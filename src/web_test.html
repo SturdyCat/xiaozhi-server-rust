@@ -12,7 +12,7 @@
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--ink);
          font: 14px/1.6 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
-  .wrap { max-width: 880px; margin: 0 auto; padding: 24px 16px 48px; }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 24px 16px 48px; }
   h1 { font-size: 20px; margin: 0 0 4px; }
   .sub { color: var(--sub); margin: 0 0 20px; font-size: 13px; }
   .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
@@ -20,9 +20,10 @@
   .card h2 { font-size: 15px; margin: 0 0 12px; display: flex; align-items: center; gap: 8px; }
   .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
   label { font-size: 12px; color: var(--sub); }
-  input, select { padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px;
-                  font-size: 13px; background: #fff; color: var(--ink); }
+  input, select, textarea { padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px;
+                  font-size: 13px; background: #fff; color: var(--ink); font-family: inherit; }
   input { flex: 1; min-width: 180px; }
+  textarea { width: 100%; resize: vertical; }
   button { padding: 8px 16px; border: 0; border-radius: 8px; background: var(--brand);
            color: #fff; font-size: 13px; cursor: pointer; }
   button:disabled { opacity: .45; cursor: not-allowed; }
@@ -31,27 +32,38 @@
   .dot { width: 9px; height: 9px; border-radius: 50%; background: #98a2b3; display: inline-block; }
   .dot.on { background: var(--ok); } .dot.busy { background: var(--warn); }
   .hint { font-size: 12px; color: var(--sub); margin-top: 8px; }
-  .stt-item { padding: 8px 12px; border-radius: 8px; margin-bottom: 8px; font-size: 13px; }
-  .stt-item.user { background: #eef4ff; }
-  .stt-item.bot  { background: #f0faf1; }
-  .stt-item b { font-size: 12px; color: var(--sub); display: block; margin-bottom: 2px; }
+
+  /* ASR 麦克风大按钮 */
+  .mic-wrap { display: flex; align-items: center; gap: 18px; }
+  .mic-btn { width: 72px; height: 72px; border-radius: 50%; border: 0; cursor: pointer;
+             background: #eef1f6; font-size: 30px; line-height: 1;
+             display: flex; align-items: center; justify-content: center;
+             transition: transform .15s, background .15s; }
+  .mic-btn:disabled { opacity: .45; cursor: not-allowed; }
+  .mic-btn.rec { background: #fee2e2; animation: pulse 1.2s infinite; }
+  @keyframes pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(220,38,38,.45); }
+    70%  { box-shadow: 0 0 0 16px rgba(220,38,38,0); }
+    100% { box-shadow: 0 0 0 0 rgba(220,38,38,0); }
+  }
+  .mic-stat b { display: block; font-size: 14px; color: var(--ink); }
+  .mic-stat span { font-size: 12px; color: var(--sub); }
+  #asrResult { margin-top: 12px; padding: 10px 12px; border: 1px dashed var(--line);
+               border-radius: 8px; min-height: 44px; font-size: 14px; background: #fafbfc; }
+  #ttsStatus { font-size: 13px; color: var(--sub); }
+
   #log { background: #10141b; color: #c7d0dd; border-radius: 8px; padding: 12px;
-         font: 12px/1.7 var(--mono); height: 260px; overflow: auto; white-space: pre-wrap;
+         font: 12px/1.7 var(--mono); height: 200px; overflow: auto; white-space: pre-wrap;
          word-break: break-all; }
   #log .up   { color: #7cc0ff; }
   #log .down { color: #86e3a1; }
   #log .meta { color: #8b95a5; }
-  .badges { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 16px; }
-  .badge { font-size: 11px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line);
-           background: #fff; color: var(--sub); }
-  .badge.bad { border-color: #fecaca; background: #fef2f2; color: var(--err); }
 </style>
 </head>
 <body>
 <div class="wrap">
   <h1>小智语音服务端 · 测试台</h1>
-  <p class="sub">浏览器直连 <code>/api/ws</code>：麦克风 → Opus 上行（ASR），下行 Opus → 扬声器（TTS）。协议对齐 <code>src/protocol.rs</code>。</p>
-  <div class="badges" id="badges"></div>
+  <p class="sub">浏览器直连 <code>/api/ws</code>：<b>① 语音识别（ASR）</b>：录音 → 识别 → 展示文本；<b>② 语音合成（TTS）</b>：文本 → 选语言/角色 → 合成播放。</p>
 
   <!-- 连接 -->
   <div class="card">
@@ -64,44 +76,55 @@
       <button id="btnConn">连接</button>
       <button id="btnDisc" class="ghost" disabled>断开</button>
     </div>
+    <div class="hint" id="nego"></div>
+  </div>
+
+  <!-- ① ASR -->
+  <div class="card">
+    <h2>① 语音识别（ASR）</h2>
+    <div class="mic-wrap">
+      <button id="micBtn" class="mic-btn" disabled title="点击开始录音">🎤</button>
+      <div class="mic-stat">
+        <b id="micTitle">未录音</b>
+        <span id="micTime">点击麦克风图标开始录音</span>
+      </div>
+    </div>
+    <div class="row" style="margin-top:14px">
+      <button id="btnRecog" disabled>开始识别</button>
+      <button id="btnAsrClear" class="ghost" disabled>清空结果</button>
+    </div>
+    <div id="asrResult">识别结果将显示在这里</div>
+    <div class="hint">录音经 Opus 编码上行，服务端对整段录音一次性识别（跳过 VAD 自动切段）。mock 后端会返回固定演示文本。</div>
+  </div>
+
+  <!-- ② TTS -->
+  <div class="card">
+    <h2>② 语音合成（TTS）</h2>
+    <textarea id="ttsText" rows="3" placeholder="输入要合成的文本（识别后可一键填入）"></textarea>
     <div class="row" style="margin-top:10px">
-      <label>下行二进制版本</label>
-      <select id="dlVer">
-        <option value="auto" selected>自动嗅探（推荐）</option>
-        <option value="1">v1 · 裸 Opus</option>
-        <option value="2">v2 · 16B 头</option>
-        <option value="3">v3 · 4B 头</option>
+      <label>语言</label>
+      <select id="ttsLang">
+        <option value="zh" selected>中文</option>
+        <option value="en">English</option>
       </select>
-      <span class="hint" id="nego"></span>
+      <label>语音角色</label>
+      <select id="ttsSpeaker">
+        <option value="0" selected>角色 0</option>
+        <option value="1">角色 1</option>
+        <option value="2">角色 2</option>
+        <option value="3">角色 3</option>
+        <option value="4">角色 4</option>
+        <option value="5">角色 5</option>
+        <option value="6">角色 6</option>
+        <option value="7">角色 7</option>
+        <option value="8">角色 8</option>
+        <option value="9">角色 9</option>
+      </select>
+      <button id="btnTts" disabled>开始转换</button>
+      <button id="btnStopPlay" class="ghost" disabled>停止播放</button>
+      <button id="btnFillStt" class="ghost" disabled>填入识别结果</button>
     </div>
-    <div class="hint">Token 非空时以 <code>?token=</code> 查询参数传递（浏览器 WebSocket 无法自定义请求头，服务端已支持）。麦克风需要 <b>Chrome / Edge</b> 且页面运行于 <b>localhost / HTTPS / file://</b>。</div>
-  </div>
-
-  <!-- 麦克风 ASR -->
-  <div class="card">
-    <h2><span class="dot" id="micDot"></span>麦克风 · ASR（真实引擎）</h2>
-    <div class="row">
-      <button id="btnMic" disabled>开始说话</button>
-      <button id="btnMicStop" class="ghost" disabled>停止</button>
-      <span class="hint" id="micStat">未采集</span>
-    </div>
-    <div class="hint">采集 16 kHz 单声道 PCM → WebCodecs 编码 Opus → 裸包上行（协议 v1）；服务端 Silero VAD 判定说话结束后回 <code>stt</code>。需服务器以 <code>--features sherpa</code> 且 ASR/TTS backend 均为 sherpa 运行；mock 模式请用下方按钮。</div>
-  </div>
-
-  <!-- mock 触发 / abort -->
-  <div class="card">
-    <h2>对话控制</h2>
-    <div class="row">
-      <button id="btnTrig" disabled>触发一轮对话（listen start）</button>
-      <button id="btnAbort" class="ghost" disabled>中断下行（abort）</button>
-    </div>
-    <div class="hint">mock 模式下「触发」即可走完 mock ASR → LLM → TTS 全链路（下行空帧，无真实声音）。</div>
-  </div>
-
-  <!-- 识别与回复 -->
-  <div class="card">
-    <h2>识别与回复</h2>
-    <div id="dialog"><div class="hint">暂无内容</div></div>
+    <div class="hint" id="ttsStatus">待连接。切换语言首次合成为冷启动（服务端需构建对应引擎，约数秒）。</div>
   </div>
 
   <!-- 日志 -->
@@ -113,27 +136,14 @@
 
 <script>
 "use strict";
-// ---------- 兼容性徽标 ----------
-(function () {
-  const b = document.getElementById("badges");
-  const add = (t, bad) => { const s = document.createElement("span"); s.className = "badge" + (bad ? " bad" : ""); s.textContent = t; b.appendChild(s); };
-  add("协议 v1/v2/v3 上行 · v1/v2/v3 下行嗅探");
-  if (window.AudioEncoder && window.AudioDecoder) add("WebCodecs 可用");
-  else add("WebCodecs 不可用（需 Chrome/Edge 94+）", true);
-  if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) add("getUserMedia 可用");
-  else add("getUserMedia 不可用（需 localhost/HTTPS）", true);
-})();
-
 // ---------- 地址与 Token 自动填充 ----------
-// 服务端托管时（http://<host>/ 或 /test）默认连同源 /api/ws；支持 ?token= 自动填充。
+// 服务端托管时默认连同源 /api/ws；支持 ?token= 自动填充。
 (function () {
   const q = new URLSearchParams(location.search);
   const tk = q.get("token");
   if (tk) document.getElementById("token").value = tk;
   const urlInput = document.getElementById("url");
-  const cur = urlInput.value;
-  // 仍是打包默认的 127.0.0.1 且页面由服务端托管时，替换为同源地址
-  if (cur.includes("127.0.0.1:8000") && location.protocol.startsWith("http")) {
+  if (urlInput.value.includes("127.0.0.1:8000") && location.protocol.startsWith("http")) {
     const wsProto = location.protocol === "https:" ? "wss:" : "ws:";
     urlInput.value = wsProto + "//" + location.host + "/api/ws";
   }
@@ -142,8 +152,9 @@
 const $ = id => document.getElementById(id);
 const logBox = $("log");
 function log(cls, text) {
-  const t = new Date().toLocaleTimeString("zh-CN", { hour12: false }) + "." +
-            String(new Date().getMilliseconds()).padStart(3, "0");
+  const d = new Date();
+  const t = d.toLocaleTimeString("zh-CN", { hour12: false }) + "." +
+            String(d.getMilliseconds()).padStart(3, "0");
   const div = document.createElement("div");
   const span = document.createElement("span");
   span.className = cls; span.textContent = "[" + t + "] " + text;
@@ -156,18 +167,18 @@ function log(cls, text) {
 let ws = null, connected = false;
 let downlinkVer = "auto", sniffed = null;           // 下行解包方式
 let decoder = null, playCtx = null, nextStart = 0;  // TTS 播放
-let enc = null, micCtx = null, micNode = null, micStream = null, micOn = false;
-let encSamples = 0, pktCount = 0;
-let sessionId = null;
+let enc = null, micCtx = null, micNode = null, micStream = null;
+let recording = false, encSamples = 0, recStartTs = 0, recTimer = null;
+let dlFrames = 0, lastStt = "";
 
 function setDot(id, cls) { const d = $(id); d.className = "dot" + (cls ? " " + cls : ""); }
 function setUI() {
   $("btnConn").disabled = connected;
   $("btnDisc").disabled = !connected;
-  $("btnTrig").disabled = !connected;
-  $("btnAbort").disabled = !connected;
-  $("btnMic").disabled = !connected || micOn;
-  $("btnMicStop").disabled = !connected || !micOn;
+  $("micBtn").disabled = !connected;
+  $("btnRecog").disabled = !connected || recording;
+  $("btnTts").disabled = !connected;
+  $("btnStopPlay").disabled = !connected;
 }
 
 // ---------- 连接 ----------
@@ -182,16 +193,15 @@ $("btnConn").onclick = () => {
   ws.onopen = () => {
     connected = true; setDot("connDot", "on"); setUI();
     // 设备 hello：version=1 → 上行裸 Opus 包；上行 16k 单声道
-    const hello = { type: "hello", version: 1, transport: "websocket",
+    sendText({ type: "hello", version: 1, transport: "websocket",
       audio_params: { format: "opus", sample_rate: 16000, channels: 1, frame_duration: 60 },
-      features: { mcp: false, aec: true } };
-    sendText(hello);
+      features: { mcp: false, aec: true } });
   };
   ws.onmessage = ev => {
     if (typeof ev.data === "string") onText(JSON.parse(ev.data));
     else onBinary(new Uint8Array(ev.data));
   };
-  ws.onclose = () => { log("meta", "连接已关闭"); cleanup(true); };
+  ws.onclose = () => { log("meta", "连接已关闭"); cleanup(); };
   ws.onerror = () => log("meta", "连接错误（检查地址/端口，或服务端 token 鉴权拒绝）");
 };
 $("btnDisc").onclick = () => { if (ws) ws.close(); };
@@ -199,11 +209,11 @@ $("btnClear").onclick = () => { logBox.textContent = ""; };
 
 function sendText(obj) { ws.send(JSON.stringify(obj)); log("up", JSON.stringify(obj)); }
 
-function cleanup(full) {
+function cleanup() {
   connected = false; setDot("connDot"); setUI();
-  stopMicInternal();
+  stopCapture();
   if (decoder) { try { decoder.close(); } catch (e) {} decoder = null; }
-  nextStart = 0; sniffed = null; sessionId = null;
+  nextStart = 0; sniffed = null; dlFrames = 0;
   $("nego").textContent = "";
 }
 
@@ -212,37 +222,36 @@ function onText(m) {
   log("down", JSON.stringify(m));
   switch (m.type) {
     case "hello": {
-      sessionId = m.session_id || null;
       const ap = m.audio_params || {};
-      $("nego").textContent = "协商完成：下行 " + (ap.sample_rate || "?") + " Hz / " +
-        (ap.frame_duration || "?") + "ms 帧 · session " + (sessionId || "-").slice(0, 8);
+      $("nego").textContent = "已连接：下行 " + (ap.sample_rate || "?") + " Hz / " +
+        (ap.frame_duration || "?") + "ms 帧";
       initDecoder(ap.sample_rate || 24000);
       break;
     }
-    case "stt": addDialog("user", "识别结果（stt）", m.text || ""); break;
-    case "llm": if (m.text) addDialog("bot", "LLM", m.text); break;
+    case "stt": {
+      lastStt = m.text || "";
+      $("asrResult").textContent = lastStt;
+      $("btnAsrClear").disabled = false;
+      $("btnFillStt").disabled = false;
+      if (!$("ttsText").value.trim()) $("ttsText").value = lastStt;  // 自动填入合成框
+      setMicState("idle");
+      break;
+    }
     case "tts":
-      if (m.state === "sentence_start") addDialog("bot", "TTS 播报", m.text || "");
-      if (m.state === "stop") log("meta", "本轮 TTS 播报完毕");
+      if (m.state === "start") $("ttsStatus").textContent = "服务端合成中…";
+      if (m.state === "sentence_start") $("ttsStatus").textContent = "播放中：" + (m.text || "");
+      if (m.state === "stop") {
+        $("ttsStatus").textContent = "播放完毕";
+        setDot("connDot", "on");
+      }
       break;
   }
 }
 
-function addDialog(who, label, text) {
-  const box = $("dialog");
-  if (box.firstElementChild && box.firstElementChild.className === "hint") box.textContent = "";
-  const div = document.createElement("div");
-  div.className = "stt-item " + who;
-  const b = document.createElement("b"); b.textContent = label;
-  div.appendChild(b); div.appendChild(document.createTextNode(text));
-  box.appendChild(div);
-}
-
-// ---------- 下行二进制（TTS Opus） ----------
+// ---------- 下行二进制（TTS Opus 播放） ----------
 function pickUnwrap(data) {
   if (downlinkVer !== "auto") return downlinkVer;
   if (sniffed) return sniffed;
-  // 依据 wrap_downlink 的头部特征嗅探；24k 裸包 TOC 不会是 0x00/0x01
   if (data.length >= 18 && data[0] === 0x01 && data[1] === 0x00) sniffed = "2";
   else if (data.length >= 6 && data[0] === 0x00 && data[1] === 0x00) sniffed = "3";
   else sniffed = "1";
@@ -250,7 +259,7 @@ function pickUnwrap(data) {
   return sniffed;
 }
 
-function unwrapUplinkMirror(data) { // 与 protocol.rs unwrap_uplink 一致（下行解包同构）
+function unwrapMirror(data) {
   const v = pickUnwrap(data);
   if (v === "1") return data;
   if (v === "2") {
@@ -264,7 +273,7 @@ function unwrapUplinkMirror(data) { // 与 protocol.rs unwrap_uplink 一致（�
 }
 
 function initDecoder(sampleRate) {
-  if (!window.AudioDecoder) { log("meta", "浏览器无 AudioDecoder，TTS 音频无法播放"); return; }
+  if (!window.AudioDecoder) { log("meta", "浏览器无 AudioDecoder，TTS 无法播放"); return; }
   if (decoder) { try { decoder.close(); } catch (e) {} }
   decoder = new AudioDecoder({
     output: ad => schedulePlay(ad),
@@ -293,33 +302,23 @@ function schedulePlay(ad) {
   if (nextStart < now + 0.03) nextStart = now + 0.03;
   src.start(nextStart);
   nextStart += n / sr;
-  setDot("micDot", "busy"); // 复用指示：正在播报
 }
 
 function onBinary(data) {
-  pktCount++;
-  if (pktCount === 1 || pktCount % 50 === 0)
-    log("down", "⟨二进制 #" + pktCount + "⟩ " + data.length + " 字节（Opus 包）");
+  dlFrames++;
+  if (dlFrames === 1 || dlFrames % 50 === 0)
+    log("down", "⟨音频 #" + dlFrames + "⟩ " + data.length + " 字节");
   if (!decoder) return;
-  const payload = unwrapUplinkMirror(data);
+  const payload = unwrapMirror(data);
   if (!payload || !payload.length) return;
   try {
     decoder.decode(new EncodedAudioChunk({
-      type: "key", timestamp: pktCount * 60000, data: payload,
+      type: "key", timestamp: dlFrames * 60000, data: payload,
     }));
   } catch (e) { log("meta", "送解码失败: " + e.message); }
 }
 
-// ---------- 对话控制 ----------
-$("btnTrig").onclick = () => sendText({ type: "listen", session_id: sessionId, state: "start", mode: "auto" });
-$("btnAbort").onclick = () => {
-  if (decoder) { try { decoder.reset(); } catch (e) {} }
-  if (playCtx) { nextStart = 0; }
-  sendText({ type: "abort", session_id: sessionId, reason: "web" });
-  setDot("micDot");
-};
-
-// ---------- 麦克风（ASR） ----------
+// ---------- ① ASR：录音 → 识别 ----------
 const WORKLET = `
 class PcmFeeder extends AudioWorkletProcessor {
   constructor(){ super(); this.buf = new Float32Array(960); this.fill = 0; } // 60ms @16k
@@ -332,7 +331,7 @@ class PcmFeeder extends AudioWorkletProcessor {
         this.buf.set(ch.subarray(i, i + n), this.fill);
         this.fill += n; i += n;
         if (this.fill === this.buf.length){
-          this.port.postMessage(new Float32Array(this.buf)); // 拷贝
+          this.port.postMessage(new Float32Array(this.buf));
           this.fill = 0;
         }
       }
@@ -342,12 +341,31 @@ class PcmFeeder extends AudioWorkletProcessor {
 }
 registerProcessor('pcm-feeder', PcmFeeder);`;
 
-$("btnMic").onclick = startMic;
-$("btnMicStop").onclick = stopMic;
+function setMicState(state) {
+  const btn = $("micBtn"), title = $("micTitle"), time = $("micTime");
+  if (recTimer) { clearInterval(recTimer); recTimer = null; }
+  if (state === "rec") {
+    btn.classList.add("rec"); btn.textContent = "⏹"; btn.title = "点击停止录音";
+    title.textContent = "录音中…";
+  } else if (state === "ready") {
+    btn.classList.remove("rec"); btn.textContent = "🎤"; btn.title = "重新录音";
+    title.textContent = "录音结束";
+  } else {
+    btn.classList.remove("rec"); btn.textContent = "🎤"; btn.title = "点击开始录音";
+    title.textContent = "未录音";
+    time.textContent = "点击麦克风图标开始录音";
+  }
+  $("btnRecog").disabled = !connected || recording;
+}
 
-async function startMic() {
+$("micBtn").onclick = async () => {
+  if (recording) { stopCapture(); return; }
+  startCapture();
+};
+
+async function startCapture() {
   if (!window.AudioEncoder || !window.AudioData) {
-    log("meta", "浏览器缺少 WebCodecs（AudioEncoder），无法采集上行；请用 Chrome/Edge"); return;
+    log("meta", "浏览器缺少 WebCodecs（AudioEncoder），请用 Chrome/Edge"); return;
   }
   try {
     micStream = await navigator.mediaDevices.getUserMedia({
@@ -367,33 +385,24 @@ async function startMic() {
     output: chunk => {
       const bytes = new Uint8Array(chunk.byteLength);
       chunk.copyTo(bytes);
-      if (ws && ws.readyState === 1) { ws.send(bytes); pktCount++; } // v1：一条消息一个 Opus 包
+      if (ws && ws.readyState === 1) ws.send(bytes); // v1：一条消息一个 Opus 包
     },
     error: e => log("meta", "编码器错误: " + e.message),
   });
   enc.configure({ codec: "opus", sampleRate: 16000, numberOfChannels: 1, bitrate: 32000 });
 
-  micOn = true; setDot("micDot", "busy"); setUI();
-  $("micStat").textContent = "采集中 · 16 kHz · Opus 上行";
-  sendText({ type: "listen", session_id: sessionId, state: "start", mode: "auto" });
-  pktCount = 0;
+  recording = true; encSamples = 0; recStartTs = Date.now();
+  setMicState("rec");
+  sendText({ type: "asr_test", action: "start" });
+  recTimer = setInterval(() => {
+    const s = (Date.now() - recStartTs) / 1000;
+    $("micTime").textContent = "已录 " + s.toFixed(1) + " 秒 · 16 kHz · 点击图标停止";
+  }, 100);
 }
 
-function feedEncoder(pcm) {
-  if (!enc || enc.state !== "configured") return;
-  const ad = new AudioData({
-    format: "f32-planar", sampleRate: 16000, numberOfFrames: pcm.length,
-    numberOfChannels: 1, timestamp: Math.round(encSamples / 16000 * 1e6), data: pcm,
-  });
-  encSamples += pcm.length;
-  enc.encode(ad); ad.close();
-}
-
-function stopMic() { sendText({ type: "listen", session_id: sessionId, state: "stop" }); stopMicInternal(); }
-
-function stopMicInternal() {
-  micOn = false; setDot("micDot"); setUI();
-  if ($("micStat")) $("micStat").textContent = "未采集";
+function stopCapture() {
+  recording = false;
+  setMicState("ready");
   if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
   if (micNode) { micNode.disconnect(); micNode = null; }
   if (micCtx) { micCtx.close(); micCtx = null; }
@@ -403,8 +412,41 @@ function stopMicInternal() {
   }
 }
 
+$("btnRecog").onclick = () => {
+  if (recording) stopCapture();     // 还在录先停采集
+  $("micTime").textContent = "识别中…";
+  sendText({ type: "asr_test", action: "stop" });
+};
+
+$("btnAsrClear").onclick = () => {
+  $("asrResult").textContent = "识别结果将显示在这里";
+  $("btnAsrClear").disabled = true;
+};
+
+// ---------- ② TTS：文本 → 合成播放 ----------
+$("btnTts").onclick = () => {
+  const text = $("ttsText").value.trim();
+  if (!text) { $("ttsStatus").textContent = "请先输入要合成的文本"; return; }
+  ensurePlayCtx(); // 用户手势内解锁播放
+  nextStart = 0; dlFrames = 0;
+  if (decoder) { try { decoder.reset(); } catch (e) {} }
+  const lang = $("ttsLang").value;
+  const speaker = parseInt($("ttsSpeaker").value, 10) || 0;
+  $("ttsStatus").textContent = "已发送合成请求…";
+  sendText({ type: "tts_test", text, lang, speaker });
+};
+
+$("btnStopPlay").onclick = () => {
+  if (decoder) { try { decoder.reset(); } catch (e) {} }
+  nextStart = 0;
+  sendText({ type: "abort", reason: "web-stop-playback" });
+  $("ttsStatus").textContent = "已停止播放";
+};
+
+$("btnFillStt").onclick = () => { $("ttsText").value = lastStt; };
+
 setUI();
-log("meta", "页面就绪：填好服务地址后点击「连接」。麦克风功能需 Chrome/Edge。");
+log("meta", "页面就绪：点击「连接」后即可测试 ASR 与 TTS。麦克风需 Chrome/Edge 且 localhost/HTTPS。");
 </script>
 </body>
 </html>

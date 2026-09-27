@@ -73,9 +73,10 @@ pub struct ClientHello {
 /// 设备 → 服务器 的文本消息。
 ///
 /// 注意：`xiaozhi-esp32` 固件发送小写 `type` 标签（`hello`/`listen`/`abort`/`mcp`），
-/// 故用 `rename_all = "lowercase"` 对齐，否则反序列化会报 unknown variant。
+/// 故用 `rename_all = "snake_case"` 对齐（单词变体仍为小写，多单词如 `AsrTest` → `asr_test`），
+/// 否则反序列化会报 unknown variant。
 #[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "type", rename_all = "lowercase")]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientMessage {
     Hello(ClientHello),
     Listen {
@@ -98,6 +99,28 @@ pub enum ClientMessage {
         #[serde(default)]
         session_id: Option<String>,
         payload: serde_json::Value,
+    },
+    /// 网页测试台专用：录音开始/结束后对整段缓冲做一次性 ASR（跳过 VAD 自动切段）。
+    AsrTest {
+        #[serde(default)]
+        session_id: Option<String>,
+        /// start | stop
+        action: String,
+    },
+    /// 网页测试台专用：文本直接合成语音下发（跳过 ASR/LLM 流水线）。
+    TtsTest {
+        #[serde(default)]
+        session_id: Option<String>,
+        text: String,
+        /// 语音角色（Kokoro sid），None 时用服务器配置默认值。
+        #[serde(default)]
+        speaker: Option<i32>,
+        /// 语言（如 "zh"/"en"），None 时用服务器配置默认值。
+        #[serde(default)]
+        lang: Option<String>,
+        /// 语速，None 时用服务器配置默认值。
+        #[serde(default)]
+        speed: Option<f32>,
     },
 }
 

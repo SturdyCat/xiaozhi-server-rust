@@ -38,6 +38,9 @@ pub async fn run_session(
     let session_id = Uuid::new_v4().to_string();
     let real_audio =
         cfg!(feature = "sherpa") && !engines.config.asr_is_mock() && !engines.config.tts_is_mock();
+    // 网页测试台：录音中标志与 PCM 缓冲（跳过 VAD，整段一次性识别）。
+    let mut test_recording = false;
+    let mut test_buf: Vec<f32> = Vec::new();
 
     while let Some(item) = socket.next().await {
         let msg = match item {
@@ -55,6 +58,8 @@ pub async fn run_session(
                     &params,
                     &mut downlink_ts,
                     &session_id,
+                    &mut test_recording,
+                    &mut test_buf,
                 )
                 .await
                 {
@@ -63,20 +68,21 @@ pub async fn run_session(
             }
             Message::Binary(b) => {
                 let data: &[u8] = b.as_ref();
-                if real_audio {
-                    handle_binary(
-                        &mut socket,
-                        data,
-                        &engines,
-                        &mut vad,
-                        &mut history,
-                        &params,
-                        &mut downlink_ts,
-                        &session_id,
-                    )
-                    .await;
-                }
-                // mock 模式忽略上行音频（由 listen start 触发模拟流水）
+                handle_binary(
+                    &mut socket,
+                    data,
+                    &engines,
+                    &mut vad,
+                    &mut history,
+                    &params,
+                    &mut downlink_ts,
+                    &session_id,
+                    &mut test_recording,
+                    &mut test_buf,
+                    real_audio,
+                )
+                .await;
+                // mock 模式且未在测试录音时忽略上行音频（由 listen start 触发模拟流水）
             }
             Message::Close(_) => break,
             _ => {}
@@ -85,6 +91,7 @@ pub async fn run_session(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_text(
     socket: &mut WebSocket,
     text: &str,
@@ -93,6 +100,8 @@ async fn handle_text(
     params: &SessionParams,
     downlink_ts: &mut u32,
     session_id: &str,
+    test_recording: &mut bool,
+    test_buf: &mut Vec<f32>,
 ) -> anyhow::Result<()> {
     let msg: ClientMessage = match serde_json::from_str(text) {
         Ok(m) => m,
@@ -136,6 +145,63 @@ async fn handle_text(
             )
             .await?;
         }
+        ClientMessage::AsrTest { action, .. } => match action.as_str() {
+            "start" => {
+                test_buf.clear();
+                *test_recording = true;
+                tracing::info!("session {session_id} 测试录音开始");
+            }
+            "stop" => {
+                *test_recording = false;
+                let buf = std::mem::take(test_buf);
+                let secs = buf.len() as f32 / params.uplink_sr as f32;
+                tracing::info!("session {session_id} 测试录音结束，{secs:.1}s，开始识别");
+                let text = if buf.is_empty() {
+                    "(未录制到音频)".to_string()
+                } else {
+                    match engines.asr.recognize(&buf, params.uplink_sr) {
+                        Ok(t) if t.trim().is_empty() => "(识别结果为空，请重试)".to_string(),
+                        Ok(t) => t,
+                        Err(e) => format!("识别失败: {e}"),
+                    }
+                };
+                send_text(
+                    socket,
+                    &ServerMessage::Stt {
+                        session_id: session_id.to_string(),
+                        text,
+                    },
+                )
+                .await?;
+            }
+            _ => tracing::warn!("未知 asr_test action: {action}"),
+        },
+        ClientMessage::TtsTest {
+            text,
+            speaker,
+            lang,
+            speed,
+            ..
+        } => {
+            if text.trim().is_empty() {
+                return Ok(());
+            }
+            let lang = lang
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| engines.config.tts.lang.clone());
+            let speaker = speaker.unwrap_or(engines.config.tts.speaker);
+            let speed = speed.unwrap_or(engines.config.tts.speed);
+            tracing::info!("session {session_id} 测试合成：lang={lang} speaker={speaker} speed={speed}");
+            let tts = engines.tts_for(&lang);
+            let (pcm, tts_sr) = match tts.synthesize(&text, speed, speaker) {
+                Ok(x) => x,
+                Err(e) => {
+                    tracing::warn!("测试合成失败: {e}");
+                    return Ok(());
+                }
+            };
+            send_tts_audio(socket, engines, params, downlink_ts, session_id, &text, &pcm, tts_sr).await?;
+        }
         ClientMessage::Hello(_) => {
             tracing::warn!("会话内收到重复 hello，忽略");
         }
@@ -143,6 +209,7 @@ async fn handle_text(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_binary(
     socket: &mut WebSocket,
     data: &[u8],
@@ -152,6 +219,9 @@ async fn handle_binary(
     params: &SessionParams,
     downlink_ts: &mut u32,
     session_id: &str,
+    test_recording: &mut bool,
+    test_buf: &mut Vec<f32>,
+    real_audio: bool,
 ) {
     let payload = unwrap_uplink(params.uplink_bin_ver, data);
     if payload.is_empty() {
@@ -160,6 +230,14 @@ async fn handle_binary(
     let Ok(pcm) = decode_opus_frame(payload, params.uplink_sr) else {
         return;
     };
+    // 网页测试台录音中：直接缓冲整段 PCM，跳过 VAD（mock 后端也可用）。
+    if *test_recording {
+        test_buf.extend_from_slice(&pcm);
+        return;
+    }
+    if !real_audio {
+        return;
+    }
     let mut segments = Vec::new();
     vad.accept(&pcm, &mut |seg| segments.push(seg));
     for seg in segments {
@@ -223,13 +301,33 @@ async fn stream_response(
     history.push(("user".to_string(), user_text.to_string()));
     history.push(("assistant".to_string(), reply.clone()));
 
-    let (pcm, tts_sr) = match engines.tts.synthesize(&reply, engines.config.tts.speed) {
+    let (pcm, tts_sr) = match engines
+        .tts()
+        .synthesize(&reply, engines.config.tts.speed, engines.config.tts.speaker)
+    {
         Ok(x) => x,
         Err(e) => {
             tracing::warn!("TTS 失败: {e}");
             return Ok(());
         }
     };
+    send_tts_audio(socket, engines, params, downlink_ts, session_id, &reply, &pcm, tts_sr).await?;
+    Ok(())
+}
+
+/// 发送完整 TTS 下行序列：tts start → sentence_start → 重采样/Opus 分帧逐帧二进制 → tts stop
+/// （支持 abort 中断）。设备流水线与网页测试台 `tts_test` 共用。
+#[allow(clippy::too_many_arguments)]
+async fn send_tts_audio(
+    socket: &mut WebSocket,
+    engines: &Arc<Engines>,
+    params: &SessionParams,
+    downlink_ts: &mut u32,
+    session_id: &str,
+    text: &str,
+    pcm: &[f32],
+    tts_sr: u32,
+) -> anyhow::Result<()> {
     send_text(
         socket,
         &ServerMessage::Tts {
@@ -244,12 +342,12 @@ async fn stream_response(
         &ServerMessage::Tts {
             session_id: session_id.to_string(),
             state: "sentence_start".to_string(),
-            text: Some(reply.clone()),
+            text: Some(text.to_string()),
         },
     )
     .await?;
 
-    let pcm_down = resample(&pcm, tts_sr, params.downlink_sr);
+    let pcm_down = resample(pcm, tts_sr, params.downlink_sr);
     let frame_samples =
         (params.downlink_sr as f32 * params.downlink_frame_ms as f32 / 1000.0) as usize;
     for chunk in pcm_down.chunks(frame_samples.max(1)) {
@@ -271,6 +369,7 @@ async fn stream_response(
                 Message::Text(t) => {
                     let s = t.to_string();
                     if let Ok(ClientMessage::Abort { .. }) = serde_json::from_str(&s) {
+                        tracing::info!("session {session_id} 中断 TTS 播报（{text}）");
                         break;
                     }
                 }

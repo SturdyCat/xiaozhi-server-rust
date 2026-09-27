@@ -22,3 +22,6 @@ target
 
 # 本地 AI 助手工作记忆（仅本地使用，不进版本库）
 .workbuddy/
+
+
+.DS_Store

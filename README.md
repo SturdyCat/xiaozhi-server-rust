@@ -182,9 +182,8 @@ python3 tests/mock_client.py
 
 [`src/web_test.html`](./src/web_test.html) 是一个**零依赖单文件页面**，浏览器直连 `/api/ws` 完成端到端语音联调（编译期内嵌进服务端二进制，`GET /` 直接出页面）：
 
-- **ASR**：麦克风 16 kHz 采集 → WebCodecs 编码 Opus → 裸包上行（协议 v1）→ 服务端 VAD 切段识别 → 展示 `stt` 文本。
-- **TTS**：接收下行 Opus 帧（支持 v1/v2/v3 自动嗅探）→ 解码 → 扬声器播放，同步展示 `tts sentence_start` 文本。
-- 消息日志实时打印收发的 JSON 与二进制帧计数；支持触发一轮 mock 对话（`listen start`）与 `abort` 中断。
+- **① ASR**：麦克风图标点击开始录音（16 kHz → WebCodecs 编码 Opus 上行），再点停止；点「开始识别」后服务端对整段录音一次性识别（跳过 VAD 自动切段，`asr_test start/stop`），结果展示并可一键填入合成框。
+- **② TTS**：文本框支持填入上次识别结果或粘贴任意文本，选择语言（中文/English）与语音角色（sid 0-9）后点「开始转换」（`tts_test`，跳过 ASR/LLM 直接合成）→ 下行 Opus 帧（v1/v2/v3 自动嗅探）解码播放。切换语言首次合成为冷启动（服务端按需构建对应引擎）。
 
 ```bash
 # 方式一：服务端直接托管（推荐）——页面编译期内嵌，访问根路径即出测试台，
@@ -195,7 +194,7 @@ python3 tests/mock_client.py
 open src/web_test.html
 
 # 方式三：本地托管
-python3 -m http.server 8123 --directory tests
+python3 -m http.server 8123 --directory src
 # 浏览器访问 http://127.0.0.1:8123/web_test.html
 ```
 

@@ -13,15 +13,16 @@ use anyhow::Context;
 use std::sync::Arc;
 
 /// 合成引擎接口：文本 → 单声道 f32 PCM + 采样率。
+/// `speaker` 为语音角色（Kokoro sid），由调用方按请求传入。
 pub trait TtsEngine: Send + Sync {
-    fn synthesize(&self, text: &str, speed: f32) -> Result<(Vec<f32>, u32)>;
+    fn synthesize(&self, text: &str, speed: f32, speaker: i32) -> Result<(Vec<f32>, u32)>;
 }
 
 /// 无模型实现，生成 0.5s 静音（24k），便于本地联调。
 pub struct MockTts;
 
 impl TtsEngine for MockTts {
-    fn synthesize(&self, _text: &str, _speed: f32) -> Result<(Vec<f32>, u32)> {
+    fn synthesize(&self, _text: &str, _speed: f32, _speaker: i32) -> Result<(Vec<f32>, u32)> {
         let sr = 24_000u32;
         let n = (sr as f32 * 0.5) as usize;
         Ok((vec![0.0; n], sr))
@@ -31,7 +32,6 @@ impl TtsEngine for MockTts {
 #[cfg(feature = "sherpa")]
 pub struct SherpaTts {
     tts: Arc<sherpa_onnx::OfflineTts>,
-    speaker: i32,
 }
 
 #[cfg(feature = "sherpa")]
@@ -49,7 +49,7 @@ impl SherpaTts {
             dict_dir: Some(cfg.dict_dir.clone()),
             lexicon: Some(cfg.lexicon.clone()),
             length_scale: 1.0,
-            lang: Some("zh".to_string()),
+            lang: Some(cfg.lang.clone()),
         };
         model_config.num_threads = cfg.num_threads as i32;
         let config = OfflineTtsConfig {
@@ -58,19 +58,16 @@ impl SherpaTts {
         };
         let tts = sherpa_onnx::OfflineTts::create(&config)
             .context("创建 Kokoro TTS 失败（检查模型路径或原生库）")?;
-        Ok(Self {
-            tts: Arc::new(tts),
-            speaker: cfg.speaker,
-        })
+        Ok(Self { tts: Arc::new(tts) })
     }
 }
 
 #[cfg(feature = "sherpa")]
 impl TtsEngine for SherpaTts {
-    fn synthesize(&self, text: &str, speed: f32) -> Result<(Vec<f32>, u32)> {
+    fn synthesize(&self, text: &str, speed: f32, speaker: i32) -> Result<(Vec<f32>, u32)> {
         use sherpa_onnx::GenerationConfig;
         let gen = GenerationConfig {
-            sid: self.speaker,
+            sid: speaker,
             speed,
             ..Default::default()
         };
@@ -97,6 +94,27 @@ pub fn build_tts(cfg: &TtsConfig) -> Result<Arc<dyn TtsEngine>> {
         }
         #[cfg(not(feature = "sherpa"))]
         {
+            anyhow::bail!("backend=sherpa 但当前未启用 `sherpa` feature，请用 --features sherpa 编译");
+        }
+    }
+    Ok(Arc::new(MockTts))
+}
+
+/// 按指定语言构造 TTS 引擎（网页测试台的多语言切换用）。
+/// 非 sherpa 后端时与 `build_tts` 等价（mock 与语言无关）。
+pub fn build_tts_with_lang(cfg: &TtsConfig, lang: &str) -> Result<Arc<dyn TtsEngine>> {
+    if cfg.backend.eq_ignore_ascii_case("sherpa") {
+        #[cfg(feature = "sherpa")]
+        {
+            let mut c = cfg.clone();
+            c.lang = lang.to_string();
+            let engine = SherpaTts::new(&c)
+                .with_context(|| format!("创建 lang={lang} 的 Kokoro TTS 失败"))?;
+            return Ok(Arc::new(engine));
+        }
+        #[cfg(not(feature = "sherpa"))]
+        {
+            let _ = lang;
             anyhow::bail!("backend=sherpa 但当前未启用 `sherpa` feature，请用 --features sherpa 编译");
         }
     }

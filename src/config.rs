@@ -97,6 +97,9 @@ pub struct TtsConfig {
     pub dict_dir: String,
     #[serde(default)]
     pub lexicon: String,
+    /// Kokoro 语言（模型创建时固定；"zh"/"en"，中文场景用 "zh"）。
+    #[serde(default = "default_tts_lang")]
+    pub lang: String,
     #[serde(default)]
     pub speaker: i32,
     #[serde(default = "default_speed")]
@@ -176,6 +179,7 @@ impl Default for TtsConfig {
             data_dir: String::new(),
             dict_dir: String::new(),
             lexicon: String::new(),
+            lang: default_tts_lang(),
             speaker: 0,
             speed: default_speed(),
             num_threads: default_tts_threads(),
@@ -246,6 +250,9 @@ fn default_num_threads() -> u32 {
 /// TTS 合成线程数默认 1：与 ASR/VAD 错峰，避免 ASR+TTS 峰值占满 4 核。
 fn default_tts_threads() -> u32 {
     1
+}
+fn default_tts_lang() -> String {
+    "zh".into()
 }
 /// tokio worker 线程数默认 2：IO 为主的工作负载足够，为核心数留余量。
 fn default_worker_threads() -> u32 {
@@ -325,6 +332,7 @@ impl Default for Config {
                 data_dir: String::new(),
                 dict_dir: String::new(),
                 lexicon: String::new(),
+                lang: default_tts_lang(),
                 speaker: 0,
                 speed: default_speed(),
                 num_threads: default_num_threads(),

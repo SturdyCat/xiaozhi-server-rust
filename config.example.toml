@@ -44,6 +44,8 @@ tokens = "/models/Kokoro/tokens.txt"
 data_dir = "/models/Kokoro/espeak-ng-data"
 dict_dir = "/models/Kokoro/dict"
 lexicon = "/models/Kokoro/lexicon-us-en.txt,/models/Kokoro/lexicon-zh.txt"
+# 合成语言（建模时固定；"zh"/"en"）。网页测试台切换其他语言时按需自动构建对应引擎。
+lang = "zh"
 speaker = 0
 speed = 1.0
 # 合成线程数（默认 1）：与 ASR 错峰，避免占满 4 核小主机

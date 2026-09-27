@@ -122,9 +122,12 @@ sequenceDiagram
 
 ### 4.1 文本消息（JSON）
 
-- serde 枚举使用 `#[serde(tag = "type", rename_all = "lowercase")]`，与固件的小写 `type` 标签严格一致（如 `"hello"`、`"listen"`、`"stt"`、`"tts"`）。
+- serde 枚举使用 `#[serde(tag = "type", rename_all = "snake_case")]`，与固件的小写 `type` 标签严格一致（`hello`/`listen`/`abort`/`mcp` 等单词变体仍为纯小写）；多单词变体为蛇形（如网页测试台的 `asr_test`、`tts_test`）。
 - 握手：首条消息必须是文本 `hello`（非文本/非 hello 直接断开）；服务器回 hello 携带 `session_id` 与下行 `audio_params`。
 - 上行协议版本跟随设备 `hello.version`；下行版本由服务端 `binary_protocol_version` 决定。
+- 网页测试台专用消息（不影响设备协议）：
+  - `asr_test`（`action: start/stop`）：录音开始/结束后对整段缓冲一次性 ASR（跳过 VAD），结果以 `stt` 回包；
+  - `tts_test`（`text` + 可选 `lang/speaker/speed`）：文本直接合成下发（跳过 ASR/LLM），复用 `tts start → sentence_start → 二进制帧 → stop` 序列。
 
 ### 4.2 二进制帧（Opus 包封装）
 
@@ -169,7 +172,7 @@ sequenceDiagram
 | `[audio]` | `downlink_sample_rate`、`downlink_frame_duration_ms`、`binary_protocol_version` | 下行音频参数，写入服务器 hello |
 | `[asr]` | `backend`（mock/sherpa）、`model`、`tokens`、`language`、`num_threads` | SenseVoice 离线识别 |
 | `[vad]` | `model`、`threshold`、`min_silence_duration` | Silero VAD 切段 |
-| `[tts]` | `backend`、`model`、`voices`、`tokens`、`data_dir`、`dict_dir`、`lexicon` | Kokoro 合成（中英） |
+| `[tts]` | `backend`、`model`、`voices`、`tokens`、`data_dir`、`dict_dir`、`lexicon`、`lang`、`speaker`、`speed` | Kokoro 合成（中英）；`lang` 建模时固定，测试台切语言按需另建引擎 |
 | `[llm]` | `backend`（mock/http）、`api_base`、`api_key`、`model`、`system_prompt`、`max_history` | OpenAI 兼容接口 |
 
 ---
