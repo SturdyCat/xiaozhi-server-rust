@@ -2,7 +2,7 @@
 # 真实引擎需要 libopus（audiopus）与网络连接（构建脚本自动下载 sherpa-onnx 原生库）。
 
 # ---------- 构建阶段 ----------
-FROM rust:1.86-bookworm AS builder
+FROM rust:1.90-bookworm AS builder
 WORKDIR /app
 
 # 系统依赖：audiopus 编译/链接需要 pkg-config 与 libopus

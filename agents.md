@@ -121,9 +121,11 @@ pub enum ServerMessage { Hello { .. }, Stt { .. }, Llm { .. }, Tts { .. }, Syste
 
 设备读取服务器 hello 的 `audio_params.sample_rate` / `frame_duration` 来解码下行 TTS 音频。上行仍按设备自己的 16k。下行采样率由 `audio.downlink_sample_rate`（默认 24000）决定。
 
-### 5.5 构建镜像的 Rust 版本必须 ≥ 1.85（edition2024）
+### 5.5 构建镜像的 Rust 版本必须与生成 `Cargo.lock` 的 cargo 对齐（当前 1.90）
 
-传递依赖 `idna_adapter`（经 `reqwest → url → idna` 引入）已发布 `edition2024` 版本。`Dockerfile` 构建阶段用 `rust:1.86-bookworm`；**Cargo < 1.85 无法解析其 manifest**，会在 `cargo build --features sherpa` 报错 `feature edition2024 is required`。不要降级回 `rust:1.82`，也避免在无 lock 限定的情况下升级依赖导致需要更高 Rust。
+`Cargo.lock` 由本机 cargo **1.90** 生成，锁定的传递依赖需要较新 Rust：`idna_adapter`（`reqwest → url → idna`）要求 `edition2024`（Cargo ≥ 1.85 才能解析）；`time` / `icu_*` 要求 `rustc 1.88`。`Dockerfile` 构建阶段用 **`rust:1.90-bookworm`**（与本机 cargo 同版本，保证 lock 一定可编译）。
+
+**不要降级镜像 Rust**；也不要在无 lock 限定的情况下 `cargo update` 导致依赖需要更高 Rust。若升级了本机 cargo，记得同步抬高此处的镜像版本。
 
 ## 6. 项目结构速查
 
