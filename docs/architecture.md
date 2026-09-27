@@ -1,0 +1,220 @@
+# xiaozhi-server-rust 项目架构文档
+
+> Rust 实现的小智（xiaozhi-esp32）语音服务端：WebSocket 对接设备固件，本地离线 ASR / TTS（sherpa-onnx），远程 LLM（OpenAI 兼容 HTTP）。单二进制、零外部服务依赖（除 LLM API），默认特性可零配置跑通 mock 全链路。
+
+---
+
+## 1. 总体架构
+
+```mermaid
+flowchart LR
+    subgraph 设备侧
+        ESP[xiaozhi-esp32 固件]
+        WEB[浏览器测试台 /]
+    end
+
+    subgraph xiaozhi-server-rust
+        WS["/api/ws<br/>WebSocket 会话"]
+        SESSION[Session 会话流水线]
+        VAD[VAD 引擎<br/>每会话一个]
+        ASR[ASR 引擎<br/>进程级单例]
+        LLM[LLM 客户端]
+        TTS[TTS 引擎<br/>进程级单例]
+    end
+
+    subgraph 本地推理 sherpa-onnx 1.13.8
+        SV[(SenseVoice INT8<br/>model.int8.onnx)]
+        KOK[(Kokoro INT8<br/>中英双语)]
+        SIL[(Silero VAD<br/>silero_vad.onnx)]
+    end
+
+    API[OpenAI 兼容 LLM API]
+
+    ESP -- "Opus 上行 / JSON 消息" --> WS
+    WS -- "Opus 下行 / JSON 消息" --> ESP
+    WEB -- "直连联调" --> WS
+    WS --> SESSION
+    SESSION --> VAD --> ASR
+    SESSION --> LLM --> TTS
+    ASR --- SV
+    VAD --- SIL
+    TTS --- KOK
+    LLM -. HTTP .-> API
+```
+
+- **进程级单例**：ASR / TTS 模型重（数百 MB），由 `Engines` 在启动时加载一次，所有会话共享（`Arc<dyn Trait>`）。
+- **每会话 VAD**：VAD 是流式有状态对象，`Engines::new_vad()` 为每个 WebSocket 会话创建独立实例。
+- **双后端抽象**：ASR / TTS / LLM / VAD 均以 trait 抽象，`backend = "mock" | "sherpa" | "http"` 由配置切换，mock 后端支持零模型联调。
+
+---
+
+## 2. 目录结构
+
+```
+xiaozhi-server-rust/
+├── src/
+│   ├── main.rs          # 入口：配置加载优先级 XIAOZHI_CONFIG > --config > 内置 mock 默认
+│   ├── ws.rs            # 路由（/ 测试台、/api/health、/api/ws）、握手、鉴权、会话调度
+│   ├── session.rs       # 单个 WS 连接的会话流水线（收帧→VAD→ASR→LLM→TTS→下发）
+│   ├── protocol.rs      # 文本 JSON 消息（serde 小写 tag）+ 二进制封装 v1/v2/v3
+│   ├── engine.rs        # Engines：进程级共享引擎集合 + 每会话 VAD 工厂
+│   ├── asr.rs           # AsrEngine trait：MockAsr / SherpaAsr（SenseVoice）
+│   ├── tts.rs           # TtsEngine trait：MockTts / SherpaTts（Kokoro）
+│   ├── vad.rs           # VadEngine trait：MockVad / SherpaVad（Silero，流式）
+│   ├── llm.rs           # Llm 枚举：MockLlm / LlmClient（OpenAI 兼容 chat/completions）
+│   ├── audio/           # opus 编解码（audiopus）、线性重采样（rubato）
+│   ├── config.rs        # TOML 配置结构与加载（serde）
+│   └── error.rs         # AppError（axum IntoResponse）+ ProtocolError
+├── docker-entrypoint.sh # 容器入口：模型自检 + 自动下载 + 代理
+├── scripts/download_models.sh  # 宿主机预置模型（与入口同源 URL）
+├── config.example.toml  # 配置样例（[server]/[audio]/[asr]/[vad]/[tts]/[llm]）
+├── tests/
+│   ├── mock_client.py   # 零依赖 RFC 6455 协议联调客户端（PASS 判定全链回包）
+│   └── web_test.html    # 单文件网页测试台（也被编译期内嵌到 GET /）
+├── Dockerfile           # rust:1.90 多阶段构建，RUSTFLAGS=-C target-cpu=x86-64-v2
+└── docker-compose.yml   # xiaozhi + xiaozhi-mock（profile）两个服务
+```
+
+---
+
+## 3. 会话流水线（一轮对话）
+
+```mermaid
+sequenceDiagram
+    participant D as 设备/浏览器
+    participant S as Session (tokio task)
+    participant V as VAD
+    participant A as ASR
+    participant L as LLM
+    participant T as TTS
+
+    D->>S: JSON hello（version + audio_params）
+    S-->>D: JSON 服务器 hello（session_id + 下行 audio_params）
+    loop 说话中
+        D->>S: 二进制 Opus 帧（上行 16k）
+        S->>V: 解码 PCM 喂入
+        V-->>S: 语音段结束（静音判定）
+    end
+    S->>A: 识别整段 PCM
+    S-->>D: JSON stt（识别文本）
+    S->>L: chat/completions（历史 + 本轮）
+    S-->>D: JSON llm（回复文本）
+    S-->>D: JSON tts start
+    loop 逐句
+        S->>T: 文本
+        T-->>S: Opus 帧（下行采样率）
+        S-->>D: 二进制帧（按 binary_protocol_version 封装）
+        S-->>D: JSON tts sentence_start（句子文本）
+    end
+    S-->>D: JSON tts stop
+    D->>S: JSON abort（可随时中断）
+```
+
+要点：
+
+- **上行**：设备发 Opus（16k 单声道），服务端解码 → 重采样（如需）→ 喂 VAD；VAD 判定说话结束后把整段 PCM 交给 ASR（非流式识别，SenseVoice 为离线模型）。
+- **下行**：LLM 回复 → TTS 逐句合成 → 按协商的下行采样率（默认 24k）编码 Opus → 按 `binary_protocol_version` 封装下发。
+- **abort**：设备可随时发 `abort` 中断播报，会话立即停止剩余合成。
+
+---
+
+## 4. 协议设计（对齐 xiaozhi-esp32 固件）
+
+### 4.1 文本消息（JSON）
+
+- serde 枚举使用 `#[serde(tag = "type", rename_all = "lowercase")]`，与固件的小写 `type` 标签严格一致（如 `"hello"`、`"listen"`、`"stt"`、`"tts"`）。
+- 握手：首条消息必须是文本 `hello`（非文本/非 hello 直接断开）；服务器回 hello 携带 `session_id` 与下行 `audio_params`。
+- 上行协议版本跟随设备 `hello.version`；下行版本由服务端 `binary_protocol_version` 决定。
+
+### 4.2 二进制帧（Opus 包封装）
+
+| 版本 | 封装格式 |
+|---|---|
+| v1 | 裸 Opus 包（无头） |
+| v2 | 16 字节头（含版本、保留位、4 字节小端 timestamp、4 字节小端 size）+ payload |
+| v3 | 4 字节头（2 字节保留 + 2 字节小端 size）+ payload |
+
+`protocol.rs::wrap_downlink / unwrap_uplink` 是唯一的封装/解封装出口；浏览器测试台按同样规则嗅探（首字节特征判定 v2/v3，否则视为 v1）。
+
+### 4.3 HTTP 端点
+
+| 路径 | 说明 |
+|---|---|
+| `GET /` | 网页测试台（`include_str!` 编译期内嵌 `tests/web_test.html`） |
+| `GET /api/health` | 健康检查，返回 `xiaozhi-server-rust ok` |
+| `GET /api/ws` | WebSocket 会话入口 |
+
+鉴权：`[server].expected_token` 非空时，设备走 `Authorization: Bearer <token>` 请求头；浏览器 WebSocket 无法自定义请求头，额外支持 `?token=` 查询参数兜底。
+
+---
+
+## 5. 关键设计决策
+
+1. **feature 门控编译**：Cargo feature `sherpa`（默认关闭）引入 sherpa-onnx 依赖；`default = []` 仅 mock，CI 与本地联调零模型即可编译运行。`cfg(feature)` 同时门控 `audiopus_sys`（本地 opus 或 autotools）。
+2. **构建目标指令集**：Docker 构建 `RUSTFLAGS="-C target-cpu=x86-64-v2"`——部署机 N5105（Tremont）无 AVX，禁止 `native`（CI 机构建会把 AVX 嵌进二进制，部署时 SIGILL）。
+3. **API 版本锁定**：sherpa-onnx Rust crate 锁定 1.13.8（`create(&config)` 返回 `Option`、`get_result()` 在 stream 上、`generate_with_config` 需显式回调类型等，见 agents.md §5）。
+4. **模型文件名**：官方包内为 `model.int8.onnx`（非 `model.onnx`）；Kokoro 使用 `kokoro-int8-multi-lang-v1_1`（中英双语完整包，含 lexicon-zh / dict / espeak-ng-data）。
+5. **容器首启自动下载**：`docker-entrypoint.sh` 自检关键模型文件，缺失则从 k2-fsa 官方 release 下载到挂载的 `/models`（默认走 `GITHUB_PROXY=https://tvv.tw/` 代理，`off` 可直连）；开关 `XIAOZHI_AUTO_DOWNLOAD_MODELS = missing | force | off`，下载失败中止启动（`XIAOZHI_ALLOW_MISSING_MODELS` 可放行）。
+6. **配置回退链**：`XIAOZHI_CONFIG` 环境变量 → `--config` 参数 → 内置 mock 默认配置，任何一级失败告警后回退，保证进程总能起来（便于零配置联调）。
+7. **并发模型**：每个 WS 连接一个 tokio task（session），引擎跨会话共享；音频编解码均为纯函数，无共享可变状态。
+8. **CPU 占用上限**：tokio worker 线程（默认 2，`[server].worker_threads`）+ ASR 识别 2 线程 + TTS 合成 1 线程 + VAD 1 线程（各段错峰执行），峰值总占用控制在 4 核以内，为 N5105 等小主机上的其他服务留余量。
+
+---
+
+## 6. 配置体系（config.example.toml）
+
+| 段 | 关键项 | 说明 |
+|---|---|---|
+| `[server]` | `listen`、`expected_token`、`worker_threads` | 监听地址、Bearer 鉴权（空 = 不校验）、tokio worker 线程数 |
+| `[audio]` | `downlink_sample_rate`、`downlink_frame_duration_ms`、`binary_protocol_version` | 下行音频参数，写入服务器 hello |
+| `[asr]` | `backend`（mock/sherpa）、`model`、`tokens`、`language`、`num_threads` | SenseVoice 离线识别 |
+| `[vad]` | `model`、`threshold`、`min_silence_duration` | Silero VAD 切段 |
+| `[tts]` | `backend`、`model`、`voices`、`tokens`、`data_dir`、`dict_dir`、`lexicon` | Kokoro 合成（中英） |
+| `[llm]` | `backend`（mock/http）、`api_base`、`api_key`、`model`、`system_prompt`、`max_history` | OpenAI 兼容接口 |
+
+---
+
+## 7. 部署架构
+
+```mermaid
+flowchart TB
+    subgraph 宿主机 NAS
+        CFG[config.toml]
+        MODELS[./models 挂载]
+        subgraph 容器 xiaozhi-server-rust
+            EP[docker-entrypoint.sh<br/>自检/下载模型]
+            BIN[/app/server]
+        end
+    end
+    GH[k2-fsa/sherpa-onnx release]
+    PROXY[tvv.tw GitHub 代理]
+
+    EP -- "1. 检查 /models 关键文件" --> MODELS
+    EP -- "2. 缺失则下载（GITHUB_PROXY）" --> PROXY --> GH
+    EP -- "3. exec" --> BIN
+    CFG -. 挂载 :ro .-> BIN
+    MODELS -. 挂载 :rw .-> BIN
+```
+
+- 镜像：`rust:1.90-bookworm` builder + `debian:bookworm-slim` runtime（运行期装 `libopus0 curl bzip2`）。
+- mock 服务：`docker compose --profile mock up`，`XIAOZHI_CONFIG=/dev/null` 回退内置 mock，零模型联调。
+- 部署后浏览器直接访问 `http://<host>:8000/` 即是测试台（同源自动填充 WS 地址与 `?token=`）。
+
+---
+
+## 8. 测试体系
+
+| 层级 | 工具 | 覆盖 |
+|---|---|---|
+| 单元测试 | `cargo test` | 协议 v1/v2/v3 二进制封装往返、JSON 序列化 |
+| 协议联调 | `tests/mock_client.py` | 零依赖 WS 客户端，断言 hello → stt → llm → tts 全链回包 |
+| 端到端 | `tests/web_test.html` | 浏览器真实麦克风 ASR + 扬声器 TTS（WebCodecs Opus） |
+| 部署验证 | ACR CI 构建 | Docker 多阶段构建（x86-64-v2 指令集） |
+
+---
+
+## 9. 扩展指引
+
+- **新增 ASR/TTS 后端**：实现 `asr.rs` / `tts.rs` 中的 trait，在 `build_asr` / `build_tts` 按 `backend` 字段分支返回。
+- **新增消息类型**：在 `protocol.rs` 的 `ClientMessage` / `ServerMessage` 枚举加变体（注意小写 tag），`session.rs` 的 switch 补处理；配套更新网页测试台与 mock_client 断言。
+- **更换 LLM**：`llm.rs` 的 `LlmClient` 只依赖 OpenAI 兼容 chat/completions，改 `api_base` 即可接任意兼容服务。

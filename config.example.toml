@@ -6,6 +6,8 @@
 listen = "0.0.0.0:8000"
 # Bearer token；为空字符串表示不校验 Authorization 头
 expected_token = ""
+# tokio 异步运行时 worker 线程数（默认 2）：避免占满 4 核小主机，给其他服务留余量
+worker_threads = 2
 
 [audio]
 # 服务器下行（TTS）采样率，写入服务器 hello，设备据此解码播放。
@@ -23,7 +25,8 @@ model = "/models/SenseVoiceSmall/model.int8.onnx"
 tokens = "/models/SenseVoiceSmall/tokens.txt"
 language = "auto"
 use_itn = true
-num_threads = 3
+# 识别线程数（默认 2）：与 TTS/VAD 错峰，避免占满 4 核小主机
+num_threads = 2
 provider = "cpu"
 
 [vad]
@@ -43,7 +46,8 @@ dict_dir = "/models/Kokoro/dict"
 lexicon = "/models/Kokoro/lexicon-us-en.txt,/models/Kokoro/lexicon-zh.txt"
 speaker = 0
 speed = 1.0
-num_threads = 2
+# 合成线程数（默认 1）：与 ASR 错峰，避免占满 4 核小主机
+num_threads = 1
 
 [llm]
 # "mock" 使用本地回显（零配置联调）；"http" 调用真实 OpenAI 兼容接口。

@@ -30,6 +30,9 @@ pub struct ServerConfig {
     /// 期望的 Bearer token；为空字符串表示不校验 `Authorization`。
     #[serde(default)]
     pub expected_token: String,
+    /// tokio 异步运行时的 worker 线程数；默认 2，避免占满低功耗主机（如 N5105 4 核）。
+    #[serde(default = "default_worker_threads")]
+    pub worker_threads: u32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -98,7 +101,7 @@ pub struct TtsConfig {
     pub speaker: i32,
     #[serde(default = "default_speed")]
     pub speed: f32,
-    #[serde(default = "default_num_threads")]
+    #[serde(default = "default_tts_threads")]
     pub num_threads: u32,
 }
 
@@ -126,6 +129,7 @@ impl Default for ServerConfig {
         ServerConfig {
             listen: default_listen(),
             expected_token: String::new(),
+            worker_threads: default_worker_threads(),
         }
     }
 }
@@ -174,7 +178,7 @@ impl Default for TtsConfig {
             lexicon: String::new(),
             speaker: 0,
             speed: default_speed(),
-            num_threads: default_num_threads(),
+            num_threads: default_tts_threads(),
         }
     }
 }
@@ -237,7 +241,15 @@ fn default_true() -> bool {
     true
 }
 fn default_num_threads() -> u32 {
-    3
+    2
+}
+/// TTS 合成线程数默认 1：与 ASR/VAD 错峰，避免 ASR+TTS 峰值占满 4 核。
+fn default_tts_threads() -> u32 {
+    1
+}
+/// tokio worker 线程数默认 2：IO 为主的工作负载足够，为核心数留余量。
+fn default_worker_threads() -> u32 {
+    2
 }
 fn default_provider() -> String {
     "cpu".into()
@@ -282,6 +294,7 @@ impl Default for Config {
             server: ServerConfig {
                 listen: default_listen(),
                 expected_token: String::new(),
+                worker_threads: default_worker_threads(),
             },
             audio: AudioConfig {
                 downlink_sample_rate: default_downlink_sr(),

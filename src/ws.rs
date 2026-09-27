@@ -6,7 +6,7 @@ use std::sync::Arc;
 use axum::{
     extract::{ws::WebSocketUpgrade, ws::WebSocket, ws::Message, ws::Utf8Bytes, Query, State},
     http::{header, HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
+    response::{Html, IntoResponse, Response},
     routing::get,
     Router,
 };
@@ -21,13 +21,19 @@ use crate::session::{run_session, SessionParams};
 /// 构造 Axum 路由（含健康检查与 WebSocket 端点）。
 pub fn router(engines: Arc<Engines>) -> Router {
     Router::new()
-        .route("/", get(health))
-        .route("/ws", get(ws_handler))
+        .route("/", get(test_page))
+        .route("/api/health", get(health))
+        .route("/api/ws", get(ws_handler))
         .with_state(engines)
 }
 
 async fn health() -> &'static str {
     "xiaozhi-server-rust ok"
+}
+
+/// 内嵌网页测试台（编译期打包，部署后直接访问 http://<host>/ 即可联调）。
+async fn test_page() -> Html<&'static str> {
+    Html(include_str!("../tests/web_test.html"))
 }
 
 async fn ws_handler(

@@ -50,7 +50,7 @@
 <body>
 <div class="wrap">
   <h1>小智语音服务端 · 测试台</h1>
-  <p class="sub">浏览器直连 <code>/ws</code>：麦克风 → Opus 上行（ASR），下行 Opus → 扬声器（TTS）。协议对齐 <code>src/protocol.rs</code>。</p>
+  <p class="sub">浏览器直连 <code>/api/ws</code>：麦克风 → Opus 上行（ASR），下行 Opus → 扬声器（TTS）。协议对齐 <code>src/protocol.rs</code>。</p>
   <div class="badges" id="badges"></div>
 
   <!-- 连接 -->
@@ -58,7 +58,7 @@
     <h2><span class="dot" id="connDot"></span>连接</h2>
     <div class="row">
       <label>服务地址</label>
-      <input id="url" value="ws://127.0.0.1:8000/ws" spellcheck="false">
+      <input id="url" value="ws://127.0.0.1:8000/api/ws" spellcheck="false">
       <label>Token</label>
       <input id="token" placeholder="留空 = 不鉴权" style="flex:0 1 160px" spellcheck="false">
       <button id="btnConn">连接</button>
@@ -122,6 +122,21 @@
   else add("WebCodecs 不可用（需 Chrome/Edge 94+）", true);
   if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) add("getUserMedia 可用");
   else add("getUserMedia 不可用（需 localhost/HTTPS）", true);
+})();
+
+// ---------- 地址与 Token 自动填充 ----------
+// 服务端托管时（http://<host>/ 或 /test）默认连同源 /api/ws；支持 ?token= 自动填充。
+(function () {
+  const q = new URLSearchParams(location.search);
+  const tk = q.get("token");
+  if (tk) document.getElementById("token").value = tk;
+  const urlInput = document.getElementById("url");
+  const cur = urlInput.value;
+  // 仍是打包默认的 127.0.0.1 且页面由服务端托管时，替换为同源地址
+  if (cur.includes("127.0.0.1:8000") && location.protocol.startsWith("http")) {
+    const wsProto = location.protocol === "https:" ? "wss:" : "ws:";
+    urlInput.value = wsProto + "//" + location.host + "/api/ws";
+  }
 })();
 
 const $ = id => document.getElementById(id);

@@ -9,6 +9,8 @@
 - **传输**：WebSocket 协议，严格对齐 `xiaozhi-esp32` 固件（文本消息 + 二进制 Opus 音频帧，支持 v1/v2/v3 二进制协议版本）。
 
 > 设计目标：在 Intel Celeron N5105（x86-64，Jasper Lake）这类低功耗主机上，用 Docker 跑起一个完全本地化（ASR/TTS 离线）的小智服务端，LLM 走本地或云端的 HTTP 接口。
+>
+> 📐 项目架构详见 [docs/architecture.md](./docs/architecture.md)（模块划分、会话流水线、协议设计、部署架构与扩展指引）。
 
 ---
 
@@ -45,7 +47,7 @@ API 已对照 1.13.8 rustdoc 校验：`OfflineSenseVoiceModelConfig`、`OfflineT
 健康检查：
 
 ```bash
-curl http://127.0.0.1:8000/
+curl http://127.0.0.1:8000/api/health
 # => xiaozhi-server-rust ok
 ```
 
@@ -178,17 +180,21 @@ python3 tests/mock_client.py
 
 ### 网页测试台（ASR / TTS 浏览器联调）
 
-[`tests/web_test.html`](./tests/web_test.html) 是一个**零依赖单文件页面**，浏览器直连 `/ws` 完成端到端语音联调：
+[`tests/web_test.html`](./tests/web_test.html) 是一个**零依赖单文件页面**，浏览器直连 `/api/ws` 完成端到端语音联调：
 
 - **ASR**：麦克风 16 kHz 采集 → WebCodecs 编码 Opus → 裸包上行（协议 v1）→ 服务端 VAD 切段识别 → 展示 `stt` 文本。
 - **TTS**：接收下行 Opus 帧（支持 v1/v2/v3 自动嗅探）→ 解码 → 扬声器播放，同步展示 `tts sentence_start` 文本。
 - 消息日志实时打印收发的 JSON 与二进制帧计数；支持触发一轮 mock 对话（`listen start`）与 `abort` 中断。
 
 ```bash
-# 方式一：直接双击/打开文件（file:// 可用）
+# 方式一：服务端直接托管（推荐）——页面编译期内嵌，访问根路径即出测试台，
+#         服务地址/Token 自动填充（支持 ?token=xxx 自动填鉴权）
+# 浏览器访问 http://127.0.0.1:8000/
+
+# 方式二：直接双击/打开文件（file:// 可用）
 open tests/web_test.html
 
-# 方式二：本地托管
+# 方式三：本地托管
 python3 -m http.server 8123 --directory tests
 # 浏览器访问 http://127.0.0.1:8123/web_test.html
 ```

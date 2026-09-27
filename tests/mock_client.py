@@ -2,7 +2,7 @@
 """xiaozhi-server-rust 协议联调客户端（零第三方依赖，纯标准库实现 RFC 6455）。
 
 流程：
-  1. 建立 WebSocket 连接到 /ws
+  1. 建立 WebSocket 连接到 /api/ws
   2. 发送设备 hello（version=1，上行 16k opus）
   3. 断言服务器 hello（含 downlink audio_params）
   4. 发送 listen start
@@ -117,8 +117,8 @@ def main() -> int:
     ap.add_argument("--token", default=None, help="Bearer token（当 expected_token 非空时必填）")
     args = ap.parse_args()
 
-    print(f"[*] 连接 ws://{args.host}:{args.port}/ws")
-    sock = ws_connect(args.host, args.port, "/ws", args.token)
+    print(f"[*] 连接 ws://{args.host}:{args.port}/api/ws")
+    sock = ws_connect(args.host, args.port, "/api/ws", args.token)
     print("[+] 握手成功")
 
     # 1) 设备 hello

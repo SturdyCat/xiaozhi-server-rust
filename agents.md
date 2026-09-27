@@ -196,7 +196,7 @@ tests/mock_client.py         零依赖 WebSocket 联调客户端
 # 启动 mock 服务（后台）
 ~/.cargo/bin/cargo run --config 'source.ustc.registry="sparse+https://mirrors.ustc.edu.cn/crates.io-index/"' &
 # 健康检查
-curl http://127.0.0.1:8000/   # => xiaozhi-server-rust ok
+curl http://127.0.0.1:8000/api/health   # => xiaozhi-server-rust ok
 
 # 协议联调（零第三方依赖，纯标准库）
 python3 tests/mock_client.py

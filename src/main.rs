@@ -24,20 +24,33 @@ use crate::config::Config;
 use crate::engine::Engines;
 use crate::ws::router;
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    // 配置在 runtime 构建前加载（worker_threads 需要它）。
+    let config = load_config();
+
+    // tokio 多线程 runtime：worker 线程数由 [server].worker_threads 控制（默认 2），
+    // 避免默认按 CPU 核数拉满，在 N5105 这类 4 核主机上挤占其他服务。
+    let workers = config.server.worker_threads.max(1) as usize;
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(workers)
+        .enable_all()
+        .build()?
+        .block_on(run(config))
+}
+
+async fn run(config: Config) -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
 
-    let config = load_config();
     tracing::info!(
-        "配置加载完成：ASR backend={}, TTS backend={}, 监听={}",
+        "配置加载完成：ASR backend={}, TTS backend={}, 监听={}, tokio worker={} 线程",
         config.asr.backend,
         config.tts.backend,
-        config.server.listen
+        config.server.listen,
+        config.server.worker_threads.max(1)
     );
 
     let engines = Engines::new(&config)?;
