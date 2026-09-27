@@ -19,3 +19,6 @@ target
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
+
+# 本地 AI 助手工作记忆（仅本地使用，不进版本库）
+.workbuddy/
