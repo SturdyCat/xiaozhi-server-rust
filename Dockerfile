@@ -2,7 +2,7 @@
 # 真实引擎需要 libopus（audiopus）与网络连接（构建脚本自动下载 sherpa-onnx 原生库）。
 
 # ---------- 构建阶段 ----------
-FROM rust:1.82-bookworm AS builder
+FROM rust:1.86-bookworm AS builder
 WORKDIR /app
 
 # 系统依赖：audiopus 编译/链接需要 pkg-config 与 libopus
@@ -13,8 +13,10 @@ RUN apt-get update \
 COPY Cargo.toml Cargo.lock* ./
 COPY src ./src
 
-# 在 N5105（Jasper Lake）上构建时启用本地指令集优化
-ENV RUSTFLAGS="-C target-cpu=native"
+# 目标指令集固定为 x86-64-v2：部署机 N5105（Tremont，无 AVX）可安全运行。
+# 不要用 native —— CI 构建机的 CPU 与部署机 N5105 不同，native 会嵌入部署机不支持的
+# AVX/AVX2/AVX-512 指令，导致运行时 SIGILL 崩溃。
+ENV RUSTFLAGS="-C target-cpu=x86-64-v2"
 RUN cargo build --release --features sherpa
 
 # ---------- 运行阶段 ----------
