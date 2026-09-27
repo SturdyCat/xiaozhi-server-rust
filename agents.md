@@ -154,7 +154,7 @@ export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:$PKG_CONFIG_PATH"
 
 ### 5.7 容器启动会自动检测并下载缺失模型（`docker-entrypoint.sh`）
 
-报错 `tokens.txt does not exist` / `创建 SenseVoice 识别器失败` 的根因是 `/models` 里没有模型文件。Docker 入口脚本在 `exec` 服务器**之前**会自检关键文件（`silero_vad.onnx`、`SenseVoiceSmall/tokens.txt`、`Kokoro/model.onnx`）：
+报错 `tokens.txt does not exist` / `创建 SenseVoice 识别器失败` 的根因是 `/models` 里没有模型文件。Docker 入口脚本在 `exec` 服务器**之前**会自检关键文件（`silero_vad.onnx`、`SenseVoiceSmall/model.int8.onnx`、`Kokoro/model.int8.onnx` 等，**官方包内文件名是 `model.int8.onnx`，不是 `model.onnx`**）：
 
 - **缺失 → 自动从 k2-fsa/sherpa-onnx 官方 release 下载**到挂载的 `/models`（默认行为），下载后持久化，后续启动检测到即跳过。
 - **默认走 GitHub 代理 `https://tvv.tw/`**（`GITHUB_PROXY` 覆盖，`off` 直连）：部署环境直连 `github.com`/`release-assets.githubusercontent.com` 常超时（curl 卡 134s）；代理仅对 github.com 直链套用，内网镜像 URL 不受影响。
@@ -164,7 +164,7 @@ export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:$PKG_CONFIG_PATH"
 - 运行期镜像需装 `curl` + `bzip2`（`tar` 自带）用于下载与解包；`docker-compose.yml` 的 `./models` 挂载**必须可写**（不要 `:ro`）。
 - 离线/内网：先 `./scripts/download_models.sh /host/models` 预置再挂载，或设 `XIAOZHI_AUTO_DOWNLOAD_MODELS=off`。
 
-默认模型包（已核对官方 release，与 config.example.toml 路径一一对应）：`sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09`（SenseVoice INT8）、 `kokoro-int8-en-v0_19`（Kokoro INT8，含 model/voices/tokens/espeak-ng-data/双 lexicon）、 `silero_vad.onnx`（Silero VAD）。
+默认模型包（已完整下载验证，与 config.example.toml 路径一一对应）：`sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09`（SenseVoice INT8，`model.int8.onnx`）、`kokoro-int8-multi-lang-v1_1`（Kokoro INT8 **中英双语**，含 model.int8.onnx/voices.bin/tokens.txt/espeak-ng-data/lexicon-zh.txt/lexicon-us-en.txt/dict（jieba）/date-zh.fst）、`silero_vad.onnx`（Silero VAD）。⚠️ 此前误判 `kokoro-int8-multi-lang-v1_1` 不是完整包（流式列清单被管道截断所致），实际 144MB/417 文件完整；`kokoro-int8-en-v0_19` 仅英文、无 lexicon，中文场景勿用。
 
 ## 6. 项目结构速查
 

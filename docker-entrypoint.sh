@@ -21,9 +21,10 @@
 # 适用场景：首次启动容器且 ./models 为空时，自动拉取 SenseVoice/Kokoro/Silero 模型；
 #          模型写入挂载目录后会持久化，后续启动检测到文件存在即跳过，避免重复下载。
 #
-# 默认模型包（已核对官方 release，与 config.example.toml 路径一一对应）：
-#   - SenseVoice INT8 : sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09
-#   - Kokoro INT8     : kokoro-int8-en-v0_19（含 model/voices/tokens/espeak-ng-data/双 lexicon）
+# 默认模型包（已核对官方 release 并完整下载验证，与 config.example.toml 路径一一对应）：
+#   - SenseVoice INT8 : sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09（model.int8.onnx）
+#   - Kokoro INT8     : kokoro-int8-multi-lang-v1_1（中英双语；model.int8.onnx/voices.bin/
+#                       tokens.txt/espeak-ng-data/lexicon-zh.txt/lexicon-us-en.txt/dict）
 #   - Silero VAD      : silero_vad.onnx
 
 set -eu
@@ -32,7 +33,7 @@ MODELS_DIR="${XIAOZHI_MODELS_DIR:-/models}"
 AUTO="${XIAOZHI_AUTO_DOWNLOAD_MODELS:-missing}"
 
 SENSEVOICE_URL="${SENSEVOICE_URL:-https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09.tar.bz2}"
-KOKORO_URL="${KOKORO_URL:-https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-int8-en-v0_19.tar.bz2}"
+KOKORO_URL="${KOKORO_URL:-https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-int8-multi-lang-v1_1.tar.bz2}"
 SILERO_VAD_URL="${SILERO_VAD_URL:-https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx}"
 
 # GitHub 直链代理：部署环境常无法直连 github.com / release-assets.githubusercontent.com
@@ -56,11 +57,12 @@ apply_proxy() {
 CURL_OPTS="-fSL --connect-timeout 15 --retry 3 --retry-delay 2"
 
 # 模型就绪“代表性”检查点：缺失任一即视为未下载。
+# 注意：官方包内模型文件名为 model.int8.onnx（不是 model.onnx）。
 CHECKPOINTS="
 $MODELS_DIR/silero_vad.onnx
+$MODELS_DIR/SenseVoiceSmall/model.int8.onnx
 $MODELS_DIR/SenseVoiceSmall/tokens.txt
-$MODELS_DIR/SenseVoiceSmall/model.onnx
-$MODELS_DIR/Kokoro/model.onnx
+$MODELS_DIR/Kokoro/model.int8.onnx
 $MODELS_DIR/Kokoro/voices.bin
 $MODELS_DIR/Kokoro/tokens.txt
 $MODELS_DIR/Kokoro/espeak-ng-data

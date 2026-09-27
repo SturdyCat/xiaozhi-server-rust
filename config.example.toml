@@ -19,7 +19,7 @@ binary_protocol_version = 1
 [asr]
 # "sherpa" 使用真实 SenseVoice INT8；"mock" 无模型回显固定文本（本地联调）。
 backend = "sherpa"
-model = "/models/SenseVoiceSmall/model.onnx"
+model = "/models/SenseVoiceSmall/model.int8.onnx"
 tokens = "/models/SenseVoiceSmall/tokens.txt"
 language = "auto"
 use_itn = true
@@ -35,7 +35,7 @@ min_speech_duration = 0.25
 [tts]
 # "sherpa" 使用真实 Kokoro INT8；"mock" 生成静音（本地联调）。
 backend = "sherpa"
-model = "/models/Kokoro/model.onnx"
+model = "/models/Kokoro/model.int8.onnx"
 voices = "/models/Kokoro/voices.bin"
 tokens = "/models/Kokoro/tokens.txt"
 data_dir = "/models/Kokoro/espeak-ng-data"
