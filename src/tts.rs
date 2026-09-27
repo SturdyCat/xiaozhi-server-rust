@@ -51,12 +51,13 @@ impl SherpaTts {
             length_scale: 1.0,
             lang: Some("zh".to_string()),
         };
-        model_config.num_threads = cfg.num_threads;
+        model_config.num_threads = cfg.num_threads as i32;
         let config = OfflineTtsConfig {
             model: model_config,
             ..Default::default()
         };
-        let tts = sherpa_onnx::OfflineTts::new(config);
+        let tts = sherpa_onnx::OfflineTts::create(&config)
+            .context("创建 Kokoro TTS 失败（检查模型路径或原生库）")?;
         Ok(Self {
             tts: Arc::new(tts),
             speaker: cfg.speaker,
@@ -75,7 +76,7 @@ impl TtsEngine for SherpaTts {
         };
         let audio = self
             .tts
-            .generate_with_config(text, &gen, |_chunk: &sherpa_onnx::GeneratedAudio| {});
+            .generate_with_config::<fn(&[f32], f32) -> bool>(text, &gen, None);
         match audio {
             Some(a) => {
                 let sr = a.sample_rate() as u32;

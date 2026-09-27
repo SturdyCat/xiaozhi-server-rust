@@ -40,7 +40,7 @@ impl SherpaAsr {
         };
         let mut model_config = OfflineModelConfig::default();
         model_config.tokens = Some(cfg.tokens.clone());
-        model_config.num_threads = cfg.num_threads;
+        model_config.num_threads = cfg.num_threads as i32;
         model_config.provider = Some(cfg.provider.clone());
         model_config.sense_voice = OfflineSenseVoiceModelConfig {
             model: Some(cfg.model.clone()),
@@ -51,7 +51,8 @@ impl SherpaAsr {
             model_config,
             ..Default::default()
         };
-        let recognizer = sherpa_onnx::OfflineRecognizer::new(config);
+        let recognizer = sherpa_onnx::OfflineRecognizer::create(&config)
+            .context("创建 SenseVoice 识别器失败（检查模型路径或原生库）")?;
         Ok(Self {
             recognizer: Arc::new(recognizer),
         })
@@ -62,10 +63,12 @@ impl SherpaAsr {
 impl AsrEngine for SherpaAsr {
     fn recognize(&self, samples: &[f32], sample_rate: u32) -> Result<String> {
         let mut stream = self.recognizer.create_stream();
-        stream.accept_waveform(sample_rate as f32, samples);
-        self.recognizer.decode_stream(&mut stream);
-        let result = self.recognizer.get_result(&stream);
-        Ok(result.text)
+        stream.accept_waveform(sample_rate as i32, samples);
+        self.recognizer.decode(&stream);
+        match stream.get_result() {
+            Some(r) => Ok(r.text),
+            None => anyhow::bail!("SenseVoice 识别失败（无返回结果）"),
+        }
     }
 }
 

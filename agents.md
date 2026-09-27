@@ -127,6 +127,31 @@ pub enum ServerMessage { Hello { .. }, Stt { .. }, Llm { .. }, Tts { .. }, Syste
 
 **不要降级镜像 Rust**；也不要在无 lock 限定的情况下 `cargo update` 导致依赖需要更高 Rust。若升级了本机 cargo，记得同步抬高此处的镜像版本。
 
+### 5.6 本地（macOS）编 `--features sherpa` 需要 Homebrew 的 `opus`（绕开 autoreconf）
+
+`audiopus_sys` 优先用 `pkg-config` 找系统的 `libopus`；找不到就回退去**从自带 Opus 源码 autotools 编译**，而本机只装了 `autoconf`/`autoreconf`/`glibtoolize`，**缺 `automake`（无 `aclocal`）**，于是 `autoreconf` 直接失败：
+
+```
+Can't exec "aclocal": No such file or directory
+autoreconf: error: aclocal failed with exit status: 2
+```
+
+**最省事的修法（macOS 本地验证用）**：
+
+```bash
+# 1) 把 Homebrew 工具链与 pkg-config 路径加入 PATH（非交互 shell 默认不带 /opt/homebrew/bin）
+export PATH="/opt/homebrew/bin:$PATH"
+# 2) 装 opus，让 audiopus_sys 走 pkg-config 动态链接，彻底跳过源码编译
+brew install opus
+export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:$PKG_CONFIG_PATH"
+# 3) 此时再编 sherpa 特性即可（动态链到 /opt/homebrew/lib/libopus.dylib）
+~/.cargo/bin/cargo check --features sherpa \
+  --config 'source.ustc.registry="sparse+https://mirrors.ustc.edu.cn/crates.io-index/"'
+```
+
+- 注意：这样编出的二进制**动态依赖 Homebrew 的 opus**，仅用于本地验证代码能否编译，**与 Docker 部署无关**（Docker 走 Debian `libopus0` + 静态/系统链接，CI 已验证可过 `audopus_sys`）。
+- 若想严格复现源码编译路径，则需再 `brew install automake libtool`（并把 `libtoolize` 链到 `glibtoolize`），但 pkg-config 路径更省事，推荐。
+
 ## 6. 项目结构速查
 
 ```
