@@ -63,14 +63,14 @@ xiaozhi-server-rust/
 │   ├── vad.rs           # VadEngine trait：MockVad / SherpaVad（Silero，流式）
 │   ├── llm.rs           # Llm 枚举：MockLlm / LlmClient（OpenAI 兼容 chat/completions）
 │   ├── audio/           # opus 编解码（audiopus）、线性重采样（rubato）
+│   ├── web_test.html    # 单文件网页测试台（include_str! 内嵌进二进制，GET / 直接返回）
 │   ├── config.rs        # TOML 配置结构与加载（serde）
 │   └── error.rs         # AppError（axum IntoResponse）+ ProtocolError
 ├── docker-entrypoint.sh # 容器入口：模型自检 + 自动下载 + 代理
 ├── scripts/download_models.sh  # 宿主机预置模型（与入口同源 URL）
 ├── config.example.toml  # 配置样例（[server]/[audio]/[asr]/[vad]/[tts]/[llm]）
 ├── tests/
-│   ├── mock_client.py   # 零依赖 RFC 6455 协议联调客户端（PASS 判定全链回包）
-│   └── web_test.html    # 单文件网页测试台（也被编译期内嵌到 GET /）
+│   └── mock_client.py   # 零依赖 RFC 6455 协议联调客户端（PASS 判定全链回包）
 ├── Dockerfile           # rust:1.90 多阶段构建，RUSTFLAGS=-C target-cpu=x86-64-v2
 └── docker-compose.yml   # xiaozhi + xiaozhi-mock（profile）两个服务
 ```
@@ -140,7 +140,7 @@ sequenceDiagram
 
 | 路径 | 说明 |
 |---|---|
-| `GET /` | 网页测试台（`include_str!` 编译期内嵌 `tests/web_test.html`） |
+| `GET /` | 网页测试台（`include_str!` 编译期内嵌 `src/web_test.html`） |
 | `GET /api/health` | 健康检查，返回 `xiaozhi-server-rust ok` |
 | `GET /api/ws` | WebSocket 会话入口 |
 
@@ -208,7 +208,7 @@ flowchart TB
 |---|---|---|
 | 单元测试 | `cargo test` | 协议 v1/v2/v3 二进制封装往返、JSON 序列化 |
 | 协议联调 | `tests/mock_client.py` | 零依赖 WS 客户端，断言 hello → stt → llm → tts 全链回包 |
-| 端到端 | `tests/web_test.html` | 浏览器真实麦克风 ASR + 扬声器 TTS（WebCodecs Opus） |
+| 端到端 | `src/web_test.html` | 浏览器真实麦克风 ASR + 扬声器 TTS（WebCodecs Opus） |
 | 部署验证 | ACR CI 构建 | Docker 多阶段构建（x86-64-v2 指令集） |
 
 ---

@@ -180,7 +180,7 @@ python3 tests/mock_client.py
 
 ### 网页测试台（ASR / TTS 浏览器联调）
 
-[`tests/web_test.html`](./tests/web_test.html) 是一个**零依赖单文件页面**，浏览器直连 `/api/ws` 完成端到端语音联调：
+[`src/web_test.html`](./src/web_test.html) 是一个**零依赖单文件页面**，浏览器直连 `/api/ws` 完成端到端语音联调（编译期内嵌进服务端二进制，`GET /` 直接出页面）：
 
 - **ASR**：麦克风 16 kHz 采集 → WebCodecs 编码 Opus → 裸包上行（协议 v1）→ 服务端 VAD 切段识别 → 展示 `stt` 文本。
 - **TTS**：接收下行 Opus 帧（支持 v1/v2/v3 自动嗅探）→ 解码 → 扬声器播放，同步展示 `tts sentence_start` 文本。
@@ -192,7 +192,7 @@ python3 tests/mock_client.py
 # 浏览器访问 http://127.0.0.1:8000/
 
 # 方式二：直接双击/打开文件（file:// 可用）
-open tests/web_test.html
+open src/web_test.html
 
 # 方式三：本地托管
 python3 -m http.server 8123 --directory tests

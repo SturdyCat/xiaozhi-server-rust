@@ -62,7 +62,7 @@ impl SherpaAsr {
 #[cfg(feature = "sherpa")]
 impl AsrEngine for SherpaAsr {
     fn recognize(&self, samples: &[f32], sample_rate: u32) -> Result<String> {
-        let mut stream = self.recognizer.create_stream();
+        let stream = self.recognizer.create_stream();
         stream.accept_waveform(sample_rate as i32, samples);
         self.recognizer.decode(&stream);
         match stream.get_result() {

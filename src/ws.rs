@@ -33,7 +33,7 @@ async fn health() -> &'static str {
 
 /// 内嵌网页测试台（编译期打包，部署后直接访问 http://<host>/ 即可联调）。
 async fn test_page() -> Html<&'static str> {
-    Html(include_str!("../tests/web_test.html"))
+    Html(include_str!("web_test.html"))
 }
 
 async fn ws_handler(
@@ -63,7 +63,7 @@ fn auth_ok(headers: &HeaderMap, query: &HashMap<String, String>, server: &Server
         }
     }
     // 兜底：浏览器 WebSocket 无法自定义请求头，允许 ?token= 查询参数
-    // （供 tests/web_test.html 网页测试台使用；设备侧仍走 Authorization 头）
+    // （供 src/web_test.html 网页测试台使用；设备侧仍走 Authorization 头）
     query.get("token").is_some_and(|t| t == &server.expected_token)
 }
 
