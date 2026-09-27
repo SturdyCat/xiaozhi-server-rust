@@ -7,7 +7,6 @@ mod asr;
 mod audio;
 mod config;
 mod engine;
-mod error;
 mod llm;
 mod protocol;
 mod session;

@@ -49,6 +49,8 @@ pub struct AudioConfig {
     pub binary_protocol_version: u8,
 }
 
+// 模型路径等字段仅 `sherpa` feature 下消费；mock 模式下仅作为配置 schema 保留。
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 pub struct AsrConfig {
     /// `sherpa` 或 `mock`。
@@ -68,6 +70,8 @@ pub struct AsrConfig {
     pub provider: String,
 }
 
+// 模型路径等字段仅 `sherpa` feature 下消费；mock 模式下仅作为配置 schema 保留。
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 pub struct VadConfig {
     #[serde(default)]
@@ -80,6 +84,8 @@ pub struct VadConfig {
     pub min_speech_duration: f32,
 }
 
+// 模型路径等字段仅 `sherpa` feature 下消费；mock 模式下仅作为配置 schema 保留。
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 pub struct TtsConfig {
     /// `sherpa` 或 `mock`。

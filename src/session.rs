@@ -88,7 +88,57 @@ pub async fn run_session(
             _ => {}
         }
     }
+
+    // 会话结束：flush VAD 残留语音段（真实音频模式），尽力把最后一句话送完流水线。
+    // 连接可能已关闭，此时发送会失败并被记录，属正常情况。
+    if real_audio {
+        let mut segments = Vec::new();
+        vad.flush(&mut |seg| segments.push(seg));
+        recognize_segments(
+            &mut socket,
+            &engines,
+            segments,
+            &mut history,
+            &params,
+            &mut downlink_ts,
+            &session_id,
+        )
+        .await;
+    }
     Ok(())
+}
+
+/// 将 VAD 切出的语音段送 ASR → 完整流水线；常规分帧与会话结束 flush 共用。
+async fn recognize_segments(
+    socket: &mut WebSocket,
+    engines: &Arc<Engines>,
+    segments: Vec<Vec<f32>>,
+    history: &mut Vec<(String, String)>,
+    params: &SessionParams,
+    downlink_ts: &mut u32,
+    session_id: &str,
+) {
+    for seg in segments {
+        let Ok(user_text) = engines.asr.recognize(&seg, params.uplink_sr) else {
+            continue;
+        };
+        if user_text.trim().is_empty() {
+            continue;
+        }
+        if let Err(e) = stream_response(
+            socket,
+            engines,
+            history,
+            params,
+            downlink_ts,
+            session_id,
+            &user_text,
+        )
+        .await
+        {
+            tracing::warn!("流水处理失败: {e}");
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -200,7 +250,7 @@ async fn handle_text(
                     return Ok(());
                 }
             };
-            send_tts_audio(socket, engines, params, downlink_ts, session_id, &text, &pcm, tts_sr).await?;
+            send_tts_audio(socket, params, downlink_ts, session_id, &text, &pcm, tts_sr).await?;
         }
         ClientMessage::Hello(_) => {
             tracing::warn!("会话内收到重复 hello，忽略");
@@ -240,27 +290,16 @@ async fn handle_binary(
     }
     let mut segments = Vec::new();
     vad.accept(&pcm, &mut |seg| segments.push(seg));
-    for seg in segments {
-        let Ok(user_text) = engines.asr.recognize(&seg, params.uplink_sr) else {
-            continue;
-        };
-        if user_text.trim().is_empty() {
-            continue;
-        }
-        if let Err(e) = stream_response(
-            socket,
-            engines,
-            history,
-            params,
-            downlink_ts,
-            session_id,
-            &user_text,
-        )
-        .await
-        {
-            tracing::warn!("流水处理失败: {e}");
-        }
-    }
+    recognize_segments(
+        socket,
+        engines,
+        segments,
+        history,
+        params,
+        downlink_ts,
+        session_id,
+    )
+    .await;
 }
 
 /// 从用户文本开始：stt → LLM → llm → TTS → 下行音频（支持 abort 中断）。
@@ -300,6 +339,11 @@ async fn stream_response(
     .await?;
     history.push(("user".to_string(), user_text.to_string()));
     history.push(("assistant".to_string(), reply.clone()));
+    // 按 [llm].max_history 截断多轮历史，只保留最近 N 条（role, content）。
+    let max_history = engines.config.llm.max_history;
+    while history.len() > max_history {
+        history.remove(0);
+    }
 
     let (pcm, tts_sr) = match engines
         .tts()
@@ -311,7 +355,7 @@ async fn stream_response(
             return Ok(());
         }
     };
-    send_tts_audio(socket, engines, params, downlink_ts, session_id, &reply, &pcm, tts_sr).await?;
+    send_tts_audio(socket, params, downlink_ts, session_id, &reply, &pcm, tts_sr).await?;
     Ok(())
 }
 
@@ -320,7 +364,6 @@ async fn stream_response(
 #[allow(clippy::too_many_arguments)]
 async fn send_tts_audio(
     socket: &mut WebSocket,
-    engines: &Arc<Engines>,
     params: &SessionParams,
     downlink_ts: &mut u32,
     session_id: &str,

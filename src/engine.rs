@@ -19,6 +19,8 @@ pub struct Engines {
     /// 网页测试台切换语言时按需构建对应引擎；mock 与语言无关）。
     tts_pool: Mutex<HashMap<String, Arc<dyn TtsEngine>>>,
     pub llm: Llm,
+    /// 仅 `sherpa` feature 下消费；mock 模式仅保留配置字段。
+    #[allow(dead_code)]
     vad_model: String,
     vad_threshold: f32,
     pub config: Arc<Config>,

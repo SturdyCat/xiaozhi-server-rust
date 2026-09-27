@@ -57,6 +57,8 @@ pub struct ClientFeatures {
 }
 
 /// 设备 → 服务器 的 hello 负载（不含外层 `type`）。
+// `features`/`transport` 为固件协议字段，当前流水线未消费，保留以完整对齐协议。
+#[allow(dead_code)]
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct ClientHello {
     /// 二进制协议版本 1/2/3。
@@ -75,6 +77,8 @@ pub struct ClientHello {
 /// 注意：`xiaozhi-esp32` 固件发送小写 `type` 标签（`hello`/`listen`/`abort`/`mcp`），
 /// 故用 `rename_all = "snake_case"` 对齐（单词变体仍为小写，多单词如 `AsrTest` → `asr_test`），
 /// 否则反序列化会报 unknown variant。
+// 部分变体字段（如 session_id/mode/text/reason）为固件协议字段，当前未消费，保留以完整对齐协议。
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientMessage {
@@ -127,6 +131,8 @@ pub enum ClientMessage {
 /// 服务器 → 设备 的文本消息。
 ///
 /// 与设备侧一致使用小写 `type` 标签（`hello`/`stt`/`llm`/`tts`/`system`/`custom`/`mcp`）。
+// `System`/`Custom` 为固件协议预留变体（如重启/自定义指令），当前未下发，保留以完整对齐协议。
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum ServerMessage {
