@@ -1,0 +1,6 @@
+target/
+.git/
+.cargo/
+*.md
+config.toml
+.env
