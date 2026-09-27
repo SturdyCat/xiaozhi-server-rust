@@ -335,8 +335,8 @@ docker run -d --name xiaozhi \
 
 ## 9. 模型下载脚本（scripts/download_models.sh）
 
-- SenseVoice INT8：`sherpa-onnx-sense-voice-zh-en-ja-ko-2025-...int8`（官方 release）。
-- Kokoro：`kokoro-multi-lang-v1_0`（含 voices.bin/tokens/espeak-ng-data/dict/lexicon）。
+- SenseVoice INT8：`sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09`（官方 release）。
+- Kokoro INT8：`kokoro-int8-en-v0_19`（含 model/voices.bin/tokens/espeak-ng-data/dict/双 lexicon）。
 - Silero VAD：`silero_vad.onnx`。
 - 统一解压到 `/host/models/{SenseVoiceSmall,Kokoro}` 与 `silero_vad.onnx`，路径与 `config.example.toml` 对齐。
 

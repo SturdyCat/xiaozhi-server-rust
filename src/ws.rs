@@ -1,9 +1,10 @@
 //! WebSocket 网关：握手、协议版本/音频参数协商、鉴权，然后转入会话状态机。
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::{
-    extract::{ws::WebSocketUpgrade, ws::WebSocket, ws::Message, ws::Utf8Bytes, State},
+    extract::{ws::WebSocketUpgrade, ws::WebSocket, ws::Message, ws::Utf8Bytes, Query, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
@@ -32,9 +33,10 @@ async fn health() -> &'static str {
 async fn ws_handler(
     ws: WebSocketUpgrade,
     headers: HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
     State(engines): State<Arc<Engines>>,
 ) -> Response {
-    if !auth_ok(&headers, &engines.config.server) {
+    if !auth_ok(&headers, &query, &engines.config.server) {
         return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
     }
     ws.on_upgrade(move |socket| async move {
@@ -44,17 +46,19 @@ async fn ws_handler(
     })
 }
 
-fn auth_ok(headers: &HeaderMap, server: &ServerConfig) -> bool {
+fn auth_ok(headers: &HeaderMap, query: &HashMap<String, String>, server: &ServerConfig) -> bool {
     if server.expected_token.is_empty() {
         return true;
     }
-    let Some(auth) = headers.get(header::AUTHORIZATION) else {
-        return false;
-    };
-    let Ok(v) = auth.to_str() else {
-        return false;
-    };
-    v == format!("Bearer {}", server.expected_token)
+    let expected = format!("Bearer {}", server.expected_token);
+    if let Some(auth) = headers.get(header::AUTHORIZATION) {
+        if auth.to_str().is_ok_and(|v| v == expected) {
+            return true;
+        }
+    }
+    // 兜底：浏览器 WebSocket 无法自定义请求头，允许 ?token= 查询参数
+    // （供 tests/web_test.html 网页测试台使用；设备侧仍走 Authorization 头）
+    query.get("token").is_some_and(|t| t == &server.expected_token)
 }
 
 async fn handle_handshake(

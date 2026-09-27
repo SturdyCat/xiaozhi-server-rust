@@ -23,12 +23,15 @@ RUN cargo build --release --features sherpa
 FROM debian:bookworm-slim AS runtime
 WORKDIR /app
 
-# 运行期需要 libopus 动态库（audiopus 链接）
+# 运行期需要 libopus 动态库（audiopus 链接）；
+# curl/bzip2 供 entrypoint 在模型缺失时按需下载（见 docker-entrypoint.sh）。
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libopus0 ca-certificates \
+    && apt-get install -y --no-install-recommends libopus0 ca-certificates curl bzip2 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/target/release/xiaozhi-server-rust /app/server
+COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh
 
 EXPOSE 8000
-ENTRYPOINT ["/app/server"]
+ENTRYPOINT ["/app/docker-entrypoint.sh"]

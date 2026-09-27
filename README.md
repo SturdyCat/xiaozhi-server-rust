@@ -92,7 +92,9 @@ export XIAOZHI_CONFIG=$PWD/config.toml
 ./scripts/download_models.sh /host/models
 ```
 
-脚本会拉取 Silero VAD、SenseVoice INT8、Kokoro INT8，并提示核对文件路径（以 k2-fsa/sherpa-onnx 官方 release 为准）。下载后按 `config.example.toml` 的 `[asr]` / `[tts]` 路径对齐 `model` / `tokens` / `voices` 等。
+脚本会拉取 Silero VAD、SenseVoice INT8、Kokoro INT8（默认取官方 release 的 `*-int8-*` 量化包），并提示核对文件路径。下载后按 `config.example.toml` 的 `[asr]` / `[vad]` / `[tts]` 路径对齐 `model` / `tokens` / `voices` 等。
+
+> 用 Docker 部署时**无需手动下载**：容器入口会自动检测并下载（见上文 [模型自动下载](#模型自动下载)），除非你处于离线/内网环境。
 
 ### 2. 编译运行
 
@@ -106,7 +108,7 @@ export XIAOZHI_CONFIG=$PWD/config.toml
 
 ## Docker
 
-多阶段构建。`Dockerfile` 默认以 `--features sherpa` 构建（运行期需 `libopus0`）：
+多阶段构建。`Dockerfile` 默认以 `--features sherpa` 构建（运行期需 `libopus0` 与 `curl`/`bzip2` 供入口脚本按需下载模型）：
 
 ```bash
 docker build -t xiaozhi-server-rust:latest .
@@ -118,7 +120,20 @@ docker run -d --name xiaozhi \
   xiaozhi-server-rust:latest
 ```
 
-N5105 构建时通过 `RUSTFLAGS="-C target-cpu=native"` 启用本地指令集优化（见 `Dockerfile`）。
+### 模型自动下载
+
+容器入口（`docker-entrypoint.sh`）会在启动时检测关键模型文件（`silero_vad.onnx`、`SenseVoiceSmall/tokens.txt`、`Kokoro/model.onnx`）：
+
+- **缺失则自动下载**到挂载的 `/models`（默认行为，首次启动拉取后持久化，后续跳过）。
+- 下载地址可用环境变量覆盖：`SENSEVOICE_URL` / `KOKORO_URL` / `SILERO_VAD_URL`（便于内网镜像）。
+- 行为开关 `XIAOZHI_AUTO_DOWNLOAD_MODELS`：`missing`（默认，缺失才下）/ `force`（每次重下）/ `off`（不下载，依赖挂载或预置）。
+
+> 因此**不手动预置模型也能直接 `docker compose up` 跑起来**；前提是容器能访问 GitHub release。
+> 离线/内网环境：先 `./scripts/download_models.sh /host/models` 预置，再挂载，或设 `XIAOZHI_AUTO_DOWNLOAD_MODELS=off`。
+
+### 部署机指令集
+
+构建期固定 `RUSTFLAGS="-C target-cpu=x86-64-v2"`（见 `Dockerfile`），以兼容部署机 N5105（Tremont，无 AVX）。**不要用 `native`**——CI 构建机 CPU 与部署机不同，`native` 会嵌入部署机不支持的 AVX/AVX2/AVX-512 指令，导致运行时 `SIGILL` 崩溃。
 
 ---
 
@@ -159,6 +174,28 @@ python3 tests/mock_client.py
 ```
 
 可用参数：`--host 127.0.0.1 --port 8000 --token <bearer>`（当 `expected_token` 非空时传 `--token`）。
+
+### 网页测试台（ASR / TTS 浏览器联调）
+
+[`tests/web_test.html`](./tests/web_test.html) 是一个**零依赖单文件页面**，浏览器直连 `/ws` 完成端到端语音联调：
+
+- **ASR**：麦克风 16 kHz 采集 → WebCodecs 编码 Opus → 裸包上行（协议 v1）→ 服务端 VAD 切段识别 → 展示 `stt` 文本。
+- **TTS**：接收下行 Opus 帧（支持 v1/v2/v3 自动嗅探）→ 解码 → 扬声器播放，同步展示 `tts sentence_start` 文本。
+- 消息日志实时打印收发的 JSON 与二进制帧计数；支持触发一轮 mock 对话（`listen start`）与 `abort` 中断。
+
+```bash
+# 方式一：直接双击/打开文件（file:// 可用）
+open tests/web_test.html
+
+# 方式二：本地托管
+python3 -m http.server 8123 --directory tests
+# 浏览器访问 http://127.0.0.1:8123/web_test.html
+```
+
+> - 需要 **Chrome / Edge**（依赖 WebCodecs）；麦克风要求页面运行于 `localhost` / `HTTPS` / `file://`。
+> - **mock 模式**：用「触发一轮对话」按钮即可走完 mock ASR → LLM → TTS 全链路（下行空帧，无声音）。
+> - **真实引擎**：服务端以 `--features sherpa` 且 ASR/TTS backend 均为 `sherpa` 运行时，「开始说话」可用麦克风实测识别与播报。
+> - 服务端设置了 `expected_token` 时，在页面 Token 框填入即可——浏览器 WebSocket 无法自定义请求头，服务端支持 `?token=` 查询参数兜底（设备侧仍走 `Authorization` 头，不受影响）。
 
 ---
 

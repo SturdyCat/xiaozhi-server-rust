@@ -152,6 +152,18 @@ export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:$PKG_CONFIG_PATH"
 - 注意：这样编出的二进制**动态依赖 Homebrew 的 opus**，仅用于本地验证代码能否编译，**与 Docker 部署无关**（Docker 走 Debian `libopus0` + 静态/系统链接，CI 已验证可过 `audopus_sys`）。
 - 若想严格复现源码编译路径，则需再 `brew install automake libtool`（并把 `libtoolize` 链到 `glibtoolize`），但 pkg-config 路径更省事，推荐。
 
+### 5.7 容器启动会自动检测并下载缺失模型（`docker-entrypoint.sh`）
+
+报错 `tokens.txt does not exist` / `创建 SenseVoice 识别器失败` 的根因是 `/models` 里没有模型文件。Docker 入口脚本在 `exec` 服务器**之前**会自检关键文件（`silero_vad.onnx`、`SenseVoiceSmall/tokens.txt`、`Kokoro/model.onnx`）：
+
+- **缺失 → 自动从 k2-fsa/sherpa-onnx 官方 release 下载**到挂载的 `/models`（默认行为），下载后持久化，后续启动检测到即跳过。
+- 下载地址可被 `SENSEVOICE_URL` / `KOKORO_URL` / `SILERO_VAD_URL` 覆盖（内网镜像）。
+- 行为开关 `XIAOZHI_AUTO_DOWNLOAD_MODELS`：`missing`（默认）/`force`（每次重下）/`off`（不下载）。
+- 运行期镜像需装 `curl` + `bzip2`（`tar` 自带）用于下载与解包；`docker-compose.yml` 的 `./models` 挂载**必须可写**（不要 `:ro`）。
+- 离线/内网：先 `./scripts/download_models.sh /host/models` 预置再挂载，或设 `XIAOZHI_AUTO_DOWNLOAD_MODELS=off`。
+
+默认模型包（已核对官方 release，与 config.example.toml 路径一一对应）：`sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09`（SenseVoice INT8）、 `kokoro-int8-en-v0_19`（Kokoro INT8，含 model/voices/tokens/espeak-ng-data/双 lexicon）、 `silero_vad.onnx`（Silero VAD）。
+
 ## 6. 项目结构速查
 
 ```
