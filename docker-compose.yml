@@ -1,0 +1,57 @@
+# xiaozhi-server-rust 部署编排
+#
+# 用法：
+#   1. 准备模型：  ./scripts/download_models.sh ./models
+#   2. 准备配置：  cp config.example.toml config.toml   # 按需修改 token / api_key / 模型路径
+#   3. 构建启动：  docker compose up -d --build
+#   4. 查看日志：  docker compose logs -f xiaozhi
+#   5. 停止：      docker compose down
+#
+# 说明：
+#   - 镜像基于 Dockerfile（debian-slim + --features sherpa），运行时需挂载模型目录。
+#   - 配置加载优先级：环境变量 XIAOZHI_CONFIG > --config 参数 > 内置 mock 默认。
+#   - 健康端点为 GET / （返回 "xiaozhi-server-rust ok"）；debian-slim 未预装 curl/wget，
+#     如需 healthcheck 可在自定义 Dockerfile 里 `apt-get install -y curl` 后启用。
+#   - 仅做本地联调（无模型）时：把 config 里 [asr]/[tts]/[llm] 的 backend 改为 "mock"，
+#     并注释掉 models 挂载即可零模型启动（见下方「mock 模式」示例）。
+
+services:
+  xiaozhi:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: xiaozhi-server-rust:latest
+    container_name: xiaozhi-server
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      # 指向容器内配置文件（见下方 volumes 挂载）。
+      # 设为不存在的路径会触发告警并回退到内置 mock 默认配置（适合无模型联调）。
+      XIAOZHI_CONFIG: /etc/xiaozhi/config.toml
+      # 可选：调整日志级别（默认 info）；如 debug / warn
+      RUST_LOG: info
+    volumes:
+      # 配置：默认直接挂 config.example.toml（已含 /models/... 路径，开箱即用）；
+      #       若已 cp 为 config.toml，把下面这行换成 ./config.toml:... 即可。
+      - ./config.example.toml:/etc/xiaozhi/config.toml:ro
+      # 模型：download_models.sh 下载到宿主 ./models，容器内路径与 config 一致。
+      - ./models:/models:ro
+
+  # ---- mock 模式（零模型本地联调，无需下载模型）----
+  # 用法：docker compose --profile mock up -d --build
+  # 说明：复用同一镜像，仅令 XIAOZHI_CONFIG 指向不存在文件 → 回退内置 mock 默认，
+  #       不挂载模型目录，ASR/TTS/LLM 全部走本地回显，可直接跑通协议联调。
+  # xiaozhi-mock:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #   image: xiaozhi-server-rust:latest
+  #   container_name: xiaozhi-server-mock
+  #   restart: unless-stopped
+  #   ports:
+  #     - "8001:8000"
+  #   environment:
+  #     XIAOZHI_CONFIG: /dev/null   # 故意指向不存在/不可解析文件 → 回退 mock 默认
+  #     RUST_LOG: info
+  #   profiles: ["mock"]
