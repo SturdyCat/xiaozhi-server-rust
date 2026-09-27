@@ -125,11 +125,12 @@ docker run -d --name xiaozhi \
 容器入口（`docker-entrypoint.sh`）会在启动时检测关键模型文件（`silero_vad.onnx`、`SenseVoiceSmall/tokens.txt`、`Kokoro/model.onnx`）：
 
 - **缺失则自动下载**到挂载的 `/models`（默认行为，首次启动拉取后持久化，后续跳过）。
+- **默认走 GitHub 代理 `https://tvv.tw/`**（`GITHUB_PROXY` 可换其他代理，`off` 直连）——部署环境直连 `github.com` / `release-assets.githubusercontent.com` 常超时不可达；代理仅对 github.com 直链套用，覆盖为内网镜像地址时不受影响。
 - 下载地址可用环境变量覆盖：`SENSEVOICE_URL` / `KOKORO_URL` / `SILERO_VAD_URL`（便于内网镜像）。
 - 行为开关 `XIAOZHI_AUTO_DOWNLOAD_MODELS`：`missing`（默认，缺失才下）/ `force`（每次重下）/ `off`（不下载，依赖挂载或预置）。
 
-> 因此**不手动预置模型也能直接 `docker compose up` 跑起来**；前提是容器能访问 GitHub release。
-> 离线/内网环境：先 `./scripts/download_models.sh /host/models` 预置，再挂载，或设 `XIAOZHI_AUTO_DOWNLOAD_MODELS=off`。
+> 因此**不手动预置模型也能直接 `docker compose up` 跑起来**；直连不可达时靠 `GITHUB_PROXY` 代理兜底。
+> 离线/内网环境：先 `GITHUB_PROXY=off ./scripts/download_models.sh /host/models` 预置（内网镜像则设对应 URL），再挂载，或设 `XIAOZHI_AUTO_DOWNLOAD_MODELS=off`。
 
 ### 部署机指令集
 

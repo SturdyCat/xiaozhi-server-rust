@@ -37,6 +37,9 @@ services:
       RUST_LOG: info
       # 自动下载模型：missing(默认，缺失才下) | force(每次重下) | off(不下载)
       XIAOZHI_AUTO_DOWNLOAD_MODELS: "missing"
+      # GitHub 代理前缀（默认 https://tvv.tw/）：直连 github.com/release-assets
+      # 不可达的环境靠它下载模型；GITHUB_PROXY=off 可关闭走直连。
+      GITHUB_PROXY: "https://tvv.tw/"
     volumes:
       # 配置：默认直接挂 config.example.toml（已含 /models/... 路径，开箱即用）；
       #       若已 cp 为 config.toml，把上面 XIAOZHI_CONFIG 路径一并改掉即可。

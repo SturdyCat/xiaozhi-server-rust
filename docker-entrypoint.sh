@@ -14,6 +14,9 @@
 #                                   off     : 不下载（依赖挂载/预置模型）
 #   XIAOZHI_ALLOW_MISSING_MODELS  非空时，即便下载失败也仍尝试启动（仅 mock 模式有意义）
 #   SENSEVOICE_URL / KOKORO_URL / SILERO_VAD_URL  可覆盖默认下载地址（便于内网镜像）
+#   GITHUB_PROXY                  GitHub 代理前缀（默认 https://tvv.tw/）。
+#                                 仅对 github.com 直链自动套用；设为 off 或空则直连。
+#                                 显式覆盖为内网/代理地址时不会被二次套用。
 #
 # 适用场景：首次启动容器且 ./models 为空时，自动拉取 SenseVoice/Kokoro/Silero 模型；
 #          模型写入挂载目录后会持久化，后续启动检测到文件存在即跳过，避免重复下载。
@@ -31,6 +34,26 @@ AUTO="${XIAOZHI_AUTO_DOWNLOAD_MODELS:-missing}"
 SENSEVOICE_URL="${SENSEVOICE_URL:-https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09.tar.bz2}"
 KOKORO_URL="${KOKORO_URL:-https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-int8-en-v0_19.tar.bz2}"
 SILERO_VAD_URL="${SILERO_VAD_URL:-https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx}"
+
+# GitHub 直链代理：部署环境常无法直连 github.com / release-assets.githubusercontent.com
+# （表现为 curl 连接 134s 超时）。默认走 tvv.tw 代理；GITHUB_PROXY=off 可关闭。
+# 仅对 github.com 开头的 URL 套前缀，用户覆盖为内网镜像/代理地址时不受影响。
+GITHUB_PROXY="${GITHUB_PROXY:-https://tvv.tw/}"
+case "$GITHUB_PROXY" in
+  off|OFF|"") GITHUB_PROXY="" ;;
+esac
+
+apply_proxy() {
+  case "$1" in
+    http://github.com/*|https://github.com/*)
+      [ -n "$GITHUB_PROXY" ] && printf '%s' "$GITHUB_PROXY$1" || printf '%s' "$1"
+      ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
+# curl 选项：连接 15s 超时（避免 134s 假死）+ 失败重试 3 次
+CURL_OPTS="-fSL --connect-timeout 15 --retry 3 --retry-delay 2"
 
 # 模型就绪“代表性”检查点：缺失任一即视为未下载。
 CHECKPOINTS="
@@ -69,28 +92,32 @@ verify_models() {
 
 download_models() {
   echo "[entrypoint] 开始下载模型到 $MODELS_DIR ..."
+  if [ -n "$GITHUB_PROXY" ]; then
+    echo "[entrypoint] GitHub 代理=$GITHUB_PROXY （GITHUB_PROXY=off 可关闭）"
+  fi
   mkdir -p "$MODELS_DIR/SenseVoiceSmall" "$MODELS_DIR/Kokoro"
 
   echo "[entrypoint] [1/3] Silero VAD"
-  curl -fSL -o "$MODELS_DIR/silero_vad.onnx" "$SILERO_VAD_URL"
+  curl $CURL_OPTS -o "$MODELS_DIR/silero_vad.onnx" "$(apply_proxy "$SILERO_VAD_URL")" || return 1
 
   echo "[entrypoint] [2/3] SenseVoice INT8"
-  curl -fSL -o /tmp/sensevoice.tar.bz2 "$SENSEVOICE_URL"
-  tar -xjf /tmp/sensevoice.tar.bz2 -C "$MODELS_DIR/SenseVoiceSmall" --strip-components=1
+  curl $CURL_OPTS -o /tmp/sensevoice.tar.bz2 "$(apply_proxy "$SENSEVOICE_URL")" || return 1
+  tar -xjf /tmp/sensevoice.tar.bz2 -C "$MODELS_DIR/SenseVoiceSmall" --strip-components=1 || return 1
   rm -f /tmp/sensevoice.tar.bz2
 
   echo "[entrypoint] [3/3] Kokoro INT8 多语种（en+zh）"
-  curl -fSL -o /tmp/kokoro.tar.bz2 "$KOKORO_URL"
-  tar -xjf /tmp/kokoro.tar.bz2 -C "$MODELS_DIR/Kokoro" --strip-components=1
+  curl $CURL_OPTS -o /tmp/kokoro.tar.bz2 "$(apply_proxy "$KOKORO_URL")" || return 1
+  tar -xjf /tmp/kokoro.tar.bz2 -C "$MODELS_DIR/Kokoro" --strip-components=1 || return 1
   rm -f /tmp/kokoro.tar.bz2
 
   echo "[entrypoint] 校验关键文件："
   if verify_models; then
     echo "[entrypoint] 模型文件齐全。"
   else
-    echo "[entrypoint] 警告：部分模型文件缺失，服务器启动后相关引擎会报错。" >&2
+    echo "[entrypoint] 错误：部分模型文件缺失（下载或解压失败）。" >&2
     echo "[entrypoint] 请检查 KOKORO_URL/SENSEVOICE_URL 是否指向了正确的模型包，" >&2
     echo "[entrypoint] 或比对 config.example.toml 的 [asr]/[vad]/[tts] 路径。" >&2
+    return 1
   fi
 }
 

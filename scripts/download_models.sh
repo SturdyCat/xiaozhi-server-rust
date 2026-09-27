@@ -17,19 +17,41 @@ SENSEVOICE_URL="${SENSEVOICE_URL:-https://github.com/k2-fsa/sherpa-onnx/releases
 KOKORO_URL="${KOKORO_URL:-https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-int8-en-v0_19.tar.bz2}"
 SILERO_VAD_URL="${SILERO_VAD_URL:-https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx}"
 
+# GitHub 直链代理：默认走 tvv.tw（github.com / release-assets 直连常不可达）。
+# GITHUB_PROXY=off 直连；显式覆盖为内网镜像/代理地址时不会被二次套用。
+GITHUB_PROXY="${GITHUB_PROXY:-https://tvv.tw/}"
+case "$GITHUB_PROXY" in
+  off|OFF|"") GITHUB_PROXY="" ;;
+esac
+
+apply_proxy() {
+  case "$1" in
+    http://github.com/*|https://github.com/*)
+      [ -n "$GITHUB_PROXY" ] && printf '%s' "$GITHUB_PROXY$1" || printf '%s' "$1"
+      ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
+CURL_OPTS="-fSL --connect-timeout 15 --retry 3 --retry-delay 2"
+
 mkdir -p "$MODELS_DIR"/SenseVoiceSmall "$MODELS_DIR"/Kokoro
 
+if [ -n "$GITHUB_PROXY" ]; then
+  echo "==> GitHub 代理=$GITHUB_PROXY （GITHUB_PROXY=off 可关闭）"
+fi
+
 echo "==> [1/3] Silero VAD"
-curl -fSL -o "$MODELS_DIR/silero_vad.onnx" "$SILERO_VAD_URL"
+curl $CURL_OPTS -o "$MODELS_DIR/silero_vad.onnx" "$(apply_proxy "$SILERO_VAD_URL")" || exit 1
 
 echo "==> [2/3] SenseVoice INT8"
-curl -fSL -o /tmp/sensevoice.tar.bz2 "$SENSEVOICE_URL"
-tar -xjf /tmp/sensevoice.tar.bz2 -C "$MODELS_DIR"/SenseVoiceSmall --strip-components=1
+curl $CURL_OPTS -o /tmp/sensevoice.tar.bz2 "$(apply_proxy "$SENSEVOICE_URL")" || exit 1
+tar -xjf /tmp/sensevoice.tar.bz2 -C "$MODELS_DIR"/SenseVoiceSmall --strip-components=1 || exit 1
 rm -f /tmp/sensevoice.tar.bz2
 
 echo "==> [3/3] Kokoro INT8 多语种（en+zh）"
-curl -fSL -o /tmp/kokoro.tar.bz2 "$KOKORO_URL"
-tar -xjf /tmp/kokoro.tar.bz2 -C "$MODELS_DIR"/Kokoro --strip-components=1
+curl $CURL_OPTS -o /tmp/kokoro.tar.bz2 "$(apply_proxy "$KOKORO_URL")" || exit 1
+tar -xjf /tmp/kokoro.tar.bz2 -C "$MODELS_DIR"/Kokoro --strip-components=1 || exit 1
 rm -f /tmp/kokoro.tar.bz2
 
 echo "==> 完成。核对关键文件："

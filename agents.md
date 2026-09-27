@@ -157,7 +157,9 @@ export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:$PKG_CONFIG_PATH"
 报错 `tokens.txt does not exist` / `创建 SenseVoice 识别器失败` 的根因是 `/models` 里没有模型文件。Docker 入口脚本在 `exec` 服务器**之前**会自检关键文件（`silero_vad.onnx`、`SenseVoiceSmall/tokens.txt`、`Kokoro/model.onnx`）：
 
 - **缺失 → 自动从 k2-fsa/sherpa-onnx 官方 release 下载**到挂载的 `/models`（默认行为），下载后持久化，后续启动检测到即跳过。
+- **默认走 GitHub 代理 `https://tvv.tw/`**（`GITHUB_PROXY` 覆盖，`off` 直连）：部署环境直连 `github.com`/`release-assets.githubusercontent.com` 常超时（curl 卡 134s）；代理仅对 github.com 直链套用，内网镜像 URL 不受影响。
 - 下载地址可被 `SENSEVOICE_URL` / `KOKORO_URL` / `SILERO_VAD_URL` 覆盖（内网镜像）。
+- curl 带 `--connect-timeout 15 --retry 3`（避免连接假死 134s）；下载/解压失败会让入口**中止启动**（未设 `XIAOZHI_ALLOW_MISSING_MODELS` 时），避免带着缺模型崩溃重启循环。
 - 行为开关 `XIAOZHI_AUTO_DOWNLOAD_MODELS`：`missing`（默认）/`force`（每次重下）/`off`（不下载）。
 - 运行期镜像需装 `curl` + `bzip2`（`tar` 自带）用于下载与解包；`docker-compose.yml` 的 `./models` 挂载**必须可写**（不要 `:ro`）。
 - 离线/内网：先 `./scripts/download_models.sh /host/models` 预置再挂载，或设 `XIAOZHI_AUTO_DOWNLOAD_MODELS=off`。
