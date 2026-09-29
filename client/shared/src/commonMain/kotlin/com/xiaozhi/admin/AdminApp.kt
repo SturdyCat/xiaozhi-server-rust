@@ -1,9 +1,8 @@
 package com.xiaozhi.admin
 
 import com.tencent.kuikly.core.annotations.Page
+import com.tencent.kuikly.core.base.Color
 import com.tencent.kuikly.core.base.ViewBuilder
-import com.tencent.kuikly.core.base.attr.Color
-import com.tencent.kuikly.core.base.attr.allCenter
 import com.tencent.kuikly.core.directives.vif
 import com.tencent.kuikly.core.views.Text
 import com.tencent.kuikly.core.views.View

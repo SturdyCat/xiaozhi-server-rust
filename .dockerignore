@@ -1,24 +1,65 @@
 # ===== monorepo 构建上下文裁剪 =====
-# Rust 服务只用到 server/ 下的 Cargo + src，其余一概不进 docker 上下文
-client/
-.agents/
-.codebuddy/
-.workbuddy/
-docs/
-scripts/
-tests/
+# 镜像三个阶段（见 Dockerfile）：web（Gradle 构建 Kuikly H5 管理页，需要 client/ 的
+# Gradle 构建链 + shared/ + apps/h5App/）、build（Rust 编译，只需 server/）、运行（debian-slim
+# + 二进制 + web 静态文件）。其余内容必须排干净，否则整个 monorepo 都会被传给构建机。
+# 注：模式均不带前导 `/`（docker 语义：不含 `/` 的模式匹配任意层级同名文件/目录）。
+
+# ---- monorepo 中与镜像无关的目录（全排）----
+.git
+.agents
+.codebuddy
+.workbuddy
+.zcode
+.claude
+docs
+scripts
+tests
+skills-lock.json
 *.md
 PLAN.md
 agents.md
-skills-lock.json
+.DS_Store
 
-# Rust 构建产物 / 缓存
-target/
-.cargo/
+# ---- 非 web 宿主端（web 阶段只构建 :apps:h5App）----
+client/apps/androidApp
+client/apps/iosApp
+client/apps/macosApp
+client/apps/ohosApp
 
-# 本地配置（含密钥，不进镜像）
+# ---- Gradle / Kotlin / Node 构建产物（web 阶段在容器里自建，产物不入上下文）----
+**/build
+**/.gradle
+.kotlin
+**/node_modules
+*.log
+
+# ⚠️ 不要排除 client/kotlin-js-store/ —— 里面是 Kotlin/JS 的 yarn.lock（已入库），
+#    web 阶段必须带上：无 lockfile 时 yarn 自行解析传递依赖，与仓库锁定值漂移
+#    （xiaoya 实测 @types/node 26.4.1 → 26.6.2）。
+
+# ---- h5App 的 web 产物：index.html 入库（必须保留）；
+#      nativevue2.js / h5App.js / *.map 是 publishWeb 构建输出——本地 docker build 时若不排，
+#      几百 KB 产物会白传一遍（镜像里随即被构建结果覆盖）。
+client/apps/h5App/web/*.js
+client/apps/h5App/web/*.js.map
+
+# ---- Gradle 构建脚本——这些是 web 阶段构建链，**必须保留**（不排除）----
+# client/{gradlew, gradlew.bat, gradle.properties, build.gradle.kts, settings.gradle.kts,
+# gradle/, kotlin-js-store/, shared/, apps/h5App/} 都参与 web 阶段构建。
+
+# ---- server/ 内部与 Rust 构建无关的内容 ----
+# Rust 构建只需要 server/{Cargo.toml, Cargo.lock, src/}。
+# ⚠️ 不要排除 Cargo.lock —— Dockerfile 用 --locked 构建，依赖它做可复现解析（Cargo.lock 已入库）。
+server/scripts
+server/tests
+server/target
+
+# ---- Rust 构建产物 / 本地 cargo 配置 ----
+target
+.cargo
+
+# ---- 运行时数据与凭证：绝不进镜像层 ----
+# config.toml（业务配置，可能含 token/api_key）；.env 同理
 config.toml
 server/config.toml
 .env
-
-.git/

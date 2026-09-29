@@ -31,5 +31,12 @@ iosApp.xcworkspace/
 **/outputs/
 **/kuikly/
 
+# h5App web 产物：index.html 入库（必须保留）；nativevue2.js / h5App.js / *.map
+# 是 :apps:h5App:publishWeb 构建输出，不入库（Docker web 阶段自行构建）。
+apps/h5App/web/*.js
+apps/h5App/web/*.js.map
+# ⚠️ kotlin-js-store/yarn.lock（Kotlin/JS 的 npm 依赖锁）**必须入库**：
+# 没有 lockfile 时 yarn 自行解析传递依赖，与仓库锁定值漂移（xiaoya 实测 @types/node 26.4.1 → 26.6.2）。
+
 # OS
 .DS_Store

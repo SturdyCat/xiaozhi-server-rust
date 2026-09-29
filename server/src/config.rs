@@ -270,10 +270,11 @@ fn default_worker_threads() -> u32 {
     2
 }
 
-/// 管理页面静态目录默认指向上级 client/apps/h5App 的 web 构建输出。
-/// 实际部署时由 [server].admin_dir 覆盖（例如容器内 /app/web）。
+/// 管理页面静态目录默认指向上级 client/apps/h5App 的 web 产物目录
+/// （:apps:h5App:publishWeb 汇聚 index.html + nativevue2.js + h5App.js）。
+/// 容器部署由镜像内置的 XIAOZHI_ADMIN_DIR=/app/web 覆盖（见 main.rs load_config）。
 fn default_admin_dir() -> String {
-    "../client/apps/h5App/dist".into()
+    "../client/apps/h5App/web".into()
 }
 fn default_provider() -> String {
     "cpu".into()

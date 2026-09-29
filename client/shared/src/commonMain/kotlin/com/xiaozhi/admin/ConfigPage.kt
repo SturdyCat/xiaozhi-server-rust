@@ -1,13 +1,15 @@
 package com.xiaozhi.admin
 
 import com.tencent.kuikly.core.annotations.Page
+import com.tencent.kuikly.core.base.Border
+import com.tencent.kuikly.core.base.BorderStyle
+import com.tencent.kuikly.core.base.Color
 import com.tencent.kuikly.core.base.ViewBuilder
-import com.tencent.kuikly.core.base.attr.Color
+import com.tencent.kuikly.core.base.ViewContainer
 import com.tencent.kuikly.core.module.NetworkModule
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.pager.Pager
 import com.tencent.kuikly.core.reactive.handler.observable
-import com.tencent.kuikly.core.views.Button
 import com.tencent.kuikly.core.views.Input
 import com.tencent.kuikly.core.views.Scroller
 import com.tencent.kuikly.core.views.Text
@@ -73,6 +75,9 @@ class ConfigPage : Pager() {
     var statusMsg by observable("")
 
     override fun body(): ViewBuilder {
+        // ⚠️ DSL 容器带 @ScopeMarker（@DslMarker）：嵌套容器内**无法**经隐式接收者访问
+        // 外部 Pager 的成员（属性 / 私有扩展），官方 demo 口径是先 `val ctx = this` 再显式 ctx.xxx。
+        val ctx = this
         return {
             attr {
                 flex(1f)
@@ -86,7 +91,8 @@ class ConfigPage : Pager() {
                     height(56f)
                     flexDirectionRow()
                     alignItemsCenter()
-                    paddingHorizontal(16f)
+                    paddingLeft(16f)
+                    paddingRight(16f)
                     backgroundColor(Color(0xFF1F1F1FL))
                 }
                 Text {
@@ -101,86 +107,94 @@ class ConfigPage : Pager() {
             Scroller {
                 attr {
                     flex(1f)
-                    paddingHorizontal(16f)
-                    paddingVertical(12f)
+                    paddingLeft(16f)
+                    paddingRight(16f)
+                    paddingTop(12f)
+                    paddingBottom(12f)
                 }
 
-                sectionTitle("Server")
-                field("listen", { listen }) { listen = it }
-                field("expected_token", { expectedToken }) { expectedToken = it }
-                field("worker_threads", { workerThreads }) { workerThreads = it }
-                field("admin_dir", { adminDir }) { adminDir = it }
+                ctx.sectionTitle("Server")
+                ctx.field("listen", { ctx.listen }) { ctx.listen = it }
+                ctx.field("expected_token", { ctx.expectedToken }) { ctx.expectedToken = it }
+                ctx.field("worker_threads", { ctx.workerThreads }) { ctx.workerThreads = it }
+                ctx.field("admin_dir", { ctx.adminDir }) { ctx.adminDir = it }
 
-                sectionTitle("Audio")
-                field("downlink_sample_rate", { downlinkSampleRate }) { downlinkSampleRate = it }
-                field("downlink_frame_duration_ms", { downlinkFrameMs }) { downlinkFrameMs = it }
-                field("channels", { channels }) { channels = it }
-                field("binary_protocol_version", { binaryProtocolVersion }) { binaryProtocolVersion = it }
+                ctx.sectionTitle("Audio")
+                ctx.field("downlink_sample_rate", { ctx.downlinkSampleRate }) { ctx.downlinkSampleRate = it }
+                ctx.field("downlink_frame_duration_ms", { ctx.downlinkFrameMs }) { ctx.downlinkFrameMs = it }
+                ctx.field("channels", { ctx.channels }) { ctx.channels = it }
+                ctx.field("binary_protocol_version", { ctx.binaryProtocolVersion }) { ctx.binaryProtocolVersion = it }
 
-                sectionTitle("ASR")
-                field("backend", { asrBackend }) { asrBackend = it }
-                field("model", { asrModel }) { asrModel = it }
-                field("tokens", { asrTokens }) { asrTokens = it }
-                field("language", { asrLanguage }) { asrLanguage = it }
-                field("use_itn", { asrUseItn }) { asrUseItn = it }
-                field("num_threads", { asrNumThreads }) { asrNumThreads = it }
-                field("provider", { asrProvider }) { asrProvider = it }
+                ctx.sectionTitle("ASR")
+                ctx.field("backend", { ctx.asrBackend }) { ctx.asrBackend = it }
+                ctx.field("model", { ctx.asrModel }) { ctx.asrModel = it }
+                ctx.field("tokens", { ctx.asrTokens }) { ctx.asrTokens = it }
+                ctx.field("language", { ctx.asrLanguage }) { ctx.asrLanguage = it }
+                ctx.field("use_itn", { ctx.asrUseItn }) { ctx.asrUseItn = it }
+                ctx.field("num_threads", { ctx.asrNumThreads }) { ctx.asrNumThreads = it }
+                ctx.field("provider", { ctx.asrProvider }) { ctx.asrProvider = it }
 
-                sectionTitle("VAD")
-                field("model", { vadModel }) { vadModel = it }
-                field("threshold", { vadThreshold }) { vadThreshold = it }
-                field("min_silence_duration", { vadMinSilence }) { vadMinSilence = it }
-                field("min_speech_duration", { vadMinSpeech }) { vadMinSpeech = it }
+                ctx.sectionTitle("VAD")
+                ctx.field("model", { ctx.vadModel }) { ctx.vadModel = it }
+                ctx.field("threshold", { ctx.vadThreshold }) { ctx.vadThreshold = it }
+                ctx.field("min_silence_duration", { ctx.vadMinSilence }) { ctx.vadMinSilence = it }
+                ctx.field("min_speech_duration", { ctx.vadMinSpeech }) { ctx.vadMinSpeech = it }
 
-                sectionTitle("TTS")
-                field("backend", { ttsBackend }) { ttsBackend = it }
-                field("model", { ttsModel }) { ttsModel = it }
-                field("voices", { ttsVoices }) { ttsVoices = it }
-                field("tokens", { ttsTokens }) { ttsTokens = it }
-                field("data_dir", { ttsDataDir }) { ttsDataDir = it }
-                field("dict_dir", { ttsDictDir }) { ttsDictDir = it }
-                field("lexicon", { ttsLexicon }) { ttsLexicon = it }
-                field("lang", { ttsLang }) { ttsLang = it }
-                field("speaker", { ttsSpeaker }) { ttsSpeaker = it }
-                field("speed", { ttsSpeed }) { ttsSpeed = it }
-                field("num_threads", { ttsNumThreads }) { ttsNumThreads = it }
+                ctx.sectionTitle("TTS")
+                ctx.field("backend", { ctx.ttsBackend }) { ctx.ttsBackend = it }
+                ctx.field("model", { ctx.ttsModel }) { ctx.ttsModel = it }
+                ctx.field("voices", { ctx.ttsVoices }) { ctx.ttsVoices = it }
+                ctx.field("tokens", { ctx.ttsTokens }) { ctx.ttsTokens = it }
+                ctx.field("data_dir", { ctx.ttsDataDir }) { ctx.ttsDataDir = it }
+                ctx.field("dict_dir", { ctx.ttsDictDir }) { ctx.ttsDictDir = it }
+                ctx.field("lexicon", { ctx.ttsLexicon }) { ctx.ttsLexicon = it }
+                ctx.field("lang", { ctx.ttsLang }) { ctx.ttsLang = it }
+                ctx.field("speaker", { ctx.ttsSpeaker }) { ctx.ttsSpeaker = it }
+                ctx.field("speed", { ctx.ttsSpeed }) { ctx.ttsSpeed = it }
+                ctx.field("num_threads", { ctx.ttsNumThreads }) { ctx.ttsNumThreads = it }
 
-                sectionTitle("LLM")
-                field("backend", { llmBackend }) { llmBackend = it }
-                field("api_base", { llmApiBase }) { llmApiBase = it }
-                field("api_key", { llmApiKey }) { llmApiKey = it }
-                field("model", { llmModel }) { llmModel = it }
-                field("system_prompt", { llmSystemPrompt }) { llmSystemPrompt = it }
-                field("max_history", { llmMaxHistory }) { llmMaxHistory = it }
-                field("temperature", { llmTemperature }) { llmTemperature = it }
+                ctx.sectionTitle("LLM")
+                ctx.field("backend", { ctx.llmBackend }) { ctx.llmBackend = it }
+                ctx.field("api_base", { ctx.llmApiBase }) { ctx.llmApiBase = it }
+                ctx.field("api_key", { ctx.llmApiKey }) { ctx.llmApiKey = it }
+                ctx.field("model", { ctx.llmModel }) { ctx.llmModel = it }
+                ctx.field("system_prompt", { ctx.llmSystemPrompt }) { ctx.llmSystemPrompt = it }
+                ctx.field("max_history", { ctx.llmMaxHistory }) { ctx.llmMaxHistory = it }
+                ctx.field("temperature", { ctx.llmTemperature }) { ctx.llmTemperature = it }
             }
 
-            // 底部保存栏
+            // 底部保存栏（传统 DSL 无 Button 组件：View + click 事件模拟）
             View {
                 attr {
                     height(60f)
                     flexDirectionRow()
                     alignItemsCenter()
-                    paddingHorizontal(16f)
+                    paddingLeft(16f)
+                    paddingRight(16f)
                     backgroundColor(Color(0xFFF7F7F7L))
                 }
-                Button {
+                View {
                     attr {
                         width(140f)
                         height(40f)
+                        allCenter()
                         backgroundColor(Color(0xFF07C160L))
-                        color(Color.WHITE)
-                        fontSize(15f)
-                        text("保存配置")
                     }
-                    event { click { saveConfig() } }
+                    event { click { ctx.saveConfig() } }
+                    Text {
+                        attr {
+                            fontSize(15f)
+                            color(Color.WHITE)
+                            text("保存配置")
+                        }
+                    }
                 }
                 Text {
                     attr {
                         marginLeft(12f)
                         fontSize(13f)
                         color(Color(0xFF888888L))
-                        text(statusMsg)
+                        text(ctx.statusMsg)
                     }
                 }
             }
@@ -190,46 +204,6 @@ class ConfigPage : Pager() {
     override fun pageDidAppear() {
         super.pageDidAppear()
         loadConfig()
-    }
-
-    /** 单个配置字段：标签 + 输入框（value 通过 getter 传入以保持响应式）。 */
-    private fun ViewBuilder.field(label: String, getValue: () -> String, onChange: (String) -> Unit) {
-        Text {
-            attr {
-                fontSize(13f)
-                color(Color(0xFF888888L))
-                marginTop(12f)
-                text(label)
-            }
-        }
-        Input {
-            attr {
-                height(40f)
-                marginTop(6f)
-                borderWidth(1f)
-                borderColor(Color(0xFFDDDDDDL))
-                borderRadius(6f)
-                paddingHorizontal(10f)
-                fontSize(14f)
-                color(Color(0xFF222222L))
-                text(getValue())
-                placeholder("")
-            }
-            event { input { text -> onChange(text) } }
-        }
-    }
-
-    private fun ViewBuilder.sectionTitle(title: String) {
-        Text {
-            attr {
-                fontSize(15f)
-                fontWeight600()
-                color(Color(0xFF1F1F1FL))
-                marginTop(20f)
-                marginBottom(4f)
-                text(title)
-            }
-        }
     }
 
     private fun network(): NetworkModule = acquireModule(NetworkModule.MODULE_NAME)
@@ -351,6 +325,50 @@ class ConfigPage : Pager() {
             llmSystemPrompt = l.optString("system_prompt", llmSystemPrompt)
             llmMaxHistory = l.optInt("max_history", llmMaxHistory.toIntOrNull() ?: 10).toString()
             llmTemperature = l.optDouble("temperature", llmTemperature.toDoubleOrNull() ?: 0.7).toString()
+        }
+    }
+}
+
+/**
+ * 单个配置字段：标签 + 输入框（value 经 getter 传入以保持响应式）。
+ * ⚠️ 必须是**文件级**扩展（官方 demo 口径）：Kuikly DSL 容器带 @ScopeMarker（@DslMarker），
+ * 类内私有成员扩展在嵌套容器里既无法经隐式接收者解析（'cannot be called in this context'），
+ * 显式 ctx.field(...) 也不行；文件级扩展无 dispatch receiver，走隐式接收者链天然可用。
+ */
+private fun ViewContainer<*, *>.field(label: String, getValue: () -> String, onChange: (String) -> Unit) {
+    Text {
+        attr {
+            fontSize(13f)
+            color(Color(0xFF888888L))
+            marginTop(12f)
+            text(label)
+        }
+    }
+    Input {
+        attr {
+            height(40f)
+            marginTop(6f)
+            border(Border(1f, BorderStyle.SOLID, Color(0xFFDDDDDDL)))
+            borderRadius(6f)
+            fontSize(14f)
+            color(Color(0xFF222222L))
+            text(getValue())
+            placeholder("")
+        }
+        event { textDidChange { params -> onChange(params.text) } }
+    }
+}
+
+/** 分组小标题 */
+private fun ViewContainer<*, *>.sectionTitle(title: String) {
+    Text {
+        attr {
+            fontSize(15f)
+            fontWeightMedium()
+            color(Color(0xFF1F1F1FL))
+            marginTop(20f)
+            marginBottom(4f)
+            text(title)
         }
     }
 }

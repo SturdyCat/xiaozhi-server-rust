@@ -10,11 +10,14 @@
 #   5. 停止：      docker compose down
 #
 # 说明：
-#   - 镜像基于 Dockerfile（debian-slim + --features sherpa），运行时需挂载模型目录。
-#   - 模型目录必须可写（不要挂 :ro）：入口脚本会在缺失时写入 ./models 并持久化。
+#   - 镜像由 Dockerfile 三阶段构建：web 阶段构建 Kuikly H5 管理页（client 工程）+
+#     Rust 阶段编译 server（--features sherpa），运行时同源托管管理页与 /api。
+#     浏览器访问 http://<host>:8000/ 即管理后台（配置页读写 config.toml）。
+#   - 运行时需挂载模型目录；模型目录必须可写（不要挂 :ro）：
+#     入口脚本会在缺失时写入 ./models 并持久化。
 #   - 配置加载优先级：环境变量 XIAOZHI_CONFIG > --config 参数 > 内置 mock 默认。
-#   - 健康端点为 GET / （返回 "xiaozhi-server-rust ok"）；debian-slim 未预装 curl/wget，
-#     如需 healthcheck 可在自定义 Dockerfile 里 `apt-get install -y curl` 后启用。
+#   - 健康检查：镜像内置 HEALTHCHECK（curl /api/health，运行层已装 curl）；
+#     若自定义 [server].listen 端口，需同步改 Dockerfile 里的 HEALTHCHECK。
 #   - 仅做本地联调（无模型）时：把 config 里 [asr]/[tts]/[llm] 的 backend 改为 "mock"，
 #     并设 XIAOZHI_AUTO_DOWNLOAD_MODELS=off、注释掉 models 挂载即可零模型启动
 #     （见下方「mock 模式」示例）。

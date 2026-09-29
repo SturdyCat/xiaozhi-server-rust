@@ -3,9 +3,10 @@ pluginManagement {
         google()
         mavenCentral()
         gradlePluginPortal()
-        // Kuikly 官方 maven 源（2.5.0 起必须添加）
+        // Kuikly 官方制品（core / core-render-web:h5 / core-gradle-plugin / core-ksp）都在此镜像。
+        // ⚠️ 不要追加 maven.tencent.com 等额外源：多一个仓库就多一分解析链被 DNS/网络异常
+        // 中断的概率（org.nodejs:node 就这么挂过，见根 build.gradle.kts 的注释）。
         maven { setUrl("https://mirrors.tencent.com/repository/maven-tencent/") }
-        maven { setUrl("https://maven.tencent.com/repository/maven/") }
     }
 
     // 统一插件版本：各子模块使用简写 id（如 kotlin("multiplatform")）时必须在此声明版本才能解析。
@@ -17,16 +18,19 @@ pluginManagement {
         kotlin("android") version "2.1.21" apply false
         id("com.android.application") version "8.9.0" apply false
         id("com.android.library") version "8.9.0" apply false
+        // Kuikly KSP 宿主插件（shared 扫描 @Page 生成页面注册代码），与 Kotlin 2.1.21 配套
+        id("com.google.devtools.ksp") version "2.1.21-2.0.1" apply false
     }
 }
 
 dependencyResolutionManagement {
-    repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
+    // 不设 repositoriesMode（默认 PREFER_PROJECT，与 xiaoya-player 一致）。
+    // ⚠️ 不要改成 PREFER_SETTINGS：那会把 Kotlin/JS 插件自动加到根工程的 nodejs.org dist
+    // 仓库丢弃掉，org.nodejs:node（Node 发行版）将落到 maven 仓库里找 → 必然 Could not resolve。
     repositories {
         google()
         mavenCentral()
         maven { setUrl("https://mirrors.tencent.com/repository/maven-tencent/") }
-        maven { setUrl("https://maven.tencent.com/repository/maven/") }
     }
 }
 

@@ -74,7 +74,8 @@ static const uint32_t kDownlinkSampleRate = 24000; // 下行（TTS）默认采�
 
 - (void)disconnect:(NSDictionary *)args {
     [self stopMic];
-    [self.webSocket cancelWithCloseCode:NSURLSessionWebSocketCloseCodeNormalProtocolStatus data:nil];
+    // 真实 API：cancelWithCloseCode:reason:（关闭码枚举是 NormalClosure，无 "NormalProtocolStatus"）
+    [self.webSocket cancelWithCloseCode:NSURLSessionWebSocketCloseCodeNormalClosure reason:nil];
     self.webSocket = nil;
     id callback = args[KR_CALLBACK_KEY];
     if (callback) [self invoke:callback result:@{@"success": @(YES)} success:YES error:nil];
@@ -118,14 +119,17 @@ static const uint32_t kDownlinkSampleRate = 24000; // 下行（TTS）默认采�
     NSData *data = [NSJSONSerialization dataWithJSONObject:dict options:0 error:&err];
     if (err) { NSLog(@"[XiaoZhi] json error: %@", err); return; }
     NSString *str = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-    [self.webSocket sendString:str completionHandler:^(NSError * _Nullable e) {
+    // 真实 API：sendMessage:completionHandler:（无 sendString:）
+    [self.webSocket sendMessage:[[NSURLSessionWebSocketMessage alloc] initWithString:str]
+              completionHandler:^(NSError * _Nullable e) {
         if (e) NSLog(@"[XiaoZhi] send error: %@", e);
     }];
 }
 
 - (void)receiveLoop {
     __weak typeof(self) weak = self;
-    [self.webSocket receiveWithCompletionHandler:^(NSURLSessionWebSocketMessage * _Nullable msg, NSError * _Nullable error) {
+    // 真实 API：receiveMessageWithCompletionHandler:（无 receiveWithCompletionHandler:）
+    [self.webSocket receiveMessageWithCompletionHandler:^(NSURLSessionWebSocketMessage * _Nullable msg, NSError * _Nullable error) {
         typeof(self) strong = weak;
         if (!strong || error) return;
         if (msg.type == NSURLSessionWebSocketMessageTypeString) {
@@ -231,7 +235,9 @@ static const uint32_t kDownlinkSampleRate = 24000; // 下行（TTS）默认采�
 
 - (void)sendBinary:(NSData *)data {
     if (!self.webSocket || data.length == 0) return;
-    [self.webSocket sendData:data completionHandler:^(NSError * _Nullable e) {
+    // 真实 API：sendMessage:completionHandler:（无 sendData:）
+    [self.webSocket sendMessage:[[NSURLSessionWebSocketMessage alloc] initWithData:data]
+              completionHandler:^(NSError * _Nullable e) {
         if (e) NSLog(@"[XiaoZhi] send binary error: %@", e);
     }];
 }

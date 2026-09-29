@@ -1,14 +1,16 @@
 package com.xiaozhi.admin
 
 import com.tencent.kuikly.core.annotations.Page
+import com.tencent.kuikly.core.base.Border
+import com.tencent.kuikly.core.base.BorderStyle
+import com.tencent.kuikly.core.base.Color
 import com.tencent.kuikly.core.base.ViewBuilder
-import com.tencent.kuikly.core.base.attr.Color
+import com.tencent.kuikly.core.base.ViewContainer
 import com.tencent.kuikly.core.module.Module
 import com.tencent.kuikly.core.module.RouterModule
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.pager.Pager
 import com.tencent.kuikly.core.reactive.handler.observable
-import com.tencent.kuikly.core.views.Button
 import com.tencent.kuikly.core.views.Input
 import com.tencent.kuikly.core.views.Scroller
 import com.tencent.kuikly.core.views.Text
@@ -41,6 +43,9 @@ class TestPage : Pager() {
     }
 
     override fun body(): ViewBuilder {
+        // ⚠️ DSL 容器带 @ScopeMarker（@DslMarker）：嵌套容器内无法隐式访问 Pager 成员，
+        // 官方 demo 口径是先 `val ctx = this` 再显式 ctx.xxx（ConfigPage 同款约定）。
+        val ctx = this
         return {
             attr {
                 flex(1f)
@@ -54,7 +59,8 @@ class TestPage : Pager() {
                     height(56f)
                     flexDirectionRow()
                     alignItemsCenter()
-                    paddingHorizontal(16f)
+                    paddingLeft(16f)
+                    paddingRight(16f)
                     backgroundColor(Color(0xFF1F1F1FL))
                 }
                 Text {
@@ -65,56 +71,70 @@ class TestPage : Pager() {
                         text("XiaoZhi 测试台 · ASR/TTS")
                     }
                 }
-                Button {
+                // 传统 DSL 无 Button 组件（只有 Compose DSL 的 ButtonView）：View + click 模拟
+                View {
                     attr {
                         height(36f)
-                        paddingHorizontal(12f)
+                        paddingLeft(12f)
+                        paddingRight(12f)
+                        allCenter()
                         backgroundColor(Color(0xFF3A3A3AL))
-                        color(Color.WHITE)
-                        fontSize(13f)
-                        text("管理后台")
                     }
-                    event { click { openAdmin() } }
+                    event { click { ctx.openAdmin() } }
+                    Text {
+                        attr {
+                            fontSize(13f)
+                            color(Color.WHITE)
+                            text("管理后台")
+                        }
+                    }
                 }
             }
 
             Scroller {
                 attr {
                     flex(1f)
-                    paddingHorizontal(16f)
-                    paddingVertical(12f)
+                    paddingLeft(16f)
+                    paddingRight(16f)
+                    paddingTop(12f)
+                    paddingBottom(12f)
                 }
 
-                sectionTitle("连接")
-                field("server url", { serverUrl }) { serverUrl = it }
-                field("token（可选）", { token }) { token = it }
+                ctx.sectionTitle("连接")
+                ctx.field("server url", { ctx.serverUrl }) { ctx.serverUrl = it }
+                ctx.field("token（可选）", { ctx.token }) { ctx.token = it }
                 View {
                     attr {
                         flexDirectionRow()
                         marginTop(8f)
                     }
-                    Button {
+                    View {
                         attr {
                             width(140f)
                             height(40f)
-                            backgroundColor(if (connected) Color(0xFF888888L) else Color(0xFF07C160L))
-                            color(Color.WHITE)
-                            fontSize(15f)
-                            text(if (connected) "已连接" else "连接")
+                            allCenter()
+                            backgroundColor(if (ctx.connected) Color(0xFF888888L) else Color(0xFF07C160L))
                         }
-                        event { click { if (connected) disconnect() else connect() } }
+                        event { click { if (ctx.connected) ctx.disconnect() else ctx.connect() } }
+                        Text {
+                            attr {
+                                fontSize(15f)
+                                color(Color.WHITE)
+                                text(if (ctx.connected) "已连接" else "连接")
+                            }
+                        }
                     }
                     Text {
                         attr {
                             marginLeft(12f)
                             fontSize(13f)
                             color(Color(0xFF888888L))
-                            text(statusMsg)
+                            text(ctx.statusMsg)
                         }
                     }
                 }
 
-                sectionTitle("ASR 识别测试")
+                ctx.sectionTitle("ASR 识别测试")
                 Text {
                     attr {
                         fontSize(12f)
@@ -128,24 +148,28 @@ class TestPage : Pager() {
                         flexDirectionRow()
                         marginTop(8f)
                     }
-                    Button {
+                    View {
                         attr {
                             width(140f)
                             height(40f)
-                            backgroundColor(if (recording) Color(0xFFE64340L) else Color(0xFF07C160L))
-                            color(Color.WHITE)
-                            fontSize(15f)
-                            text(if (recording) "停止录音" else "开始录音")
+                            allCenter()
+                            backgroundColor(if (ctx.recording) Color(0xFFE64340L) else Color(0xFF07C160L))
                         }
-                        event { click { if (recording) stopAsr() else startAsr() } }
+                        event { click { if (ctx.recording) ctx.stopAsr() else ctx.startAsr() } }
+                        Text {
+                            attr {
+                                fontSize(15f)
+                                color(Color.WHITE)
+                                text(if (ctx.recording) "停止录音" else "开始录音")
+                            }
+                        }
                     }
                 }
                 View {
                     attr {
                         marginTop(10f)
                         padding(12f)
-                        borderWidth(1f)
-                        borderColor(Color(0xFFEEEEEL))
+                        border(Border(1f, BorderStyle.SOLID, Color(0xFFEEEEEL)))
                         borderRadius(6f)
                         minHeight(60f)
                     }
@@ -153,41 +177,44 @@ class TestPage : Pager() {
                         attr {
                             fontSize(15f)
                             color(Color(0xFF222222L))
-                            text(if (asrText.isEmpty()) "识别结果将显示在此" else asrText)
+                            text(if (ctx.asrText.isEmpty()) "识别结果将显示在此" else ctx.asrText)
                         }
                     }
                 }
 
-                sectionTitle("TTS 合成测试")
+                ctx.sectionTitle("TTS 合成测试")
                 Input {
                     attr {
                         height(80f)
                         marginTop(6f)
-                        borderWidth(1f)
-                        borderColor(Color(0xFFDDDDDDL))
+                        border(Border(1f, BorderStyle.SOLID, Color(0xFFDDDDDDL)))
                         borderRadius(6f)
-                        paddingHorizontal(10f)
                         fontSize(14f)
                         color(Color(0xFF222222L))
-                        text(ttsText)
+                        text(ctx.ttsText)
                         placeholder("输入要合成的文字")
                     }
-                    event { input { t -> ttsText = t } }
+                    event { textDidChange { params -> ctx.ttsText = params.text } }
                 }
-                field("语言 (auto/zh/en/ja/ko/yue)", { ttsLang }) { ttsLang = it }
-                field("语速 (0.5~2.0)", { ttsSpeed }) { ttsSpeed = it }
-                field("语音角色 speaker (sid)", { ttsSpeaker }) { ttsSpeaker = it }
-                Button {
+                ctx.field("语言 (auto/zh/en/ja/ko/yue)", { ctx.ttsLang }) { ctx.ttsLang = it }
+                ctx.field("语速 (0.5~2.0)", { ctx.ttsSpeed }) { ctx.ttsSpeed = it }
+                ctx.field("语音角色 speaker (sid)", { ctx.ttsSpeaker }) { ctx.ttsSpeaker = it }
+                View {
                     attr {
                         marginTop(8f)
                         width(140f)
                         height(40f)
+                        allCenter()
                         backgroundColor(Color(0xFF07C160L))
-                        color(Color.WHITE)
-                        fontSize(15f)
-                        text("合成并播放")
                     }
-                    event { click { speak() } }
+                    event { click { ctx.speak() } }
+                    Text {
+                        attr {
+                            fontSize(15f)
+                            color(Color.WHITE)
+                            text("合成并播放")
+                        }
+                    }
                 }
             }
         }
@@ -241,45 +268,51 @@ class TestPage : Pager() {
     }
 
     private fun openAdmin() {
-        router().openPage("config", mutableMapOf())
+        // RouterModule.openPage(pageName, pageData: JSONObject? = null)——第二参是 JSONObject，
+        // 不能传 mutableMapOf()。
+        router().openPage("config")
     }
+}
 
-    private fun ViewBuilder.field(label: String, getValue: () -> String, onChange: (String) -> Unit) {
-        Text {
-            attr {
-                fontSize(13f)
-                color(Color(0xFF888888L))
-                marginTop(12f)
-                text(label)
-            }
-        }
-        Input {
-            attr {
-                height(40f)
-                marginTop(6f)
-                borderWidth(1f)
-                borderColor(Color(0xFFDDDDDDL))
-                borderRadius(6f)
-                paddingHorizontal(10f)
-                fontSize(14f)
-                color(Color(0xFF222222L))
-                text(getValue())
-                placeholder("")
-            }
-            event { input { t -> onChange(t) } }
+/**
+ * 单个配置字段：标签 + 输入框（value 经 getter 传入以保持响应式）。
+ * ⚠️ 必须是**文件级**扩展（同 ConfigPage.kt 的约定）：类内私有成员扩展在 @ScopeMarker
+ * 限定的嵌套容器里无法解析（'cannot be called in this context'）。
+ */
+private fun ViewContainer<*, *>.field(label: String, getValue: () -> String, onChange: (String) -> Unit) {
+    Text {
+        attr {
+            fontSize(13f)
+            color(Color(0xFF888888L))
+            marginTop(12f)
+            text(label)
         }
     }
+    Input {
+        attr {
+            height(40f)
+            marginTop(6f)
+            border(Border(1f, BorderStyle.SOLID, Color(0xFFDDDDDDL)))
+            borderRadius(6f)
+            fontSize(14f)
+            color(Color(0xFF222222L))
+            text(getValue())
+            placeholder("")
+        }
+        event { textDidChange { params -> onChange(params.text) } }
+    }
+}
 
-    private fun ViewBuilder.sectionTitle(title: String) {
-        Text {
-            attr {
-                fontSize(15f)
-                fontWeight600()
-                color(Color(0xFF1F1F1FL))
-                marginTop(20f)
-                marginBottom(4f)
-                text(title)
-            }
+/** 分组小标题 */
+private fun ViewContainer<*, *>.sectionTitle(title: String) {
+    Text {
+        attr {
+            fontSize(15f)
+            fontWeightMedium()
+            color(Color(0xFF1F1F1FL))
+            marginTop(20f)
+            marginBottom(4f)
+            text(title)
         }
     }
 }

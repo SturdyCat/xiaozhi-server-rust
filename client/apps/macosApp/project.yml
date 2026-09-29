@@ -1,24 +1,40 @@
 # xcodegen 工程描述：在 macosApp 目录下执行 `xcodegen generate` 生成 macosApp.xcodeproj
-# 前置：先用 Gradle 编出 shared.framework（见 README「ASR/TTS 测试台」启动步骤 1）。
+# 前置：先用 Gradle 编出 shared.framework：cd client && ./gradlew :shared:linkReleaseFrameworkMacosArm64
+#
+# ⚠️ 平台选择说明（实测结论，勿轻易改）：
+#   本 App 源码 import UIKit（Kuikly 渲染器是 UIKit 的），只能以 **Mac Catalyst** 构建。
+#   曾试过 iOS 平台 + SUPPORTS_MACCATALYST（Catalyst-only，杜绝误选运行目标），
+#   但 iOS 平台目标在新 Xcode 上强制要求 development team，而本机钥匙串的全部
+#   Apple Development 证书都不具备 Mac 开发能力（多个团队实测均报
+#   No "Mac Development" signing certificate matching team ID），走不通。
+#   故保持 macOS 平台 + ad-hoc 签名（零团队依赖，构建已验证 BUILD SUCCEEDED），
+#   误选原生 "My Mac" 目标的场景由下方 preBuildScripts 守卫兜底：报一句中文人话错误。
 name: macosApp
 options:
   bundleIdPrefix: com.xiaozhi.admin
   deploymentTarget:
-    macOS: "10.15"
-  # 生成的工程使用默认 signing（本地运行选 Sign to Run Locally 即可）
+    # 本机 Xcode 27 SDK 最低支持 macOS 12.0（10.15 会被直接报错拒建，实测）
+    macOS: "12.0"
   createIntermediateGroups: true
 
 settings:
   base:
     PRODUCT_BUNDLE_IDENTIFIER: com.xiaozhi.admin.macosApp
     INFOPLIST_FILE: Info.plist
-    CODE_SIGN_STYLE: Automatic
-    MACOSX_DEPLOYMENT_TARGET: 10.15
+    # 签名：Manual + ad-hoc（"-"），零团队依赖。
+    # 曾试过 iOS 平台 + Automatic + 本机 3 个团队逐一实测，因证书无 Mac 能力全部失败，勿回退那套。
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: "-"
+    MACOSX_DEPLOYMENT_TARGET: "12.0"
     PRODUCT_NAME: macosApp
     # Mac Catalyst：用 UIKit for Mac 跑 Kuikly 的 iOS 渲染器
     SUPPORTS_MACCATALYST: "YES"
     CLANG_ENABLE_MODULES: "YES"
     LD_RUNPATH_SEARCH_PATHS: "@executable_path/../Frameworks"
+    # shared 框架搜索路径：macosApp 位于 apps/ 子目录，shared 在 client/ 根，
+    # 相对路径需往上两级；且相对路径在链接阶段会因 ld 工作目录不在工程目录而失效
+    # （ld: warning: search path not found，实测），用 $(PROJECT_DIR) 展开为绝对路径才稳。
+    FRAMEWORK_SEARCH_PATHS: "$(inherited) $(PROJECT_DIR)/../../shared/build/bin/macosArm64/releaseFramework"
 
 targets:
   macosApp:
@@ -30,8 +46,33 @@ targets:
         excludes: ["Podfile", "project.yml", "*.xcodeproj", "*.xcworkspace"]
     info:
       path: Info.plist
+      properties:
+        # ⚠️ UIScene 生命周期（新 SDK 强制）：AppDelegate 直建 window 的老模式启动即报
+        #    "UIScene life cycle is required for apps built with this SDK"（实测）。
+        #    写在这里而不是手改 Info.plist——xcodegen 每次 generate 都会重写该文件。
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+          UISceneConfigurations:
+            UIWindowSceneSessionRoleApplication:
+              - UISceneConfigurationName: Default Configuration
+                UISceneDelegateClassName: SceneDelegate
+    preBuildScripts:
+      # 守卫：本 App 只能以 Mac Catalyst 构建（UIKit 渲染器）。误选原生 "My Mac"
+      # 运行目标时，编译会在 'UIKit/UIKit.h' file not found 上报难懂的错误；
+      # 这里提前用 EFFECTIVE_PLATFORM_NAME 拦截（Catalyst 构建该值为 -maccatalyst），
+      # 给出可直接执行的指引。
+      - name: Guardrail - 运行目标必须是 My Mac (Mac Catalyst)
+        script: |
+          if [ "${EFFECTIVE_PLATFORM_NAME}" != "-maccatalyst" ]; then
+            echo "error: 运行目标选错了。请把顶部的运行目标从 'My Mac' 切换为 'My Mac (Mac Catalyst)'（本 App 用 UIKit 渲染器，只能跑 Catalyst），再 Cmd+R。"
+            exit 1
+          fi
     dependencies:
       # 手动嵌入 KMP 编出的业务框架（含 config 管理页 + test 测试页）。
-      # 路径相对本文件所在目录（macosApp）；务必先执行 assembleMacosArm64。
-      - framework: ../shared/build/bin/macosArm64/releaseShared/shared.framework
+      # ⚠️ macosApp 在 apps/ 子目录下，shared 在 client/ 根：相对路径必须往上**两级**
+      #    （../../shared/...）。写成 ../shared 会解析到不存在的 apps/shared
+      #    （ld: warning: search path not found → library 'shared' not found，实测）。
+      # KMP 框架产物目录是 releaseFramework（link*Framework* 任务的输出），
+      # 先执行 :shared:linkReleaseFrameworkMacosArm64 再生成工程。
+      - framework: ../../shared/build/bin/macosArm64/releaseFramework/shared.framework
         embed: true

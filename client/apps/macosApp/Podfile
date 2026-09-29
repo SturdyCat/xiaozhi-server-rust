@@ -3,7 +3,13 @@ source 'https://cdn.cocoapods.org/'
 # macOS（Mac Catalyst）：复用 iOS 渲染器 OpenKuiklyIOSRender 支持 macOS。
 # 版本需与 shared 的 core 对齐（裸 Kuikly 版本号，见 gradle.properties 的 kuiklyVersion）。
 # Catalyst 最低要求 macOS 10.15。
-platform :osx, '10.15'
+#
+# ⚠️ platform 必须写 :ios（不要写 :osx）：OpenKuiklyIOSRender 是 UIKit/iOS Pod，
+#    写 :osx 会让 Pod 以 macOS 原生平台构建，UIKit 符号缺失 → 产物出不来 →
+#    链接时报 library 'OpenKuiklyIOSRender' not found（实测）。
+#    Catalyst = iOS Pod 以 macabi 变体构建，需下方 post_install 打开 SUPPORTS_MACCATALYST。
+#    iOS 15 ↔ macOS 12（Catalyst 版本映射）；本机 Xcode 27 SDK 最低要求 macOS 12.0。
+platform :ios, '15.0'
 
 target 'macosApp' do
   inhibit_all_warnings!
@@ -12,12 +18,22 @@ target 'macosApp' do
   pod 'OpenKuiklyIOSRender', '2.28.0'
 
   # 注：业务框架 shared.framework 不通过 CocoaPods 引入（KMP 模块未接 cocoapods 插件，
-  # 无 podspec）。改为由 xcodegen 的 project.yml 直接 embed 到 App（见下方说明）。
+  # 无 podspec）。改为由 xcodegen 的 project.yml 直接 embed 到 App（见 project.yml 说明）。
 end
 
-# 仅 arm64：排除 x86_64 架构（Catalyst 只在 Apple Silicon Mac 运行）
+# 仅 arm64：排除 x86_64 架构（Catalyst 只在 Apple Silicon Mac 运行）；
+# 并允许各 Pod 以 Mac Catalyst 变体构建（否则只出 iOS 产物，App 链接时找不到库）。
 post_install do |installer|
-  installer.pods_project.build_configurations.each do |config|
-    config.build_settings['EXCLUDED_ARCHS[sdk=macosx*]'] = 'x86_64'
+  installer.pods_project.targets.each do |t|
+    t.build_configurations.each do |config|
+      config.build_settings['SUPPORTS_MACCATALYST'] = 'YES'
+      # ⚠️ Catalyst 变体的 macOS 部署目标由 **IPHONEOS_DEPLOYMENT_TARGET 映射**而来
+      #    （iOS 13 → macOS 10.15、iOS 15 → macOS 12.0），只改 MACOSX_DEPLOYMENT_TARGET
+      #    对 iOS 平台的 Pod 目标不生效（实测报 "deployment target 10.15"）。
+      #    podspec 声明 ios 13.0 会压过 Podfile platform，必须在此强制覆盖。
+      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.0'
+      config.build_settings['MACOSX_DEPLOYMENT_TARGET'] = '12.0'
+      config.build_settings['EXCLUDED_ARCHS[sdk=macosx*]'] = 'x86_64'
+    end
   end
 end

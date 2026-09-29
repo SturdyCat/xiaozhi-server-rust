@@ -1,0 +1,16 @@
+PODS:
+  - OpenKuiklyIOSRender (2.28.0)
+
+DEPENDENCIES:
+  - OpenKuiklyIOSRender (= 2.28.0)
+
+SPEC REPOS:
+  trunk:
+    - OpenKuiklyIOSRender
+
+SPEC CHECKSUMS:
+  OpenKuiklyIOSRender: bed821fae9ff52da4c3f8fb4a7b3ec4360181822
+
+PODFILE CHECKSUM: 7dac3ef76ce8d48711fa829409e83f868ab39dac
+
+COCOAPODS: 1.16.2

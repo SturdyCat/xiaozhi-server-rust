@@ -9,8 +9,9 @@ expected_token = ""
 # tokio 异步运行时 worker 线程数（默认 2）：避免占满 4 核小主机，给其他服务留余量
 worker_threads = 2
 # 管理页面（h5App 的 Kuikly Web 构建产物）目录；server 在 / 静态托管。
-# 默认相对 server/ 指向上级 client/apps/h5App/dist；Docker 部署设为 /app/web。
-admin_dir = "../client/apps/h5App/dist"
+# 默认相对 server/ 指向上级 client/apps/h5App/web（:apps:h5App:publishWeb 产物）；
+# Docker 部署无需修改——镜像内置 XIAOZHI_ADMIN_DIR=/app/web 环境变量覆盖。
+admin_dir = "../client/apps/h5App/web"
 
 [audio]
 # 服务器下行（TTS）采样率，写入服务器 hello，设备据此解码播放。

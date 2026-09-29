@@ -13,7 +13,9 @@
 </head>
 <body>
     <div id="root"></div>
-    <!-- 开发期由 webpack dev server 注入；生产部署替换为 page/nativevue2.js -->
-    <script src="http://127.0.0.1:8899/nativevue2.js"></script>
+    <!-- 1. 业务页面 bundle（:shared:packLocalJSBundleRelease 产出，需先加载——注入 Kuikly core 桥接） -->
+    <script type="text/javascript" src="./nativevue2.js"></script>
+    <!-- 2. H5 壳（core-render-web 渲染器 + 入口 Main.kt），:apps:h5App 产出 -->
+    <script type="text/javascript" src="./h5App.js"></script>
 </body>
 </html>

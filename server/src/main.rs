@@ -64,6 +64,19 @@ async fn run(config: Config, config_path: Option<String>) -> Result<()> {
 /// 配置加载优先级：`XIAOZHI_CONFIG` 环境变量 → `--config` 参数 → 内置默认（mock）。
 /// 返回加载到的配置与（若有）配置文件路径，供 `PUT /api/config` 写回使用。
 fn load_config() -> (Config, Option<String>) {
+    let (mut config, path) = load_config_inner();
+    // [server].admin_dir 支持环境变量覆盖（Docker 镜像内置 XIAOZHI_ADMIN_DIR=/app/web，
+    // 挂载的 config.toml 无需为容器单独改路径）。与 XIAOZHI_CONFIG 同语义：env 只影响
+    // 本次运行的生效配置，不写回文件（GET /api/config 展示的仍是文件原值）。
+    if let Ok(dir) = std::env::var("XIAOZHI_ADMIN_DIR") {
+        if !dir.is_empty() {
+            config.server.admin_dir = dir;
+        }
+    }
+    (config, path)
+}
+
+fn load_config_inner() -> (Config, Option<String>) {
     if let Ok(p) = std::env::var("XIAOZHI_CONFIG") {
         if let Ok(c) = Config::load(&p) {
             return (c, Some(p));

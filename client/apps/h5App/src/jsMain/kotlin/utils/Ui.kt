@@ -1,6 +1,6 @@
 package utils
 
-import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
+import com.tencent.kuikly.core.render.web.nvi.serialization.json.JSONObject
 import kotlinx.browser.document
 import kotlinx.browser.window
 

@@ -184,17 +184,41 @@ server/                        # Rust 服务端
   tests/mock_client.py         零依赖 WebSocket 联调客户端
 client/                        # Kuikly 多端工程（管理后台 web + macOS 测试台）
   settings.gradle.kts         rootProject.name = "client"
+  gradle.properties           kuiklyVersion 唯一来源（升级需与根 build.gradle.kts 的 buildscript 双写同步）
+  build.gradle.kts            Kuikly 插件经 buildscript classpath 引入 + 插件版本锁定（含 KSP）
+  kotlin-js-store/yarn.lock   Kotlin/JS npm 依赖锁（⚠️ 必须入库，缺失则 yarn 解析漂移）
   shared/
     commonMain/               公共代码：@Page("config") 管理后台（跨端）+ 配置表单 + NetworkModule
     macosArm64Main/           仅 macOS(arm64) 编译：@Page("test") ASR/TTS 测试台 + XiaoZhiModule
+    （js(IR) 目标在此模块：@Page 注册靠 KSP(core-ksp)，业务包由 Kuikly 插件打包）
   apps/
-    h5App/                    Web(H5) 宿主：Main.kt + index.html（仅管理后台，无测试功能）
+    h5App/                    Web(H5) 壳：渲染器(core-render-web:h5) + Main.kt；publishWeb 汇聚 web/
+    web/                      产物契约：index.html(入库) + nativevue2.js(业务包) + h5App.js(壳)
     androidApp/ iosApp/ ohosApp/   各原生宿主
     macosApp/                 macOS 宿主（原生，Mac Catalyst）：ASR/TTS 测试台，复用 iOS 渲染器
 ```
 
-> server 在 `/` 静态托管 `client/apps/h5App` 构建产物（由 `[server].admin_dir` 指定目录），
-> 并通过 `GET/POST /api/config` 让管理页读写 `config.toml`。
+> server 在 `/` 静态托管 `client/apps/h5App/web`（`[server].admin_dir` 默认值即此；
+> 容器内由镜像内置 `XIAOZHI_ADMIN_DIR=/app/web` 覆盖），并通过 `GET/POST /api/config`
+> 让管理页读写 `config.toml`。本地产出管理页：`cd client && ./gradlew :apps:h5App:publishWeb`。
+
+### 5.8 client（Kuikly）构建链要点与陷阱
+
+- **web 双 bundle 架构**（对齐 xiaoya-player）：`shared` 持有 js 目标 → Kuikly 插件 `packLocalJSBundleRelease` 产业务包 `nativevue2.js`；`apps/h5App` 是壳（渲染器 + 入口）→ webpack 产 `h5App.js`；`web/index.html` 先载业务包、后载壳。**js 消费方无法解析无 js 目标的 KMP 模块**——不要把 js 目标从 shared 挪走。
+- **Web 渲染器真实坐标是 `com.tencent.kuikly-open.core-render-web:h5`**（artifactId 为 `h5`）。`com.tencent.kuikly-open:core-render-web` 在腾讯镜像上 404（实测 Could not resolve）。
+- **DSL 陷阱**：容器带 `@ScopeMarker`（@DslMarker）——body 的嵌套容器里不能隐式访问 Pager 成员；官方口径 `val ctx = this` + `ctx.xxx`。可复用 UI 片段写成**文件级** `private fun ViewContainer<*,*>.xxx()` 扩展（类内成员扩展实测编译失败）。
+- **API 位置**：`Color`/`Border`/`BorderStyle` 在 `com.tencent.kuikly.core.base`（不在 base.attr）；传统 DSL 无 `Button`（用 View + event click 模拟）；无 `paddingHorizontal/Vertical`（用 padding(left/right/top/bottom)）；Input 文本变化事件是 `event { textDidChange { } }`。
+- **Docker 构建内存**（ACR 构建机实测 OOM 表现：日志戛然而止 + rpc EOF）：web 阶段 Gradle/Kotlin daemon/webpack-Node 三处显式限堆（1280m/1024m/1024m，取 xiaoya 实测口径）+ `-PwebSourceMap=false` 关 source map；⛔ 不要调高。
+- **settings.gradle.kts 勿设 PREFER_SETTINGS**（会丢 Kotlin/JS 插件自动加的 nodejs.org dist 仓库，org.nodejs:node 必然解析失败）；根工程/子模块勿声明项目级 repositories（多余仓库的 DNS 异常会中断整条解析链）。
+
+### 5.9 macosApp（Mac Catalyst）构建与运行要点
+
+- **只能用「My Mac (Mac Catalyst)」运行目标**：渲染器 OpenKuiklyIOSRender 是 UIKit 的；选原生 "My Mac" 必报 `'UIKit/UIKit.h' file not found`。防呆已内建：target 的 preBuildScripts 守卫检查 `EFFECTIVE_PLATFORM_NAME != -maccatalyst` 时直接报中文指引（原生目标构建在编译前即被拦下，双向实测）。
+- **生成顺序**：`xcodegen generate` → `pod install`（xcodegen 重写 .xcodeproj 会抹掉 Pods 集成，重新生成后必须重跑 pod install）。开 `macosApp.xcworkspace`。
+- **签名**：project.yml 用 Manual + ad-hoc（`CODE_SIGN_IDENTITY: "-"`，即 Xcode 的 Sign to Run Locally）；Automatic 无开发者团队直接拒建。⚠️ 曾试过「iOS 平台 + SUPPORTS_MACCATALYST」做 Catalyst-only 杜绝误选：iOS 平台目标强制要求 development team，而本机全部 Apple Development 证书均无 Mac 开发能力（3 个团队逐一实测均报 `No "Mac Development" signing certificate matching team ID`）——勿回退那套，守卫脚本已解决误选问题。
+- **Podfile Catalyst 配方**：`platform :ios`（**不能** `:osx`——UIKit Pod 按 macOS 原生平台编不出产物）+ post_install 给全部 Pod 目标开 `SUPPORTS_MACCATALYST`、排除 x86_64、**强制 `IPHONEOS_DEPLOYMENT_TARGET=15.0`**（⚠️ Catalyst 的 macOS 部署目标由 iOS 目标**映射**而来：iOS 13→macOS 10.15 会被新 Xcode SDK 拒建；只改 MACOSX_DEPLOYMENT_TARGET 对 iOS 平台 Pod 无效，实测踩坑）。
+- **框架路径**：macosApp 在 `apps/` 子目录，shared 在 `client/` 根——相对路径要上**两级**（`../../shared/...`），且链接搜索路径用 `$(PROJECT_DIR)/../../shared/...`（纯相对路径 ld 找不到）；产物目录是 `releaseFramework`（无 releaseShared）。
+- **macabi 平台补丁（已自动化）**：Kotlin/Native 无 macabi 目标，静态框架（ar 归档）内目标文件平台标记是 macOS，ld 拒绝链入 Catalyst。`shared/linkReleaseFrameworkMacosArm64` 等框架链接任务已 `finalizedBy` 补丁任务，自动执行 `scripts/patch_framework_macabi.py`（ar x → 改写 LC_BUILD_VERSION platform 1→6、minos≥12.0 → ar cr → ranlib，幂等）。本机 vtool 不认 macabi 平台名，勿走 vtool。
 
 ## 7. 运行与联调
 
