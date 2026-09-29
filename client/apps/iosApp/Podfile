@@ -1,0 +1,19 @@
+source 'https://cdn.cocoapods.org/'
+
+platform :ios, '14.1'
+
+target 'iosApp' do
+  inhibit_all_warnings!
+
+  # Kuikly iOS 渲染器（版本需与 shared 的 core 一致；iOS 渲染层用裸 Kuikly 版本号）
+  pod 'OpenKuiklyIOSRender', '2.28.0'
+  # 本地链接 KMP 编译出的 shared 业务 framework
+  pod 'shared', :path => '../shared'
+end
+
+# 仅 arm64：排除 Intel 模拟器（x86_64）架构，避免 pod 编译 x86 切片
+post_install do |installer|
+  installer.pods_project.build_configurations.each do |config|
+    config.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] = 'x86_64'
+  end
+end

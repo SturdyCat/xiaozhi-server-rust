@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>XiaoZhi Admin</title>
+    <style>
+        html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #fff; }
+        #root { width: 100%; height: 100%; }
+        .toast-wrapper { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 9999; }
+        .toast-content { padding: 10px 16px; background: rgba(0,0,0,.75); color: #fff; border-radius: 8px; font-size: 14px; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    <!-- 开发期由 webpack dev server 注入；生产部署替换为 page/nativevue2.js -->
+    <script src="http://127.0.0.1:8899/nativevue2.js"></script>
+</body>
+</html>

@@ -1,10 +1,10 @@
 # xiaozhi-server-rust 部署编排
 #
 # 用法：
-#   1. （可选）手动预置模型：  ./scripts/download_models.sh ./models
+    #   1. （可选）手动预置模型：  ./scripts/download_models.sh ./models
 #      —— 不预置也没关系：容器首次启动会自动检测缺失并下载到挂载的 ./models，
 #         之后文件已存在即跳过（见 docker-entrypoint.sh + 下方 XIAOZHI_AUTO_DOWNLOAD_MODELS）。
-#   2. 准备配置：  cp config.example.toml config.toml   # 按需修改 token / api_key / 模型路径
+#   2. 准备配置：  cp server/config.example.toml server/config.toml   # 按需修改 token / api_key / 模型路径
 #   3. 构建启动：  docker compose up -d --build
 #   4. 查看日志：  docker compose logs -f xiaozhi
 #   5. 停止：      docker compose down
@@ -41,9 +41,9 @@ services:
       # 不可达的环境靠它下载模型；GITHUB_PROXY=off 可关闭走直连。
       GITHUB_PROXY: "https://tvv.tw/"
     volumes:
-      # 配置：默认直接挂 config.example.toml（已含 /models/... 路径，开箱即用）；
-      #       若已 cp 为 config.toml，把上面 XIAOZHI_CONFIG 路径一并改掉即可。
-      - ./config.toml:/etc/xiaozhi/config.toml:ro
+      # 配置：默认直接挂 server/config.example.toml（已含 /models/... 路径，开箱即用）；
+      #       若已 cp 为 server/config.toml，把上面 XIAOZHI_CONFIG 路径一并改掉即可。
+      - ./server/config.toml:/etc/xiaozhi/config.toml:ro
       # 模型：宿主 ./models 挂载进容器；首启缺失时由入口脚本自动下载并写入（需可写），
       #       下载后持久化，后续启动检测到文件即跳过。
       - ./models:/models

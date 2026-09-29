@@ -1,0 +1,37 @@
+# xcodegen 工程描述：在 macosApp 目录下执行 `xcodegen generate` 生成 macosApp.xcodeproj
+# 前置：先用 Gradle 编出 shared.framework（见 README「ASR/TTS 测试台」启动步骤 1）。
+name: macosApp
+options:
+  bundleIdPrefix: com.xiaozhi.admin
+  deploymentTarget:
+    macOS: "10.15"
+  # 生成的工程使用默认 signing（本地运行选 Sign to Run Locally 即可）
+  createIntermediateGroups: true
+
+settings:
+  base:
+    PRODUCT_BUNDLE_IDENTIFIER: com.xiaozhi.admin.macosApp
+    INFOPLIST_FILE: Info.plist
+    CODE_SIGN_STYLE: Automatic
+    MACOSX_DEPLOYMENT_TARGET: 10.15
+    PRODUCT_NAME: macosApp
+    # Mac Catalyst：用 UIKit for Mac 跑 Kuikly 的 iOS 渲染器
+    SUPPORTS_MACCATALYST: "YES"
+    CLANG_ENABLE_MODULES: "YES"
+    LD_RUNPATH_SEARCH_PATHS: "@executable_path/../Frameworks"
+
+targets:
+  macosApp:
+    type: application
+    platform: macOS
+    sources:
+      - path: .
+        includes: ["**/*.m", "**/*.mm", "**/*.h", "**/*.swift"]
+        excludes: ["Podfile", "project.yml", "*.xcodeproj", "*.xcworkspace"]
+    info:
+      path: Info.plist
+    dependencies:
+      # 手动嵌入 KMP 编出的业务框架（含 config 管理页 + test 测试页）。
+      # 路径相对本文件所在目录（macosApp）；务必先执行 assembleMacosArm64。
+      - framework: ../shared/build/bin/macosArm64/releaseShared/shared.framework
+        embed: true

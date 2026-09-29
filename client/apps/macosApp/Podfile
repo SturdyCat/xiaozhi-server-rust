@@ -1,0 +1,23 @@
+source 'https://cdn.cocoapods.org/'
+
+# macOS（Mac Catalyst）：复用 iOS 渲染器 OpenKuiklyIOSRender 支持 macOS。
+# 版本需与 shared 的 core 对齐（裸 Kuikly 版本号，见 gradle.properties 的 kuiklyVersion）。
+# Catalyst 最低要求 macOS 10.15。
+platform :osx, '10.15'
+
+target 'macosApp' do
+  inhibit_all_warnings!
+
+  # Kuikly macOS/iOS 渲染器（提供 UIKit for Mac 的页面渲染能力）
+  pod 'OpenKuiklyIOSRender', '2.28.0'
+
+  # 注：业务框架 shared.framework 不通过 CocoaPods 引入（KMP 模块未接 cocoapods 插件，
+  # 无 podspec）。改为由 xcodegen 的 project.yml 直接 embed 到 App（见下方说明）。
+end
+
+# 仅 arm64：排除 x86_64 架构（Catalyst 只在 Apple Silicon Mac 运行）
+post_install do |installer|
+  installer.pods_project.build_configurations.each do |config|
+    config.build_settings['EXCLUDED_ARCHS[sdk=macosx*]'] = 'x86_64'
+  end
+end

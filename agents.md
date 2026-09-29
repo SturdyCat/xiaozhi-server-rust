@@ -54,7 +54,7 @@ export PATH="$HOME/.cargo/bin:$PATH"      # 或直接使用绝对路径 ~/.cargo
   --config 'source.ustc.registry="sparse+https://mirrors.ustc.edu.cn/crates.io-index/"'
 
 # 运行（mock 模式，无需模型与 libopus）
-~/.cargo/bin/cargo run \
+cd server && ~/.cargo/bin/cargo run \
   --config 'source.ustc.registry="sparse+https://mirrors.ustc.edu.cn/crates.io-index/"'
 
 # 单元测试
@@ -62,7 +62,7 @@ export PATH="$HOME/.cargo/bin:$PATH"      # 或直接使用绝对路径 ~/.cargo
   --config 'source.ustc.registry="sparse+https://mirrors.ustc.edu.cn/crates.io-index/"'
 
 # 真实引擎（需联网下载 sherpa 原生库 + 系统 libopus + 模型文件）
-~/.cargo/bin/cargo run --features sherpa -- --config config.toml
+cd server && ~/.cargo/bin/cargo run --features sherpa -- --config config.toml
 ```
 
 ## 4. Feature 门控（重要）
@@ -162,33 +162,39 @@ export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:$PKG_CONFIG_PATH"
 - curl 带 `--connect-timeout 15 --retry 3`（避免连接假死 134s）；下载/解压失败会让入口**中止启动**（未设 `XIAOZHI_ALLOW_MISSING_MODELS` 时），避免带着缺模型崩溃重启循环。
 - 行为开关 `XIAOZHI_AUTO_DOWNLOAD_MODELS`：`missing`（默认）/`force`（每次重下）/`off`（不下载）。
 - 运行期镜像需装 `curl` + `bzip2`（`tar` 自带）用于下载与解包；`docker-compose.yml` 的 `./models` 挂载**必须可写**（不要 `:ro`）。
-- 离线/内网：先 `./scripts/download_models.sh /host/models` 预置再挂载，或设 `XIAOZHI_AUTO_DOWNLOAD_MODELS=off`。
+- 离线/内网：先 `./server/scripts/download_models.sh /host/models` 预置再挂载，或设 `XIAOZHI_AUTO_DOWNLOAD_MODELS=off`。
 
 默认模型包（已完整下载验证，与 config.example.toml 路径一一对应）：`sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09`（SenseVoice INT8，`model.int8.onnx`）、`kokoro-int8-multi-lang-v1_1`（Kokoro INT8 **中英双语**，含 model.int8.onnx/voices.bin/tokens.txt/espeak-ng-data/lexicon-zh.txt/lexicon-us-en.txt/dict（jieba）/date-zh.fst）、`silero_vad.onnx`（Silero VAD）。⚠️ 此前误判 `kokoro-int8-multi-lang-v1_1` 不是完整包（流式列清单被管道截断所致），实际 144MB/417 文件完整；`kokoro-int8-en-v0_19` 仅英文、无 lexicon，中文场景勿用。
 
-## 6. 项目结构速查
+## 6. 项目结构速查（monorepo）
+
+本仓库为 monorepo：`server/` 是 Rust 服务端，`client/` 是 Kuikly 多端工程（管理后台 web）。
 
 ```
-src/
-  main.rs       入口：加载配置 → 初始化引擎 → 启动 Axum
-  config.rs     TOML 配置 + mock 默认值（注意各 backend 默认值均为 mock）
-  protocol.rs   消息枚举 + 二进制版本封装（v1/v2/v3）—— 改这里必看 §5.1
-  error.rs      错误类型（当前为 anyhow 桥接占位，部分项暂未使用）
-  engine.rs     共享引擎容器（Asr/Tts/Llm + 按配置构造 VAD）
-  ws.rs         WebSocket 网关：握手 / 协商 / 鉴权
-  session.rs    每连接会话状态机 + 语音流水线（支持 abort）
-  asr.rs        AsrEngine trait + MockAsr / SherpaAsr
-  vad.rs        VadEngine trait + MockVad / SherpaVad
-  tts.rs        TtsEngine trait + MockTts / SherpaTts
-  llm.rs        LlmClient（http）+ MockLlm（mock）+ build_llm
-  audio/
-    opus.rs     Opus 编解码（sherpa 下用 audiopus；mock 返回空帧）
-    resample.rs 重采样（sherpa 下用 rubato）
-scripts/download_models.sh   模型下载脚本
-config.example.toml          配置样例
-Dockerfile / .dockerignore   容器化（默认 --features sherpa 构建）
-tests/mock_client.py         零依赖 WebSocket 联调客户端
+server/                        # Rust 服务端
+  src/
+    main.rs       入口：加载配置 → 初始化引擎 → 启动 Axum
+    config.rs     TOML 配置 + mock 默认值（含 GET/POST /api/config 读写）
+    protocol.rs   消息枚举 + 二进制版本封装（v1/v2/v3）—— 改这里必看 §5.1
+    ws.rs         WebSocket 网关：握手 / 协商 / 鉴权 + 静态托管管理页（/）
+    session.rs    每连接会话状态机 + 语音流水线（支持 abort）
+    asr.rs / vad.rs / tts.rs / llm.rs / engine.rs / audio/
+  config.toml / config.example.toml
+  scripts/download_models.sh
+  tests/mock_client.py         零依赖 WebSocket 联调客户端
+client/                        # Kuikly 多端工程（管理后台 web + macOS 测试台）
+  settings.gradle.kts         rootProject.name = "client"
+  shared/
+    commonMain/               公共代码：@Page("config") 管理后台（跨端）+ 配置表单 + NetworkModule
+    macosArm64Main/           仅 macOS(arm64) 编译：@Page("test") ASR/TTS 测试台 + XiaoZhiModule
+  apps/
+    h5App/                    Web(H5) 宿主：Main.kt + index.html（仅管理后台，无测试功能）
+    androidApp/ iosApp/ ohosApp/   各原生宿主
+    macosApp/                 macOS 宿主（原生，Mac Catalyst）：ASR/TTS 测试台，复用 iOS 渲染器
 ```
+
+> server 在 `/` 静态托管 `client/apps/h5App` 构建产物（由 `[server].admin_dir` 指定目录），
+> 并通过 `GET/POST /api/config` 让管理页读写 `config.toml`。
 
 ## 7. 运行与联调
 
@@ -199,7 +205,7 @@ tests/mock_client.py         零依赖 WebSocket 联调客户端
 curl http://127.0.0.1:8000/api/health   # => xiaozhi-server-rust ok
 
 # 协议联调（零第三方依赖，纯标准库）
-python3 tests/mock_client.py
+python3 server/tests/mock_client.py
 # 期望输出含：握手成功 → 服务器 hello（downlink sr=24000）→
 # 文本消息序列 ['stt','llm','tts:start','tts:sentence_start','tts:stop']
 # → 收到若干下行二进制帧 → PASS

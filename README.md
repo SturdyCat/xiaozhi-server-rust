@@ -39,7 +39,7 @@ API 已对照 1.13.8 rustdoc 校验：`OfflineSenseVoiceModelConfig`、`OfflineT
 
 ```bash
 # 使用本地 cargo（本仓库在 macOS 上用 ~/.cargo/bin/cargo）
-~/.cargo/bin/cargo run
+cd server && ~/.cargo/bin/cargo run
 ```
 
 默认监听 `0.0.0.0:8000`，使用内置 mock 配置（`asr.backend=mock`、`tts.backend=mock`、`expected_token=""`）。
@@ -61,14 +61,14 @@ curl http://127.0.0.1:8000/api/health
 
 ```bash
 # 方式一：环境变量
-export XIAOZHI_CONFIG=$PWD/config.toml
-~/.cargo/bin/cargo run
+export XIAOZHI_CONFIG=$PWD/server/config.toml
+cd server && ~/.cargo/bin/cargo run
 
 # 方式二：命令行参数
-~/.cargo/bin/cargo run -- --config config.toml
+cd server && ~/.cargo/bin/cargo run -- --config config.toml
 ```
 
-配置字段说明见 [`config.example.toml`](./config.example.toml)。关键项：
+配置字段说明见 [`server/config.example.toml`](./server/config.example.toml)。关键项：
 
 - `server.listen`：监听地址，默认 `0.0.0.0:8000`。
 - `server.expected_token`：Bearer token；为空表示不校验 `Authorization` 头。
@@ -91,7 +91,7 @@ export XIAOZHI_CONFIG=$PWD/config.toml
 ### 1. 下载模型
 
 ```bash
-./scripts/download_models.sh /host/models
+./server/scripts/download_models.sh /host/models
 ```
 
 脚本会拉取 Silero VAD、SenseVoice INT8、Kokoro INT8（默认取官方 release 的 `*-int8-*` 量化包），并提示核对文件路径。下载后按 `config.example.toml` 的 `[asr]` / `[vad]` / `[tts]` 路径对齐 `model` / `tokens` / `voices` 等。
@@ -101,7 +101,7 @@ export XIAOZHI_CONFIG=$PWD/config.toml
 ### 2. 编译运行
 
 ```bash
-~/.cargo/bin/cargo run --features sherpa -- --config config.toml
+cd server && ~/.cargo/bin/cargo run --features sherpa -- --config config.toml
 ```
 
 > 构建 `sherpa-onnx` 原生库需要联网；首次 `cargo build --features sherpa` 可能耗时数分钟。
@@ -159,7 +159,7 @@ docker run -d --name xiaozhi \
 协议层与音频层含 `#[cfg(test)]` 用例（二进制版本往返、VAD/ASR 桩等）：
 
 ```bash
-~/.cargo/bin/cargo test
+cd server && ~/.cargo/bin/cargo test
 ```
 
 ### 协议联调（Python mock 客户端）
@@ -168,66 +168,105 @@ docker run -d --name xiaozhi \
 
 ```bash
 # 先启动服务（mock 模式）
-~/.cargo/bin/cargo run &
+cd server && ~/.cargo/bin/cargo run &
 
 # 运行联调客户端
-python3 tests/mock_client.py
+python3 server/tests/mock_client.py
 # => 依次断言 server hello / stt / llm / tts start / tts sentence_start / 二进制帧 / tts stop
 # => 输出 PASS 或 FAIL
 ```
 
 可用参数：`--host 127.0.0.1 --port 8000 --token <bearer>`（当 `expected_token` 非空时传 `--token`）。
 
-### 网页测试台（ASR / TTS 浏览器联调）
+### 管理后台（Web 配置页）
 
-[`src/web_test.html`](./src/web_test.html) 是一个**零依赖单文件页面**，浏览器直连 `/api/ws` 完成端到端语音联调（编译期内嵌进服务端二进制，`GET /` 直接出页面）：
+管理后台是一个 **Kuikly 多端工程**（`client/`），配置页（`@Page("config")`）位于 `client/shared` 公共层，跨端复用（web / Android / iOS / OHOS）。
+其 web 构建产物由 server 在 `/` 静态托管。它通过 `GET` / `POST`（或 `PUT`）`/api/config` 读写 `config.toml` 的**全部参数**，无需手改文件；auth 沿用 `server.expected_token` 语义，不另造简化鉴权。
 
-- **① ASR**：麦克风图标点击开始录音（16 kHz → WebCodecs 编码 Opus 上行），再点停止；点「开始识别」后服务端对整段录音一次性识别（跳过 VAD 自动切段，`asr_test start/stop`），结果展示并可一键填入合成框。
-- **② TTS**：文本框支持填入上次识别结果或粘贴任意文本，选择语言（中文/English）与语音角色（sid 0-9）后点「开始转换」（`tts_test`，跳过 ASR/LLM 直接合成）→ 下行 Opus 帧（v1/v2/v3 自动嗅探）解码播放。切换语言首次合成为冷启动（服务端按需构建对应引擎）。
+- **访问**：启动 server（带 `--config config.toml`）后浏览器打开 `http://<host>/?page_name=config`，
+  页面自动拉取当前配置并渲染表单；修改后点「保存配置」写回 `config.toml`（原 TOML 注释会被覆盖）。
+- **API**：
+  - `GET /api/config` → 返回当前配置 JSON（启动时指定了文件则实时读盘）。
+  - `POST /api/config`（亦接受 `PUT`）→ 接收完整配置 JSON 并写回启动加载的配置文件；**引擎相关参数（ASR/TTS/LLM）需重启 server 才生效**，`[server]` 部分下次启动生效。
+- **注意**：以内置默认（mock）配置启动（未指定文件）时保存无目标文件，会返回 400；请用 `--config` 指定 `config.toml` 后重启再保存。
 
 ```bash
-# 方式一：服务端直接托管（推荐）——页面编译期内嵌，访问根路径即出测试台，
-#         服务地址/Token 自动填充（支持 ?token=xxx 自动填鉴权）
-# 浏览器访问 http://127.0.0.1:8000/
+# 构建 web 管理页（产物目录含 index.html 与 nativevue2.js，由 [server].admin_dir 指向）
+cd client && ./gradlew :apps:h5App:build
 
-# 方式二：直接双击/打开文件（file:// 可用）
-open src/web_test.html
-
-# 方式三：本地托管
-python3 -m http.server 8123 --directory src
-# 浏览器访问 http://127.0.0.1:8123/web_test.html
+# 启动 server（admin_dir 默认 ../client/apps/h5App/dist，按实际构建输出调整）
+cd server && ~/.cargo/bin/cargo run -- --config config.toml
+# 浏览器访问 http://127.0.0.1:8000/?page_name=config
 ```
 
-> - 需要 **Chrome / Edge**（依赖 WebCodecs）；麦克风要求页面运行于 `localhost` / `HTTPS` / `file://`。
-> - **mock 模式**：用「触发一轮对话」按钮即可走完 mock ASR → LLM → TTS 全链路（下行空帧，无声音）。
-> - **真实引擎**：服务端以 `--features sherpa` 且 ASR/TTS backend 均为 `sherpa` 运行时，「开始说话」可用麦克风实测识别与播报。
-> - 服务端设置了 `expected_token` 时，在页面 Token 框填入即可——浏览器 WebSocket 无法自定义请求头，服务端支持 `?token=` 查询参数兜底（设备侧仍走 `Authorization` 头，不受影响）。
+### ASR/TTS 测试台（macOS App）
+
+`web` 受浏览器麦克风 / WebSocket 二进制等限制，不适合做语音链路测试。因此另起 **macOS App**（`apps/macosApp`，Mac Catalyst，复用 iOS 渲染器 `OpenKuiklyIOSRender`）承载 ASR/TTS 测试，替代原 web 测试台：
+
+- **测试页 `@Page("test")` 仅放在 `client/shared/src/macosArm64Main`**：只编译进 macOS 框架，**web/Android/iOS/OHOS 的包都不含测试代码**，web 自然无测试功能。
+- 管理后台 `@Page("config")` 仍在 `commonMain`，**跨端复用**；测试页提供「管理后台」入口跳过去。
+- 测试逻辑复用 server 的专用测试协议（见 `src/protocol.rs` / `src/session.rs`）：
+  - `asr_test {action: start|stop}`：整段录音缓冲后一次性识别，回 `stt`；
+  - `tts_test {text, speaker, lang, speed}`：合成并流式下发 Opus 音频。
+- 原生桥接在 `apps/macosApp/XiaoZhiModule.m`（Kuikly 自定义 Module `XiaoZhiModule`）：负责 WS 建连、麦克风采集、音频播放。**Opus 编解码目前为占位 TODO**（需接入 `libopus` / OpusKit），是联调前唯一待补的原生环节。
+
+```bash
+# ① 编出 KMP 业务框架 shared.framework（含 config 管理页 + test 测试页），仅 Apple Silicon
+cd client && ./gradlew :shared:linkReleaseFrameworkMacosArm64
+#    产物在 client/shared/build/bin/macosArm64/releaseShared/shared.framework
+#    （注：Kotlin/Native 没有 assembleMacosArm64 任务，正确任务名是 linkReleaseFrameworkMacosArm64）
+
+# ② 生成 Xcode 工程（需 brew install xcodegen）
+cd client/apps/macosApp && xcodegen generate        # 生成 macosApp.xcodeproj，并 embed 上面的 shared.framework
+
+# ③ 安装渲染器依赖（需 CocoaPods：sudo gem install cocoapods 或 brew install cocoapods）
+pod install                                        # 拉取 OpenKuiklyIOSRender，生成 macosApp.xcworkspace
+
+# ④ 用 Xcode 打开 workspace，选「My Mac (Mac Catalyst)」运行
+open macosApp.xcworkspace
+```
+
+> 启动顺序不可省：必须先 ① 编出 `shared.framework`，② 的 xcodegen 才能把框架正确 embed 进 App；
+> 否则链接阶段报 `shared.framework not found`。Opus 编解码（`XiaoZhiModule.m`）仍为 TODO，联调前需补。
+
+> 协议要点与 `mock_client.py` 共用同一套 `hello / asr_test / tts_test` 语义，便于回归。
 
 ---
 
-## 项目结构
+## 项目结构（monorepo）
+
+本仓库为 monorepo：`server/` 是 Rust 服务端，`client/` 是 Kuikly 多端工程（管理后台 web）。
 
 ```
-src/
-  main.rs         入口：加载配置、初始化引擎、启动 Axum
-  config.rs       TOML 配置与 mock 默认值
-  protocol.rs     消息枚举 + 二进制版本封装（v1/v2/v3）
-  error.rs        错误类型
-  llm.rs          OpenAI 兼容 LLM 客户端
-  asr.rs          AsrEngine trait + MockAsr / SherpaAsr
-  vad.rs          VadEngine trait + MockVad / SherpaVad
-  tts.rs          TtsEngine trait + MockTts / SherpaTts
-  engine.rs       共享引擎容器（Asr/Tts/Llm + 按配置构造 VAD）
-  audio/
-    opus.rs       Opus 编解码（sherpa feature 下启用 audiopus；mock 返回空帧）
-    resample.rs   重采样（sherpa 下用 rubato）
-  ws.rs           WebSocket 网关：握手 / 协商 / 鉴权
-  session.rs      每连接会话状态机 + 语音流水线
-scripts/download_models.sh   模型下载脚本
-config.example.toml          配置样例
-Dockerfile / .dockerignore   容器化
-tests/mock_client.py         协议联调客户端
+.
+├── Dockerfile / docker-compose.yml / docker-entrypoint.sh   # 部署编排（仓库根）
+├── server/                      # Rust 服务端
+│   ├── Cargo.toml / Cargo.lock
+│   ├── src/
+│   │   ├── main.rs             入口：加载配置、初始化引擎、启动 Axum
+│   │   ├── config.rs           TOML 配置与 mock 默认值（含 GET/POST /api/config 读写）
+│   │   ├── protocol.rs         消息枚举 + 二进制版本封装（v1/v2/v3）
+│   │   ├── ws.rs               WebSocket 网关 + 静态托管管理页（/）
+│   │   ├── session.rs          每连接会话状态机 + 语音流水线
+│   │   ├── asr.rs / vad.rs / tts.rs / llm.rs / engine.rs / audio/
+│   ├── config.toml / config.example.toml
+│   ├── scripts/download_models.sh
+│   └── tests/mock_client.py
+└── client/                      # Kuikly 多端工程（管理后台）
+    ├── settings.gradle.kts      rootProject.name = "client"
+    ├── shared/
+    │   ├── commonMain/         公共代码：@Page("config") 管理后台（跨端）+ 配置表单 + NetworkModule
+    │   └── macosArm64Main/     仅 macOS(arm64) 编译：@Page("test") ASR/TTS 测试台 + XiaoZhiModule
+    └── apps/
+        ├── h5App/               Web(H5) 宿主：Main.kt + index.html（仅管理后台，无测试功能）
+        ├── androidApp/          Android 宿主（仅 arm64-v8a，ndk.abiFilters 限定）
+        ├── iosApp/              iOS 宿主（原生；仅 arm64：iosArm64 + Apple Silicon 模拟器，Podfile 排除 x86_64）
+        ├── macosApp/            macOS 宿主（原生，Mac Catalyst）：ASR/TTS 测试台（仅 arm64）
+        └── ohosApp/             HarmonyOS 宿主（原生）
 ```
+
+> server 在 `/` 静态托管 `client/apps/h5App` 的构建产物（由 `[server].admin_dir` 指定目录），
+> 并通过 `GET/POST /api/config` 让管理页读写 `config.toml`。
 
 ---
 

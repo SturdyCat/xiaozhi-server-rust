@@ -1,6 +1,24 @@
-target/
-.git/
-.cargo/
+# ===== monorepo 构建上下文裁剪 =====
+# Rust 服务只用到 server/ 下的 Cargo + src，其余一概不进 docker 上下文
+client/
+.agents/
+.codebuddy/
+.workbuddy/
+docs/
+scripts/
+tests/
 *.md
+PLAN.md
+agents.md
+skills-lock.json
+
+# Rust 构建产物 / 缓存
+target/
+.cargo/
+
+# 本地配置（含密钥，不进镜像）
 config.toml
+server/config.toml
 .env
+
+.git/

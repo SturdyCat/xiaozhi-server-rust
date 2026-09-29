@@ -1,0 +1,83 @@
+{
+  "version": 1,
+  "skills": {
+    "kuikly-animation": {
+      "source": "Tencent-TDS/KuiklyUI-AI",
+      "sourceType": "github",
+      "skillPath": "skills/kuikly-animation/SKILL.md",
+      "computedHash": "6f60f94972c1f72383264133c5370a641b9abcd717349c852e37144968f9be37"
+    },
+    "kuikly-assets-resource": {
+      "source": "Tencent-TDS/KuiklyUI-AI",
+      "sourceType": "github",
+      "skillPath": "skills/kuikly-assets-resource/SKILL.md",
+      "computedHash": "a9c8d37d4c56690e029bf7f540d229d0107ab2429c528fff9634e11b64ec72d5"
+    },
+    "kuikly-compose-interop-dsl": {
+      "source": "Tencent-TDS/KuiklyUI-AI",
+      "sourceType": "github",
+      "skillPath": "skills/kuikly-compose-interop-dsl/SKILL.md",
+      "computedHash": "a61467af6a09c04755ba8586f11d620646bbbbd13d73ea6ec06f72dd567e6fb5"
+    },
+    "kuikly-compose-ui-framework": {
+      "source": "Tencent-TDS/KuiklyUI-AI",
+      "sourceType": "github",
+      "skillPath": "skills/kuikly-compose-ui-framework/SKILL.md",
+      "computedHash": "a51a07fd520cf9ae29e4efe936b8830ac8cab66c9b08ef30e076f24a2fbbb11d"
+    },
+    "kuikly-coroutines-threading": {
+      "source": "Tencent-TDS/KuiklyUI-AI",
+      "sourceType": "github",
+      "skillPath": "skills/kuikly-coroutines-threading/SKILL.md",
+      "computedHash": "97d89d0b0e541b9f58b427ad7b452724842a3595dc6d6d34fb44c613b2a02c4d"
+    },
+    "kuikly-expand-api": {
+      "source": "Tencent-TDS/KuiklyUI-AI",
+      "sourceType": "github",
+      "skillPath": "skills/kuikly-expand-api/SKILL.md",
+      "computedHash": "6d50b968e90ee9647e7a9e3312175a44ff0aa2d405a449cfd133b8cede715776"
+    },
+    "kuikly-expand-view": {
+      "source": "Tencent-TDS/KuiklyUI-AI",
+      "sourceType": "github",
+      "skillPath": "skills/kuikly-expand-view/SKILL.md",
+      "computedHash": "fb6c204bbce7edd650c808e2a76e6a9f511e593a8435c90ed0a3cd42d9a55da9"
+    },
+    "kuikly-multi-module-config": {
+      "source": "Tencent-TDS/KuiklyUI-AI",
+      "sourceType": "github",
+      "skillPath": "skills/kuikly-multi-module-config/SKILL.md",
+      "computedHash": "275c5305c52736a2df02bf3b109a8275a17fed5ecacd4e3113bd95703fa078fb"
+    },
+    "kuikly-network-and-json": {
+      "source": "Tencent-TDS/KuiklyUI-AI",
+      "sourceType": "github",
+      "skillPath": "skills/kuikly-network-and-json/SKILL.md",
+      "computedHash": "331aad329b18ccdecd996e7a93258f7601281216f9f8cbc898813f8334763719"
+    },
+    "kuikly-reactive-observer": {
+      "source": "Tencent-TDS/KuiklyUI-AI",
+      "sourceType": "github",
+      "skillPath": "skills/kuikly-reactive-observer/SKILL.md",
+      "computedHash": "c362e82cad2e1b01ece018e1e65f8b7aed9f7925ba734d4829cd91d1818eb229"
+    },
+    "kuikly-recomposition-analyzer": {
+      "source": "Tencent-TDS/KuiklyUI-AI",
+      "sourceType": "github",
+      "skillPath": "skills/kuikly-recomposition-analyzer/SKILL.md",
+      "computedHash": "0b037e4bc0bd6347a526ad6de9959498f311a32b9e46e6eeaa8b78dd75b44613"
+    },
+    "kuikly-ui-framework": {
+      "source": "Tencent-TDS/KuiklyUI-AI",
+      "sourceType": "github",
+      "skillPath": "skills/kuikly-ui-framework/SKILL.md",
+      "computedHash": "f74f53467a3d9f6362e16ae1d2b62b067c4d989e2471f2ded5fb50d748d85b39"
+    },
+    "kuikly-visibility-exposure": {
+      "source": "Tencent-TDS/KuiklyUI-AI",
+      "sourceType": "github",
+      "skillPath": "skills/kuikly-visibility-exposure/SKILL.md",
+      "computedHash": "8c9f975dd48f89ba6df391a18aab61d5d7c80aa21065612d8af8290e90e088e4"
+    }
+  }
+}

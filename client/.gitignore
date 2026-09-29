@@ -1,0 +1,35 @@
+# Gradle
+.gradle/
+build/
+**/build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# Android
+local.properties
+*.iml
+.idea/
+captures/
+
+# iOS
+Pods/
+DerivedData/
+*.xcworkspace/xcuserdata/
+iosApp.xcworkspace/
+
+# HarmonyOS
+.gradle/
+**/node_modules/
+.hvigor/
+**/oh_modules/
+**/build/default/
+**/build/**/libs/
+*.hap
+*.app
+**/resources/base/profile/backup_config.json
+
+# KMP / Kuikly 产物
+**/outputs/
+**/kuikly/
+
+# OS
+.DS_Store

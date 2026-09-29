@@ -10,8 +10,9 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends pkg-config libopus-dev \
     && rm -rf /var/lib/apt/lists/*
 
-COPY Cargo.toml Cargo.lock* ./
-COPY src ./src
+# 源码与 Cargo 清单位于 monorepo 的 server/ 子目录
+COPY server/Cargo.toml server/Cargo.lock* ./
+COPY server/src ./src
 
 # 目标指令集固定为 x86-64-v2：部署机 N5105（Tremont，无 AVX）可安全运行。
 # 不要用 native —— CI 构建机的 CPU 与部署机 N5105 不同，native 会嵌入部署机不支持的

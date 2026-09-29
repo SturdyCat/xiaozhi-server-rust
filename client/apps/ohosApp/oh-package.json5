@@ -1,0 +1,9 @@
+{
+  "name": "ohosApp",
+  "version": "1.0.0",
+  "description": "XiaoZhi Admin HarmonyOS 宿主（Kuikly 鸿蒙渲染）",
+  "dependencies": {
+    // Kuikly 鸿蒙渲染器（版本需与 shared 的 core 一致；鸿蒙渲染层用裸 Kuikly 版本号）
+    "@kuikly/core-render-ohos": "2.28.0"
+  }
+}
