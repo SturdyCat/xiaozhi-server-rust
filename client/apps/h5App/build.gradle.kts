@@ -15,10 +15,10 @@ val webSourceMap = (findProperty("webSourceMap") as String?)?.toBoolean() ?: tru
 
 kotlin {
     js(IR) {
-        moduleName = "h5App"
+        outputModuleName.set("h5App")
         browser {
             webpackTask {
-                outputFileName = "h5App.js"
+                mainOutputFileName.set("h5App.js")
             }
             commonWebpackConfig {
                 // 保持 IIFE：避免 h5App.js 覆盖 window.com（nativevue2.js 注入的 Kuikly 桥接）

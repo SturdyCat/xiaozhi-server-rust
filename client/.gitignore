@@ -10,10 +10,12 @@ local.properties
 .idea/
 captures/
 
-# iOS
+# iOS / macOS（Xcode）
+# ⚠️ 用 xcuserdata/ 全局匹配（* 不跨目录分隔符，*.xcodeproj/xcuserdata/ 匹配不到深层路径）
 Pods/
 DerivedData/
-*.xcworkspace/xcuserdata/
+xcuserdata/
+*.xcuserstate
 iosApp.xcworkspace/
 
 # HarmonyOS

@@ -8,13 +8,13 @@
 
 /* Begin PBXBuildFile section */
 		82076E2947B82E2418CA3DB5 /* shared.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = C76C6AC69873090EB53328B9 /* shared.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
-		889BF6BA9D75CFEF2AF45A34 /* main.m in Sources */ = {isa = PBXBuildFile; fileRef = TEMP_C77C575B-BDB9-4A05-AFD1-CE64DD68CD3E /* main.m */; };
-		9241ECB7DDFE1E41E5210EE6 /* KRRouterHandler.m in Sources */ = {isa = PBXBuildFile; fileRef = TEMP_D0AC826C-CE9C-429C-9A61-40C540856AE6 /* KRRouterHandler.m */; };
-		9EDCAEA5CB25ED54AB34DF38 /* XiaoZhiModule.m in Sources */ = {isa = PBXBuildFile; fileRef = TEMP_20539220-3938-406F-8C42-1F98E35CDD33 /* XiaoZhiModule.m */; };
+		889BF6BA9D75CFEF2AF45A34 /* main.m in Sources */ = {isa = PBXBuildFile; fileRef = "TEMP_C77C575B-BDB9-4A05-AFD1-CE64DD68CD3E" /* main.m */; };
+		9241ECB7DDFE1E41E5210EE6 /* KRRouterHandler.m in Sources */ = {isa = PBXBuildFile; fileRef = "TEMP_D0AC826C-CE9C-429C-9A61-40C540856AE6" /* KRRouterHandler.m */; };
+		9EDCAEA5CB25ED54AB34DF38 /* XiaoZhiModule.m in Sources */ = {isa = PBXBuildFile; fileRef = "TEMP_20539220-3938-406F-8C42-1F98E35CDD33" /* XiaoZhiModule.m */; };
 		B2FE56198131D80B2580FF2F /* shared.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C76C6AC69873090EB53328B9 /* shared.framework */; };
-		B502FE6DFFD4A0D82DF66DDF /* AppDelegate.m in Sources */ = {isa = PBXBuildFile; fileRef = TEMP_CFAB1DF3-F99A-4DF1-8E2A-4608A2A8D801 /* AppDelegate.m */; };
-		C5EBDC5632019433F2339ADB /* KuiklyRenderViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = TEMP_12957456-A682-405B-A04B-4527DF7427C5 /* KuiklyRenderViewController.m */; };
-		EAE0314EE7C2DAB88B75A9EB /* SceneDelegate.m in Sources */ = {isa = PBXBuildFile; fileRef = TEMP_7EA8123F-163C-49F7-9FAA-18C315D50D91 /* SceneDelegate.m */; };
+		B502FE6DFFD4A0D82DF66DDF /* AppDelegate.m in Sources */ = {isa = PBXBuildFile; fileRef = "TEMP_CFAB1DF3-F99A-4DF1-8E2A-4608A2A8D801" /* AppDelegate.m */; };
+		C5EBDC5632019433F2339ADB /* KuiklyRenderViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = "TEMP_12957456-A682-405B-A04B-4527DF7427C5" /* KuiklyRenderViewController.m */; };
+		EAE0314EE7C2DAB88B75A9EB /* SceneDelegate.m in Sources */ = {isa = PBXBuildFile; fileRef = "TEMP_7EA8123F-163C-49F7-9FAA-18C315D50D91" /* SceneDelegate.m */; };
 		F3650CFB7C3DF183453959A7 /* libPods-macosApp.a in Frameworks */ = {isa = PBXBuildFile; fileRef = B6FB4B482DD65D0E7EC3CF71 /* libPods-macosApp.a */; };
 /* End PBXBuildFile section */
 
@@ -38,12 +38,12 @@
 		2863A489DBCF47E96F493A00 /* macosApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = macosApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B6FB4B482DD65D0E7EC3CF71 /* libPods-macosApp.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-macosApp.a"; sourceTree = BUILT_PRODUCTS_DIR; };
 		C76C6AC69873090EB53328B9 /* shared.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = shared.framework; path = ../../shared/build/bin/macosArm64/releaseFramework/shared.framework; sourceTree = "<group>"; };
-		TEMP_12957456-A682-405B-A04B-4527DF7427C5 /* KuiklyRenderViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = KuiklyRenderViewController.m; sourceTree = "<group>"; };
-		TEMP_20539220-3938-406F-8C42-1F98E35CDD33 /* XiaoZhiModule.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = XiaoZhiModule.m; sourceTree = "<group>"; };
-		TEMP_7EA8123F-163C-49F7-9FAA-18C315D50D91 /* SceneDelegate.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = SceneDelegate.m; sourceTree = "<group>"; };
-		TEMP_C77C575B-BDB9-4A05-AFD1-CE64DD68CD3E /* main.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = main.m; sourceTree = "<group>"; };
-		TEMP_CFAB1DF3-F99A-4DF1-8E2A-4608A2A8D801 /* AppDelegate.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = AppDelegate.m; sourceTree = "<group>"; };
-		TEMP_D0AC826C-CE9C-429C-9A61-40C540856AE6 /* KRRouterHandler.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = KRRouterHandler.m; sourceTree = "<group>"; };
+		"TEMP_12957456-A682-405B-A04B-4527DF7427C5" /* KuiklyRenderViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = KuiklyRenderViewController.m; sourceTree = "<group>"; };
+		"TEMP_20539220-3938-406F-8C42-1F98E35CDD33" /* XiaoZhiModule.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = XiaoZhiModule.m; sourceTree = "<group>"; };
+		"TEMP_7EA8123F-163C-49F7-9FAA-18C315D50D91" /* SceneDelegate.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = SceneDelegate.m; sourceTree = "<group>"; };
+		"TEMP_C77C575B-BDB9-4A05-AFD1-CE64DD68CD3E" /* main.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = main.m; sourceTree = "<group>"; };
+		"TEMP_CFAB1DF3-F99A-4DF1-8E2A-4608A2A8D801" /* AppDelegate.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = AppDelegate.m; sourceTree = "<group>"; };
+		"TEMP_D0AC826C-CE9C-429C-9A61-40C540856AE6" /* KRRouterHandler.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = KRRouterHandler.m; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -76,12 +76,26 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
+		84BB4FDC306C9BE900E6DD90 /* Recovered References */ = {
+			isa = PBXGroup;
+			children = (
+				"TEMP_CFAB1DF3-F99A-4DF1-8E2A-4608A2A8D801" /* AppDelegate.m */,
+				"TEMP_D0AC826C-CE9C-429C-9A61-40C540856AE6" /* KRRouterHandler.m */,
+				"TEMP_12957456-A682-405B-A04B-4527DF7427C5" /* KuiklyRenderViewController.m */,
+				"TEMP_7EA8123F-163C-49F7-9FAA-18C315D50D91" /* SceneDelegate.m */,
+				"TEMP_20539220-3938-406F-8C42-1F98E35CDD33" /* XiaoZhiModule.m */,
+				"TEMP_C77C575B-BDB9-4A05-AFD1-CE64DD68CD3E" /* main.m */,
+			);
+			name = "Recovered References";
+			sourceTree = "<group>";
+		};
 		AAC9F062BCA099C25E3EA0C0 = {
 			isa = PBXGroup;
 			children = (
 				315E352E3C275F0534E1E571 /* Frameworks */,
 				572842642664AE95291FC9D0 /* Products */,
 				AB8E32C79F78D2FE2750F8CE /* Pods */,
+				84BB4FDC306C9BE900E6DD90 /* Recovered References */,
 			);
 			sourceTree = "<group>";
 		};
@@ -91,7 +105,6 @@
 				0FDD6F9D49DCE3F4478AA39F /* Pods-macosApp.debug.xcconfig */,
 				1E31F42E60B00E6D354DDB68 /* Pods-macosApp.release.xcconfig */,
 			);
-			name = Pods;
 			path = Pods;
 			sourceTree = "<group>";
 		};

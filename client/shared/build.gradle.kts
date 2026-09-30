@@ -1,5 +1,7 @@
 import com.tencent.kuikly.gradle.config.KuiklyConfig
 import org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import javax.inject.Inject
 
 plugins {
     kotlin("multiplatform")
@@ -18,6 +20,10 @@ val kuiklyVersion: String = property("kuiklyVersion") as String
 // 生成 .map 只抬高 webpack 峰值内存（xiaoya 实测 2.84GB → 3.22GB），ACR 构建机内存有限。
 val webSourceMap = (findProperty("webSourceMap") as String?)?.toBoolean() ?: true
 
+// Apple 平台 framework 的 bundleId（修复链接期 "Cannot infer a bundle ID" 警告；
+// Framework DSL 无 bundleId 属性，经 binaryOption 映射为 -Xbinary=bundleId 编译参数）
+val frameworkBundleId = "com.xiaozhi.admin.shared"
+
 android {
     namespace = "com.xiaozhi.admin"
     compileSdk = 35
@@ -29,10 +35,8 @@ android {
 kotlin {
     @OptIn(ExperimentalKotlinGradlePluginApi::class)
     androidTarget {
-        compilations.all {
-            kotlinOptions {
-                jvmTarget = "17"
-            }
+        compilerOptions {
+            jvmTarget = JvmTarget.JVM_17
         }
     }
 
@@ -44,6 +48,7 @@ kotlin {
         it.binaries.framework {
             baseName = "shared"
             isStatic = true
+            binaryOption("bundleId", frameworkBundleId)
         }
     }
 
@@ -55,6 +60,7 @@ kotlin {
     macosArm64().binaries.framework {
         baseName = "shared"
         isStatic = true
+        binaryOption("bundleId", frameworkBundleId)
     }
 
     // Web/JS target：业务页面编译打包为 nativevue2.js（业务 bundle），由 :apps:h5App:publishWeb
@@ -63,10 +69,10 @@ kotlin {
     //   实测 :apps:h5App 的 jsNpmAggregated 解析 :shared 直接失败；xiaoya-player 同为
     //   shared js + h5App js 双目标共存，无 NodeJsRootPlugin 冲突。）
     js(IR) {
-        moduleName = "nativevue2"
+        outputModuleName.set("nativevue2")
         browser {
             webpackTask {
-                outputFileName = "nativevue2.js"
+                mainOutputFileName.set("nativevue2.js")
             }
             commonWebpackConfig {
                 // 不导出全局对象，只导出必要的入口函数
@@ -107,7 +113,7 @@ ksp {
     arg("pageNameList", (project.properties["pageNameList"] as? String) ?: "")
 }
 
-// Kuikly 插件配置：web 打包产物名与 KMP 插件 webpackTask#outputFileName 一致
+// Kuikly 插件配置：web 打包产物名与 KMP 插件 webpackTask#mainOutputFileName 一致
 configure<KuiklyConfig> {
     js {
         outputName("nativevue2")
@@ -121,15 +127,36 @@ configure<KuiklyConfig> {
 // 链接完成后用 scripts/patch_framework_macabi.py 把归档内各目标文件的
 // LC_BUILD_VERSION 平台改写为 MacCatalyst(6)（幂等，详见脚本头注释）。
 // 本机 vtool 不认 macabi 平台名（实测），故走脚本而非 vtool。
-val patchFrameworkForCatalyst by tasks.registering {
+val patchFrameworkForCatalyst by tasks.registering(PatchFrameworkForCatalystTask::class) {
     group = "build"
     description = "把 macosArm64 静态框架平台标记改写为 Mac Catalyst（macabi），供 macosApp 链接"
-    doLast {
-        val script = rootProject.file("scripts/patch_framework_macabi.py")
-        listOf("releaseFramework", "debugFramework").forEach { dir ->
-            val bin = buildDir.resolve("bin/macosArm64/$dir/shared.framework/Versions/A/shared")
-            if (bin.exists()) {
-                exec { commandLine("python3", script.absolutePath, bin.absolutePath) }
+    patchScript.set(rootProject.file("scripts/patch_framework_macabi.py"))
+    frameworkBinaries.set(providers.provider {
+        listOf("releaseFramework", "debugFramework").map { dir ->
+            layout.buildDirectory.dir("bin/macosArm64/$dir").get()
+                .file("shared.framework/Versions/A/shared")
+        }
+    })
+}
+
+// project.exec 已在 Gradle 9 移除：任务内执行外部命令改走注入的 ExecOperations
+abstract class PatchFrameworkForCatalystTask : DefaultTask() {
+    @get:Inject
+    abstract val execOps: ExecOperations
+
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val patchScript: RegularFileProperty
+
+    @get:Internal
+    abstract val frameworkBinaries: ListProperty<RegularFile>
+
+    @TaskAction
+    fun patch() {
+        val script = patchScript.get().asFile
+        frameworkBinaries.get().forEach { bin ->
+            if (bin.asFile.exists()) {
+                execOps.exec { commandLine("python3", script.absolutePath, bin.asFile.absolutePath) }
             }
         }
     }

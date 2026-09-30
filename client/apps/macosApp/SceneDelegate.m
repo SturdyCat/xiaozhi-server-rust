@@ -12,8 +12,8 @@
 
     self.window = [[UIWindow alloc] initWithWindowScene:windowScene];
 
-    // Mac 版默认进入 ASR/TTS 测试页（test）；管理后台（config）跨平台，可从测试页跳转或作为独立入口。
-    KuiklyRenderViewController *root = [[KuiklyRenderViewController alloc] initWithPageName:@"test"
+    // Mac 版默认进入单窗口管理后台壳（router）：侧边栏 + 内容区，概览/测试台/配置同页切换。
+    KuiklyRenderViewController *root = [[KuiklyRenderViewController alloc] initWithPageName:@"router"
                                                                                   pageData:@{}];
     UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:root];
     self.window.rootViewController = nav;
