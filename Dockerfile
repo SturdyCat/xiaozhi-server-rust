@@ -48,6 +48,17 @@ RUN ./gradlew :apps:h5App:help --no-daemon
 COPY client/shared ./client/shared
 COPY client/apps/h5App ./client/apps/h5App
 
+# 🚨 源码断言：COPY 对空/缺目录**静默成功**，缺 src 时 Gradle 把 js 源集判成 NO-SOURCE →
+#   KSP 不执行 → KuiklyCoreEntry.kt 不生成 → 打包任务深处抛晦涩的 FileNotFoundException
+#   （实测部署链路上 409s 才失败）。这里在进入 Gradle 前快速失败，错误信息直指根因
+#   （部署工具同步的上下文不完整），省一轮整链排障。
+RUN if ! (test -d client/shared/src/commonMain/kotlin \
+          && test -f client/shared/src/commonMain/kotlin/com/xiaozhi/admin/ConfigPage.kt \
+          && test -f client/apps/h5App/src/jsMain/kotlin/com/xiaozhi/admin/Main.kt); then \
+      echo "❌ 构建上下文缺少 client 业务源码（client/shared/src 或 client/apps/h5App/src）——检查部署工具的仓库克隆/上下文同步是否完整" >&2; \
+      exit 1; \
+    fi
+
 # 🚨 内存三上限（见文件头说明，勿调高）：Gradle JVM 1280m / Kotlin daemon 1024m / webpack Node 1024m；
 #   -PwebSourceMap=false：生产镜像不调试，关掉 .map 生成（xiaoya 实测省 ~400MB 峰值内存）。
 # 产物断言：web/ 下三件套缺一不可（index.html 入口 / nativevue2.js 业务包 / h5App.js 壳），
