@@ -37,7 +37,8 @@ class TestBenchState {
 
     private fun xz(ctx: Pager): XiaoZhiModule = ctx.acquireModule(XiaoZhiModule.MODULE_NAME)
 
-    fun connect(ctx: Pager) {
+    /** onDone：连接结果回调（成功与否），供启动自动连接流程（ConnectState）接续 UI 切换。 */
+    fun connect(ctx: Pager, onDone: ((Boolean) -> Unit)? = null) {
         connectionState = "connecting"
         statusMsg = "连接中…"
         xz(ctx).connect(serverUrl, token) { result ->
@@ -45,6 +46,7 @@ class TestBenchState {
             connected = ok
             connectionState = if (ok) "connected" else "error"
             statusMsg = if (ok) "已连接" else "连接失败: ${result?.optString("error", "") ?: ""}"
+            onDone?.invoke(ok)
         }
     }
 

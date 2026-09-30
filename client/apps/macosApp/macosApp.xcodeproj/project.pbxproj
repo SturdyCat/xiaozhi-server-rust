@@ -7,15 +7,15 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		48B6D5B5C0FDD46D88A408CE /* KRRouterHandler.m in Sources */ = {isa = PBXBuildFile; fileRef = TEMP_E8D8C1F8-9F8B-48A7-A81C-5CFDF478F873 /* KRRouterHandler.m */; };
+		762D4D14880B7F2617465841 /* main.m in Sources */ = {isa = PBXBuildFile; fileRef = TEMP_2F3A6E6A-1A22-4A17-94E1-B0F02CF95D90 /* main.m */; };
 		82076E2947B82E2418CA3DB5 /* shared.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = C76C6AC69873090EB53328B9 /* shared.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
-		889BF6BA9D75CFEF2AF45A34 /* main.m in Sources */ = {isa = PBXBuildFile; fileRef = "TEMP_C77C575B-BDB9-4A05-AFD1-CE64DD68CD3E" /* main.m */; };
-		9241ECB7DDFE1E41E5210EE6 /* KRRouterHandler.m in Sources */ = {isa = PBXBuildFile; fileRef = "TEMP_D0AC826C-CE9C-429C-9A61-40C540856AE6" /* KRRouterHandler.m */; };
-		9EDCAEA5CB25ED54AB34DF38 /* XiaoZhiModule.m in Sources */ = {isa = PBXBuildFile; fileRef = "TEMP_20539220-3938-406F-8C42-1F98E35CDD33" /* XiaoZhiModule.m */; };
+		A28F1C1F4454B88E8B28E594 /* XiaoZhiModule.m in Sources */ = {isa = PBXBuildFile; fileRef = TEMP_0E5D192D-3625-430D-B69E-D1ED402F0D62 /* XiaoZhiModule.m */; };
+		AAF18642DE3F95540DCEC673 /* AppDelegate.m in Sources */ = {isa = PBXBuildFile; fileRef = TEMP_85583440-902C-4B3C-82B8-A15190602EB7 /* AppDelegate.m */; };
 		B2FE56198131D80B2580FF2F /* shared.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C76C6AC69873090EB53328B9 /* shared.framework */; };
-		B502FE6DFFD4A0D82DF66DDF /* AppDelegate.m in Sources */ = {isa = PBXBuildFile; fileRef = "TEMP_CFAB1DF3-F99A-4DF1-8E2A-4608A2A8D801" /* AppDelegate.m */; };
-		C5EBDC5632019433F2339ADB /* KuiklyRenderViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = "TEMP_12957456-A682-405B-A04B-4527DF7427C5" /* KuiklyRenderViewController.m */; };
-		EAE0314EE7C2DAB88B75A9EB /* SceneDelegate.m in Sources */ = {isa = PBXBuildFile; fileRef = "TEMP_7EA8123F-163C-49F7-9FAA-18C315D50D91" /* SceneDelegate.m */; };
-		F3650CFB7C3DF183453959A7 /* libPods-macosApp.a in Frameworks */ = {isa = PBXBuildFile; fileRef = B6FB4B482DD65D0E7EC3CF71 /* libPods-macosApp.a */; };
+		BD80B0A7295E52093A48EF5C /* SceneDelegate.m in Sources */ = {isa = PBXBuildFile; fileRef = TEMP_4EF57F44-FCD5-4385-ADE5-DE7A8A6F4DC4 /* SceneDelegate.m */; };
+		D5DD0C876CF1F5CC4A2CF84B /* KuiklyRenderViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = TEMP_99D7DD03-9C4B-475D-B906-6DCA865A2C0F /* KuiklyRenderViewController.m */; };
+		E63F089BB0915A495875ED1E /* libPods-macosApp.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 20AEC0702A74AEEB4489BC60 /* libPods-macosApp.a */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -33,17 +33,17 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
-		0FDD6F9D49DCE3F4478AA39F /* Pods-macosApp.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-macosApp.debug.xcconfig"; path = "Target Support Files/Pods-macosApp/Pods-macosApp.debug.xcconfig"; sourceTree = "<group>"; };
-		1E31F42E60B00E6D354DDB68 /* Pods-macosApp.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-macosApp.release.xcconfig"; path = "Target Support Files/Pods-macosApp/Pods-macosApp.release.xcconfig"; sourceTree = "<group>"; };
+		152AF6AD54D27D13E5AE9015 /* Pods-macosApp.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-macosApp.debug.xcconfig"; path = "Target Support Files/Pods-macosApp/Pods-macosApp.debug.xcconfig"; sourceTree = "<group>"; };
+		20AEC0702A74AEEB4489BC60 /* libPods-macosApp.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-macosApp.a"; sourceTree = BUILT_PRODUCTS_DIR; };
 		2863A489DBCF47E96F493A00 /* macosApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = macosApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		B6FB4B482DD65D0E7EC3CF71 /* libPods-macosApp.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-macosApp.a"; sourceTree = BUILT_PRODUCTS_DIR; };
+		3CC67F40B67946C4E516ED39 /* Pods-macosApp.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-macosApp.release.xcconfig"; path = "Target Support Files/Pods-macosApp/Pods-macosApp.release.xcconfig"; sourceTree = "<group>"; };
 		C76C6AC69873090EB53328B9 /* shared.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = shared.framework; path = ../../shared/build/bin/macosArm64/releaseFramework/shared.framework; sourceTree = "<group>"; };
-		"TEMP_12957456-A682-405B-A04B-4527DF7427C5" /* KuiklyRenderViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = KuiklyRenderViewController.m; sourceTree = "<group>"; };
-		"TEMP_20539220-3938-406F-8C42-1F98E35CDD33" /* XiaoZhiModule.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = XiaoZhiModule.m; sourceTree = "<group>"; };
-		"TEMP_7EA8123F-163C-49F7-9FAA-18C315D50D91" /* SceneDelegate.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = SceneDelegate.m; sourceTree = "<group>"; };
-		"TEMP_C77C575B-BDB9-4A05-AFD1-CE64DD68CD3E" /* main.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = main.m; sourceTree = "<group>"; };
-		"TEMP_CFAB1DF3-F99A-4DF1-8E2A-4608A2A8D801" /* AppDelegate.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = AppDelegate.m; sourceTree = "<group>"; };
-		"TEMP_D0AC826C-CE9C-429C-9A61-40C540856AE6" /* KRRouterHandler.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = KRRouterHandler.m; sourceTree = "<group>"; };
+		TEMP_0E5D192D-3625-430D-B69E-D1ED402F0D62 /* XiaoZhiModule.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = XiaoZhiModule.m; sourceTree = "<group>"; };
+		TEMP_2F3A6E6A-1A22-4A17-94E1-B0F02CF95D90 /* main.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = main.m; sourceTree = "<group>"; };
+		TEMP_4EF57F44-FCD5-4385-ADE5-DE7A8A6F4DC4 /* SceneDelegate.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = SceneDelegate.m; sourceTree = "<group>"; };
+		TEMP_85583440-902C-4B3C-82B8-A15190602EB7 /* AppDelegate.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = AppDelegate.m; sourceTree = "<group>"; };
+		TEMP_99D7DD03-9C4B-475D-B906-6DCA865A2C0F /* KuiklyRenderViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = KuiklyRenderViewController.m; sourceTree = "<group>"; };
+		TEMP_E8D8C1F8-9F8B-48A7-A81C-5CFDF478F873 /* KRRouterHandler.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = KRRouterHandler.m; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -52,7 +52,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				B2FE56198131D80B2580FF2F /* shared.framework in Frameworks */,
-				F3650CFB7C3DF183453959A7 /* libPods-macosApp.a in Frameworks */,
+				E63F089BB0915A495875ED1E /* libPods-macosApp.a in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -63,7 +63,7 @@
 			isa = PBXGroup;
 			children = (
 				C76C6AC69873090EB53328B9 /* shared.framework */,
-				B6FB4B482DD65D0E7EC3CF71 /* libPods-macosApp.a */,
+				20AEC0702A74AEEB4489BC60 /* libPods-macosApp.a */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -76,17 +76,14 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
-		84BB4FDC306C9BE900E6DD90 /* Recovered References */ = {
+		82C66E7DDA19F3D0901041A7 /* Pods */ = {
 			isa = PBXGroup;
 			children = (
-				"TEMP_CFAB1DF3-F99A-4DF1-8E2A-4608A2A8D801" /* AppDelegate.m */,
-				"TEMP_D0AC826C-CE9C-429C-9A61-40C540856AE6" /* KRRouterHandler.m */,
-				"TEMP_12957456-A682-405B-A04B-4527DF7427C5" /* KuiklyRenderViewController.m */,
-				"TEMP_7EA8123F-163C-49F7-9FAA-18C315D50D91" /* SceneDelegate.m */,
-				"TEMP_20539220-3938-406F-8C42-1F98E35CDD33" /* XiaoZhiModule.m */,
-				"TEMP_C77C575B-BDB9-4A05-AFD1-CE64DD68CD3E" /* main.m */,
+				152AF6AD54D27D13E5AE9015 /* Pods-macosApp.debug.xcconfig */,
+				3CC67F40B67946C4E516ED39 /* Pods-macosApp.release.xcconfig */,
 			);
-			name = "Recovered References";
+			name = Pods;
+			path = Pods;
 			sourceTree = "<group>";
 		};
 		AAC9F062BCA099C25E3EA0C0 = {
@@ -94,18 +91,8 @@
 			children = (
 				315E352E3C275F0534E1E571 /* Frameworks */,
 				572842642664AE95291FC9D0 /* Products */,
-				AB8E32C79F78D2FE2750F8CE /* Pods */,
-				84BB4FDC306C9BE900E6DD90 /* Recovered References */,
+				82C66E7DDA19F3D0901041A7 /* Pods */,
 			);
-			sourceTree = "<group>";
-		};
-		AB8E32C79F78D2FE2750F8CE /* Pods */ = {
-			isa = PBXGroup;
-			children = (
-				0FDD6F9D49DCE3F4478AA39F /* Pods-macosApp.debug.xcconfig */,
-				1E31F42E60B00E6D354DDB68 /* Pods-macosApp.release.xcconfig */,
-			);
-			path = Pods;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -115,7 +102,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 317DD12EE6808A1F9C85D7CA /* Build configuration list for PBXNativeTarget "macosApp" */;
 			buildPhases = (
-				9076B47AF9F742BC285FB247 /* [CP] Check Pods Manifest.lock */,
+				395C97DC8EC4566F977BF024 /* [CP] Check Pods Manifest.lock */,
 				90B6C29C3F0A90D21EEF004B /* Guardrail - 运行目标必须是 My Mac (Mac Catalyst) */,
 				A9A6C77F0235BA27FADF472C /* Sources */,
 				E745A4B0595D6DD763C11FE1 /* Frameworks */,
@@ -164,7 +151,7 @@
 /* End PBXProject section */
 
 /* Begin PBXShellScriptBuildPhase section */
-		9076B47AF9F742BC285FB247 /* [CP] Check Pods Manifest.lock */ = {
+		395C97DC8EC4566F977BF024 /* [CP] Check Pods Manifest.lock */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -211,12 +198,12 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				B502FE6DFFD4A0D82DF66DDF /* AppDelegate.m in Sources */,
-				9241ECB7DDFE1E41E5210EE6 /* KRRouterHandler.m in Sources */,
-				C5EBDC5632019433F2339ADB /* KuiklyRenderViewController.m in Sources */,
-				EAE0314EE7C2DAB88B75A9EB /* SceneDelegate.m in Sources */,
-				9EDCAEA5CB25ED54AB34DF38 /* XiaoZhiModule.m in Sources */,
-				889BF6BA9D75CFEF2AF45A34 /* main.m in Sources */,
+				AAF18642DE3F95540DCEC673 /* AppDelegate.m in Sources */,
+				48B6D5B5C0FDD46D88A408CE /* KRRouterHandler.m in Sources */,
+				D5DD0C876CF1F5CC4A2CF84B /* KuiklyRenderViewController.m in Sources */,
+				BD80B0A7295E52093A48EF5C /* SceneDelegate.m in Sources */,
+				A28F1C1F4454B88E8B28E594 /* XiaoZhiModule.m in Sources */,
+				762D4D14880B7F2617465841 /* main.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -225,7 +212,7 @@
 /* Begin XCBuildConfiguration section */
 		31C5665DEAD4A34768866A1C /* Release */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = 1E31F42E60B00E6D354DDB68 /* Pods-macosApp.release.xcconfig */;
+			baseConfigurationReference = 3CC67F40B67946C4E516ED39 /* Pods-macosApp.release.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				COMBINE_HIDPI_IMAGES = YES;
@@ -383,7 +370,7 @@
 		};
 		D3855CB0315CF81CA0CC941D /* Debug */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = 0FDD6F9D49DCE3F4478AA39F /* Pods-macosApp.debug.xcconfig */;
+			baseConfigurationReference = 152AF6AD54D27D13E5AE9015 /* Pods-macosApp.debug.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				COMBINE_HIDPI_IMAGES = YES;

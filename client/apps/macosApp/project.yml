@@ -56,6 +56,11 @@ targets:
             UIWindowSceneSessionRoleApplication:
               - UISceneConfigurationName: Default Configuration
                 UISceneDelegateClassName: SceneDelegate
+        # ⚠️ ATS 放开明文：本 App 是调试台，连接页要 http 明文拉 /api/config、测试台要
+        #    ws:// 连本地/局域网/远程服务器（127.0.0.1:8000、192.168.x.x 等）。
+        #    Catalyst 下 ATS 默认拦截明文 http/ws，不放开会全部失败（NSURLError -1022）。
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
     preBuildScripts:
       # 守卫：本 App 只能以 Mac Catalyst 构建（UIKit 渲染器）。误选原生 "My Mac"
       # 运行目标时，编译会在 'UIKit/UIKit.h' file not found 上报难懂的错误；

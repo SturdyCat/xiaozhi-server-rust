@@ -1,14 +1,10 @@
 #import "XiaoZhiModule.h"
 #import <AVFoundation/AVFoundation.h>
 
-// Kuikly 通过这两个 key 从 args 中取参数与回调（来自 OpenKuiklyIOSRender 宏定义）。
-// 若集成时实际宏名不同，请以 pod 头文件为准。
-#ifndef KR_PARAM_KEY
-#define KR_PARAM_KEY @"__kr_param__"
-#endif
-#ifndef KR_CALLBACK_KEY
-#define KR_CALLBACK_KEY @"__kr_callback__"
-#endif
+// ⚠️ 参数/回调 key 不能自定义：KR_PARAM_KEY/KR_CALLBACK_KEY 是 OpenKuiklyIOSRender
+//    KRBaseModule.h 声明的 extern 常量（实际值为 @"param"/@"callback"）。
+//    此前用 #ifndef 兜底定义 @"__kr_param__"，运行期取不到参数（params 恒为空字典），
+//    WS 连接实际从未拿到 url（会以 invalid url 失败或此处崩溃）。
 
 static const uint32_t kUplinkSampleRate = 16000;   // 上行（麦克风）采样率，与 server 协商一致
 static const uint32_t kDownlinkSampleRate = 24000; // 下行（TTS）默认采样率，实际以 server hello 为准
@@ -29,14 +25,31 @@ static const uint32_t kDownlinkSampleRate = 24000; // 下行（TTS）默认采�
 
 + (NSString *)moduleName { return @"XiaoZhiModule"; }
 
+#pragma mark - 参数解析
+
+// Kotlin 侧 toNative 的 param 类型不定：传 JSON 字符串 → 原生收 NSString；
+// 直接传 JSONObject 对象 → 桥接为 SharedCoreJSONObject（不能下标取值，否则
+// unrecognized selector objectForKeyedSubscript: 崩溃）。统一解析为 NSDictionary。
+- (NSDictionary *)parseParams:(id)raw {
+    if ([raw isKindOfClass:[NSDictionary class]]) return raw;
+    if ([raw isKindOfClass:[NSString class]]) return [raw hr_stringToDictionary] ?: @{};
+    if (raw) {
+        // SharedCoreJSONObject 的 description 即其 Kotlin toString() = JSON 文本
+        id d = [[raw description] hr_stringToDictionary];
+        if ([d isKindOfClass:[NSDictionary class]]) return d;
+    }
+    return @{};
+}
+
 #pragma mark - Module 方法（方法名与 Kotlin 侧 toNative(methodName=...) 一一对应）
 
 // connect(url, token) → 建立 WS 并发送 hello
 - (void)connect:(NSDictionary *)args {
-    NSDictionary *params = args[KR_PARAM_KEY] ?: @{};
+    NSDictionary *params = [self parseParams:args[KR_PARAM_KEY]];
     id callback = args[KR_CALLBACK_KEY];
     NSString *url = params[@"url"] ?: @"";
     NSString *token = params[@"token"] ?: @"";
+    NSLog(@"[XiaoZhi] connect url=%@ token=%@", url, token);
 
     [self setupAudio];
 
@@ -100,7 +113,7 @@ static const uint32_t kDownlinkSampleRate = 24000; // 下行（TTS）默认采�
 
 // speak(text, speaker, lang, speed) → 发送 tts_test；服务端合成并流式下发 Opus 音频
 - (void)speak:(NSDictionary *)args {
-    NSDictionary *params = args[KR_PARAM_KEY] ?: @{};
+    NSDictionary *params = [self parseParams:args[KR_PARAM_KEY]];
     self.speakCallback = args[KR_CALLBACK_KEY];
     [self sendJSON:@{
         @"type": @"tts_test",

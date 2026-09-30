@@ -13,6 +13,8 @@ import com.tencent.kuikly.core.reactive.handler.observable
  * 外加 dirty / saving / statusMsg / lastSavedAt。
  * - load(ctx) / save(ctx)：经 NetworkModule 拉取 / 写回 server 的 GET|POST /api/config
  *   （acquireModule 是 Pager 方法，故 load/save 接收 ctx: Pager）。
+ * - baseUrl：请求基址前缀。web（h5App）由 server 同域托管，保持默认 "" → 相对路径 /api/config；
+ *   macOS 测试台跨机访问时由 ConnectState 传入已连接服务器的绝对基址（如 http://192.168.1.10:8000）。
  * - 任意字段变更时 dirty=true（在 onChange 里设）。
  * - 渲染见文件底部的 ViewContainer.renderForm(form) 扩展。
  *
@@ -84,8 +86,8 @@ class ConfigFormState {
 
     private fun network(ctx: Pager): NetworkModule = ctx.acquireModule(NetworkModule.MODULE_NAME)
 
-    fun load(ctx: Pager) {
-        network(ctx).requestGet("/api/config", JSONObject()) { data, success, errorMsg, _ ->
+    fun load(ctx: Pager, baseUrl: String = "") {
+        network(ctx).requestGet("${baseUrl}/api/config", JSONObject()) { data, success, errorMsg, _ ->
             if (success) {
                 fill(data)
                 statusMsg = "已加载配置"
@@ -95,7 +97,7 @@ class ConfigFormState {
         }
     }
 
-    fun save(ctx: Pager) {
+    fun save(ctx: Pager, baseUrl: String = "") {
         saving = true
         val body = JSONObject().apply {
             put("server", JSONObject().apply {
@@ -148,7 +150,7 @@ class ConfigFormState {
                 put("temperature", llmTemperature.toDoubleOrNull() ?: 0.7)
             })
         }
-        network(ctx).requestPost("/api/config", body) { _, success, errorMsg, _ ->
+        network(ctx).requestPost("${baseUrl}/api/config", body) { _, success, errorMsg, _ ->
             saving = false
             if (success) {
                 dirty = false
@@ -160,7 +162,11 @@ class ConfigFormState {
         }
     }
 
-    private fun fill(obj: JSONObject) {
+    /**
+     * 用服务端 /api/config 回包填充表单（公开：macOS ConnectState 连接流程自行 GET 后调用，
+     * 以便同时提取 expected_token 供 WS 鉴权；load() 内部也走这里）。
+     */
+    fun fill(obj: JSONObject) {
         obj.optJSONObject("server")?.let { s ->
             listen = s.optString("listen", listen)
             expectedToken = s.optString("expected_token", expectedToken)

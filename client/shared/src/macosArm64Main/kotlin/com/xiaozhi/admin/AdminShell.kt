@@ -3,6 +3,7 @@ package com.xiaozhi.admin
 import com.tencent.kuikly.core.annotations.Page
 import com.tencent.kuikly.core.base.ViewBuilder
 import com.tencent.kuikly.core.base.ViewContainer
+import com.tencent.kuikly.core.directives.velse
 import com.tencent.kuikly.core.directives.vif
 import com.tencent.kuikly.core.module.Module
 import com.tencent.kuikly.core.pager.Pager
@@ -14,17 +15,20 @@ import com.tencent.kuikly.core.views.View
 /**
  * 管理后台根页面（router）——macOS 单窗口壳。
  *
- * 取代「多窗口 openPage 跳转」：本页是壳（sidebar + 内容区），内容区在同一 Pager 内用可观察状态
- * selectedSection 切换「概览 / 测试台 / 配置」三个 section，不再 push 新窗口。
+ * 启动流程：先显示「连接服务器」页（ConnectState，输入地址 → GET /api/config 读配置 →
+ * 自动 WS 连接 → 进入主壳）；主壳内 sidebar + 内容区在同一 Pager 内用可观察状态
+ * selectedSection 切换「概览 / 测试台 / 配置」三个 section，不 push 新窗口。
  * 视觉走现代 macOS 原生风（Apple HIG），见 AdminTheme.kt 的 token 与组件。
  *
  * 跨端说明：
  * - ConfigFormState / ConfigPage / AdminTheme 在 commonMain（无 macOS 依赖），本壳仅 macOS 注册；
+ * - web（h5App）由 server 同域托管、只提供配置功能（ConfigPage 相对路径），不走本壳与连接页；
  * - XiaoZhiModule 由本 Pager 经 createExternalModules() 注册，供 TestBenchState 使用。
  */
 @Page("router")
 class AdminShell : Pager() {
 
+    val conn = ConnectState()
     val bench = TestBenchState()
     val form = ConfigFormState()
     var selectedSection by observable("home")
@@ -36,7 +40,9 @@ class AdminShell : Pager() {
 
     override fun pageDidAppear() {
         super.pageDidAppear()
-        form.load(this)
+        // 启动连接流程：读记忆地址 → （有记忆则）自动 读配置 + 连 WS；配置表单由该流程填充
+        // （不再用相对路径 form.load：macOS 无同域，相对 URL 请求必败）
+        conn.onLaunch(this)
     }
 
     override fun body(): ViewBuilder {
@@ -52,115 +58,129 @@ class AdminShell : Pager() {
         return {
             attr {
                 flex(1f)
-                flexDirectionRow()
                 backgroundColor(AdminColors.windowBg)
             }
 
-            // ===== 侧边栏（启动即进入主界面：不显示 App 名称标题，导航项直接作为起点） =====
-            // ⚠️ paddingTop = 标题栏避让区：macOS 红黄绿窗口按钮浮在窗口左上角（约 y=12、高 12），
-            //    本壳隐藏了系统导航栏（SceneDelegate→KuiklyRenderViewController setNavigationBarHidden:YES），
-            //    故内容直接铺满窗口；预留 36pt 顶距让首个导航项避开窗口按钮，避免重叠。
-            View {
-                attr {
-                    width(240f)
-                    flexDirectionColumn()
-                    backgroundColor(AdminColors.sidebarBg)
-                    paddingTop(36f)
-                }
-                // ⚠️ 非限定调用：接收者=侧边栏 View，导航项才能挂进侧边栏（经 ctx. 调用会逃逸到根容器）
-                // ⚠️ 选中态传 lambda（在 attr/vif 闭包内读取 observable），点击后高亮才能响应式更新
-                sidebarItem("概览", { ctx.selectedSection == "home" }) { ctx.selectedSection = "home" }
-                sidebarItem("测试台", { ctx.selectedSection == "testbench" }) { ctx.selectedSection = "testbench" }
-                // 「配置」项：form.dirty 时右侧显示小橙点（warning 色）
-                sidebarItem("配置", { ctx.selectedSection == "config" }, showDot = { ctx.form.dirty }) { ctx.selectedSection = "config" }
-                // 「状态」项：置灰禁用，点击无反应
-                sidebarItem("状态", { ctx.selectedSection == "status" }, enabled = false) { }
-                // 底部弹性占位 + 版本信息
-                View { attr { flex(1f) } }
-                Text {
-                    attr {
-                        fontSize(AdminType.micro)
-                        color(AdminColors.textTertiary)
-                        marginLeft(16f)
-                        marginBottom(16f)
-                        text("v1.0 · macOS")
-                    }
-                }
+            // ===== 分支一：启动连接页（stage=connect；成功/跳过后切 main）=====
+            vif({ ctx.conn.stage == "connect" }) {
+                renderConnect(ctx.conn, ctx)
             }
-
-            // 侧边栏右边 1px 分隔
-            View {
-                attr {
-                    width(1f)
-                    backgroundColor(AdminColors.divider)
-                }
-            }
-
-            // ===== 内容区 =====
-            // ⚠️ 同侧边栏，预留 36pt 顶距避让 macOS 窗口按钮，使顶栏与侧边栏顶端对齐、不压住红黄绿。
-            View {
-                attr {
-                    flex(1f)
-                    flexDirectionColumn()
-                    paddingTop(36f)
-                }
-
-                // 顶栏标题/右侧操作区随 section 响应式切换：
-                // 标题经 largeTitleBar 的 title lambda 在 attr 闭包内读取 selectedSection；
-                // 右侧操作区统一传入，内部用 vif 按 section 显隐（构建期 when 一次性求值不会更新）。
-                largeTitleBar(
-                    title = {
-                        when (ctx.selectedSection) {
-                            "testbench" -> "测试台"
-                            "config" -> "配置"
-                            else -> "概览"
-                        }
-                    },
-                    trailing = {
-                        vif({ ctx.selectedSection == "config" }) {
-                            primaryButton(
-                                if (ctx.form.saving) "保存中…" else "保存配置",
-                                enabled = !ctx.form.saving,
-                            ) {
-                                ctx.form.save(ctx)
-                                ctx.toast = ctx.form.statusMsg
-                            }
-                        }
-                        vif({ ctx.selectedSection == "testbench" }) {
-                            statusBadge(ctx.bench.connectionState, connectionLabel(ctx.bench.connectionState))
-                        }
-                    },
-                )
-
-                Scroller {
+            velse {
+                // ===== 分支二：主壳（侧边栏 + 内容区）=====
+                View {
                     attr {
                         flex(1f)
-                        paddingLeft(AdminSpace.xl)
-                        paddingRight(AdminSpace.xl)
-                        paddingTop(AdminSpace.xxl)
-                        paddingBottom(AdminSpace.xxxl)
+                        flexDirectionRow()
                     }
-                    // ⚠️ 非限定调用（接收者=Scroller），卡片/表单才能挂进 Scroller
-                    vif({ ctx.selectedSection == "home" }) { homeSection(ctx, twoColumn) }
-                    vif({ ctx.selectedSection == "testbench" }) { renderBench(ctx.bench, ctx, twoColumn) }
-                    vif({ ctx.selectedSection == "config" }) { renderForm(ctx.form, twoColumn) }
-                }
 
-                // 底部 toast（全局状态提示）
-                vif({ ctx.toast.isNotEmpty() }) {
+                    // ===== 侧边栏（启动即进入主界面：不显示 App 名称标题，导航项直接作为起点） =====
+                    // ⚠️ paddingTop = 标题栏避让区：macOS 红黄绿窗口按钮浮在窗口左上角（约 y=12、高 12），
+                    //    本壳隐藏了系统导航栏（SceneDelegate→KuiklyRenderViewController setNavigationBarHidden:YES），
+                    //    故内容直接铺满窗口；预留 36pt 顶距让首个导航项避开窗口按钮，避免重叠。
                     View {
                         attr {
-                            height(44f)
-                            flexDirectionRow()
-                            alignItemsCenter()
-                            paddingLeft(AdminSpace.xl)
-                            backgroundColor(AdminColors.accentTintBg)
+                            width(240f)
+                            flexDirectionColumn()
+                            backgroundColor(AdminColors.sidebarBg)
+                            paddingTop(36f)
                         }
+                        // ⚠️ 非限定调用：接收者=侧边栏 View，导航项才能挂进侧边栏（经 ctx. 调用会逃逸到根容器）
+                        // ⚠️ 选中态传 lambda（在 attr/vif 闭包内读取 observable），点击后高亮才能响应式更新
+                        sidebarItem("概览", { ctx.selectedSection == "home" }) { ctx.selectedSection = "home" }
+                        sidebarItem("测试台", { ctx.selectedSection == "testbench" }) { ctx.selectedSection = "testbench" }
+                        // 「配置」项：form.dirty 时右侧显示小橙点（warning 色）
+                        sidebarItem("配置", { ctx.selectedSection == "config" }, showDot = { ctx.form.dirty }) { ctx.selectedSection = "config" }
+                        // 「状态」项：置灰禁用，点击无反应
+                        sidebarItem("状态", { ctx.selectedSection == "status" }, enabled = false) { }
+                        // 底部弹性占位 + 切换服务器（回到启动连接页，本地/远程调试切换入口）+ 版本信息
+                        View { attr { flex(1f) } }
+                        sidebarItem("切换服务器", { false }) { ctx.conn.backToConnect(ctx) }
                         Text {
                             attr {
-                                fontSize(AdminType.caption)
-                                color(AdminColors.textAccent)
-                                text(ctx.toast)
+                                fontSize(AdminType.micro)
+                                color(AdminColors.textTertiary)
+                                marginLeft(16f)
+                                marginBottom(16f)
+                                text("v1.0 · macOS")
+                            }
+                        }
+                    }
+
+                    // 侧边栏右边 1px 分隔
+                    View {
+                        attr {
+                            width(1f)
+                            backgroundColor(AdminColors.divider)
+                        }
+                    }
+
+                    // ===== 内容区 =====
+                    // ⚠️ 同侧边栏，预留 36pt 顶距避让 macOS 窗口按钮，使顶栏与侧边栏顶端对齐、不压住红黄绿。
+                    View {
+                        attr {
+                            flex(1f)
+                            flexDirectionColumn()
+                            paddingTop(36f)
+                        }
+
+                        // 顶栏标题/右侧操作区随 section 响应式切换：
+                        // 标题经 largeTitleBar 的 title lambda 在 attr 闭包内读取 selectedSection；
+                        // 右侧操作区统一传入，内部用 vif 按 section 显隐（构建期 when 一次性求值不会更新）。
+                        largeTitleBar(
+                            title = {
+                                when (ctx.selectedSection) {
+                                    "testbench" -> "测试台"
+                                    "config" -> "配置"
+                                    else -> "概览"
+                                }
+                            },
+                            trailing = {
+                                vif({ ctx.selectedSection == "config" }) {
+                                    primaryButton(
+                                        if (ctx.form.saving) "保存中…" else "保存配置",
+                                        enabled = !ctx.form.saving,
+                                    ) {
+                                        ctx.form.save(ctx, ctx.conn.baseUrl)
+                                        ctx.toast = ctx.form.statusMsg
+                                    }
+                                }
+                                vif({ ctx.selectedSection == "testbench" }) {
+                                    statusBadge(ctx.bench.connectionState, connectionLabel(ctx.bench.connectionState))
+                                }
+                            },
+                        )
+
+                        Scroller {
+                            attr {
+                                flex(1f)
+                                paddingLeft(AdminSpace.xl)
+                                paddingRight(AdminSpace.xl)
+                                paddingTop(AdminSpace.xxl)
+                                paddingBottom(AdminSpace.xxxl)
+                            }
+                            // ⚠️ 非限定调用（接收者=Scroller），卡片/表单才能挂进 Scroller
+                            vif({ ctx.selectedSection == "home" }) { homeSection(ctx, twoColumn) }
+                            vif({ ctx.selectedSection == "testbench" }) { renderBench(ctx.bench, ctx, twoColumn) }
+                            vif({ ctx.selectedSection == "config" }) { renderForm(ctx.form, twoColumn) }
+                        }
+
+                        // 底部 toast（全局状态提示）
+                        vif({ ctx.toast.isNotEmpty() }) {
+                            View {
+                                attr {
+                                    height(44f)
+                                    flexDirectionRow()
+                                    alignItemsCenter()
+                                    paddingLeft(AdminSpace.xl)
+                                    backgroundColor(AdminColors.accentTintBg)
+                                }
+                                Text {
+                                    attr {
+                                        fontSize(AdminType.caption)
+                                        color(AdminColors.textAccent)
+                                        text(ctx.toast)
+                                    }
+                                }
                             }
                         }
                     }
