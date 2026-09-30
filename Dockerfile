@@ -45,17 +45,22 @@ WORKDIR /src/client
 RUN ./gradlew :apps:h5App:help --no-daemon
 
 # 业务源码：shared（KMP 共享层，@Page 页面 + Kuikly 插件打业务包）+ h5App 壳
-COPY client/shared ./client/shared
-COPY client/apps/h5App ./client/apps/h5App
+# ⚠️ 上方 WORKDIR 已切到 /src/client（第 45 行 RUN 的需要），COPY 的 dest 相对 WORKDIR 解析：
+#    必须写 ./shared、./apps/h5App（= Gradle 根 /src/client 下的模块目录，对应 settings 的
+#    :shared、:apps:h5App）。曾误写 ./client/shared，源码实际落盘 /src/client/client/shared
+#    （双层嵌套）：COPY 静默成功，Gradle 侧 shared/ 只有 build.gradle.kts 没有 src →
+#    js 源集 NO-SOURCE → KSP 不生成 KuiklyCoreEntry.kt → 打包任务深处 FileNotFoundException。
+COPY client/shared ./shared
+COPY client/apps/h5App ./apps/h5App
 
-# 🚨 源码断言：COPY 对空/缺目录**静默成功**，缺 src 时 Gradle 把 js 源集判成 NO-SOURCE →
-#   KSP 不执行 → KuiklyCoreEntry.kt 不生成 → 打包任务深处抛晦涩的 FileNotFoundException
-#   （实测部署链路上 409s 才失败）。这里在进入 Gradle 前快速失败，错误信息直指根因
-#   （部署工具同步的上下文不完整），省一轮整链排障。
-RUN if ! (test -d client/shared/src/commonMain/kotlin \
-          && test -f client/shared/src/commonMain/kotlin/com/xiaozhi/admin/ConfigPage.kt \
-          && test -f client/apps/h5App/src/jsMain/kotlin/com/xiaozhi/admin/Main.kt); then \
-      echo "❌ 构建上下文缺少 client 业务源码（client/shared/src 或 client/apps/h5App/src）——检查部署工具的仓库克隆/上下文同步是否完整" >&2; \
+# 🚨 源码断言：验证业务源码真的落在了 Gradle 工程期望的位置（而非嵌套错位或上下文缺目录）。
+#   缺失/错位时 Gradle 会把 js 源集判成 NO-SOURCE → KSP 不执行 → KuiklyCoreEntry.kt 不生成
+#   → 打包任务深处抛晦涩的 FileNotFoundException（实测部署链路 409s 才失败）。这里在进入
+#   Gradle 前快速失败，错误信息直指根因。
+RUN if ! (test -d shared/src/commonMain/kotlin \
+          && test -f shared/src/commonMain/kotlin/com/xiaozhi/admin/ConfigPage.kt \
+          && test -f apps/h5App/src/jsMain/kotlin/com/xiaozhi/admin/Main.kt); then \
+      echo "❌ web 构建缺业务源码：/src/client/shared/src 或 /src/client/apps/h5App/src 未就位（COPY 目标路径错位或上下文不完整）" >&2; \
       exit 1; \
     fi
 
