@@ -7,7 +7,9 @@ import com.tencent.kuikly.core.base.ViewBuilder
 import com.tencent.kuikly.core.base.ViewContainer
 import com.tencent.kuikly.core.directives.velse
 import com.tencent.kuikly.core.directives.vif
+import com.tencent.kuikly.core.views.ActivityIndicator
 import com.tencent.kuikly.core.views.Input
+import com.tencent.kuikly.core.views.Scroller
 import com.tencent.kuikly.core.views.Text
 import com.tencent.kuikly.core.views.View
 
@@ -59,6 +61,8 @@ object AdminColors {
     val danger = Color(0xFFFF453AL)
     val dangerHover = Color(0xFFE53429L)
     val dangerActive = Color(0xFFD12E24L)
+    /** 禁用态红（录音按钮禁用/加载时用；比 danger 暗、去饱和，与 accentDisable 同风格） */
+    val dangerDisable = Color(0xFF5A3230L)
     val dangerTintBg = Color(0x33FF453AL)
     val dangerTintText = Color(0xFFFF6961L)
 
@@ -292,8 +296,23 @@ fun ViewContainer<*, *>.labeledField(
 /**
  * 主按钮：高 48（触屏）、paddingH 20、minWidth 96、radiusSm、allCenter；
  * bg accent（禁用 accentDisable + 文字 0xFFF4FCF8）；文字 textOnAccent body(17)/500。
+ * - danger=true：录音等待止类按钮用红色系（danger/dangerDisable）。
+ * - loading=true：按钮内显示菊花（白色 ActivityIndicator）+ 文案，配合 enabled=false
+ *   表达「处理中」并阻止重复点击（文案由调用方经 vif/velse 分支切换）。
  */
-fun ViewContainer<*, *>.primaryButton(text: String, enabled: Boolean = true, onClick: () -> Unit) {
+fun ViewContainer<*, *>.primaryButton(
+    text: String,
+    enabled: Boolean = true,
+    danger: Boolean = false,
+    loading: Boolean = false,
+    onClick: () -> Unit,
+) {
+    val bg = when {
+        danger && (!enabled && !loading) -> AdminColors.dangerDisable
+        danger -> AdminColors.danger
+        !enabled && !loading -> AdminColors.accentDisable
+        else -> AdminColors.accent
+    }
     View {
         attr {
             height(48f)
@@ -301,15 +320,25 @@ fun ViewContainer<*, *>.primaryButton(text: String, enabled: Boolean = true, onC
             paddingLeft(AdminSpace.lg)
             paddingRight(AdminSpace.lg)
             borderRadius(AdminShape.radiusSm)
+            flexDirectionRow()
             allCenter()
-            backgroundColor(if (enabled) AdminColors.accent else AdminColors.accentDisable)
+            backgroundColor(bg)
         }
-        event { click { if (enabled) onClick() } }
+        event { click { if (enabled && !loading) onClick() } }
+        if (loading) {
+            // 白色菊花（暗色/彩色底上可见）：isGrayStyle(false) → "white"
+            ActivityIndicator {
+                attr {
+                    isGrayStyle(false)
+                    marginRight(AdminSpace.xs)
+                }
+            }
+        }
         Text {
             attr {
                 fontSize(AdminType.body)
                 fontWeightMedium()
-                color(if (enabled) AdminColors.textOnAccent else Color(0xFFF4FCF8L))
+                color(if (enabled || loading) AdminColors.textOnAccent else Color(0xFFF4FCF8L))
                 text(text)
             }
         }
@@ -431,6 +460,111 @@ fun ViewContainer<*, *>.switchRow(label: String, checked: Boolean, onToggle: () 
                     marginLeft(if (checked) 22f else 2f)
                     marginTop(2f)
                 }
+            }
+        }
+    }
+}
+
+// ===================== 下拉选择 =====================
+
+/**
+ * 下拉选择字段：label + 选择框（显示当前项 + ▾/▴）+ 展开面板（独立 Scroller，高 320，可滚动）。
+ *
+ * 展开状态由调用方持有（isOpen lambda 读取 observable）——放在状态类里而不是组件内部，
+ * 避免 body 重建把展开态重置（Kuikly 的 Pager body 会随 observable 变化重跑）。
+ * 选项列表用普通 while 循环铺（vfor 只接受 ObservableList；固定列表用循环更直接，
+ * 与 cardGrid 的写法一致）。选中项高亮为 accentTintText + 左侧 3px 指示条。
+ */
+fun ViewContainer<*, *>.dropdownField(
+    label: String,
+    currentLabel: () -> String,
+    options: List<Pair<String, String>>,
+    selectedId: () -> String,
+    isOpen: () -> Boolean,
+    onToggle: () -> Unit,
+    onSelect: (String) -> Unit,
+) {
+    fieldLabel(label)
+    View {
+        attr {
+            flexDirectionRow()
+            alignItemsCenter()
+            height(48f)
+            backgroundColor(AdminColors.fieldBg)
+            border(Border(1f, BorderStyle.SOLID, AdminColors.divider))
+            borderRadius(AdminShape.radiusSm)
+            paddingLeft(AdminSpace.sm)
+            paddingRight(AdminSpace.sm)
+        }
+        event { click { onToggle() } }
+        Text {
+            attr {
+                flex(1f)
+                fontSize(AdminType.body)
+                color(AdminColors.textPrimary)
+                text(currentLabel())
+            }
+        }
+        Text {
+            attr {
+                fontSize(AdminType.caption)
+                color(AdminColors.textSecondary)
+                text(if (isOpen()) "▴" else "▾")
+            }
+        }
+    }
+    vif({ isOpen() }) {
+        Scroller {
+            attr {
+                height(320f)
+                backgroundColor(AdminColors.cardBg)
+                border(Border(1f, BorderStyle.SOLID, AdminColors.divider))
+                borderRadius(AdminShape.radiusSm)
+                marginTop(AdminSpace.xs)
+            }
+            var i = 0
+            while (i < options.size) {
+                val opt = options[i]
+                val selected = opt.first == selectedId()
+                View {
+                    attr {
+                        height(44f)
+                        flexDirectionRow()
+                        alignItemsCenter()
+                        paddingLeft(AdminSpace.sm)
+                        paddingRight(AdminSpace.md)
+                    }
+                    event { click { onSelect(opt.first) } }
+                    if (selected) {
+                        View {
+                            attr {
+                                width(3f)
+                                height(20f)
+                                borderRadius(AdminShape.radiusPill)
+                                backgroundColor(AdminColors.accent)
+                                marginRight(AdminSpace.xs)
+                            }
+                        }
+                    }
+                    Text {
+                        attr {
+                            flex(1f)
+                            fontSize(AdminType.body)
+                            color(if (selected) AdminColors.accentTintText else AdminColors.textPrimary)
+                            text(opt.second)
+                        }
+                    }
+                }
+                if (i < options.size - 1) {
+                    View {
+                        attr {
+                            height(1f)
+                            marginLeft(AdminSpace.md)
+                            backgroundColor(AdminColors.divider)
+                        }
+                    }
+                }
+                i++
             }
         }
     }

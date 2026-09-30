@@ -1,5 +1,6 @@
 #import "XiaoZhiModule.h"
 #import <AVFoundation/AVFoundation.h>
+#import <AudioToolbox/AudioToolbox.h>
 
 // ⚠️ 参数/回调 key 不能自定义：KR_PARAM_KEY/KR_CALLBACK_KEY 是 OpenKuiklyIOSRender
 //    KRBaseModule.h 声明的 extern 常量（实际值为 @"param"/@"callback"）。
@@ -8,6 +9,38 @@
 
 static const uint32_t kUplinkSampleRate = 16000;   // 上行（麦克风）采样率，与 server 协商一致
 static const uint32_t kDownlinkSampleRate = 24000; // 下行（TTS）默认采样率，实际以 server hello 为准
+static const uint32_t kFrameDurationMs = 60;       // 上下行帧长，与 server 一致
+
+// ===== 新版 API 兼容封装（Xcode 27 SDK 把 connect/play/installTap 改为带 error 的版本）=====
+// 部署目标 macOS 12（Catalyst iOS 15），新 API 需 Catalyst 27+：可用则用新 API（并回报错误），
+// 否则回退旧 API（仅弃用、功能一致，局部抑制弃用告警保持构建零警告）。
+static BOOL XZEngineConnect(AVAudioEngine *engine, AVAudioNode *src, AVAudioNode *dst, AVAudioFormat *fmt) {
+    NSError *err = nil;
+    BOOL ok;
+    if (@available(macCatalyst 27.0, *)) {
+        ok = [engine connect:src to:dst format:fmt error:&err];
+    } else {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        [engine connect:src to:dst format:fmt];
+        ok = YES;
+#pragma clang diagnostic pop
+    }
+    if (!ok || err) NSLog(@"[XiaoZhi] engine connect 失败: %@", err);
+    return ok;
+}
+
+static void XZPlayerPlay(AVAudioPlayerNode *player) {
+    NSError *err = nil;
+    if (@available(macCatalyst 27.0, *)) {
+        if (![player playAndReturnError:&err] || err) NSLog(@"[XiaoZhi] player play 失败: %@", err);
+    } else {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        [player play];
+#pragma clang diagnostic pop
+    }
+}
 
 @interface XiaoZhiModule ()
 @property (nonatomic, strong, nullable) NSURLSessionWebSocketTask *webSocket;
@@ -19,6 +52,11 @@ static const uint32_t kDownlinkSampleRate = 24000; // 下行（TTS）默认采�
 @property (nonatomic, copy, nullable) id asrCallback;   // keepCallbackAlive：待服务端回 stt 时回调
 @property (nonatomic, copy, nullable) id speakCallback; // 待 tts stop 时回调
 @property (nonatomic, assign) uint32_t downlinkSampleRate;
+// ===== Opus 编解码（系统 AudioToolbox，实测可用；Catalyst 下无需第三方库）=====
+@property (nonatomic, assign) AudioConverterRef downlinkDecoder; // Opus(下行率) → LPCM float32
+@property (nonatomic, assign) AudioConverterRef uplinkEncoder;   // LPCM float32(48k) → Opus(16k)
+@property (nonatomic, strong) NSMutableData *micAccum;           // 麦克风 48k 采样累积（攒满一帧再编码）
+@property (nonatomic, assign) UInt32 micFrameSamples;            // 每帧 48k 样本数（2880 = 60ms）
 @end
 
 @implementation XiaoZhiModule
@@ -78,7 +116,7 @@ static const uint32_t kDownlinkSampleRate = 24000; // 下行（TTS）默认采�
             @"format": @"opus",
             @"sample_rate": @(kUplinkSampleRate),
             @"channels": @(1),
-            @"frame_duration": @(60)
+            @"frame_duration": @(kFrameDurationMs)
         }
     }];
 
@@ -115,6 +153,10 @@ static const uint32_t kDownlinkSampleRate = 24000; // 下行（TTS）默认采�
 - (void)speak:(NSDictionary *)args {
     NSDictionary *params = [self parseParams:args[KR_PARAM_KEY]];
     self.speakCallback = args[KR_CALLBACK_KEY];
+    // 新一次合成前丢弃上一段仍在排队的音频（否则旧尾音与新音频叠播）
+    [self.playerNode stop];
+    [self.playerNode reset];
+    XZPlayerPlay(self.playerNode);
     [self sendJSON:@{
         @"type": @"tts_test",
         @"text": params[@"text"] ?: @"",
@@ -145,10 +187,14 @@ static const uint32_t kDownlinkSampleRate = 24000; // 下行（TTS）默认采�
     [self.webSocket receiveMessageWithCompletionHandler:^(NSURLSessionWebSocketMessage * _Nullable msg, NSError * _Nullable error) {
         typeof(self) strong = weak;
         if (!strong || error) return;
+        // playerNode/audioEngine 的操作统一派发主线程（AVAudioEngine 的属性/调度需同一线程同步，
+        // URLSession 回调默认在非主线程，直接操作有竞态风险）。
         if (msg.type == NSURLSessionWebSocketMessageTypeString) {
-            [strong handleText:msg.string];
+            NSString *s = msg.string;
+            dispatch_async(dispatch_get_main_queue(), ^{ [strong handleText:s]; });
         } else if (msg.type == NSURLSessionWebSocketMessageTypeData) {
-            [strong handleBinary:msg.data];
+            NSData *d = msg.data;
+            dispatch_async(dispatch_get_main_queue(), ^{ [strong handleBinary:d]; });
         }
         [strong receiveLoop];
     }];
@@ -161,7 +207,14 @@ static const uint32_t kDownlinkSampleRate = 24000; // 下行（TTS）默认采�
     NSString *type = dict[@"type"];
     if ([type isEqualToString:@"hello"]) {
         NSDictionary *ap = dict[@"audio_params"];
-        if (ap[@"sample_rate"]) self.downlinkSampleRate = [ap[@"sample_rate"] unsignedIntValue];
+        if (ap[@"sample_rate"]) {
+            uint32_t sr = [ap[@"sample_rate"] unsignedIntValue];
+            if (sr != self.downlinkSampleRate) {
+                self.downlinkSampleRate = sr;
+                [self rebuildDownlinkDecoder];              // 下行采样率以 server hello 为准
+                [self reconnectPlayerForSampleRate:sr];     // player 连接格式联动（否则变速/异常）
+            }
+        }
         return;
     }
     if ([type isEqualToString:@"stt"]) {
@@ -184,9 +237,8 @@ static const uint32_t kDownlinkSampleRate = 24000; // 下行（TTS）默认采�
 
 - (void)handleBinary:(NSData *)opus {
     if (opus.length == 0) return;
-    // TODO: Opus 解码（downlink 采样率）→ Float32 PCM，再播放。下方为占位直通。
     NSData *pcm = [self decodeOpus:opus];
-    [self playPcm:pcm];
+    if (pcm.length) [self playPcm:pcm];
 }
 
 #pragma mark - 音频采集 / 播放
@@ -196,54 +248,146 @@ static const uint32_t kDownlinkSampleRate = 24000; // 下行（TTS）默认采�
     self.audioEngine = [[AVAudioEngine alloc] init];
     self.playerNode = [[AVAudioPlayerNode alloc] init];
     [self.audioEngine attachNode:self.playerNode];
-    AVAudioFormat *outFormat = [[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatFloat32
-                                                                sampleRate:kDownlinkSampleRate
-                                                                  channels:1
-                                                               interleaved:NO];
-    [self.audioEngine connect:self.playerNode to:self.audioEngine.mainMixerNode format:outFormat];
+    // ⚠️ player→mainMixer 必须**显式指定**与调度 buffer 相同的声道数（下行单声道）。
+    //    实测（本机 AVAudioEngine）：format:nil 时 mixer 协商为 48000Hz/2ch，调度
+    //    1ch buffer 直接抛 "required condition is false: _outputFormat.channelCount ==
+    //    buffer.format.channelCount"。采样率也会按连接解释（不抛异常但变速），
+    //    故连接采样率与下行采样率必须一致（hello 后如变化走 reconnectPlayerForSampleRate:）。
+    AVAudioFormat *playerFormat = [[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatFloat32
+                                                                   sampleRate:(self.downlinkSampleRate ?: kDownlinkSampleRate)
+                                                                     channels:1
+                                                                  interleaved:NO];
+    XZEngineConnect(self.audioEngine, self.playerNode, self.audioEngine.mainMixerNode, playerFormat);
+#if TARGET_OS_MACCATALYST
+    // Mac Catalyst：AVAudioSession 可用（iOS API 面）。PlayAndRecord + 默认扬声器，
+    // 供 TTS 播放与麦克风采集共存（实测 macabi 目标下这些 API 均可编译/可用）。
     NSError *err = nil;
-    [[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryPlayAndRecord
-                                     withOptions:AVAudioSessionCategoryOptionDefaultToSpeaker
-                                           error:&err];
-    [[AVAudioSession sharedInstance] setActive:YES error:&err];
+    AVAudioSession *session = [AVAudioSession sharedInstance];
+    [session setCategory:AVAudioSessionCategoryPlayAndRecord
+             withOptions:AVAudioSessionCategoryOptionDefaultToSpeaker
+                   error:&err];
+    if (err) NSLog(@"[XiaoZhi] audio session category error: %@", err);
+    err = nil;
+    [session setActive:YES error:&err];
+    if (err) NSLog(@"[XiaoZhi] audio session active error: %@", err);
+#endif
     [self.audioEngine prepare];
-    [self.audioEngine startAndReturnError:&err];
-    if (err) NSLog(@"[XiaoZhi] audio engine error: %@", err);
-    [self.playerNode play];
+    NSError *startErr = nil;
+    [self.audioEngine startAndReturnError:&startErr];
+    if (startErr) NSLog(@"[XiaoZhi] audio engine error: %@", startErr);
+    XZPlayerPlay(self.playerNode);
+}
+
+/// 下行采样率变化（server hello）时重建 player 的连接格式，保证连接与 buffer 采样率一致。
+- (void)reconnectPlayerForSampleRate:(uint32_t)sr {
+    if (!self.audioEngine || !self.playerNode) return;
+    AVAudioFormat *f = [[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatFloat32
+                                                        sampleRate:sr
+                                                          channels:1
+                                                       interleaved:NO];
+    [self.audioEngine disconnectNodeOutput:self.playerNode];
+    XZEngineConnect(self.audioEngine, self.playerNode, self.audioEngine.mainMixerNode, f);
+    XZPlayerPlay(self.playerNode);
+    NSLog(@"[XiaoZhi] player 重连为 %.0fHz/1ch（下行采样率变化）", f.sampleRate);
 }
 
 - (void)requestMicPermission:(void (^)(void))granted {
-    if (@available(macOS 11.0, *)) {
-        [AVAudioSession.sharedInstance requestRecordPermission:^(BOOL ok) {
-            dispatch_async(dispatch_get_main_queue(), ^{ if (ok) granted(); });
-        }];
-    } else {
+    // 麦克风权限：用 AVCaptureDevice（Catalyst 13+/macOS 10.14+ 通用；实测 macabi 可编译）。
+    // ⚠️ 两条硬前提（此前踩坑）：
+    //   ① Info.plist 必须有 NSMicrophoneUsageDescription（缺失时 TCC 直接拒绝，inputNode
+    //      报 0 声道 → AUIOBase "no channels in channel map" + AudioConverter -50 刷屏）；
+    //   ② 必须等用户授权后再访问 inputNode 的格式（未授权时格式无效）。
+    AVAuthorizationStatus st = [AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeAudio];
+    if (st == AVAuthorizationStatusAuthorized) {
         granted();
+        return;
     }
+    if (st == AVAuthorizationStatusDenied || st == AVAuthorizationStatusRestricted) {
+        NSLog(@"[XiaoZhi] 麦克风权限被拒绝：系统设置 → 隐私与安全性 → 麦克风，勾选本 App 后重试");
+        return;
+    }
+    [AVCaptureDevice requestAccessForMediaType:AVMediaTypeAudio completionHandler:^(BOOL ok) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (!ok) {
+                NSLog(@"[XiaoZhi] 麦克风权限被拒绝：系统设置 → 隐私与安全性 → 麦克风，勾选本 App 后重试");
+                return;
+            }
+            granted();
+        });
+    }];
 }
 
 - (void)startMic {
     self.micNode = self.audioEngine.inputNode;
     AVAudioFormat *fmt = [self.micNode outputFormatForBus:0];
+    NSLog(@"[XiaoZhi] mic format: %.0f Hz, %u ch", fmt.sampleRate, (unsigned)fmt.channelCount);
+    // 每帧 48k 样本数按实际麦克风采样率计算（通常 48000 → 2880）
+    self.micFrameSamples = (UInt32)llround(fmt.sampleRate * kFrameDurationMs / 1000.0);
+    self.micAccum = [NSMutableData data];
+    // 用硬件原生格式安装 tap（不指定 fmt 避免 -50 转换失败），在回调里重采样。
+    // 新 SDK 的 installTap 带 error 出参（Catalyst 27+），旧 API 回退（功能一致）。
     __weak typeof(self) weak = self;
-    [self.micNode installTapOnBus:0 bufferSize:1024 format:fmt block:^(AVAudioPCMBuffer * _Nonnull buffer, AVAudioTime * _Nonnull when) {
+    AVAudioNodeTapBlock tapBlock = ^(AVAudioPCMBuffer * _Nonnull buffer, AVAudioTime * _Nonnull when) {
         typeof(self) strong = weak;
         if (!strong || !strong.recording) return;
-        float *p = buffer.floatChannelData[0];
-        UInt32 n = buffer.frameLength;
-        if (n == 0) return;
-        NSData *pcm = [NSData dataWithBytes:p length:n * sizeof(float)];
-        // TODO: 重采样到 16k 并 Opus 编码（libopus），按 v1（裸 Opus）二进制下发。
-        NSData *opus = [strong encodeOpus:pcm];
-        [strong sendBinary:opus];
-    }];
+        [strong appendMicBuffer:buffer];
+    };
+    if (@available(macCatalyst 27.0, *)) {
+        NSError *tapErr = nil;
+        if (![self.micNode installTapOnBus:0 bufferSize:1024 format:fmt error:&tapErr block:tapBlock]) {
+            NSLog(@"[XiaoZhi] installTap 失败: %@", tapErr);
+        }
+    } else {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        [self.micNode installTapOnBus:0 bufferSize:1024 format:fmt block:tapBlock];
+#pragma clang diagnostic pop
+    }
     NSError *err = nil;
     [self.audioEngine startAndReturnError:&err];
     if (err) NSLog(@"[XiaoZhi] start engine error: %@", err);
 }
 
+// 麦克风回调：把任意长度/采样率的 float32 单声道缓冲累积到“整帧”后编码上行，避免
+// 任意长度编码失败与半帧丢失（AudioConverter 每次只吃整数帧）。
+- (void)appendMicBuffer:(AVAudioPCMBuffer *)buffer {
+    if (buffer.frameLength == 0 || buffer.floatChannelData == NULL) return;
+    float *src = buffer.floatChannelData[0];
+    UInt32 n = buffer.frameLength;
+    if (buffer.format.channelCount > 1) {
+        // 多声道混单：直接取第 0 声道即可（设备麦克风为单声道，混音场景少见）
+    }
+    double sr = buffer.format.sampleRate;
+    if (fabs(sr - 48000.0) > 1.0) {
+        // 非常规采样率：线性插值到 48k（每帧只需要 2880 个 48k 样本）
+        UInt32 outN = (UInt32)(n * 48000.0 / sr);
+        float *tmp = malloc(outN * sizeof(float));
+        for (UInt32 i = 0; i < outN; i++) {
+            double pos = i * sr / 48000.0;
+            UInt32 i0 = (UInt32)pos;
+            double frac = pos - i0;
+            float a = src[i0 < n ? i0 : n - 1];
+            float b = src[(i0 + 1) < n ? (i0 + 1) : (n - 1)];
+            tmp[i] = a + (b - a) * (float)frac;
+        }
+        [self.micAccum appendBytes:tmp length:outN * sizeof(float)];
+        free(tmp);
+    } else {
+        [self.micAccum appendBytes:src length:n * sizeof(float)];
+    }
+
+    // 攒满整帧就编码发送（可能一次回调攒出多帧）
+    while (self.micAccum.length >= self.micFrameSamples * sizeof(float)) {
+        NSData *frame = [self.micAccum subdataWithRange:NSMakeRange(0, self.micFrameSamples * sizeof(float))];
+        [self.micAccum replaceBytesInRange:NSMakeRange(0, frame.length) withBytes:NULL length:0];
+        NSData *opus = [self encodeOpus:frame];
+        if (opus.length) [self sendBinary:opus];
+    }
+}
+
 - (void)stopMic {
     if (self.micNode) { [self.micNode removeTapOnBus:0]; self.micNode = nil; }
+    self.micAccum = nil;
 }
 
 - (void)sendBinary:(NSData *)data {
@@ -257,27 +401,166 @@ static const uint32_t kDownlinkSampleRate = 24000; // 下行（TTS）默认采�
 
 - (void)playPcm:(NSData *)pcm {
     if (!self.playerNode || pcm.length == 0) return;
+    uint32_t sr = self.downlinkSampleRate ?: kDownlinkSampleRate;
     AVAudioFormat *fmt = [[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatFloat32
-                                                        sampleRate:self.downlinkSampleRate ?: kDownlinkSampleRate
+                                                        sampleRate:sr
                                                           channels:1
                                                        interleaved:NO];
     AVAudioFrameCount frames = (AVAudioFrameCount)(pcm.length / sizeof(float));
     AVAudioPCMBuffer *buf = [[AVAudioPCMBuffer alloc] initWithPCMFormat:fmt frameCapacity:frames];
     buf.frameLength = frames;
     memcpy(buf.floatChannelData[0], pcm.bytes, pcm.length);
+    // 60ms 帧逐帧调度（buffer 内 hasValidFrames 由 AVAudioPlayerNode 顺序播放）
     [self.playerNode scheduleBuffer:buf completionHandler:nil];
 }
 
-#pragma mark - Opus 编解码占位（需接入真实 Opus 库）
+#pragma mark - Opus 编解码（系统 AudioToolbox：kAudioFormatOpus，实测 Catalyst 可用）
 
-- (NSData *)encodeOpus:(NSData *)pcm {
-    // TODO: 接入 libopus（bridging header 或 OpusKit Swift 包）编码 16k 单声道 Float32 → Opus 帧。
-    return pcm; // 占位：实际应返回 Opus 帧
+// 编码输入回调的状态：转换器可能多次回调索取输入，必须记录“已消费”位置，
+// 否则第二次回调会把同一帧重复喂入（产生重复音频）。逐帧调用场景下一帧即返回。
+struct XZEncFeed {
+    const void *bytes;
+    UInt32 totalFrames;   // 本帧总样本数
+    UInt32 consumed;      // 已喂入样本数
+};
+
+static OSStatus XZEncodeInputProc(AudioConverterRef conv, UInt32 *ioNumPackets, AudioBufferList *ioData,
+                                  AudioStreamPacketDescription **outDesc, void *user) {
+    (void)conv; (void)outDesc;
+    struct XZEncFeed *feed = (struct XZEncFeed *)user;
+    UInt32 remain = feed->totalFrames - feed->consumed;
+    UInt32 want = *ioNumPackets;
+    if (remain == 0 || want == 0) { *ioNumPackets = 0; return noErr; }
+    UInt32 give = remain < want ? remain : want;
+    ioData->mNumberBuffers = 1;
+    ioData->mBuffers[0].mNumberChannels = 1;
+    ioData->mBuffers[0].mDataByteSize = give * sizeof(float);
+    ioData->mBuffers[0].mData = (void *)((const float *)feed->bytes + feed->consumed);
+    feed->consumed += give;
+    *ioNumPackets = give;
+    return noErr;
+}
+
+- (AudioConverterRef)createPcmToOpusConverterFrom:(double)srcRate to:(double)dstRate {
+    AudioStreamBasicDescription s = {0}, d = {0};
+    s.mSampleRate = srcRate;
+    s.mFormatID = kAudioFormatLinearPCM;
+    s.mFormatFlags = kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked;
+    s.mChannelsPerFrame = 1;
+    s.mBitsPerChannel = 32;
+    s.mBytesPerFrame = 4;
+    s.mBytesPerPacket = 4;
+    s.mFramesPerPacket = 1;
+    d.mSampleRate = dstRate;
+    d.mFormatID = kAudioFormatOpus;
+    d.mChannelsPerFrame = 1;
+    d.mFramesPerPacket = (UInt32)(dstRate * kFrameDurationMs / 1000.0);
+    AudioConverterRef conv = NULL;
+    AudioConverterNew(&s, &d, &conv);
+    if (conv) {
+        // bitrate 显式指定，避免默认值在部分采样率下生成失败
+        UInt32 bitrate = dstRate >= 24000 ? 32000 : 24000;
+        AudioConverterSetProperty(conv, kAudioConverterEncodeBitRate, sizeof(bitrate), &bitrate);
+    }
+    return conv;
+}
+
+// 麦克风 48k 单声道 float32 → Opus 16k 一帧
+- (NSData *)encodeOpus:(NSData *)pcm48 {
+    if (!self.uplinkEncoder) {
+        self.uplinkEncoder = [self createPcmToOpusConverterFrom:48000 to:kUplinkSampleRate];
+        if (!self.uplinkEncoder) { NSLog(@"[XiaoZhi] 上行 Opus 编码器创建失败"); return nil; }
+    }
+    struct XZEncFeed feed = { pcm48.bytes, (UInt32)(pcm48.length / sizeof(float)), 0 };
+    UInt8 buf[4096];
+    AudioBufferList out = {0};
+    out.mNumberBuffers = 1;
+    out.mBuffers[0].mNumberChannels = 1;
+    out.mBuffers[0].mDataByteSize = sizeof(buf);
+    out.mBuffers[0].mData = buf;
+    AudioStreamPacketDescription pd = {0};
+    UInt32 ioPkts = 1;
+    OSStatus st = AudioConverterFillComplexBuffer(self.uplinkEncoder, XZEncodeInputProc,
+                                                   &feed, &ioPkts, &out, &pd);
+    if (st != noErr || ioPkts == 0 || pd.mDataByteSize == 0) {
+        NSLog(@"[XiaoZhi] 上行编码失败: st=%d pkts=%u", (int)st, (unsigned)ioPkts);
+        return nil;
+    }
+    return [NSData dataWithBytes:buf length:pd.mDataByteSize];
+}
+
+struct XZDecFeed {
+    const void *bytes;
+    UInt32 size;
+    int provided;
+    AudioStreamPacketDescription desc;
+};
+
+static OSStatus XZDecodeInputProc(AudioConverterRef conv, UInt32 *ioNumPackets, AudioBufferList *ioData,
+                                  AudioStreamPacketDescription **outDesc, void *user) {
+    (void)conv;
+    struct XZDecFeed *feed = (struct XZDecFeed *)user;
+    if (feed->provided) { *ioNumPackets = 0; return noErr; }
+    ioData->mNumberBuffers = 1;
+    ioData->mBuffers[0].mNumberChannels = 1;
+    ioData->mBuffers[0].mDataByteSize = feed->size;
+    ioData->mBuffers[0].mData = (void *)feed->bytes;
+    feed->desc.mStartOffset = 0;
+    feed->desc.mDataByteSize = feed->size;
+    feed->desc.mVariableFramesInPacket = 0; // 由解码器按 Opus 头推导
+    if (outDesc) *outDesc = &feed->desc;
+    feed->provided = 1;
+    *ioNumPackets = 1;
+    return noErr;
+}
+
+// 下行 Opus(server 采样率) → float32 LPCM（单声道），供玩家节点播放
+- (void)rebuildDownlinkDecoder {
+    if (self.downlinkDecoder) { AudioConverterDispose(self.downlinkDecoder); self.downlinkDecoder = NULL; }
+    uint32_t sr = self.downlinkSampleRate ?: kDownlinkSampleRate;
+    AudioStreamBasicDescription s = {0}, d = {0};
+    s.mSampleRate = sr;
+    s.mFormatID = kAudioFormatOpus;
+    s.mChannelsPerFrame = 1;
+    s.mFramesPerPacket = (UInt32)(sr * kFrameDurationMs / 1000.0);
+    d.mSampleRate = sr;
+    d.mFormatID = kAudioFormatLinearPCM;
+    d.mFormatFlags = kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked;
+    d.mChannelsPerFrame = 1;
+    d.mBitsPerChannel = 32;
+    d.mBytesPerFrame = 4;
+    d.mBytesPerPacket = 4;
+    d.mFramesPerPacket = 1;
+    AudioConverterRef conv = NULL;
+    OSStatus st = AudioConverterNew(&s, &d, &conv);
+    if (st != noErr) {
+        NSLog(@"[XiaoZhi] 下行 Opus 解码器创建失败: %d", (int)st);
+        self.downlinkDecoder = NULL;
+    } else {
+        self.downlinkDecoder = conv;
+    }
 }
 
 - (NSData *)decodeOpus:(NSData *)opus {
-    // TODO: 解码 Opus → Float32（downlink 采样率），供 playPcm 播放。
-    return opus; // 占位
+    if (!self.downlinkDecoder) [self rebuildDownlinkDecoder];
+    if (!self.downlinkDecoder) return nil;
+    float pcm[8192];
+    AudioBufferList out = {0};
+    out.mNumberBuffers = 1;
+    out.mBuffers[0].mNumberChannels = 1;
+    out.mBuffers[0].mDataByteSize = sizeof(pcm);
+    out.mBuffers[0].mData = pcm;
+    UInt32 ioFrames = 8192;
+    struct XZDecFeed feed = { opus.bytes, (UInt32)opus.length, 0, {0} };
+    OSStatus st = AudioConverterFillComplexBuffer(self.downlinkDecoder, XZDecodeInputProc,
+                                                   &feed, &ioFrames, &out, NULL);
+    if (st != noErr || ioFrames == 0) {
+        // 单包解码首帧报错时重建解码器（状态异常自愈）
+        NSLog(@"[XiaoZhi] 下行解码失败: st=%d frames=%u，重建解码器", (int)st, (unsigned)ioFrames);
+        [self rebuildDownlinkDecoder];
+        return nil;
+    }
+    return [NSData dataWithBytes:pcm length:ioFrames * sizeof(float)];
 }
 
 #pragma mark - 回调

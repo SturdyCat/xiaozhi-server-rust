@@ -255,9 +255,10 @@ fun ViewContainer<*, *>.renderConnect(conn: ConnectState, shell: AdminShell) {
                 }
             }
             actionRow {
-                // 忙碌态用 vif/velse 分支重建（构建期裸读 busy 不会响应式更新按钮文案）
+                // 忙碌态用 vif/velse 分支重建（构建期裸读 busy 不会响应式更新按钮文案）；
+                // 菊花 + 禁用表达「处理中」，同时从事件层堵住重复点击。
                 vif({ conn.busy }) {
-                    primaryButton("连接中…", enabled = false) { }
+                    primaryButton("连接中…", enabled = false, loading = true) { }
                 }
                 velse {
                     primaryButton("连接") { conn.connect(shell) }

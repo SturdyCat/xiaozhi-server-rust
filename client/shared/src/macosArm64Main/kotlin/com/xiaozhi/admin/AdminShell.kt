@@ -323,8 +323,9 @@ fun ViewContainer<*, *>.homeSection(shell: AdminShell, wide: () -> Boolean) {
                 labeledField("合成文字", { shell.bench.ttsText }, { shell.bench.ttsText = it }, "输入要合成的文字", height = 100f)
                 actionRow {
                     primaryButton(
-                        if (shell.bench.speaking) "合成中…" else "合成并播放",
-                        enabled = !shell.bench.speaking,
+                        if (shell.bench.ttsBusy) "合成中…" else "合成并播放",
+                        enabled = !shell.bench.ttsBusy,
+                        loading = shell.bench.ttsBusy,
                     ) { shell.bench.speak(shell) }
                 }
             },

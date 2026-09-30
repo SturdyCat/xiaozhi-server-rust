@@ -61,6 +61,9 @@ targets:
         #    Catalyst 下 ATS 默认拦截明文 http/ws，不放开会全部失败（NSURLError -1022）。
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
+        # ⚠️ 麦克风用途描述：缺失时 TCC 直接拒绝授权（不弹窗），inputNode 报 0 声道 →
+        #    AUIOBase "no channels in channel map" + AudioConverter -50 刷屏、录音无声。
+        NSMicrophoneUsageDescription: 用于 ASR 语音识别测试（录音上传到本机或局域网服务器做识别）。
     preBuildScripts:
       # 守卫：本 App 只能以 Mac Catalyst 构建（UIKit 渲染器）。误选原生 "My Mac"
       # 运行目标时，编译会在 'UIKit/UIKit.h' file not found 上报难懂的错误；

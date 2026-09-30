@@ -393,7 +393,7 @@ async fn send_tts_audio(
     let pcm_down = resample(pcm, tts_sr, params.downlink_sr);
     let frame_samples =
         (params.downlink_sr as f32 * params.downlink_frame_ms as f32 / 1000.0) as usize;
-    for chunk in pcm_down.chunks(frame_samples.max(1)) {
+    for chunk in frame_chunks(&pcm_down, frame_samples.max(1)) {
         let opus = match encode_opus_frame(chunk, params.downlink_sr) {
             Ok(o) => o,
             Err(e) => {
@@ -439,6 +439,66 @@ async fn send_text(socket: &mut WebSocket, msg: &ServerMessage) -> anyhow::Resul
         .await
         .map_err(|e| anyhow::anyhow!("发送文本失败: {e}"))?;
     Ok(())
+}
+
+/// 把下行 PCM 切成固定帧长；末尾不足一帧补 0（静音）到整帧。
+///
+/// Opus 只接受合法帧长（2.5/5/10/20/40/60ms）。TTS 音频总样本数几乎不可能整除帧长，
+/// 残帧直接编码会返回 BadArgument（日志 "Opus 编码失败: Opus(BadArgument)"），
+/// 整段语音最后不足一帧被丢弃——补零后音频完整、听感无差异。
+fn frame_chunks(pcm: &[f32], frame: usize) -> Vec<Vec<f32>> {
+    let frame = frame.max(1);
+    let mut out: Vec<Vec<f32>> = pcm.chunks(frame).map(|c| c.to_vec()).collect();
+    if let Some(last) = out.last_mut() {
+        if last.len() < frame {
+            last.resize(frame, 0.0);
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::frame_chunks;
+
+    #[test]
+    fn frame_chunks_pads_partial_tail() {
+        // 24k/60ms = 1440 样本；1500 样本 = 1 整帧 + 60 残帧
+        let pcm = vec![0.5f32; 1500];
+        let frames = frame_chunks(&pcm, 1440);
+        assert_eq!(frames.len(), 2);
+        assert_eq!(frames[0].len(), 1440);
+        assert_eq!(frames[1].len(), 1440, "残帧必须补零到整帧，否则 Opus 编码 BadArgument");
+        // 残帧内容：前 60 个样本保留原值，其余补 0
+        assert_eq!(frames[1][0], 0.5);
+        assert_eq!(frames[1][59], 0.5);
+        assert_eq!(frames[1][60], 0.0);
+        assert_eq!(frames[1][1439], 0.0);
+    }
+
+    #[test]
+    fn frame_chunks_exact_multiple_untouched() {
+        let pcm = vec![1.0f32; 2880];
+        let frames = frame_chunks(&pcm, 1440);
+        assert_eq!(frames.len(), 2);
+        assert!(frames.iter().all(|f| f.len() == 1440));
+    }
+
+    #[test]
+    fn frame_chunks_single_partial() {
+        // 短于一帧：补成一帧（原先直接编码会 BadArgument）
+        let pcm = vec![0.25f32; 100];
+        let frames = frame_chunks(&pcm, 1440);
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].len(), 1440);
+        assert_eq!(frames[0][99], 0.25);
+        assert_eq!(frames[0][100], 0.0);
+    }
+
+    #[test]
+    fn frame_chunks_empty() {
+        assert!(frame_chunks(&[], 1440).is_empty());
+    }
 }
 
 async fn send_binary(socket: &mut WebSocket, data: Vec<u8>) -> anyhow::Result<()> {
