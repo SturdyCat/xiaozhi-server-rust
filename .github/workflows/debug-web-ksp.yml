@@ -1,0 +1,58 @@
+# 一次性诊断 workflow：在真实 Linux 上复现 ACR web 阶段构建失败
+# （:shared:kspKotlinJs NO-SOURCE → KuiklyCoreEntry.kt 缺失 → JSProcessor readLines 崩溃）
+# 用后即删，勿合并。ACR 构建规则绑定 main 分支，本分支不触发镜像发布。
+name: debug-web-ksp-linux
+
+on:
+  push:
+    branches: [debug/linux-ksp]
+  workflow_dispatch:
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Step1 - reproduce compileKotlinJs state
+        working-directory: client
+        run: ./gradlew :shared:compileKotlinJs --console=plain --no-build-cache 2>&1 | tail -40
+
+      - name: Step2 - publishWeb full failure with stacktrace
+        working-directory: client
+        run: |
+          ./gradlew :apps:h5App:publishWeb --console=plain --no-build-cache --stacktrace \
+            -PwebSourceMap=false \
+            -Dorg.gradle.jvmargs="-Xmx2048m -Dfile.encoding=UTF-8" \
+            2>&1 | tail -120 || true
+
+      - name: Step3 - differential: ignoreDisabledTargets=true
+        working-directory: client
+        run: |
+          ./gradlew :apps:h5App:publishWeb --console=plain --no-build-cache \
+            -PwebSourceMap=false -Pkotlin.native.ignoreDisabledTargets=true \
+            -Dorg.gradle.jvmargs="-Xmx2048m -Dfile.encoding=UTF-8" \
+            2>&1 | tail -60 || true
+
+      - name: Step4 - dump source set graph
+        working-directory: client
+        run: |
+          cat > /tmp/init-dump.gradle <<'EOF'
+          gradle.projectsEvaluated {
+            gradle.rootProject.subprojects { p ->
+              def kext = p.extensions.findByName('kotlin')
+              if (kext) {
+                kext.sourceSets.each { ss ->
+                  println "SOURCESET ${p.name}:${ss.name} dependsOn=${ss.dependsOn.collect{it.name}} srcDirs=${ss.kotlin.srcDirs.collect{it.path}}"
+                }
+              }
+            }
+          }
+          EOF
+          ./gradlew :shared:compileKotlinJs --console=plain --no-build-cache -I /tmp/init-dump.gradle 2>&1 | grep -E "SOURCESET|NO-SOURCE|Task :shared:(ksp|compile)|BUILD" | head -30
