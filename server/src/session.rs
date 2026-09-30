@@ -394,7 +394,7 @@ async fn send_tts_audio(
     let frame_samples =
         (params.downlink_sr as f32 * params.downlink_frame_ms as f32 / 1000.0) as usize;
     for chunk in frame_chunks(&pcm_down, frame_samples.max(1)) {
-        let opus = match encode_opus_frame(chunk, params.downlink_sr) {
+        let opus = match encode_opus_frame(&chunk, params.downlink_sr) {
             Ok(o) => o,
             Err(e) => {
                 tracing::warn!("Opus 编码失败: {e}");
