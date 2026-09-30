@@ -11,6 +11,10 @@ on:
 jobs:
   diag:
     runs-on: ubuntu-latest
+    env:
+      # 忠实复现 ACR gradle 镜像：无 Android SDK（ubuntu runner 自带 SDK，须屏蔽）
+      ANDROID_HOME: /nonexistent
+      ANDROID_SDK_ROOT: /nonexistent
     steps:
       - uses: actions/checkout@v4
 
