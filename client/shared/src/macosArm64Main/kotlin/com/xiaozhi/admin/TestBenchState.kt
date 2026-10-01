@@ -4,7 +4,9 @@ import com.tencent.kuikly.core.base.ViewContainer
 import com.tencent.kuikly.core.directives.velse
 import com.tencent.kuikly.core.directives.vif
 import com.tencent.kuikly.core.pager.Pager
+import com.tencent.kuikly.core.reactive.collection.ObservableList
 import com.tencent.kuikly.core.reactive.handler.observable
+import com.tencent.kuikly.core.reactive.handler.observableList
 import com.tencent.kuikly.core.timer.setTimeout
 import com.tencent.kuikly.core.views.Text
 import com.tencent.kuikly.core.views.View
@@ -64,6 +66,23 @@ class TestBenchState {
 
     /** 当前展开的下拉（"" = 全部收起）；放状态类里避免 Pager body 重建时丢失展开态 */
     var openDropdown by observable("")
+
+    // ===== 下拉选项（ObservableList：音色列表随性别切换增删，vfor 响应式渲染）=====
+    val langOptions: ObservableList<Pair<String, String>> by observableList()
+    val genderOptions: ObservableList<Pair<String, String>> by observableList()
+    val voiceOptions: ObservableList<Pair<String, String>> by observableList()
+
+    init {
+        langOptions.addAll(LANG_OPTIONS)
+        genderOptions.addAll(VoiceCatalog.GENDERS)
+        reloadVoiceOptions()
+    }
+
+    /** 按当前性别重建音色选项列表（sid 一并写入显示文案）。 */
+    private fun reloadVoiceOptions() {
+        voiceOptions.clear()
+        voiceOptions.addAll(VoiceCatalog.options(voiceGender).map { it.id to "${it.id}（sid ${it.sid}）" })
+    }
 
     var statusMsg by observable("")
 
@@ -252,11 +271,12 @@ class TestBenchState {
         }
     }
 
-    /** 语音选择：切换性别时自动落到该性别第一个音色；同步 sid。 */
+    /** 语音选择：切换性别时自动落到该性别第一个音色；同步 sid 与下拉选项列表。 */
     fun selectVoice(gender: String, id: String) {
         voiceGender = gender
         voiceId = id
         VoiceCatalog.sidOf(id)?.let { ttsSpeaker = it }
+        reloadVoiceOptions()
     }
 
     companion object {
@@ -335,10 +355,12 @@ data class VoiceOption(val id: String, val sid: Int)
  * 渲染测试台三个分组卡片（连接 / ASR 识别测试 / TTS 合成测试）。
  * 宽屏（wide()=true）：连接 + ASR 一行两列，TTS（奇数张）独占整行；窄屏：纵向单列。
  *
+ * ⚠️ 响应式铁律（本项目反复踩坑）：凡依赖 observable 的文案/启用态/分支，必须写在
+ * vif/velse 条件闭包或 attr 闭包内——构建期裸读（if/when 直接读 observable）只求值一次，
+ * 状态变化后 UI 不会更新（实测「按钮三态不出现」的根因）。本文件所有分支均为 vif/velse 链。
  * ⚠️ 必须在目标容器（Scroller）闭包内**非限定**调用 `renderBench(bench, ctx, wide)`：
  * Kuikly 的 View{} DSL 静态绑定到词法作用域最近的 ViewContainer 接收者，
  * 以 `ctx.groupedCard(...)` 方式调用会把卡片挂到 Pager 根容器，导致布局逃逸。
- * AdminCard 的 content（ViewBuilder，带接收者）在 groupedCard 卡片容器内执行，节点挂进卡片。
  * ⚠️ wide 须为 lambda（如 `{ pagerData.pageViewWidth >= 900f }`），在 cardGrid 的
  * vif 闭包内读取才能随窗口 resize 响应式重排。
  */
@@ -350,11 +372,14 @@ fun ViewContainer<*, *>.renderBench(bench: TestBenchState, ctx: Pager, wide: () 
                 labeledField("server url", { bench.serverUrl }, { bench.serverUrl = it }, "ws://127.0.0.1:8000/api/ws")
                 labeledField("token（可选）", { bench.token }, { bench.token = it })
                 actionRow {
-                    primaryButton(if (bench.connected) "断开" else "连接") {
-                        if (bench.connected) bench.disconnect(ctx) else bench.connect(ctx)
+                    vif({ bench.connected }) {
+                        primaryButton("断开") { bench.disconnect(ctx) }
+                    }
+                    velse {
+                        primaryButton("连接") { bench.connect(ctx) }
                     }
                     View { attr { width(AdminSpace.md) } }
-                    statusBadge(bench.connectionState, connectionLabel(bench.connectionState))
+                    statusBadge({ bench.connectionState }, { connectionLabel(bench.connectionState) })
                 }
             },
             AdminCard("ASR 识别测试") {
@@ -367,45 +392,59 @@ fun ViewContainer<*, *>.renderBench(bench: TestBenchState, ctx: Pager, wide: () 
                     }
                 }
                 actionRow {
-                    // 五态按钮：启动中(菊花) / 录音中(红，停止采集) / 识别中(菊花) / 其余(开始或重新录音)。
-                    when (bench.asrPhase) {
-                        "starting" -> primaryButton("正在启动…", enabled = false, loading = true) { }
-                        "recording" -> primaryButton("停止录音", danger = true) { bench.stopRecording(ctx) }
-                        "recognizing" -> primaryButton("识别中…", enabled = false, loading = true) { }
-                        "recorded" -> primaryButton("重新录音") { bench.startAsr(ctx) }
-                        else -> primaryButton("开始录音") { bench.startAsr(ctx) }
+                    // 五态按钮：每态一个 vif 分支（裸读 when 不随状态更新——见函数头注释）
+                    vif({ bench.asrPhase == "starting" }) {
+                        primaryButton("正在启动…", enabled = false, loading = true) { }
+                    }
+                    velse {
+                        vif({ bench.asrPhase == "recording" }) {
+                            primaryButton("停止录音", danger = true) { bench.stopRecording(ctx) }
+                        }
+                        velse {
+                            vif({ bench.asrPhase == "recognizing" }) {
+                                primaryButton("识别中…", enabled = false, loading = true) { }
+                            }
+                            velse {
+                                vif({ bench.asrPhase == "recorded" }) {
+                                    primaryButton("重新录音") { bench.startAsr(ctx) }
+                                }
+                                velse {
+                                    primaryButton("开始录音") { bench.startAsr(ctx) }
+                                }
+                            }
+                        }
                     }
                     View { attr { width(AdminSpace.md) } }
-                    // 发送识别：仅在已录且未在录/未在识别时可用
+                    // 发送识别：仅在已录（且未在录/未在识别）时出现
                     vif({ bench.asrPhase == "recorded" }) {
                         primaryButton("发送识别") { bench.sendAsr(ctx) }
                         View { attr { width(AdminSpace.md) } }
                     }
                     vif({ bench.asrPhase == "recording" }) {
-                        statusBadge("recording", "录音中")
+                        statusBadge({ "recording" }, { "录音中" })
                     }
                     velse {
                         vif({ bench.asrPhase == "recognizing" }) {
-                            statusBadge("busy", "识别中")
+                            statusBadge({ "busy" }, { "识别中" })
                         }
                         velse {
-                            statusBadge("idle", "空闲")
+                            statusBadge({ "idle" }, { "空闲" })
                         }
                     }
                 }
-                // 录音试听播放器（已录且有波形时显示；合成中禁用）
+                // 录音试听播放器（已录且有波形时显示）
                 vif({ bench.recWave.isNotEmpty() }) {
                     waveformPlayer(
                         wave = { bench.recWave },
                         progress = { bench.recProgress },
                         playing = { bench.recPlaying },
                         durationText = { formatDuration(bench.recDuration) },
-                        enabled = !bench.ttsBusy && bench.asrPhase != "recording",
+                        enabled = { bench.asrPhase != "recording" && !bench.ttsBusy },
                     ) { bench.togglePlayback(ctx, "recording") }
                 }
                 View { attr { height(AdminSpace.md) } }
                 groupedCard("识别结果", withDivider = false) {
-                    if (bench.asrText.isEmpty()) {
+                    vif({ bench.asrText.isEmpty() }) {
                         Text {
                             attr {
                                 fontSize(AdminType.body)
@@ -413,7 +452,8 @@ fun ViewContainer<*, *>.renderBench(bench: TestBenchState, ctx: Pager, wide: () 
                                 text("识别结果将显示在此")
                             }
                         }
-                    } else {
+                    }
+                    velse {
                         Text {
                             attr {
                                 fontSize(AdminType.body)
@@ -431,8 +471,8 @@ fun ViewContainer<*, *>.renderBench(bench: TestBenchState, ctx: Pager, wide: () 
                 // 语言：下拉（auto 走服务器默认；zh/en 显式指定）
                 dropdownField(
                     label = "语言",
-                    currentLabel = { LANG_OPTIONS.firstOrNull { it.first == bench.ttsLang }?.second ?: bench.ttsLang },
-                    options = LANG_OPTIONS,
+                    currentLabel = { bench.langOptions.firstOrNull { it.first == bench.ttsLang }?.second ?: bench.ttsLang },
+                    options = { bench.langOptions },
                     selectedId = { bench.ttsLang },
                     isOpen = { bench.openDropdown == "lang" },
                     onToggle = { bench.openDropdown = if (bench.openDropdown == "lang") "" else "lang" },
@@ -441,11 +481,11 @@ fun ViewContainer<*, *>.renderBench(bench: TestBenchState, ctx: Pager, wide: () 
                         bench.openDropdown = ""
                     },
                 )
-                // 音色性别：下拉（切换时自动落到该组第一个音色，并同步语言 zh/en）
+                // 音色性别：下拉（切换时自动落到该组第一个音色，并联动语言 zh/en）
                 dropdownField(
                     label = "音色性别",
-                    currentLabel = { GenderOptions.firstOrNull { it.first == bench.voiceGender }?.second ?: bench.voiceGender },
-                    options = GenderOptions,
+                    currentLabel = { bench.genderOptions.firstOrNull { it.first == bench.voiceGender }?.second ?: bench.voiceGender },
+                    options = { bench.genderOptions },
                     selectedId = { bench.voiceGender },
                     isOpen = { bench.openDropdown == "gender" },
                     onToggle = { bench.openDropdown = if (bench.openDropdown == "gender") "" else "gender" },
@@ -456,11 +496,11 @@ fun ViewContainer<*, *>.renderBench(bench: TestBenchState, ctx: Pager, wide: () 
                         bench.openDropdown = ""
                     },
                 )
-                // 音色：下拉（Kokoro voices.bin 索引，55/45/3 项，面板内可滚动）
+                // 音色：下拉（Kokoro voices.bin 索引，55/45/3 项；选项列表随性别切换增删）
                 dropdownField(
-                    label = "音色（共 ${VoiceCatalog.options(bench.voiceGender).size} 项）",
-                    currentLabel = { "${bench.voiceId}（sid ${bench.ttsSpeaker}）" },
-                    options = VoiceCatalog.options(bench.voiceGender).map { it.id to "${it.id}（sid ${it.sid}）" },
+                    label = "音色",
+                    currentLabel = { "${bench.voiceId}（sid ${bench.ttsSpeaker} · 共 ${bench.voiceOptions.size} 项）" },
+                    options = { bench.voiceOptions },
                     selectedId = { bench.voiceId },
                     isOpen = { bench.openDropdown == "voice" },
                     onToggle = { bench.openDropdown = if (bench.openDropdown == "voice") "" else "voice" },
@@ -471,10 +511,10 @@ fun ViewContainer<*, *>.renderBench(bench: TestBenchState, ctx: Pager, wide: () 
                 )
                 labeledField("语速 (0.5~2.0)", { bench.ttsSpeed }, { bench.ttsSpeed = it })
                 actionRow {
-                    // 录音/启动/识别中禁用合成；合成中显示菊花并堵重复点击
-                    if (bench.ttsBusy) {
+                    vif({ bench.ttsBusy }) {
                         primaryButton("合成中…", enabled = false, loading = true) { }
-                    } else {
+                    }
+                    velse {
                         primaryButton(
                             "合成并播放",
                             enabled = bench.asrPhase != "recording" && bench.asrPhase != "starting" && bench.asrPhase != "recognizing",
@@ -490,7 +530,7 @@ fun ViewContainer<*, *>.renderBench(bench: TestBenchState, ctx: Pager, wide: () 
                         progress = { bench.ttsProgress },
                         playing = { bench.ttsPlaying },
                         durationText = { formatDuration(bench.ttsDuration) },
-                        enabled = !bench.ttsBusy,
+                        enabled = { !bench.ttsBusy },
                     ) { bench.togglePlayback(ctx, "tts") }
                 }
             },
@@ -504,9 +544,6 @@ private val LANG_OPTIONS: List<Pair<String, String>> = listOf(
     "zh" to "中文（zh）",
     "en" to "英文（en）",
 )
-
-/** 音色性别下拉选项（与 VoiceCatalog.GENDERS 同源）。 */
-private val GenderOptions: List<Pair<String, String>> = VoiceCatalog.GENDERS
 
 /** 秒 → "m:ss" 播放器时间文本。 */
 internal fun formatDuration(seconds: Double): String {

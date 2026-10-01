@@ -5,8 +5,10 @@ import com.tencent.kuikly.core.base.BorderStyle
 import com.tencent.kuikly.core.base.Color
 import com.tencent.kuikly.core.base.ViewBuilder
 import com.tencent.kuikly.core.base.ViewContainer
+import com.tencent.kuikly.core.directives.vfor
 import com.tencent.kuikly.core.directives.velse
 import com.tencent.kuikly.core.directives.vif
+import com.tencent.kuikly.core.reactive.collection.ObservableList
 import com.tencent.kuikly.core.views.ActivityIndicator
 import com.tencent.kuikly.core.views.Input
 import com.tencent.kuikly.core.views.Scroller
@@ -484,15 +486,16 @@ fun ViewContainer<*, *>.switchRow(label: String, checked: Boolean, onToggle: () 
 /**
  * 下拉选择字段：label + 选择框（显示当前项 + ▾/▴）+ 展开面板（独立 Scroller，高 320，可滚动）。
  *
- * 展开状态由调用方持有（isOpen lambda 读取 observable）——放在状态类里而不是组件内部，
- * 避免 body 重建把展开态重置（Kuikly 的 Pager body 会随 observable 变化重跑）。
- * 选项列表用普通 while 循环铺（vfor 只接受 ObservableList；固定列表用循环更直接，
- * 与 cardGrid 的写法一致）。选中项高亮为 accentTintText + 左侧 3px 指示条。
+ * 响应式约定（⚠️ Kuikly 只对闭包内的 observable 读取做响应式跟踪）：
+ * - isOpen：lambda，由调用方持有展开态（放状态类里避免 body 重建丢失）；
+ * - options：返回 **ObservableList** 的 lambda + 内部用 vfor 渲染——选项列表本身可变
+ *   （如音色列表随性别切换增删），普通 List 在构建期一次性铺开不会随数据更新；
+ * - selectedId/currentLabel：lambda，选中态变化即时刷新。
  */
 fun ViewContainer<*, *>.dropdownField(
     label: String,
     currentLabel: () -> String,
-    options: List<Pair<String, String>>,
+    options: () -> ObservableList<Pair<String, String>>,
     selectedId: () -> String,
     isOpen: () -> Boolean,
     onToggle: () -> Unit,
@@ -536,10 +539,7 @@ fun ViewContainer<*, *>.dropdownField(
                 borderRadius(AdminShape.radiusSm)
                 marginTop(AdminSpace.xs)
             }
-            var i = 0
-            while (i < options.size) {
-                val opt = options[i]
-                val selected = opt.first == selectedId()
+            vfor(options) { opt ->
                 View {
                     attr {
                         height(44f)
@@ -549,7 +549,7 @@ fun ViewContainer<*, *>.dropdownField(
                         paddingRight(AdminSpace.md)
                     }
                     event { click { onSelect(opt.first) } }
-                    if (selected) {
+                    vif({ opt.first == selectedId() }) {
                         View {
                             attr {
                                 width(3f)
@@ -564,21 +564,11 @@ fun ViewContainer<*, *>.dropdownField(
                         attr {
                             flex(1f)
                             fontSize(AdminType.body)
-                            color(if (selected) AdminColors.accentTintText else AdminColors.textPrimary)
+                            color(if (opt.first == selectedId()) AdminColors.accentTintText else AdminColors.textPrimary)
                             text(opt.second)
                         }
                     }
                 }
-                if (i < options.size - 1) {
-                    View {
-                        attr {
-                            height(1f)
-                            marginLeft(AdminSpace.md)
-                            backgroundColor(AdminColors.divider)
-                        }
-                    }
-                }
-                i++
             }
         }
     }
@@ -600,7 +590,7 @@ fun ViewContainer<*, *>.waveformPlayer(
     progress: () -> Float,
     playing: () -> Boolean,
     durationText: () -> String,
-    enabled: Boolean = true,
+    enabled: () -> Boolean,
     onToggle: () -> Unit,
 ) {
     View {
@@ -609,7 +599,7 @@ fun ViewContainer<*, *>.waveformPlayer(
             alignItemsCenter()
             marginTop(AdminSpace.fieldGap)
         }
-        event { click { if (enabled) onToggle() } }
+        event { click { if (enabled()) onToggle() } }
         // 播放/停止圆钮
         View {
             attr {
@@ -617,7 +607,7 @@ fun ViewContainer<*, *>.waveformPlayer(
                 height(44f)
                 borderRadius(AdminShape.radiusPill)
                 allCenter()
-                backgroundColor(if (enabled) AdminColors.accent else AdminColors.accentDisable)
+                backgroundColor(if (enabled()) AdminColors.accent else AdminColors.accentDisable)
             }
             Text {
                 attr {
@@ -672,58 +662,56 @@ private const val WAVE_BARS = 32
 /**
  * 状态徽标：胶囊高 26、paddingH 10、圆点 8 + 文字 micro(13)/600。
  * state: connected/recording/busy/idle/error 对应 accent/danger/warning/中性/danger 色。
+ * ⚠️ state/text 必须是 lambda 且只在 attr 闭包内读取——Kuikly 只对闭包内的 observable
+ * 读取做响应式跟踪；构建期传入的一次性 String 在状态变化后颜色/文案不会更新。
  */
-fun ViewContainer<*, *>.statusBadge(state: String, text: String) {
-    val dotColor: Color
-    val bgColor: Color
-    val fgColor: Color
-    when (state) {
-        "connected" -> {
-            dotColor = AdminColors.accent
-            bgColor = AdminColors.accentTintBg
-            fgColor = AdminColors.accentTintText
-        }
-        "recording", "error" -> {
-            dotColor = AdminColors.danger
-            bgColor = AdminColors.dangerTintBg
-            fgColor = AdminColors.dangerTintText
-        }
-        "busy" -> {
-            dotColor = AdminColors.warning
-            bgColor = AdminColors.warningTintBg
-            fgColor = AdminColors.warningTintText
-        }
-        else -> {
-            dotColor = AdminColors.textPlaceholder
-            bgColor = AdminColors.insetBg
-            fgColor = AdminColors.textTertiary
-        }
-    }
+fun ViewContainer<*, *>.statusBadge(state: () -> String, text: () -> String) {
     View {
         attr {
             flexDirectionRow()
             alignItemsCenter()
             height(26f)
             borderRadius(AdminShape.radiusPill)
-            backgroundColor(bgColor)
             paddingLeft(10f)
             paddingRight(10f)
+            // 级别颜色在 attr 闭包内按 observable 求值 → 状态变化即时变色
+            val s = state()
+            when (s) {
+                "connected" -> backgroundColor(AdminColors.accentTintBg)
+                "recording", "error" -> backgroundColor(AdminColors.dangerTintBg)
+                "busy" -> backgroundColor(AdminColors.warningTintBg)
+                else -> backgroundColor(AdminColors.insetBg)
+            }
         }
         View {
             attr {
                 width(8f)
                 height(8f)
                 borderRadius(AdminShape.radiusPill)
-                backgroundColor(dotColor)
                 marginRight(6f)
+                backgroundColor(
+                    when (state()) {
+                        "connected" -> AdminColors.accent
+                        "recording", "error" -> AdminColors.danger
+                        "busy" -> AdminColors.warning
+                        else -> AdminColors.textPlaceholder
+                    },
+                )
             }
         }
         Text {
             attr {
                 fontSize(AdminType.micro)
                 fontWeightMedium()
-                color(fgColor)
-                text(text)
+                text(text())
+                color(
+                    when (state()) {
+                        "connected" -> AdminColors.accentTintText
+                        "recording", "error" -> AdminColors.dangerTintText
+                        "busy" -> AdminColors.warningTintText
+                        else -> AdminColors.textTertiary
+                    },
+                )
             }
         }
     }

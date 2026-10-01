@@ -145,7 +145,7 @@ class AdminShell : Pager() {
                                     }
                                 }
                                 vif({ ctx.selectedSection == "testbench" }) {
-                                    statusBadge(ctx.bench.connectionState, connectionLabel(ctx.bench.connectionState))
+                                    statusBadge({ ctx.bench.connectionState }, { connectionLabel(ctx.bench.connectionState) })
                                 }
                             },
                         )
@@ -289,17 +289,20 @@ fun ViewContainer<*, *>.homeSection(shell: AdminShell, wide: () -> Boolean) {
         wide = wide,
         cards = listOf(
             AdminCard("连接状态") {
-                statusBadge(shell.bench.connectionState, connectionLabel(shell.bench.connectionState))
+                statusBadge({ shell.bench.connectionState }, { connectionLabel(shell.bench.connectionState) })
                 View { attr { height(AdminSpace.md) } }
                 labeledField("server url", { shell.bench.serverUrl }, { shell.bench.serverUrl = it }, "ws://127.0.0.1:8000/api/ws")
                 actionRow {
-                    primaryButton(if (shell.bench.connected) "断开" else "连接") {
-                        if (shell.bench.connected) shell.bench.disconnect(shell) else shell.bench.connect(shell)
+                    vif({ shell.bench.connected }) {
+                        primaryButton("断开") { shell.bench.disconnect(shell) }
+                    }
+                    velse {
+                        primaryButton("连接") { shell.bench.connect(shell) }
                     }
                 }
             },
             AdminCard("最近识别") {
-                if (shell.bench.asrText.isEmpty()) {
+                vif({ shell.bench.asrText.isEmpty() }) {
                     Text {
                         attr {
                             fontSize(AdminType.body)
@@ -307,7 +310,8 @@ fun ViewContainer<*, *>.homeSection(shell: AdminShell, wide: () -> Boolean) {
                             text("暂无识别记录")
                         }
                     }
-                } else {
+                }
+                velse {
                     Text {
                         attr {
                             fontSize(AdminType.body)
@@ -322,11 +326,12 @@ fun ViewContainer<*, *>.homeSection(shell: AdminShell, wide: () -> Boolean) {
             AdminCard("TTS 快捷") {
                 labeledField("合成文字", { shell.bench.ttsText }, { shell.bench.ttsText = it }, "输入要合成的文字", height = 100f)
                 actionRow {
-                    primaryButton(
-                        if (shell.bench.ttsBusy) "合成中…" else "合成并播放",
-                        enabled = !shell.bench.ttsBusy,
-                        loading = shell.bench.ttsBusy,
-                    ) { shell.bench.speak(shell) }
+                    vif({ shell.bench.ttsBusy }) {
+                        primaryButton("合成中…", enabled = false, loading = true) { }
+                    }
+                    velse {
+                        primaryButton("合成并播放") { shell.bench.speak(shell) }
+                    }
                 }
             },
             AdminCard("快捷入口") {
