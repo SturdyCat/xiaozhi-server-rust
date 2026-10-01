@@ -65,6 +65,8 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
 @property (nonatomic, assign) CFTimeInterval playbackStartedAt;  // 试听起始时钟（进度 = now - startedAt）
 @property (nonatomic, assign) NSUInteger decodeFailCount;        // 下行解码连续失败计数（日志节流）
 @property (nonatomic, assign) BOOL loggedFirstDecode;            // 首个下行包解码成功仅打一条日志
+@property (nonatomic, assign) NSUInteger ttsDecodedPackets;      // 本次合成成功解码的包数（tts stop 汇总）
+@property (nonatomic, assign) NSUInteger ttsFailCount;           // 本次合成解码失败的包数（tts stop 汇总）
 @end
 
 @implementation XiaoZhiModule
@@ -173,7 +175,12 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
     NSDictionary *params = [self parseParams:args[KR_PARAM_KEY]];
     self.speakCallback = args[KR_CALLBACK_KEY];
     self.ttsPcm = [NSMutableData data];
-    [self ensureAudioEngine]; // 懒启动：合成即准备音频（首帧到达即可出声）
+    self.ttsDecodedPackets = 0;
+    self.ttsFailCount = 0;
+    self.decodeFailCount = 0;
+    // ⚠️ 不在这里启动音频引擎：实机对比发现「点击即启动引擎」会在麦克风未授权时
+    //    触发 AUIOBase/-50 刷屏；改为首帧到达（playPcm→ensureAudioEngine）时才启动，
+    //    与实测零噪音路径一致（synthesize 需 1s+，引擎启动 ~百 ms，无听感影响）。
     // 新一次合成前丢弃上一段仍在排队的音频（否则旧尾音与新音频叠播）
     [self.playerNode stop];
     [self.playerNode reset];
@@ -348,6 +355,12 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
     if ([type isEqualToString:@"tts"]) {
         NSString *state = dict[@"state"];
         if ([state isEqualToString:@"stop"] && self.speakCallback) {
+            // 每次合成收尾汇总：实机日志可直接确认「多少包解码成功 / 多少帧 / 失败几包」
+            NSUInteger frames = self.ttsPcm.length / sizeof(float);
+            uint32_t sr = self.downlinkSampleRate ?: kDownlinkSampleRate;
+            NSLog(@"[XiaoZhi] TTS 下行统计：解码 %lu 包 / %lu 帧（%.2fs），失败 %lu 包",
+                  (unsigned long)self.ttsDecodedPackets, (unsigned long)frames,
+                  frames / (double)sr, (unsigned long)self.ttsFailCount);
             [self invoke:self.speakCallback result:@{@"state": @"stop"} success:YES error:nil];
             self.speakCallback = nil;
         }
@@ -684,7 +697,18 @@ static OSStatus XZDecodeInputProc(AudioConverterRef conv, UInt32 *ioNumPackets, 
                                   AudioStreamPacketDescription **outDesc, void *user) {
     (void)conv;
     struct XZDecFeed *feed = (struct XZDecFeed *)user;
-    if (feed->provided) { *ioNumPackets = 0; return noErr; }
+    if (feed->provided) {
+        // EOF 信号（输入耗尽）：必须把 ioData 全部零化后再返回 0 包。
+        // 不置零时转换器会把 ioData 里遗留/预填的字节数当成"已提供但无包描述"的输入，
+        // 打印 "61440 bytes of input provided, but packet descriptions (0) only
+        // account for 0 bytes"（实机日志刷屏的另一来源）。
+        ioData->mNumberBuffers = 1;
+        ioData->mBuffers[0].mNumberChannels = 1;
+        ioData->mBuffers[0].mDataByteSize = 0;
+        ioData->mBuffers[0].mData = NULL;
+        *ioNumPackets = 0;
+        return noErr;
+    }
     ioData->mNumberBuffers = 1;
     ioData->mBuffers[0].mNumberChannels = 1;
     ioData->mBuffers[0].mDataByteSize = feed->size;
@@ -736,18 +760,21 @@ static OSStatus XZDecodeInputProc(AudioConverterRef conv, UInt32 *ioNumPackets, 
     //    「重建解码器后每包只成功一次」。Reset 后 5/5 包全部解出（首包 2.5ms pre-skip
     //    修剪 1380 帧、其余 1440 帧，样本数正确无漂移）。转换器仍复用，重置代价可忽略。
     AudioConverterReset(self.downlinkDecoder);
+    uint32_t sr = self.downlinkSampleRate ?: kDownlinkSampleRate;
+    UInt32 frameSamples = (UInt32)(sr * kFrameDurationMs / 1000.0); // 24k/60ms = 1440
     float pcm[8192];
     AudioBufferList out = {0};
     out.mNumberBuffers = 1;
     out.mBuffers[0].mNumberChannels = 1;
     out.mBuffers[0].mDataByteSize = sizeof(pcm);
     out.mBuffers[0].mData = pcm;
-    UInt32 ioFrames = 8192;
-    uint32_t sr = self.downlinkSampleRate ?: kDownlinkSampleRate;
+    // 精确请求一帧输出（而非一次要 8192）：请求量≈单包产出时，转换器多数情况一次拉取
+    // 即完成，不再为「填满输出」二次索要输入（二次索要的 EOF 记账是实机警告的来源之一）。
+    UInt32 ioFrames = frameSamples;
     struct XZDecFeed feed = {
         opus.bytes,
         (UInt32)opus.length,
-        (UInt32)(sr * kFrameDurationMs / 1000.0), // 包内帧数，必须显式给（见 input proc 注释）
+        frameSamples, // 包内帧数，必须显式给（见 input proc 注释）
         0,
         {0},
     };
@@ -755,16 +782,18 @@ static OSStatus XZDecodeInputProc(AudioConverterRef conv, UInt32 *ioNumPackets, 
     OSStatus st = AudioConverterFillComplexBuffer(self.downlinkDecoder, XZDecodeInputProc,
                                                    &feed, &ioFrames, &out, NULL);
     if (st != noErr || ioFrames == 0) {
-        // 解码失败自愈：重建解码器；日志节流（每 20 次打一条），避免下行期间刷屏
+        // 解码失败自愈：重建解码器；日志前 3 次 + 每 20 次（避免下行期间刷屏但保证可见性）
         self.decodeFailCount++;
-        if (self.decodeFailCount % 20 == 1) {
-            NSLog(@"[XiaoZhi] 下行解码失败(累计 %lu): st=%d frames=%u，已重建解码器",
+        self.ttsFailCount++;
+        if (self.decodeFailCount <= 3 || self.decodeFailCount % 20 == 1) {
+            NSLog(@"[XiaoZhi] 下行解码失败(连续 %lu): st=%d frames=%u，已重建解码器",
                   (unsigned long)self.decodeFailCount, (int)st, (unsigned)ioFrames);
         }
         [self rebuildDownlinkDecoder];
         return nil;
     }
     self.decodeFailCount = 0;
+    self.ttsDecodedPackets++;
     if (!self.loggedFirstDecode) {
         self.loggedFirstDecode = YES;
         NSLog(@"[XiaoZhi] 首个下行包解码成功: %u bytes → %u frames @ %uHz（首包含 pre-skip 修剪）",
