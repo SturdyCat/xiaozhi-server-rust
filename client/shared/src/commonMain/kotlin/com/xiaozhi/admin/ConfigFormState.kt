@@ -150,14 +150,22 @@ class ConfigFormState {
                 put("temperature", llmTemperature.toDoubleOrNull() ?: 0.7)
             })
         }
-        network(ctx).requestPost("${baseUrl}/api/config", body) { _, success, errorMsg, _ ->
+        // ⚠️ 必须显式带 Content-Type: application/json：
+        // Kuikly 的 requestPost 默认 headers=null，原生 KRHttpRequestTool 在非 JSON
+        // Content-Type 下会把 body 编码成 form-urlencoded —— 服务端 Json<Config> 提取器
+        // 直接 415（实测报 "Expected request with `Content-Type: application/json`"，
+        // macApp 表现为「保存配置」失败）。同时按 HTTP 状态码判定成功：
+        // 传输层 success 且 statusCode 非 2xx（如 415/400）时给出明确错误。
+        val headers = JSONObject().apply { put("Content-Type", "application/json") }
+        network(ctx).httpRequest("${baseUrl}/api/config", true, body, headers) { _, success, errorMsg, resp ->
             saving = false
-            if (success) {
+            val code = resp.statusCode
+            if (success && (code == null || code in 200..299)) {
                 dirty = false
                 lastSavedAt = "已保存"
                 statusMsg = "保存成功（引擎参数需重启生效）"
             } else {
-                statusMsg = "保存失败: $errorMsg"
+                statusMsg = "保存失败: ${if (errorMsg.isNotEmpty()) errorMsg else "HTTP $code"}"
             }
         }
     }
