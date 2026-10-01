@@ -63,6 +63,7 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
 @property (nonatomic, strong) NSMutableData *ttsPcm;             // 最近一次 TTS 合成缓冲（试听 + 波形）
 @property (nonatomic, assign) BOOL playbackActive;               // 正在试听（区别于下行实时播放）
 @property (nonatomic, assign) CFTimeInterval playbackStartedAt;  // 试听起始时钟（进度 = now - startedAt）
+@property (nonatomic, assign) NSUInteger decodeFailCount;        // 下行解码连续失败计数（日志节流）
 @end
 
 @implementation XiaoZhiModule
@@ -151,7 +152,6 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
 }
 
 // stopRecording() → 仅停止采集（保留录音缓冲供试听），不发 asr_test stop。
-// 「发送识别」由 sendAsr 触发——录音与识别解耦，中间可反复试听。
 - (void)stopRecording:(NSDictionary *)args {
     self.recording = NO;
     [self stopMic];
@@ -365,6 +365,7 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
 
 - (void)setupAudio {
     if (self.audioEngine) return;
+    self.downlinkSampleRate = kDownlinkSampleRate; // 默认 24k；hello 一致则不触发无谓重连
     self.audioEngine = [[AVAudioEngine alloc] init];
     self.playerNode = [[AVAudioPlayerNode alloc] init];
     [self.audioEngine attachNode:self.playerNode];
@@ -374,22 +375,15 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
     //    buffer.format.channelCount"。采样率也会按连接解释（不抛异常但变速），
     //    故连接采样率与下行采样率必须一致（hello 后如变化走 reconnectPlayerForSampleRate:）。
     AVAudioFormat *playerFormat = [[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatFloat32
-                                                                   sampleRate:(self.downlinkSampleRate ?: kDownlinkSampleRate)
+                                                                   sampleRate:self.downlinkSampleRate
                                                                      channels:1
                                                                   interleaved:NO];
     XZEngineConnect(self.audioEngine, self.playerNode, self.audioEngine.mainMixerNode, playerFormat);
+    // ⚠️ connect 阶段只用 Playback：PlayAndRecord 会让引擎启动时拉起 input node——
+    //    麦克风未授权时其格式为 0 声道 → AUIOBase "no channels in channel map" +
+    //    AudioConverter -50 刷屏（实测）。切到 PlayAndRecord 推迟到授权后的 startMic。
 #if TARGET_OS_MACCATALYST
-    // Mac Catalyst：AVAudioSession 可用（iOS API 面）。PlayAndRecord + 默认扬声器，
-    // 供 TTS 播放与麦克风采集共存（实测 macabi 目标下这些 API 均可编译/可用）。
-    NSError *err = nil;
-    AVAudioSession *session = [AVAudioSession sharedInstance];
-    [session setCategory:AVAudioSessionCategoryPlayAndRecord
-             withOptions:AVAudioSessionCategoryOptionDefaultToSpeaker
-                   error:&err];
-    if (err) NSLog(@"[XiaoZhi] audio session category error: %@", err);
-    err = nil;
-    [session setActive:YES error:&err];
-    if (err) NSLog(@"[XiaoZhi] audio session active error: %@", err);
+    [self applyAudioSessionCategory:AVAudioSessionCategoryPlayback];
 #endif
     [self.audioEngine prepare];
     NSError *startErr = nil;
@@ -397,6 +391,23 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
     if (startErr) NSLog(@"[XiaoZhi] audio engine error: %@", startErr);
     XZPlayerPlay(self.playerNode);
 }
+
+#if TARGET_OS_MACCATALYST
+/// 设置 AVAudioSession category 并确保激活（运行中切换由引擎下次 start 生效）。
+- (void)applyAudioSessionCategory:(AVAudioSessionCategory)category {
+    NSError *err = nil;
+    AVAudioSession *session = [AVAudioSession sharedInstance];
+    if ([category isEqualToString:AVAudioSessionCategoryPlayAndRecord]) {
+        [session setCategory:category withOptions:AVAudioSessionCategoryOptionDefaultToSpeaker error:&err];
+    } else {
+        [session setCategory:category error:&err];
+    }
+    if (err) NSLog(@"[XiaoZhi] audio session category error: %@", err);
+    err = nil;
+    [session setActive:YES error:&err];
+    if (err) NSLog(@"[XiaoZhi] audio session active error: %@", err);
+}
+#endif
 
 /// 下行采样率变化（server hello）时重建 player 的连接格式，保证连接与 buffer 采样率一致。
 - (void)reconnectPlayerForSampleRate:(uint32_t)sr {
@@ -438,9 +449,19 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
 }
 
 - (void)startMic {
+    // 授权后才切 PlayAndRecord（startAsr 的授权回调先行调用），保证 inputNode 格式有效
+#if TARGET_OS_MACCATALYST
+    [self applyAudioSessionCategory:AVAudioSessionCategoryPlayAndRecord];
+#endif
+    // category 切换后引擎需重启以应用新路由
+    [self.audioEngine stop];
     self.micNode = self.audioEngine.inputNode;
     AVAudioFormat *fmt = [self.micNode outputFormatForBus:0];
     NSLog(@"[XiaoZhi] mic format: %.0f Hz, %u ch", fmt.sampleRate, (unsigned)fmt.channelCount);
+    if (fmt.channelCount == 0) {
+        NSLog(@"[XiaoZhi] inputNode 仍为 0 声道（权限未生效或无输入设备），放弃本次录音");
+        return;
+    }
     // 每帧 48k 样本数按实际麦克风采样率计算（通常 48000 → 2880）
     self.micFrameSamples = (UInt32)llround(fmt.sampleRate * kFrameDurationMs / 1000.0);
     self.micAccum = [NSMutableData data];
@@ -631,6 +652,7 @@ static OSStatus XZEncodeInputProc(AudioConverterRef conv, UInt32 *ioNumPackets, 
 struct XZDecFeed {
     const void *bytes;
     UInt32 size;
+    UInt32 frames;      // 包内帧数（= 采样率×帧长/1000，必须显式给：converter 不会从 Opus 头推导）
     int provided;
     AudioStreamPacketDescription desc;
 };
@@ -646,7 +668,9 @@ static OSStatus XZDecodeInputProc(AudioConverterRef conv, UInt32 *ioNumPackets, 
     ioData->mBuffers[0].mData = (void *)feed->bytes;
     feed->desc.mStartOffset = 0;
     feed->desc.mDataByteSize = feed->size;
-    feed->desc.mVariableFramesInPacket = 0; // 由解码器按 Opus 头推导
+    // ⚠️ 必须显式给帧数：实测填 0 时 converter 按 CBR（mBytesPerPacket=0）解释压缩输入，
+    //    报 "packet descriptions (0) only account for 0 bytes" 且 0 帧输出。
+    feed->desc.mVariableFramesInPacket = feed->frames;
     if (outDesc) *outDesc = &feed->desc;
     feed->provided = 1;
     *ioNumPackets = 1;
@@ -690,15 +714,28 @@ static OSStatus XZDecodeInputProc(AudioConverterRef conv, UInt32 *ioNumPackets, 
     out.mBuffers[0].mDataByteSize = sizeof(pcm);
     out.mBuffers[0].mData = pcm;
     UInt32 ioFrames = 8192;
-    struct XZDecFeed feed = { opus.bytes, (UInt32)opus.length, 0, {0} };
+    uint32_t sr = self.downlinkSampleRate ?: kDownlinkSampleRate;
+    struct XZDecFeed feed = {
+        opus.bytes,
+        (UInt32)opus.length,
+        (UInt32)(sr * kFrameDurationMs / 1000.0), // 包内帧数，必须显式给（见 input proc 注释）
+        0,
+        {0},
+    };
+    AudioStreamPacketDescription inPktDescs[1];
     OSStatus st = AudioConverterFillComplexBuffer(self.downlinkDecoder, XZDecodeInputProc,
-                                                   &feed, &ioFrames, &out, NULL);
+                                                   &feed, &ioFrames, &out, inPktDescs);
     if (st != noErr || ioFrames == 0) {
-        // 单包解码首帧报错时重建解码器（状态异常自愈）
-        NSLog(@"[XiaoZhi] 下行解码失败: st=%d frames=%u，重建解码器", (int)st, (unsigned)ioFrames);
+        // 解码失败自愈：重建解码器；日志节流（每 20 次打一条），避免下行期间刷屏
+        self.decodeFailCount++;
+        if (self.decodeFailCount % 20 == 1) {
+            NSLog(@"[XiaoZhi] 下行解码失败(累计 %lu): st=%d frames=%u，已重建解码器",
+                  (unsigned long)self.decodeFailCount, (int)st, (unsigned)ioFrames);
+        }
         [self rebuildDownlinkDecoder];
         return nil;
     }
+    self.decodeFailCount = 0;
     return [NSData dataWithBytes:pcm length:ioFrames * sizeof(float)];
 }
 
