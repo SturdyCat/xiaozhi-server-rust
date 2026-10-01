@@ -243,14 +243,22 @@ async fn handle_text(
             let speed = speed.unwrap_or(engines.config.tts.speed);
             tracing::info!("session {session_id} 测试合成：lang={lang} speaker={speaker} speed={speed}");
             let tts = engines.tts_for(&lang);
+            let t0 = std::time::Instant::now();
             let (pcm, tts_sr) = match tts.synthesize(&text, speed, speaker) {
                 Ok(x) => x,
                 Err(e) => {
-                    tracing::warn!("测试合成失败: {e}");
+                    tracing::warn!("测试合成失败（耗时 {}ms）: {e}", t0.elapsed().as_millis());
                     return Ok(());
                 }
             };
-            send_tts_audio(socket, params, downlink_ts, session_id, &text, &pcm, tts_sr).await?;
+            tracing::info!(
+                "session {session_id} 合成完成：耗时 {}ms，音频 {:.2}s / {tts_sr}Hz（{} 样本）",
+                t0.elapsed().as_millis(),
+                pcm.len() as f32 / tts_sr as f32,
+                pcm.len()
+            );
+            let frames = send_tts_audio(socket, params, downlink_ts, session_id, &text, &pcm, tts_sr).await?;
+            tracing::info!("session {session_id} 下行发送完成：{frames} 帧（{}ms / {}ms 帧）", frames as u32 * params.downlink_frame_ms, params.downlink_frame_ms);
         }
         ClientMessage::Hello(_) => {
             tracing::warn!("会话内收到重复 hello，忽略");
@@ -321,13 +329,15 @@ async fn stream_response(
     )
     .await?;
 
+    let t_llm = std::time::Instant::now();
     let reply = match engines.llm.chat(history, user_text).await {
         Ok(r) => r,
         Err(e) => {
-            tracing::warn!("LLM 调用失败: {e}");
+            tracing::warn!("LLM 调用失败（耗时 {}ms）: {e}", t_llm.elapsed().as_millis());
             return Ok(());
         }
     };
+    tracing::info!("session {session_id} LLM 完成：耗时 {}ms", t_llm.elapsed().as_millis());
     send_text(
         socket,
         &ServerMessage::Llm {
@@ -345,22 +355,34 @@ async fn stream_response(
         history.remove(0);
     }
 
+    let t_tts = std::time::Instant::now();
     let (pcm, tts_sr) = match engines
         .tts()
         .synthesize(&reply, engines.config.tts.speed, engines.config.tts.speaker)
     {
         Ok(x) => x,
         Err(e) => {
-            tracing::warn!("TTS 失败: {e}");
+            tracing::warn!("TTS 失败（耗时 {}ms）: {e}", t_tts.elapsed().as_millis());
             return Ok(());
         }
     };
-    send_tts_audio(socket, params, downlink_ts, session_id, &reply, &pcm, tts_sr).await?;
+    tracing::info!(
+        "session {session_id} 流水线合成完成：TTS 耗时 {}ms，音频 {:.2}s / {tts_sr}Hz",
+        t_tts.elapsed().as_millis(),
+        pcm.len() as f32 / tts_sr as f32
+    );
+    let t_send = std::time::Instant::now();
+    let frames = send_tts_audio(socket, params, downlink_ts, session_id, &reply, &pcm, tts_sr).await?;
+    tracing::info!(
+        "session {session_id} 下行发送完成：{frames} 帧，耗时 {}ms",
+        t_send.elapsed().as_millis()
+    );
     Ok(())
 }
 
 /// 发送完整 TTS 下行序列：tts start → sentence_start → 重采样/Opus 分帧逐帧二进制 → tts stop
 /// （支持 abort 中断）。设备流水线与网页测试台 `tts_test` 共用。
+/// 返回实际下发的帧数（供日志统计耗时/流量）。
 #[allow(clippy::too_many_arguments)]
 async fn send_tts_audio(
     socket: &mut WebSocket,
@@ -370,7 +392,7 @@ async fn send_tts_audio(
     text: &str,
     pcm: &[f32],
     tts_sr: u32,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<usize> {
     send_text(
         socket,
         &ServerMessage::Tts {
@@ -393,6 +415,7 @@ async fn send_tts_audio(
     let pcm_down = resample(pcm, tts_sr, params.downlink_sr);
     let frame_samples =
         (params.downlink_sr as f32 * params.downlink_frame_ms as f32 / 1000.0) as usize;
+    let mut frames_sent: usize = 0;
     for chunk in frame_chunks(&pcm_down, frame_samples.max(1)) {
         let opus = match encode_opus_frame(&chunk, params.downlink_sr) {
             Ok(o) => o,
@@ -403,12 +426,13 @@ async fn send_tts_audio(
         };
         let framed = wrap_downlink(params.downlink_bin_ver, &opus, *downlink_ts);
         *downlink_ts += params.downlink_frame_ms;
+        frames_sent += 1;
         send_binary(socket, framed).await?;
 
         // 每帧后非阻塞检查 abort / close
         if let Some(Some(Ok(m))) = socket.next().now_or_never() {
             match m {
-                Message::Close(_) => return Ok(()),
+                Message::Close(_) => return Ok(frames_sent),
                 Message::Text(t) => {
                     let s = t.to_string();
                     if let Ok(ClientMessage::Abort { .. }) = serde_json::from_str(&s) {
@@ -430,7 +454,7 @@ async fn send_tts_audio(
         },
     )
     .await?;
-    Ok(())
+    Ok(frames_sent)
 }
 
 async fn send_text(socket: &mut WebSocket, msg: &ServerMessage) -> anyhow::Result<()> {

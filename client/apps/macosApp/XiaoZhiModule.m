@@ -1,6 +1,7 @@
 #import "XiaoZhiModule.h"
 #import <AVFoundation/AVFoundation.h>
 #import <AudioToolbox/AudioToolbox.h>
+#import <QuartzCore/QuartzCore.h> // CACurrentMediaTime（试听进度推算）
 
 // ⚠️ 参数/回调 key 不能自定义：KR_PARAM_KEY/KR_CALLBACK_KEY 是 OpenKuiklyIOSRender
 //    KRBaseModule.h 声明的 extern 常量（实际值为 @"param"/@"callback"）。
@@ -57,6 +58,11 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
 @property (nonatomic, assign) AudioConverterRef uplinkEncoder;   // LPCM float32(48k) → Opus(16k)
 @property (nonatomic, strong) NSMutableData *micAccum;           // 麦克风 48k 采样累积（攒满一帧再编码）
 @property (nonatomic, assign) UInt32 micFrameSamples;            // 每帧 48k 样本数（2880 = 60ms）
+// ===== 试听/波形（录音与 TTS 统一存 24k float32 单声道，player 连接格式即 24k/1ch）=====
+@property (nonatomic, strong) NSMutableData *recordingPcm;       // 本次录音缓冲（试听 + 波形）
+@property (nonatomic, strong) NSMutableData *ttsPcm;             // 最近一次 TTS 合成缓冲（试听 + 波形）
+@property (nonatomic, assign) BOOL playbackActive;               // 正在试听（区别于下行实时播放）
+@property (nonatomic, assign) CFTimeInterval playbackStartedAt;  // 试听起始时钟（进度 = now - startedAt）
 @end
 
 @implementation XiaoZhiModule
@@ -132,9 +138,11 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
     if (callback) [self invoke:callback result:@{@"success": @(YES)} success:YES error:nil];
 }
 
-// startAsr() → 申请麦克风权限并开始采集，发送 asr_test start；服务端缓冲整段音频（跳过 VAD）
+// startAsr() → 申请麦克风权限并开始采集，发送 asr_test start；服务端缓冲整段音频（跳过 VAD）。
+// 本地同时累积 24k PCM（recordingPcm）供停止后试听/波形；「发送识别」由 sendAsr 单独触发。
 - (void)startAsr:(NSDictionary *)args {
     self.asrCallback = args[KR_CALLBACK_KEY]; // 保留，待服务端回 stt 时回调
+    self.recordingPcm = [NSMutableData data];
     [self requestMicPermission:^{
         self.recording = YES;
         [self sendJSON:@{@"type": @"asr_test", @"action": @"start"}];
@@ -142,17 +150,28 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
     }];
 }
 
-// stopAsr() → 停止采集，发送 asr_test stop；服务端对整段做一次性识别并回 stt
-- (void)stopAsr:(NSDictionary *)args {
+// stopRecording() → 仅停止采集（保留录音缓冲供试听），不发 asr_test stop。
+// 「发送识别」由 sendAsr 触发——录音与识别解耦，中间可反复试听。
+- (void)stopRecording:(NSDictionary *)args {
     self.recording = NO;
     [self stopMic];
+    id callback = args[KR_CALLBACK_KEY];
+    double seconds = self.recordingPcm.length / (24000.0 * sizeof(float));
+    [self invoke:callback result:@{@"seconds": @(seconds)} success:YES error:nil];
+}
+
+// sendAsr() → 发送 asr_test stop；服务端对整段（此前流式上传的）做一次性识别并回 stt
+// （stt 经既有 asrCallback 通道回到 Kotlin）。
+- (void)sendAsr:(NSDictionary *)args {
     [self sendJSON:@{@"type": @"asr_test", @"action": @"stop"}];
 }
 
-// speak(text, speaker, lang, speed) → 发送 tts_test；服务端合成并流式下发 Opus 音频
+// speak(text, speaker, lang, speed) → 发送 tts_test；服务端合成并流式下发 Opus 音频。
+// 下行 PCM 同时累积到 ttsPcm，tts stop 后可供试听/波形（playTts）。
 - (void)speak:(NSDictionary *)args {
     NSDictionary *params = [self parseParams:args[KR_PARAM_KEY]];
     self.speakCallback = args[KR_CALLBACK_KEY];
+    self.ttsPcm = [NSMutableData data];
     // 新一次合成前丢弃上一段仍在排队的音频（否则旧尾音与新音频叠播）
     [self.playerNode stop];
     [self.playerNode reset];
@@ -164,6 +183,104 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
         @"lang": params[@"lang"] ?: @"zh",
         @"speed": params[@"speed"] ?: @(1.0)
     }];
+}
+
+#pragma mark - 试听 / 波形（录音与 TTS 共用，缓冲统一 24k float32 单声道）
+
+// playRecording() / playTts() → 从头整段播放对应缓冲（playSource: 共用实现）
+- (void)playRecording:(NSDictionary *)args {
+    [self playSource:self.recordingPcm callback:args[KR_CALLBACK_KEY]];
+}
+
+- (void)playTts:(NSDictionary *)args {
+    [self playSource:self.ttsPcm callback:args[KR_CALLBACK_KEY]];
+}
+
+- (void)playSource:(NSData *)pcm callback:(id)callback {
+    if (pcm.length < sizeof(float)) {
+        [self invoke:callback result:@{@"duration": @(0)} success:YES error:nil];
+        return;
+    }
+    [self.playerNode stop];
+    [self.playerNode reset];
+    uint32_t sr = self.downlinkSampleRate ?: kDownlinkSampleRate;
+    AVAudioFormat *fmt = [[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatFloat32
+                                                          sampleRate:sr channels:1 interleaved:NO];
+    AVAudioFrameCount frames = (AVAudioFrameCount)(pcm.length / sizeof(float));
+    AVAudioPCMBuffer *buf = [[AVAudioPCMBuffer alloc] initWithPCMFormat:fmt frameCapacity:frames];
+    buf.frameLength = frames;
+    memcpy(buf.floatChannelData[0], pcm.bytes, pcm.length);
+    self.playbackActive = YES;
+    self.playbackStartedAt = CACurrentMediaTime();
+    __weak typeof(self) weak = self;
+    [self.playerNode scheduleBuffer:buf completionHandler:^{
+        // 数据消费完毕（播完或被 stop 打断）；派主线程与轮询侧一致。
+        // 播完状态由 Kotlin 轮询 getAudioState 发现（playing=false）。
+        dispatch_async(dispatch_get_main_queue(), ^{
+            typeof(self) strong = weak;
+            if (!strong) return;
+            strong.playbackActive = NO;
+        });
+    }];
+    XZPlayerPlay(self.playerNode);
+    double duration = pcm.length / (sr * sizeof(float));
+    [self invoke:callback result:@{@"duration": @(duration)} success:YES error:nil];
+}
+
+// stopPlayback() → 停止试听
+- (void)stopPlayback:(NSDictionary *)args {
+    [self.playerNode stop];
+    [self.playerNode reset];
+    XZPlayerPlay(self.playerNode);
+    self.playbackActive = NO;
+}
+
+// getAudioState(source) → {wave:[64 桶峰值 0~1], duration, playing, position}
+// Kotlin 侧 100ms 轮询驱动播放进度可视化；source: "recording" | "tts"
+- (void)getAudioState:(NSDictionary *)args {
+    NSDictionary *params = [self parseParams:args[KR_PARAM_KEY]];
+    id callback = args[KR_CALLBACK_KEY];
+    NSData *pcm = [params[@"source"] isEqualToString:@"tts"] ? self.ttsPcm : self.recordingPcm;
+    uint32_t sr = self.downlinkSampleRate ?: kDownlinkSampleRate;
+    double duration = pcm.length / (sr * sizeof(float));
+    // 播放进度用「起始时钟 + 播放速率 1」推算（player timeline 在 stop 后归零，时钟更稳）；
+    // 是否仍在播以 AVAudioPlayerNode.isPlaying 为准（schedule 队列播完自动转 NO）。
+    BOOL playing = self.playbackActive && self.playerNode.isPlaying;
+    double position = playing ? CACurrentMediaTime() - self.playbackStartedAt : 0;
+    if (position > duration) position = duration;
+    NSArray *wave = [self waveformOf:pcm buckets:64];
+    [self invoke:callback result:@{
+        @"wave": wave ?: @[],
+        @"duration": @(duration),
+        @"playing": @(playing),
+        @"position": @(position),
+    } success:YES error:nil];
+}
+
+// 波形包络：等分为 buckets 段，每段取峰值绝对值并按全局峰值归一化到 [0,1]
+- (NSArray *)waveformOf:(NSData *)pcm buckets:(NSInteger)buckets {
+    NSInteger frames = pcm.length / sizeof(float);
+    if (frames <= 0 || buckets <= 0) return @[];
+    const float *s = pcm.bytes;
+    NSMutableArray *out = [NSMutableArray arrayWithCapacity:buckets];
+    double peak = 1e-6;
+    for (NSInteger b = 0; b < buckets; b++) {
+        NSInteger lo = b * frames / buckets;
+        NSInteger hi = MAX(lo + 1, (b + 1) * frames / buckets);
+        double m = 0;
+        for (NSInteger i = lo; i < hi && i < frames; i++) {
+            double a = fabs((double)s[i]);
+            if (a > m) m = a;
+        }
+        if (m > peak) peak = m;
+        [out addObject:@(m)];
+    }
+    NSMutableArray *norm = [NSMutableArray arrayWithCapacity:buckets];
+    for (NSNumber *v in out) {
+        double x = v.doubleValue / peak;
+        [norm addObject:@(0.12 + 0.88 * x)]; // 底噪高度 12%，避免静音段全空
+    }
+    return norm;
 }
 
 #pragma mark - WebSocket
@@ -238,7 +355,10 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
 - (void)handleBinary:(NSData *)opus {
     if (opus.length == 0) return;
     NSData *pcm = [self decodeOpus:opus];
-    if (pcm.length) [self playPcm:pcm];
+    if (!pcm.length) return;
+    // 累积到 TTS 缓冲（24k float32，与下行采样率一致），tts stop 后供试听/波形
+    [self.ttsPcm appendData:pcm];
+    [self playPcm:pcm];
 }
 
 #pragma mark - 音频采集 / 播放
@@ -348,8 +468,9 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
     if (err) NSLog(@"[XiaoZhi] start engine error: %@", err);
 }
 
-// 麦克风回调：把任意长度/采样率的 float32 单声道缓冲累积到“整帧”后编码上行，避免
-// 任意长度编码失败与半帧丢失（AudioConverter 每次只吃整数帧）。
+// 麦克风回调：把任意长度/采样率的 float32 单声道缓冲归一到 48k 后：
+//   ① 累积到整帧编码上行（AudioConverter 每次只吃整数帧，攒满 2880 样本发一帧）；
+//   ② 降采样 24k 追加 recordingPcm（本地试听/波形，与 TTS 缓冲同格式）。
 - (void)appendMicBuffer:(AVAudioPCMBuffer *)buffer {
     if (buffer.frameLength == 0 || buffer.floatChannelData == NULL) return;
     float *src = buffer.floatChannelData[0];
@@ -358,23 +479,41 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
         // 多声道混单：直接取第 0 声道即可（设备麦克风为单声道，混音场景少见）
     }
     double sr = buffer.format.sampleRate;
+    // 统一归一到 48k（非常规采样率线性插值）
+    float *unit48 = src;
+    UInt32 n48 = n;
+    BOOL owned = NO;
     if (fabs(sr - 48000.0) > 1.0) {
-        // 非常规采样率：线性插值到 48k（每帧只需要 2880 个 48k 样本）
-        UInt32 outN = (UInt32)(n * 48000.0 / sr);
-        float *tmp = malloc(outN * sizeof(float));
-        for (UInt32 i = 0; i < outN; i++) {
+        n48 = (UInt32)(n * 48000.0 / sr);
+        unit48 = malloc(n48 * sizeof(float));
+        owned = YES;
+        for (UInt32 i = 0; i < n48; i++) {
             double pos = i * sr / 48000.0;
             UInt32 i0 = (UInt32)pos;
             double frac = pos - i0;
             float a = src[i0 < n ? i0 : n - 1];
             float b = src[(i0 + 1) < n ? (i0 + 1) : (n - 1)];
-            tmp[i] = a + (b - a) * (float)frac;
+            unit48[i] = a + (b - a) * (float)frac;
         }
-        [self.micAccum appendBytes:tmp length:outN * sizeof(float)];
-        free(tmp);
-    } else {
-        [self.micAccum appendBytes:src length:n * sizeof(float)];
     }
+    // ① 上行编码队列（48k 整帧）
+    [self.micAccum appendBytes:unit48 length:n48 * sizeof(float)];
+    // ② 本地试听缓冲：48k → 24k（2:1 线性插值，试听音质足够）
+    UInt32 n24 = n48 / 2;
+    if (n24 > 0) {
+        float *buf24 = malloc(n24 * sizeof(float));
+        for (UInt32 i = 0; i < n24; i++) {
+            double pos = i * 2.0;
+            UInt32 i0 = (UInt32)pos;
+            double frac = pos - i0;
+            float a = unit48[i0 < n48 ? i0 : n48 - 1];
+            float b = unit48[(i0 + 1) < n48 ? (i0 + 1) : (n48 - 1)];
+            buf24[i] = a + (b - a) * (float)frac;
+        }
+        [self.recordingPcm appendBytes:buf24 length:n24 * sizeof(float)];
+        free(buf24);
+    }
+    if (owned) free(unit48);
 
     // 攒满整帧就编码发送（可能一次回调攒出多帧）
     while (self.micAccum.length >= self.micFrameSamples * sizeof(float)) {

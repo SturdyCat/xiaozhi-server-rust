@@ -345,23 +345,37 @@ fun ViewContainer<*, *>.primaryButton(
     }
 }
 
-/** 次按钮：高 44、radiusSm、bg insetBg、文字 textPrimary body(17)/500。 */
-fun ViewContainer<*, *>.secondaryButton(text: String, onClick: () -> Unit) {
+/** 次按钮：高 44、radiusSm、bg insetBg、文字 textPrimary body(17)/500。支持禁用/加载态。 */
+fun ViewContainer<*, *>.secondaryButton(
+    text: String,
+    enabled: Boolean = true,
+    loading: Boolean = false,
+    onClick: () -> Unit,
+) {
     View {
         attr {
             height(44f)
             paddingLeft(AdminSpace.lg)
             paddingRight(AdminSpace.lg)
             borderRadius(AdminShape.radiusSm)
-            backgroundColor(AdminColors.insetBg)
+            flexDirectionRow()
             allCenter()
+            backgroundColor(if (enabled && !loading) AdminColors.insetBg else AdminColors.trackBg)
         }
-        event { click { onClick() } }
+        event { click { if (enabled && !loading) onClick() } }
+        if (loading) {
+            ActivityIndicator {
+                attr {
+                    isGrayStyle(true)
+                    marginRight(AdminSpace.xs)
+                }
+            }
+        }
         Text {
             attr {
                 fontSize(AdminType.body)
                 fontWeightMedium()
-                color(AdminColors.textPrimary)
+                color(if (enabled && !loading) AdminColors.textPrimary else AdminColors.textTertiary)
                 text(text)
             }
         }
@@ -569,6 +583,89 @@ fun ViewContainer<*, *>.dropdownField(
         }
     }
 }
+
+// ===================== 音频波形播放器 =====================
+
+/**
+ * 波形播放控件（录音试听 / TTS 回放共用）：
+ * [▶/‖ 圆钮] [32 根波形柱（已播 accent 高亮，未播 trackBg）] [时间 0:03/0:12]
+ *
+ * - "流过"视觉：进度推进时柱子逐根点亮（attr 闭包内读 progress observable，局部更新颜色）。
+ * - wave() 返回 64 桶峰值 0~1（原生 getAudioState 采样），渲染时按 32 柱两两取大。
+ * - 整块可点（含波形区）切换播放/停止；enabled=false（合成中/无内容）置灰并屏蔽点击。
+ * - 进度/波形由调用方轮询原生后写入 observable（TestBenchState），本组件只做纯渲染。
+ */
+fun ViewContainer<*, *>.waveformPlayer(
+    wave: () -> List<Float>,
+    progress: () -> Float,
+    playing: () -> Boolean,
+    durationText: () -> String,
+    enabled: Boolean = true,
+    onToggle: () -> Unit,
+) {
+    View {
+        attr {
+            flexDirectionRow()
+            alignItemsCenter()
+            marginTop(AdminSpace.fieldGap)
+        }
+        event { click { if (enabled) onToggle() } }
+        // 播放/停止圆钮
+        View {
+            attr {
+                width(44f)
+                height(44f)
+                borderRadius(AdminShape.radiusPill)
+                allCenter()
+                backgroundColor(if (enabled) AdminColors.accent else AdminColors.accentDisable)
+            }
+            Text {
+                attr {
+                    fontSize(AdminType.title)
+                    color(AdminColors.textOnAccent)
+                    text(if (playing()) "‖" else "▶")
+                }
+            }
+        }
+        // 波形柱（32 根，等宽；已播放点亮 accent）
+        View {
+            attr {
+                flex(1f)
+                height(48f)
+                flexDirectionRow()
+                alignItemsCenter()
+                marginLeft(AdminSpace.sm)
+            }
+            var i = 0
+            while (i < WAVE_BARS) {
+                // 64 桶两两取大映射到 32 根柱
+                val v = maxOf(wave().getOrElse(i * 2) { 0.1f }, wave().getOrElse(i * 2 + 1) { 0.1f })
+                val played = progress() * WAVE_BARS > i
+                View {
+                    attr {
+                        flex(1f)
+                        height(6f + v * 36f)
+                        marginRight(2f)
+                        borderRadius(2f)
+                        backgroundColor(if (played) AdminColors.accent else AdminColors.trackBg)
+                    }
+                }
+                i++
+            }
+        }
+        Text {
+            attr {
+                fontSize(AdminType.micro)
+                color(AdminColors.textTertiary)
+                marginLeft(AdminSpace.xs)
+                text(durationText())
+            }
+        }
+    }
+}
+
+/** 波形柱数量（getAudioState 返回 64 桶，渲染 32 根柱：两桶取一）。 */
+private const val WAVE_BARS = 32
 
 // ===================== 状态徽标 =====================
 

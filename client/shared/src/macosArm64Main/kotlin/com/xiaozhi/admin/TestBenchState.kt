@@ -12,8 +12,8 @@ import com.tencent.kuikly.core.views.View
 /**
  * ASR / TTS 测试台状态（macOS 专用，macosArm64Main）。
  *
- * 持有连接 / 录音 / 合成 / 识别结果等状态，方法 connect/disconnect/startAsr/stopAsr/speak
- * 照 TestPage.kt 现有实现调用 XiaoZhiModule（web/Android/iOS 不注册该模块，故测试功能仅 Mac App）。
+ * 录音流程（录音与识别解耦）：开始录音 → 停止录音（本地缓冲，可反复试听）→ 发送识别。
+ * TTS 流程：合成并播放（实时下行边收边播）→ 完成后出现波形播放器可反复回听。
  *
  * ⚠️ XiaoZhiModule 由持有它的 Pager（AdminShell）经 createExternalModules() 注册；
  *   本类不是 Pager，故方法都接收 ctx: Pager 来 acquireModule。
@@ -25,19 +25,28 @@ class TestBenchState {
     var token by observable("")
     var connected by observable(false)
     var connectionState by observable("idle") // idle / connecting / connected / error
-    var recording by observable(false)
+
+    /** ASR 阶段：idle(未录) / starting(启动中) / recording(录音中) / recorded(已录待识别) / recognizing(识别中) */
+    var asrPhase by observable("idle")
+    var asrText by observable("")
+
+    // 录音试听播放器（原生 recordingPcm）
+    var recWave by observable(emptyList<Float>())
+    var recProgress by observable(0f)
+    var recPlaying by observable(false)
+    var recDuration by observable(0.0)
+
+    // TTS 回放播放器（原生 ttsPcm）
+    var ttsReady by observable(false)
+    var ttsWave by observable(emptyList<Float>())
+    var ttsProgress by observable(0f)
+    var ttsPlaying by observable(false)
+    var ttsDuration by observable(0.0)
+
+    /** 合成中（发 tts_test → 收到 tts stop）：按钮菊花 + 禁止再次合成 */
+    var ttsBusy by observable(false)
     var speaking by observable(false)
 
-    /** 录音启动中（权限申请/引擎启动，尚未真正录）：按钮显示菊花并禁止重复点击 */
-    var asrStarting by observable(false)
-
-    /** 等待识别结果中（已发 asr_test stop，服务端一次性识别）：按钮显示菊花并禁止重复点击 */
-    var asrBusy by observable(false)
-
-    /** 合成进行中（已发 tts_test，等待服务端 start→音频→stop 全流程）：按钮菊花。与 speaking 同义，
-     *  单独字段以区分「等待服务端」与「正在播放」两个语义（播放中禁止再次合成）。 */
-    var ttsBusy by observable(false)
-    var asrText by observable("")
     var ttsText by observable("你好，小智")
 
     /** 合成语言：auto 自动（Kokoro 需明确 lang，auto 走服务器默认）/ zh / en */
@@ -84,45 +93,63 @@ class TestBenchState {
         statusMsg = "已断开"
     }
 
-    /** 开始录音：asrStarting 菊花期间挡住重复点击；权限被拒时原生仅打日志，
-     *  超时兜底进入录音态（用户能点「停止并识别」恢复，不阻塞 UI）。 */
+    // ============================================================
+    // ASR：录音 → 试听 → 发送识别
+    // ============================================================
+
+    /** 开始录音：asrPhase=starting 菊花期间挡住重复点击；原生同时累积本地缓冲。 */
     fun startAsr(ctx: Pager) {
-        if (asrStarting || recording || asrBusy) return
-        asrStarting = true
+        if (asrPhase == "starting" || asrPhase == "recording" || asrPhase == "recognizing") return
+        asrPhase = "starting"
         asrText = ""
+        recWave = emptyList()
+        recProgress = 0f
+        recPlaying = false
         statusMsg = "正在启动录音…"
         xz(ctx).startAsr { result ->
-            // 回调在「识别结果回来」时才触发（keepCallbackAlive），此处只处理识别文本
-            asrStarting = false
-            asrBusy = false
-            recording = false
+            // keepCallback：此回调在服务端回 stt（sendAsr 之后）时触发
+            asrPhase = if (asrPhase == "recognizing") "recorded" else "idle"
             asrText = result?.optString("text", "") ?: ""
             statusMsg = "识别完成"
         }
-        // 权限框弹出后无回调分支：0.8s 后认为进入录音态（按钮变「停止并识别」）
+        // 权限框弹出后无回调分支：0.8s 后认为进入录音态
         ctx.setTimeout(800) {
-            if (asrStarting) {
-                asrStarting = false
-                recording = true
-                statusMsg = "录音中…（再点一次停止并识别）"
+            if (asrPhase == "starting") {
+                asrPhase = "recording"
+                statusMsg = "录音中…说完点「停止录音」"
             }
         }
     }
 
-    fun stopAsr(ctx: Pager) {
-        if (!recording || asrBusy) return
-        recording = false
-        asrBusy = true
+    /** 停止录音（不发识别）：原生保留缓冲，进入试听态。 */
+    fun stopRecording(ctx: Pager) {
+        if (asrPhase != "recording") return
+        asrPhase = "recorded"
+        statusMsg = "已停止，可试听后点「发送识别」"
+        xz(ctx).stopRecording { result ->
+            recDuration = result?.optDouble("seconds") ?: 0.0
+            refreshWave(ctx, "recording")
+        }
+    }
+
+    /** 发送识别（asr_test stop）：服务端识别整段并经 stt 回调返回。 */
+    fun sendAsr(ctx: Pager) {
+        if (asrPhase != "recorded") return
+        asrPhase = "recognizing"
         statusMsg = "识别中…"
-        xz(ctx).stopAsr()
-        // 服务端识别（SenseVoice 整段）超时兜底：30s 未回 stt 则恢复按钮，避免永久卡死
+        xz(ctx).sendAsr()
+        // 超时兜底：SenseVoice 整段识别一般数秒；30s 未回则恢复（按钮不卡死）
         ctx.setTimeout(30_000) {
-            if (asrBusy) {
-                asrBusy = false
+            if (asrPhase == "recognizing") {
+                asrPhase = "recorded"
                 statusMsg = "识别超时：请检查服务器日志或重试"
             }
         }
     }
+
+    // ============================================================
+    // TTS：合成（实时播放）→ 完成后波形回放
+    // ============================================================
 
     fun speak(ctx: Pager) {
         if (ttsBusy) return
@@ -132,14 +159,19 @@ class TestBenchState {
         }
         ttsBusy = true
         speaking = true
+        ttsReady = false
+        ttsPlaying = false
+        ttsProgress = 0f
         statusMsg = "合成中…"
         val speed = ttsSpeed.toDoubleOrNull() ?: 1.0
-        val speaker = ttsSpeaker
         val lang = resolveLang(ttsLang)
-        xz(ctx).speak(ttsText, speaker, lang, speed) { _ ->
+        xz(ctx).speak(ttsText, ttsSpeaker, lang, speed) { _ ->
+            // tts stop：合成结束（第一遍已实时播完/在播尾帧）
             ttsBusy = false
             speaking = false
-            statusMsg = "TTS 播放完成"
+            ttsReady = true
+            statusMsg = "TTS 播放完成，可回听"
+            refreshWave(ctx, "tts")
         }
         // 合成+下发超时兜底：60s 未收到 tts stop 则恢复按钮（模型首次加载可能较慢）
         ctx.setTimeout(60_000) {
@@ -151,16 +183,81 @@ class TestBenchState {
         }
     }
 
-    /** 语音选择：切换性别时自动落到该性别第一个音色；同步 sid（老上游兼容字段）。 */
+    // ============================================================
+    // 播放器控制（录音 / TTS 共用；100ms 轮询驱动进度）
+    // ============================================================
+
+    fun togglePlayback(ctx: Pager, source: String) {
+        val playing = if (source == "tts") ttsPlaying else recPlaying
+        if (playing) {
+            xz(ctx).stopPlayback()
+            if (source == "tts") {
+                ttsPlaying = false
+                ttsProgress = 0f
+            } else {
+                recPlaying = false
+                recProgress = 0f
+            }
+            return
+        }
+        // 从头播
+        if (source == "tts") {
+            ttsPlaying = true
+            xz(ctx).playTts(null)
+        } else {
+            recPlaying = true
+            xz(ctx).playRecording(null)
+        }
+        startPolling(ctx, source)
+    }
+
+    /** 轮询原生播放状态（100ms）刷新进度；播完自动停轮询并复位。 */
+    private fun startPolling(ctx: Pager, source: String) {
+        xz(ctx).getAudioState(source) { st ->
+            val playing = st?.optBoolean("playing", false) ?: false
+            val position = st?.optDouble("position") ?: 0.0
+            val duration = st?.optDouble("duration") ?: 0.0
+            val p = if (duration > 0) (position / duration).toFloat().coerceIn(0f, 1f) else 0f
+            if (source == "tts") {
+                ttsPlaying = playing
+                ttsProgress = p
+            } else {
+                recPlaying = playing
+                recProgress = p
+            }
+            if (playing) {
+                ctx.setTimeout(100) { startPolling(ctx, source) }
+            } else {
+                // 播完/停止：进度复位由 stopPlayback/下一次播放处理
+                if (source == "tts") ttsProgress = 0f else recProgress = 0f
+            }
+        }
+    }
+
+    /** 拉一次波形（录音/合成完成后各拉一次；波形静态，播放只推进度）。 */
+    private fun refreshWave(ctx: Pager, source: String) {
+        xz(ctx).getAudioState(source) { st ->
+            val wave = mutableListOf<Float>()
+            val arr = st?.optJSONArray("wave")
+            if (arr != null) {
+                for (i in 0 until arr.length()) wave.add(arr.optDouble(i).toFloat())
+            }
+            if (source == "tts") {
+                ttsWave = wave
+                ttsDuration = st?.optDouble("duration") ?: 0.0
+            } else {
+                recWave = wave
+                recDuration = st?.optDouble("duration") ?: recDuration
+            }
+        }
+    }
+
+    /** 语音选择：切换性别时自动落到该性别第一个音色；同步 sid。 */
     fun selectVoice(gender: String, id: String) {
         voiceGender = gender
         voiceId = id
         VoiceCatalog.sidOf(id)?.let { ttsSpeaker = it }
     }
-
-    // ============================================================
-    // 渲染：见文件底部 ViewContainer.renderBench(bench, ctx) 扩展
-    // ============================================================
 
     companion object {
         /** auto → 交给服务器默认；zh/en 显式指定 Kokoro lang（Kokoro 的 lang 在建模时固定，
@@ -266,32 +363,45 @@ fun ViewContainer<*, *>.renderBench(bench: TestBenchState, ctx: Pager, wide: () 
                         fontSize(AdminType.caption)
                         color(AdminColors.textSecondary)
                         marginTop(AdminSpace.xs)
-                        text("语言由 SenseVoice 自动检测（zh/en/ja/ko/yue）；说话结束后点「停止并识别」")
+                        text("流程：录音 → 停止后可反复试听 → 发送识别（SenseVoice 自动检测语言）")
                     }
                 }
                 actionRow {
-                    // 四态按钮：启动中(菊花) / 识别中(菊花) / 录音中(红色，点击停止并识别) / 空闲。
-                    // 合成中禁用录音；录音/启动/识别中禁用 TTS 合成（见下方 TTS 组按钮）。
-                    when {
-                        bench.asrStarting -> primaryButton("正在启动…", enabled = false, loading = true) { }
-                        bench.asrBusy -> primaryButton("识别中…", enabled = false, loading = true) { }
-                        bench.recording -> primaryButton("停止并识别", danger = true, enabled = !bench.speaking) {
-                            bench.stopAsr(ctx)
-                        }
-                        else -> primaryButton("开始录音", enabled = !bench.speaking) { bench.startAsr(ctx) }
+                    // 五态按钮：启动中(菊花) / 录音中(红，停止采集) / 识别中(菊花) / 其余(开始或重新录音)。
+                    when (bench.asrPhase) {
+                        "starting" -> primaryButton("正在启动…", enabled = false, loading = true) { }
+                        "recording" -> primaryButton("停止录音", danger = true) { bench.stopRecording(ctx) }
+                        "recognizing" -> primaryButton("识别中…", enabled = false, loading = true) { }
+                        "recorded" -> primaryButton("重新录音") { bench.startAsr(ctx) }
+                        else -> primaryButton("开始录音") { bench.startAsr(ctx) }
                     }
                     View { attr { width(AdminSpace.md) } }
-                    vif({ bench.recording }) {
+                    // 发送识别：仅在已录且未在录/未在识别时可用
+                    vif({ bench.asrPhase == "recorded" }) {
+                        primaryButton("发送识别") { bench.sendAsr(ctx) }
+                        View { attr { width(AdminSpace.md) } }
+                    }
+                    vif({ bench.asrPhase == "recording" }) {
                         statusBadge("recording", "录音中")
                     }
                     velse {
-                        vif({ bench.asrBusy }) {
+                        vif({ bench.asrPhase == "recognizing" }) {
                             statusBadge("busy", "识别中")
                         }
                         velse {
                             statusBadge("idle", "空闲")
                         }
                     }
+                }
+                // 录音试听播放器（已录且有波形时显示；合成中禁用）
+                vif({ bench.recWave.isNotEmpty() }) {
+                    waveformPlayer(
+                        wave = { bench.recWave },
+                        progress = { bench.recProgress },
+                        playing = { bench.recPlaying },
+                        durationText = { formatDuration(bench.recDuration) },
+                        enabled = !bench.ttsBusy && bench.asrPhase != "recording",
+                    ) { bench.togglePlayback(ctx, "recording") }
                 }
                 View { attr { height(AdminSpace.md) } }
                 groupedCard("识别结果", withDivider = false) {
@@ -365,10 +475,23 @@ fun ViewContainer<*, *>.renderBench(bench: TestBenchState, ctx: Pager, wide: () 
                     if (bench.ttsBusy) {
                         primaryButton("合成中…", enabled = false, loading = true) { }
                     } else {
-                        primaryButton("合成并播放", enabled = !bench.recording && !bench.asrStarting && !bench.asrBusy) {
+                        primaryButton(
+                            "合成并播放",
+                            enabled = bench.asrPhase != "recording" && bench.asrPhase != "starting" && bench.asrPhase != "recognizing",
+                        ) {
                             bench.speak(ctx)
                         }
                     }
+                }
+                // TTS 波形回放（合成完成后显示，可反复回听；播放进度流过点亮）
+                vif({ bench.ttsReady && bench.ttsWave.isNotEmpty() }) {
+                    waveformPlayer(
+                        wave = { bench.ttsWave },
+                        progress = { bench.ttsProgress },
+                        playing = { bench.ttsPlaying },
+                        durationText = { formatDuration(bench.ttsDuration) },
+                        enabled = !bench.ttsBusy,
+                    ) { bench.togglePlayback(ctx, "tts") }
                 }
             },
         ),
@@ -384,3 +507,9 @@ private val LANG_OPTIONS: List<Pair<String, String>> = listOf(
 
 /** 音色性别下拉选项（与 VoiceCatalog.GENDERS 同源）。 */
 private val GenderOptions: List<Pair<String, String>> = VoiceCatalog.GENDERS
+
+/** 秒 → "m:ss" 播放器时间文本。 */
+internal fun formatDuration(seconds: Double): String {
+    val s = seconds.toInt().coerceAtLeast(0)
+    return "${s / 60}:${(s % 60).toString().padStart(2, '0')}"
+}

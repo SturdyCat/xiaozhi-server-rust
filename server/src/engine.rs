@@ -67,14 +67,15 @@ impl Engines {
         if let Some(e) = pool.get(lang) {
             return e.clone();
         }
+        let t0 = std::time::Instant::now();
         match build_tts_with_lang(&self.config.tts, lang) {
             Ok(e) => {
-                tracing::info!("已构建 lang={lang} 的 TTS 引擎并缓存");
+                tracing::info!("已构建 lang={lang} 的 TTS 引擎并缓存（耗时 {}ms）", t0.elapsed().as_millis());
                 pool.insert(lang.to_string(), e.clone());
                 e
             }
             Err(err) => {
-                tracing::warn!("构建 lang={lang} 的 TTS 引擎失败，回退默认引擎: {err:#}");
+                tracing::warn!("构建 lang={lang} 的 TTS 引擎失败（耗时 {}ms），回退默认引擎: {err:#}", t0.elapsed().as_millis());
                 self.tts.clone()
             }
         }

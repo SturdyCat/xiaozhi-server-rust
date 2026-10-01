@@ -45,6 +45,7 @@ class XiaoZhiModule : Module() {
 
     /**
      * 开始 ASR 测试录音。keepCallbackAlive=true：原生在 server 返回 stt 时再次回调（one-shot）。
+     * 录音同时在原生侧累积缓冲，停止后可试听（stopRecording → playRecording）。
      */
     fun startAsr(callback: CallbackFn? = null) {
         toNative(
@@ -56,12 +57,72 @@ class XiaoZhiModule : Module() {
         )
     }
 
-    fun stopAsr() {
+    /** 仅停止采集（保留录音缓冲供试听/波形），不发 asr_test stop。回调 {seconds}。 */
+    fun stopRecording(callback: CallbackFn? = null) {
         toNative(
             keepCallbackAlive = false,
-            methodName = "stopAsr",
+            methodName = "stopRecording",
+            param = null,
+            callback = callback,
+            syncCall = false,
+        )
+    }
+
+    /** 发送 asr_test stop 触发服务端识别；识别结果经 startAsr 的 keepCallback 回调（stt）。 */
+    fun sendAsr() {
+        toNative(
+            keepCallbackAlive = false,
+            methodName = "sendAsr",
             param = null,
             callback = null,
+            syncCall = false,
+        )
+    }
+
+    /** 从头试听录音缓冲（原生 24k PCM）。回调 {duration}。 */
+    fun playRecording(callback: CallbackFn? = null) {
+        toNative(
+            keepCallbackAlive = false,
+            methodName = "playRecording",
+            param = null,
+            callback = callback,
+            syncCall = false,
+        )
+    }
+
+    /** 从头试听 TTS 合成缓冲。回调 {duration}。 */
+    fun playTts(callback: CallbackFn? = null) {
+        toNative(
+            keepCallbackAlive = false,
+            methodName = "playTts",
+            param = null,
+            callback = callback,
+            syncCall = false,
+        )
+    }
+
+    /** 停止试听播放。 */
+    fun stopPlayback() {
+        toNative(
+            keepCallbackAlive = false,
+            methodName = "stopPlayback",
+            param = null,
+            callback = null,
+            syncCall = false,
+        )
+    }
+
+    /**
+     * 查询音频状态（试听进度可视化用，UI 100ms 轮询）。
+     * @param source "recording" | "tts"
+     * 回调 {wave: [64 桶峰值 0~1], duration, playing, position}
+     */
+    fun getAudioState(source: String, callback: CallbackFn? = null) {
+        toNative(
+            keepCallbackAlive = false,
+            methodName = "getAudioState",
+            param = JSONObject().apply { put("source", source) },
+            callback = callback,
             syncCall = false,
         )
     }
