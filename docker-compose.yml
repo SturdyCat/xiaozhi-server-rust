@@ -30,6 +30,10 @@ services:
     image: xiaozhi-server-rust:latest
     container_name: xiaozhi-server
     restart: unless-stopped
+    # CPU 配额：容器最多使用 3.5 核（N5105 四核，留 0.5 核给宿主机/其他服务）。
+    # TTS 合成线程 [tts].num_threads=4 会在这 3.5 核配额内由内核调度，
+    # 合成吞吐 ≈ 3.5 核，不会占满整机（等价 --cpus=3.5，见 docker compose config 核对）。
+    cpus: "3.5"
     ports:
       - "8000:8000"
     environment:

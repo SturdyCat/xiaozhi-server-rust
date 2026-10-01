@@ -52,9 +52,10 @@ lexicon = "/models/Kokoro/lexicon-us-en.txt,/models/Kokoro/lexicon-zh.txt"
 lang = "zh"
 speaker = 0
 speed = 1.0
-# 合成线程数（默认 4）：用满 N5105 四核。旧值 1（「与 ASR 错峰」）实测让合成只剩
+# 合成线程数（默认 4）：用满计算预算。旧值 1（「与 ASR 错峰」）实测让合成只剩
 # 1/4 算力（CPU 25%、4 个字 8+ 秒、10 个字 20 秒）——流水线 ASR→LLM→TTS 本身串行，
-# 不存在抢占；多设备并发才需要权衡，可下调到 2~3。
+# 不存在抢占。容器部署（docker-compose.yml）已设 cpus: "3.5" 配额（留 0.5 核给宿主机），
+# 4 个合成线程在 3.5 核配额内调度；如需更保守可下调到 3。
 num_threads = 4
 
 [llm]
