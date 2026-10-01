@@ -13,6 +13,7 @@ import com.tencent.kuikly.core.views.ActivityIndicator
 import com.tencent.kuikly.core.views.AlertDialog
 import com.tencent.kuikly.core.views.Input
 import com.tencent.kuikly.core.views.Scroller
+import com.tencent.kuikly.core.views.Switch
 import com.tencent.kuikly.core.views.Text
 import com.tencent.kuikly.core.views.View
 
@@ -439,9 +440,10 @@ fun ViewContainer<*, *>.segmentedControl(options: List<String>, selectedIndex: I
 // ===================== 开关行 =====================
 
 /**
- * 开关行：高 52（触屏），左标签 body(17)/500 textPrimary，右 Switch。
- * 轨道 46×26 radiusPill(13)，开=accent/关=switchOff；旋钮 22 radiusPill(11)，
- * marginLeft 2/22、垂直居中。整行点击经开关轨道手势切换。
+ * 开关行：高 52（触屏），左标签 body(17)/500 textPrimary，右开关。
+ * 开关用**官方 Switch 组件**（组合组件：iOS 走原生 UISwitch，其他平台官方内置实现，跨端一致），
+ * 颜色对齐主题 token：开=accent、关=switchOff、滑块=knob。
+ * 注：checked 为初始值；点击后的视觉翻转由官方组件内部状态自治，业务在 onToggle 同步数据。
  */
 fun ViewContainer<*, *>.switchRow(label: String, checked: Boolean, onToggle: () -> Unit) {
     View {
@@ -460,23 +462,17 @@ fun ViewContainer<*, *>.switchRow(label: String, checked: Boolean, onToggle: () 
                 text(label)
             }
         }
-        View {
+        Switch {
             attr {
                 width(46f)
                 height(26f)
-                borderRadius(13f)
-                backgroundColor(if (checked) AdminColors.accent else AdminColors.switchOff)
+                isOn(checked)
+                onColor(AdminColors.accent)
+                unOnColor(AdminColors.switchOff)
+                thumbColor(AdminColors.knob)
             }
-            event { click { onToggle() } }
-            View {
-                attr {
-                    width(22f)
-                    height(22f)
-                    borderRadius(11f)
-                    backgroundColor(AdminColors.knob)
-                    marginLeft(if (checked) 22f else 2f)
-                    marginTop(2f)
-                }
+            event {
+                switchOnChanged { onToggle() }
             }
         }
     }
