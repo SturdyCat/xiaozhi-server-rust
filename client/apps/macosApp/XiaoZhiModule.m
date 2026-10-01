@@ -63,6 +63,8 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
 @property (nonatomic, strong) NSMutableData *ttsPcm;             // 最近一次 TTS 合成缓冲（试听 + 波形）
 @property (nonatomic, assign) BOOL playbackActive;               // 正在试听（区别于下行实时播放）
 @property (nonatomic, assign) CFTimeInterval playbackStartedAt;  // 试听起始时钟（进度 = now - startedAt）
+@property (nonatomic, assign) NSUInteger recSamples24k;          // 录音中已采集的 24k 样本数（只增计数，避免跨线程读缓冲）
+@property (nonatomic, assign) CFTimeInterval asrSentAt;          // sendAsr 发出时刻（统计识别往返耗时）
 @property (nonatomic, assign) NSUInteger decodeFailCount;        // 下行解码连续失败计数（日志节流）
 @property (nonatomic, assign) BOOL loggedFirstDecode;            // 首个下行包解码成功仅打一条日志
 @property (nonatomic, assign) NSUInteger ttsDecodedPackets;      // 本次合成成功解码的包数（tts stop 汇总）
@@ -144,13 +146,33 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
 
 // startAsr() → 申请麦克风权限并开始采集，发送 asr_test start；服务端缓冲整段音频（跳过 VAD）。
 // 本地同时累积 24k PCM（recordingPcm）供停止后试听/波形；「发送识别」由 sendAsr 单独触发。
+// 回调时序（asrCallback keepCallbackAlive，多次回调）：
+//   ① 录音真正开始 → {started:true}（UI 据此进入录音态并开始计秒，不再靠猜测延时）
+//   ② 启动失败（权限被拒/设备异常）→ {error:"..."}
+//   ③ 识别结果 → {text:"...", elapsedMs:N}（sendAsr → stt 的服务端往返耗时）
 - (void)startAsr:(NSDictionary *)args {
-    self.asrCallback = args[KR_CALLBACK_KEY]; // 保留，待服务端回 stt 时回调
+    self.asrCallback = args[KR_CALLBACK_KEY]; // 保留，待 started/stt 时回调
     self.recordingPcm = [NSMutableData data];
-    [self requestMicPermission:^{
-        self.recording = YES;
-        [self sendJSON:@{@"type": @"asr_test", @"action": @"start"}];
-        [self startMic];
+    self.recSamples24k = 0;
+    __weak typeof(self) weak = self;
+    [self requestMicPermission:^(BOOL ok) {
+        typeof(self) strong = weak;
+        if (!strong) return;
+        if (!ok) {
+            [strong invoke:strong.asrCallback result:@{@"error": @"麦克风权限被拒绝（系统设置 → 隐私与安全性 → 麦克风）"} success:NO error:@"mic denied"];
+            strong.asrCallback = nil;
+            return;
+        }
+        strong.recording = YES;
+        [strong sendJSON:@{@"type": @"asr_test", @"action": @"start"}];
+        if ([strong startMic]) {
+            // 实际开始录音后才回报（installTap + 引擎启动均成功）
+            [strong invoke:strong.asrCallback result:@{@"started": @(YES)} success:YES error:nil];
+        } else {
+            strong.recording = NO;
+            [strong invoke:strong.asrCallback result:@{@"error": @"录音设备启动失败（检查输入设备）"} success:NO error:@"mic start failed"];
+            strong.asrCallback = nil;
+        }
     }];
 }
 
@@ -164,8 +186,9 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
 }
 
 // sendAsr() → 发送 asr_test stop；服务端对整段（此前流式上传的）做一次性识别并回 stt
-// （stt 经既有 asrCallback 通道回到 Kotlin）。
+// （stt 经既有 asrCallback 通道回到 Kotlin）。发出时刻记入 asrSentAt，供统计识别耗时。
 - (void)sendAsr:(NSDictionary *)args {
+    self.asrSentAt = CACurrentMediaTime();
     [self sendJSON:@{@"type": @"asr_test", @"action": @"stop"}];
 }
 
@@ -249,8 +272,8 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
     self.playbackActive = NO;
 }
 
-// getAudioState(source) → {wave:[64 桶峰值 0~1], duration, playing, position}
-// Kotlin 侧 100ms 轮询驱动播放进度可视化；source: "recording" | "tts"
+// getAudioState(source) → {wave:[64 桶峰值 0~1], duration, playing, position, recordingSeconds, recording}
+// Kotlin 侧 100ms 轮询驱动播放进度/录音计秒；source: "recording" | "tts"
 - (void)getAudioState:(NSDictionary *)args {
     NSDictionary *params = [self parseParams:args[KR_PARAM_KEY]];
     id callback = args[KR_CALLBACK_KEY];
@@ -263,11 +286,15 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
     double position = playing ? CACurrentMediaTime() - self.playbackStartedAt : 0;
     if (position > duration) position = duration;
     NSArray *wave = [self waveformOf:pcm buckets:64];
+    // 录音计秒：录音中按已采集样本数回报实时秒数（24k 单声道）
+    double recordingSeconds = self.recSamples24k / 24000.0;
     [self invoke:callback result:@{
         @"wave": wave ?: @[],
         @"duration": @(duration),
         @"playing": @(playing),
         @"position": @(position),
+        @"recordingSeconds": @(recordingSeconds),
+        @"recording": @(self.recording),
     } success:YES error:nil];
 }
 
@@ -351,7 +378,10 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
     if ([type isEqualToString:@"stt"]) {
         NSString *t = dict[@"text"] ?: @"";
         if (self.asrCallback) {
-            [self invoke:self.asrCallback result:@{@"text": t} success:YES error:nil];
+            // 识别耗时：sendAsr（发出 asr_test stop）→ 收到本条 stt 的往返ms
+            double elapsedMs = self.asrSentAt > 0 ? (CACurrentMediaTime() - self.asrSentAt) * 1000.0 : 0;
+            self.asrSentAt = 0;
+            [self invoke:self.asrCallback result:@{@"text": t, @"elapsedMs": @(elapsedMs)} success:YES error:nil];
             self.asrCallback = nil; // one-shot
         }
         return;
@@ -458,7 +488,9 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
     NSLog(@"[XiaoZhi] player 重连为 %.0fHz/1ch（下行采样率变化）", f.sampleRate);
 }
 
-- (void)requestMicPermission:(void (^)(void))granted {
+/// 麦克风权限查询/申请：completion(ok) 必被调用（授权/拒绝/受限都回调），
+/// 调用方据此回报 started / error 给 Kotlin（不再靠 800ms 猜测延时判断录音是否开始）。
+- (void)requestMicPermission:(void (^)(BOOL ok))completion {
     // 麦克风权限：用 AVCaptureDevice（Catalyst 13+/macOS 10.14+ 通用；实测 macabi 可编译）。
     // ⚠️ 两条硬前提（此前踩坑）：
     //   ① Info.plist 必须有 NSMicrophoneUsageDescription（缺失时 TCC 直接拒绝，inputNode
@@ -466,25 +498,24 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
     //   ② 必须等用户授权后再访问 inputNode 的格式（未授权时格式无效）。
     AVAuthorizationStatus st = [AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeAudio];
     if (st == AVAuthorizationStatusAuthorized) {
-        granted();
+        completion(YES);
         return;
     }
     if (st == AVAuthorizationStatusDenied || st == AVAuthorizationStatusRestricted) {
         NSLog(@"[XiaoZhi] 麦克风权限被拒绝：系统设置 → 隐私与安全性 → 麦克风，勾选本 App 后重试");
+        completion(NO);
         return;
     }
     [AVCaptureDevice requestAccessForMediaType:AVMediaTypeAudio completionHandler:^(BOOL ok) {
         dispatch_async(dispatch_get_main_queue(), ^{
-            if (!ok) {
-                NSLog(@"[XiaoZhi] 麦克风权限被拒绝：系统设置 → 隐私与安全性 → 麦克风，勾选本 App 后重试");
-                return;
-            }
-            granted();
+            if (!ok) NSLog(@"[XiaoZhi] 麦克风权限被拒绝：系统设置 → 隐私与安全性 → 麦克风，勾选本 App 后重试");
+            completion(ok);
         });
     }];
 }
 
-- (void)startMic {
+/// 启动麦克风采集。返回 YES 表示 tap 安装且引擎成功启动（录音真的开始了）。
+- (BOOL)startMic {
     if (!self.audioEngine) [self setupAudio];
     // 授权后才切 PlayAndRecord（startAsr 的授权回调先行调用）：
     // ⚠️ 实测（本机 Catalyst 复现）在 Playback 分类下触碰 inputNode 会让引擎直接
@@ -494,7 +525,7 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
     AVAudioSession *session = [AVAudioSession sharedInstance];
     if (![session.category isEqualToString:AVAudioSessionCategoryPlayAndRecord]) {
         NSLog(@"[XiaoZhi] 会话分类切换未生效（当前 %@），放弃本次录音", session.category);
-        return;
+        return NO;
     }
 #endif
     // 懒启动的引擎此时可能未运行；切分类后重建输入路径（stop→重读格式→installTap→start）
@@ -504,7 +535,7 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
     NSLog(@"[XiaoZhi] mic format: %.0f Hz, %u ch", fmt.sampleRate, (unsigned)fmt.channelCount);
     if (fmt.channelCount == 0) {
         NSLog(@"[XiaoZhi] inputNode 仍为 0 声道（权限未生效或无输入设备），放弃本次录音");
-        return;
+        return NO;
     }
     // 每帧 48k 样本数按实际麦克风采样率计算（通常 48000 → 2880）
     self.micFrameSamples = (UInt32)llround(fmt.sampleRate * kFrameDurationMs / 1000.0);
@@ -529,8 +560,11 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
 #pragma clang diagnostic pop
     }
     NSError *err = nil;
-    [self.audioEngine startAndReturnError:&err];
-    if (err) NSLog(@"[XiaoZhi] start engine error: %@", err);
+    if (![self.audioEngine startAndReturnError:&err]) {
+        NSLog(@"[XiaoZhi] start engine error: %@", err);
+        return NO;
+    }
+    return YES;
 }
 
 // 麦克风回调：把任意长度/采样率的 float32 单声道缓冲归一到 48k 后：
@@ -576,6 +610,7 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
             buf24[i] = a + (b - a) * (float)frac;
         }
         [self.recordingPcm appendBytes:buf24 length:n24 * sizeof(float)];
+        self.recSamples24k += n24; // 只增计数：供 getAudioState 回报「录音中已录秒数」
         free(buf24);
     }
     if (owned) free(unit48);
@@ -663,8 +698,12 @@ static OSStatus XZEncodeInputProc(AudioConverterRef conv, UInt32 *ioNumPackets, 
     AudioConverterRef conv = NULL;
     AudioConverterNew(&s, &d, &conv);
     if (conv) {
-        // bitrate 显式指定，避免默认值在部分采样率下生成失败
-        UInt32 bitrate = dstRate >= 24000 ? 32000 : 24000;
+        // 码率对齐 xiaozhi-esp32 固件：其上行编码器用 ESP_OPUS_BITRATE_AUTO（= libopus
+        // OPUS_AUTO = -1000），16k/mono/AUDIO 下等价 40 kbps（本机 libopus 实测）。
+        // 历史值 24 kbps 是随手定的，比 ESP 窄 40%，压缩损失更明显——统一到 40k。
+        // （ESP 的 complexity=0 / VBR / DTX 是 esp_opus_enc 专属参数，AudioToolbox 面
+        //   不暴露；码率一致是本端能对齐的关键项。）
+        UInt32 bitrate = dstRate >= 24000 ? 32000 : 40000;
         AudioConverterSetProperty(conv, kAudioConverterEncodeBitRate, sizeof(bitrate), &bitrate);
     }
     return conv;

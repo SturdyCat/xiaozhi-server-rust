@@ -69,29 +69,69 @@ impl OpusFrameEncoder {
     }
 }
 
-/// 将 Opus 帧解码为单声道 f32 PCM。
+/// 有状态 Opus 帧解码器：一段上行音频的所有帧必须共用同一个实例。
+///
+/// ⚠️ 与编码侧同理：逐包新建 Decoder = 每 60ms 丢一次帧间状态（loss concealment /
+/// 预测上下文），解出的 PCM 在帧边界有断层，影响 VAD 切段与 ASR 识别质量。
+/// 对齐 xiaozhi-esp32 的流式行为：会话内保持单一解码器、逐帧连续解码。
+#[cfg(feature = "sherpa")]
+pub struct OpusFrameDecoder {
+    dec: audiopus::coder::Decoder,
+    pcm: Vec<i16>,
+}
+
+#[cfg(feature = "sherpa")]
+impl OpusFrameDecoder {
+    pub fn new(sample_rate: u32) -> anyhow::Result<Self> {
+        use audiopus::{coder::Decoder, Channels, SampleRate};
+
+        let sr = match sample_rate {
+            8000 => SampleRate::Hz8000,
+            12000 => SampleRate::Hz12000,
+            16000 => SampleRate::Hz16000,
+            24000 => SampleRate::Hz24000,
+            48000 => SampleRate::Hz48000,
+            _ => anyhow::bail!("不支持的 Opus 采样率 {sample_rate}"),
+        };
+
+        let dec = Decoder::new(sr, Channels::Mono)
+            .map_err(|e| anyhow::anyhow!("创建 Opus 解码器失败: {e:?}"))?;
+        Ok(Self {
+            dec,
+            // 120ms 上限缓冲足够各采样率下的单帧。
+            pcm: vec![0i16; 5760],
+        })
+    }
+
+    /// 解码一包为单声道 f32 PCM（[-1,1]）。同一实例连续调用即流式解码。
+    pub fn decode_frame(&mut self, data: &[u8]) -> anyhow::Result<Vec<f32>> {
+        let n = self
+            .dec
+            .decode(Some(data), &mut self.pcm, false)
+            .map_err(|e| anyhow::anyhow!("Opus 解码失败: {e:?}"))?;
+        Ok(self.pcm[..n].iter().map(|s| *s as f32 / 32768.0).collect())
+    }
+}
+
+#[cfg(not(feature = "sherpa"))]
+pub struct OpusFrameDecoder;
+
+#[cfg(not(feature = "sherpa"))]
+impl OpusFrameDecoder {
+    pub fn new(_sample_rate: u32) -> anyhow::Result<Self> {
+        Ok(Self)
+    }
+
+    pub fn decode_frame(&mut self, _data: &[u8]) -> anyhow::Result<Vec<f32>> {
+        Ok(Vec::new())
+    }
+}
+
+/// 将 Opus 帧解码为单声道 f32 PCM（无状态便捷函数，仅适用于单包场景；
+/// 连续音频流请使用 [`OpusFrameDecoder`] 保持帧间状态）。
 #[cfg(feature = "sherpa")]
 pub fn decode_opus_frame(data: &[u8], sample_rate: u32) -> anyhow::Result<Vec<f32>> {
-    use audiopus::{coder::Decoder, Channels, SampleRate};
-
-    let sr = match sample_rate {
-        8000 => SampleRate::Hz8000,
-        12000 => SampleRate::Hz12000,
-        16000 => SampleRate::Hz16000,
-        24000 => SampleRate::Hz24000,
-        48000 => SampleRate::Hz48000,
-        _ => anyhow::bail!("不支持的 Opus 采样率 {sample_rate}"),
-    };
-
-    let mut dec = Decoder::new(sr, Channels::Mono)
-        .map_err(|e| anyhow::anyhow!("创建 Opus 解码器失败: {e:?}"))?;
-    // 120ms 上限缓冲足够各采样率下的单帧。
-    let mut pcm = vec![0i16; 5760];
-    let n = dec
-        .decode(Some(data), &mut pcm, false)
-        .map_err(|e| anyhow::anyhow!("Opus 解码失败: {e:?}"))?;
-    pcm.truncate(n);
-    Ok(pcm.into_iter().map(|s| s as f32 / 32768.0).collect())
+    OpusFrameDecoder::new(sample_rate)?.decode_frame(data)
 }
 
 #[cfg(not(feature = "sherpa"))]

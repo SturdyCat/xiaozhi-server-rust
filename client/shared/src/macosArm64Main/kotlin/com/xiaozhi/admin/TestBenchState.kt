@@ -32,6 +32,12 @@ class TestBenchState {
     var asrPhase by observable("idle")
     var asrText by observable("")
 
+    /** 录音计秒（秒，小数）：录音中由原生样本计数 200ms 轮询刷新 */
+    var recSeconds by observable(0.0)
+
+    /** 上次识别的耗时（ms）：sendAsr 发出 → 收到 stt 的服务端往返 */
+    var asrElapsedMs by observable(0)
+
     // 录音试听播放器（原生 recordingPcm）
     var recWave by observable(emptyList<Float>())
     var recProgress by observable(0f)
@@ -116,26 +122,49 @@ class TestBenchState {
     // ASR：录音 → 试听 → 发送识别
     // ============================================================
 
-    /** 开始录音：asrPhase=starting 菊花期间挡住重复点击；原生同时累积本地缓冲。 */
+    /** 开始录音：asrPhase=starting 菊花期间挡住重复点击；原生同时累积本地缓冲。
+     *  录音实际开始的信号来自原生 started 回调（非猜测延时）——拿到即进入 recording 并开始计秒。 */
     fun startAsr(ctx: Pager) {
         if (asrPhase == "starting" || asrPhase == "recording" || asrPhase == "recognizing") return
         asrPhase = "starting"
         asrText = ""
+        asrElapsedMs = 0
+        recSeconds = 0.0
         recWave = emptyList()
         recProgress = 0f
         recPlaying = false
         statusMsg = "正在启动录音…"
         xz(ctx).startAsr { result ->
-            // keepCallback：此回调在服务端回 stt（sendAsr 之后）时触发
-            asrPhase = if (asrPhase == "recognizing") "recorded" else "idle"
-            asrText = result?.optString("text", "") ?: ""
-            statusMsg = "识别完成"
-        }
-        // 权限框弹出后无回调分支：0.8s 后认为进入录音态
-        ctx.setTimeout(800) {
-            if (asrPhase == "starting") {
+            if (result == null) return@startAsr
+            if (result.optBoolean("started", false)) {
+                // 原生确认：tap 已装、引擎已起 —— 真正开始录音
                 asrPhase = "recording"
                 statusMsg = "录音中…说完点「停止录音」"
+                startRecordTick(ctx)
+                return@startAsr
+            }
+            val err = result.optString("error", "")
+            if (err.isNotEmpty()) {
+                // 启动失败（权限被拒/设备异常）
+                asrPhase = "idle"
+                statusMsg = "录音启动失败：$err"
+                return@startAsr
+            }
+            // 识别结果（sendAsr 之后服务端回 stt）
+            asrElapsedMs = result.optInt("elapsedMs", 0)
+            asrPhase = if (asrPhase == "recognizing") "recorded" else "idle"
+            asrText = result.optString("text", "")
+            statusMsg = if (asrElapsedMs > 0) "识别完成（耗时 ${asrElapsedMs}ms）" else "识别完成"
+        }
+    }
+
+    /** 录音计秒轮询（200ms）：读原生已采集样本数刷新 recSeconds；停止/退出时自然结束。 */
+    private fun startRecordTick(ctx: Pager) {
+        if (asrPhase != "recording") return
+        xz(ctx).getAudioState("recording") { st ->
+            if (st != null && st.optBoolean("recording", false)) {
+                recSeconds = st.optDouble("recordingSeconds", recSeconds)
+                ctx.setTimeout(200) { startRecordTick(ctx) }
             }
         }
     }
@@ -144,14 +173,14 @@ class TestBenchState {
     fun stopRecording(ctx: Pager) {
         if (asrPhase != "recording") return
         asrPhase = "recorded"
-        statusMsg = "已停止，可试听后点「发送识别」"
+        statusMsg = "已停止（录了 ${formatSeconds(recSeconds)}），可试听后点「发送识别」"
         xz(ctx).stopRecording { result ->
-            recDuration = result?.optDouble("seconds") ?: 0.0
+            recDuration = result?.optDouble("seconds") ?: recSeconds
             refreshWave(ctx, "recording")
         }
     }
 
-    /** 发送识别（asr_test stop）：服务端识别整段并经 stt 回调返回。 */
+    /** 发送识别（asr_test stop）：服务端识别整段并经 stt 回调返回；stt 回调携带往返耗时。 */
     fun sendAsr(ctx: Pager) {
         if (asrPhase != "recorded") return
         asrPhase = "recognizing"
@@ -430,7 +459,8 @@ fun ViewContainer<*, *>.renderBench(bench: TestBenchState, ctx: Pager, wide: () 
                         marginTop(AdminSpace.sm)
                     }
                     vif({ bench.asrPhase == "recording" }) {
-                        statusBadge({ "recording" }, { "录音中" })
+                        // 录音计秒：文本 lambda 在 attr 闭包内求值，recSeconds（200ms 轮询刷新）驱动实时更新
+                        statusBadge({ "recording" }, { "录音中 ${formatSeconds(bench.recSeconds)}" })
                     }
                     velse {
                         vif({ bench.asrPhase == "recognizing" }) {
@@ -438,7 +468,7 @@ fun ViewContainer<*, *>.renderBench(bench: TestBenchState, ctx: Pager, wide: () 
                         }
                         velse {
                             vif({ bench.asrPhase == "recorded" }) {
-                                statusBadge({ "connected" }, { "已录音，可试听/发送识别" })
+                                statusBadge({ "connected" }, { "已录 ${formatDuration(bench.recDuration)}，可试听/发送识别" })
                             }
                             velse {
                                 statusBadge({ "idle" }, { "空闲" })
@@ -473,6 +503,17 @@ fun ViewContainer<*, *>.renderBench(bench: TestBenchState, ctx: Pager, wide: () 
                                 fontSize(AdminType.body)
                                 color(AdminColors.textPrimary)
                                 text(bench.asrText)
+                            }
+                        }
+                        // 识别耗时：sendAsr 发出 → 收到 stt 的服务端往返（stt 回调携带）
+                        vif({ bench.asrElapsedMs > 0 }) {
+                            Text {
+                                attr {
+                                    fontSize(AdminType.micro)
+                                    color(AdminColors.textTertiary)
+                                    marginTop(AdminSpace.xs)
+                                    text("识别耗时 ${bench.asrElapsedMs} ms（发送→收到结果）")
+                                }
                             }
                         }
                         View { attr { height(AdminSpace.sm) } }
@@ -563,4 +604,10 @@ private val LANG_OPTIONS: List<Pair<String, String>> = listOf(
 internal fun formatDuration(seconds: Double): String {
     val s = seconds.toInt().coerceAtLeast(0)
     return "${s / 60}:${(s % 60).toString().padStart(2, '0')}"
+}
+
+/** 秒 → "12.3s"（录音计秒/短时长的十进制显示）。 */
+internal fun formatSeconds(seconds: Double): String {
+    val tenth = (seconds * 10).toInt().coerceAtLeast(0)
+    return "${tenth / 10}.${tenth % 10}s"
 }

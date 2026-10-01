@@ -10,7 +10,7 @@ use axum::extract::ws::{Message, Utf8Bytes, WebSocket};
 use futures_util::{FutureExt, StreamExt};
 use uuid::Uuid;
 
-use crate::audio::opus::{decode_opus_frame, OpusFrameEncoder};
+use crate::audio::opus::{OpusFrameDecoder, OpusFrameEncoder};
 use crate::audio::resample::resample;
 use crate::engine::Engines;
 use crate::protocol::{BinVersion, ClientMessage, ServerMessage, unwrap_uplink, wrap_downlink};
@@ -33,6 +33,8 @@ pub async fn run_session(
     params: SessionParams,
 ) -> anyhow::Result<()> {
     let mut vad = engines.new_vad();
+    // 上行流式解码器：会话内单一实例，逐帧连续解码（帧间状态保留，对齐 xiaozhi-esp32）。
+    let mut uplink_decoder = OpusFrameDecoder::new(params.uplink_sr)?;
     let mut history: Vec<(String, String)> = Vec::new();
     let mut downlink_ts: u32 = 0;
     let session_id = Uuid::new_v4().to_string();
@@ -73,6 +75,7 @@ pub async fn run_session(
                     data,
                     &engines,
                     &mut vad,
+                    &mut uplink_decoder,
                     &mut history,
                     &params,
                     &mut downlink_ts,
@@ -273,6 +276,7 @@ async fn handle_binary(
     data: &[u8],
     engines: &Arc<Engines>,
     vad: &mut Box<dyn VadEngine>,
+    uplink_decoder: &mut OpusFrameDecoder,
     history: &mut Vec<(String, String)>,
     params: &SessionParams,
     downlink_ts: &mut u32,
@@ -285,7 +289,8 @@ async fn handle_binary(
     if payload.is_empty() {
         return;
     }
-    let Ok(pcm) = decode_opus_frame(payload, params.uplink_sr) else {
+    // 会话级解码器连续解码（帧间状态保留；逐包新建会在帧边界产生 PCM 断层）
+    let Ok(pcm) = uplink_decoder.decode_frame(payload) else {
         return;
     };
     // 网页测试台录音中：直接缓冲整段 PCM，跳过 VAD（mock 后端也可用）。
