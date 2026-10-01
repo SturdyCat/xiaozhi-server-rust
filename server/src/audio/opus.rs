@@ -126,15 +126,3 @@ impl OpusFrameDecoder {
         Ok(Vec::new())
     }
 }
-
-/// 将 Opus 帧解码为单声道 f32 PCM（无状态便捷函数，仅适用于单包场景；
-/// 连续音频流请使用 [`OpusFrameDecoder`] 保持帧间状态）。
-#[cfg(feature = "sherpa")]
-pub fn decode_opus_frame(data: &[u8], sample_rate: u32) -> anyhow::Result<Vec<f32>> {
-    OpusFrameDecoder::new(sample_rate)?.decode_frame(data)
-}
-
-#[cfg(not(feature = "sherpa"))]
-pub fn decode_opus_frame(_data: &[u8], _sample_rate: u32) -> anyhow::Result<Vec<f32>> {
-    Ok(Vec::new())
-}

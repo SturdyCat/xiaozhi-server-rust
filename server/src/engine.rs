@@ -70,7 +70,11 @@ impl Engines {
         let t0 = std::time::Instant::now();
         match build_tts_with_lang(&self.config.tts, lang) {
             Ok(e) => {
-                tracing::info!("已构建 lang={lang} 的 TTS 引擎并缓存（耗时 {}ms）", t0.elapsed().as_millis());
+                tracing::info!(
+                    "已构建 lang={lang} 的 TTS 引擎并缓存（耗时 {}ms，num_threads={}）",
+                    t0.elapsed().as_millis(),
+                    self.config.tts.num_threads
+                );
                 pool.insert(lang.to_string(), e.clone());
                 e
             }

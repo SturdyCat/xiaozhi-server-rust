@@ -52,8 +52,10 @@ lexicon = "/models/Kokoro/lexicon-us-en.txt,/models/Kokoro/lexicon-zh.txt"
 lang = "zh"
 speaker = 0
 speed = 1.0
-# 合成线程数（默认 1）：与 ASR 错峰，避免占满 4 核小主机
-num_threads = 1
+# 合成线程数（默认 4）：用满 N5105 四核。旧值 1（「与 ASR 错峰」）实测让合成只剩
+# 1/4 算力（CPU 25%、4 个字 8+ 秒、10 个字 20 秒）——流水线 ASR→LLM→TTS 本身串行，
+# 不存在抢占；多设备并发才需要权衡，可下调到 2~3。
+num_threads = 4
 
 [llm]
 # "mock" 使用本地回显（零配置联调）；"http" 调用真实 OpenAI 兼容接口。

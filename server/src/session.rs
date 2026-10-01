@@ -122,12 +122,29 @@ async fn recognize_segments(
     session_id: &str,
 ) {
     for seg in segments {
-        let Ok(user_text) = engines.asr.recognize(&seg, params.uplink_sr) else {
-            continue;
+        // 识别是同步阻塞的 CPU 调用：spawn_blocking 隔离（勿在 async 线程直接跑）
+        let asr = engines.asr.clone();
+        let sr = params.uplink_sr;
+        let t0 = std::time::Instant::now();
+        let user_text = match tokio::task::spawn_blocking(move || asr.recognize(&seg, sr)).await {
+            Ok(Ok(t)) => t,
+            Ok(Err(e)) => {
+                tracing::warn!("ASR 识别失败: {e}");
+                continue;
+            }
+            Err(e) => {
+                tracing::warn!("ASR 任务异常: {e}");
+                continue;
+            }
         };
         if user_text.trim().is_empty() {
             continue;
         }
+        tracing::info!(
+            "session {session_id} 识别完成：耗时 {}ms（{} 字）",
+            t0.elapsed().as_millis(),
+            user_text.chars().count()
+        );
         if let Err(e) = stream_response(
             socket,
             engines,
@@ -212,10 +229,25 @@ async fn handle_text(
                 let text = if buf.is_empty() {
                     "(未录制到音频)".to_string()
                 } else {
-                    match engines.asr.recognize(&buf, params.uplink_sr) {
-                        Ok(t) if t.trim().is_empty() => "(识别结果为空，请重试)".to_string(),
-                        Ok(t) => t,
-                        Err(e) => format!("识别失败: {e}"),
+                    // 识别是同步阻塞的 CPU 调用：spawn_blocking 隔离（勿在 async 线程直接跑）
+                    let asr = engines.asr.clone();
+                    let sr = params.uplink_sr;
+                    let t0 = std::time::Instant::now();
+                    let recognized = tokio::task::spawn_blocking(move || asr.recognize(&buf, sr)).await;
+                    match recognized {
+                        Ok(Ok(t)) => {
+                            tracing::info!(
+                                "session {session_id} 测试识别完成：耗时 {}ms（音频 {secs:.1}s）",
+                                t0.elapsed().as_millis()
+                            );
+                            if t.trim().is_empty() {
+                                "(识别结果为空，请重试)".to_string()
+                            } else {
+                                t
+                            }
+                        }
+                        Ok(Err(e)) => format!("识别失败: {e}"),
+                        Err(e) => format!("识别任务异常: {e}"),
                     }
                 };
                 send_text(
@@ -247,18 +279,29 @@ async fn handle_text(
             tracing::info!("session {session_id} 测试合成：lang={lang} speaker={speaker} speed={speed}");
             let tts = engines.tts_for(&lang);
             let t0 = std::time::Instant::now();
-            let (pcm, tts_sr) = match tts.synthesize(&text, speed, speaker) {
-                Ok(x) => x,
-                Err(e) => {
+            // ⚠️ 推理是同步阻塞的 CPU 密集调用（实测单次 8~20s）：必须放 spawn_blocking，
+            //    否则整个 tokio worker 线程被独占，期间同 runtime 的其他会话/HTTP 全部卡死。
+            let text_c = text.clone();
+            let synthesis =
+                tokio::task::spawn_blocking(move || tts.synthesize(&text_c, speed, speaker))
+                    .await;
+            let (pcm, tts_sr) = match synthesis {
+                Ok(Ok(x)) => x,
+                Ok(Err(e)) => {
                     tracing::warn!("测试合成失败（耗时 {}ms）: {e}", t0.elapsed().as_millis());
+                    return Ok(());
+                }
+                Err(e) => {
+                    tracing::warn!("测试合成任务异常（耗时 {}ms）: {e}", t0.elapsed().as_millis());
                     return Ok(());
                 }
             };
             tracing::info!(
-                "session {session_id} 合成完成：耗时 {}ms，音频 {:.2}s / {tts_sr}Hz（{} 样本）",
+                "session {session_id} 合成完成：耗时 {}ms，音频 {:.2}s / {tts_sr}Hz（{} 样本，RTF={:.2}）",
                 t0.elapsed().as_millis(),
                 pcm.len() as f32 / tts_sr as f32,
-                pcm.len()
+                pcm.len(),
+                t0.elapsed().as_secs_f32() / (pcm.len() as f32 / tts_sr as f32).max(0.01)
             );
             let frames = send_tts_audio(socket, params, downlink_ts, session_id, &text, &pcm, tts_sr).await?;
             tracing::info!("session {session_id} 下行发送完成：{frames} 帧（{}ms / {}ms 帧）", frames as u32 * params.downlink_frame_ms, params.downlink_frame_ms);
@@ -361,13 +404,20 @@ async fn stream_response(
     }
 
     let t_tts = std::time::Instant::now();
-    let (pcm, tts_sr) = match engines
-        .tts()
-        .synthesize(&reply, engines.config.tts.speed, engines.config.tts.speaker)
-    {
-        Ok(x) => x,
-        Err(e) => {
+    // 推理是同步阻塞的 CPU 调用：spawn_blocking 隔离（勿在 async 线程直接跑）
+    let tts = engines.tts();
+    let speed = engines.config.tts.speed;
+    let speaker = engines.config.tts.speaker;
+    let reply_c = reply.clone();
+    let synthesis = tokio::task::spawn_blocking(move || tts.synthesize(&reply_c, speed, speaker)).await;
+    let (pcm, tts_sr) = match synthesis {
+        Ok(Ok(x)) => x,
+        Ok(Err(e)) => {
             tracing::warn!("TTS 失败（耗时 {}ms）: {e}", t_tts.elapsed().as_millis());
+            return Ok(());
+        }
+        Err(e) => {
+            tracing::warn!("TTS 任务异常（耗时 {}ms）: {e}", t_tts.elapsed().as_millis());
             return Ok(());
         }
     };

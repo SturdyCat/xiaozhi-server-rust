@@ -258,9 +258,13 @@ fn default_true() -> bool {
 fn default_num_threads() -> u32 {
     2
 }
-/// TTS 合成线程数默认 1：与 ASR/VAD 错峰，避免 ASR+TTS 峰值占满 4 核。
+/// TTS 合成线程数默认 4（用满 N5105 的 4 核）。
+/// 旧默认 1 的理由是「与 ASR 错峰」——实机实测该顾虑不成立：语音流水线本身
+/// ASR → LLM → TTS 串行，TTS 合成时 ASR 并不在跑；单线程让合成只剩 1/4 算力，
+/// 实测 RTF≈7（4 个字要 8+ 秒，CPU 仅 25%）。多设备并发是吞吐问题、4 核本来就不够，
+/// 不该牺牲单次合成的延迟。小主机如需保守可调回 2~3。
 fn default_tts_threads() -> u32 {
-    1
+    4
 }
 fn default_tts_lang() -> String {
     "zh".into()
