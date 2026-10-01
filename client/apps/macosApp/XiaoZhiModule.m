@@ -64,6 +64,7 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
 @property (nonatomic, assign) BOOL playbackActive;               // 正在试听（区别于下行实时播放）
 @property (nonatomic, assign) CFTimeInterval playbackStartedAt;  // 试听起始时钟（进度 = now - startedAt）
 @property (nonatomic, assign) NSUInteger decodeFailCount;        // 下行解码连续失败计数（日志节流）
+@property (nonatomic, assign) BOOL loggedFirstDecode;            // 首个下行包解码成功仅打一条日志
 @end
 
 @implementation XiaoZhiModule
@@ -172,6 +173,7 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
     NSDictionary *params = [self parseParams:args[KR_PARAM_KEY]];
     self.speakCallback = args[KR_CALLBACK_KEY];
     self.ttsPcm = [NSMutableData data];
+    [self ensureAudioEngine]; // 懒启动：合成即准备音频（首帧到达即可出声）
     // 新一次合成前丢弃上一段仍在排队的音频（否则旧尾音与新音频叠播）
     [self.playerNode stop];
     [self.playerNode reset];
@@ -201,6 +203,7 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
         [self invoke:callback result:@{@"duration": @(0)} success:YES error:nil];
         return;
     }
+    [self ensureAudioEngine]; // 懒启动：播放前才拉起引擎
     [self.playerNode stop];
     [self.playerNode reset];
     uint32_t sr = self.downlinkSampleRate ?: kDownlinkSampleRate;
@@ -379,16 +382,27 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
                                                                      channels:1
                                                                   interleaved:NO];
     XZEngineConnect(self.audioEngine, self.playerNode, self.audioEngine.mainMixerNode, playerFormat);
-    // ⚠️ connect 阶段只用 Playback：PlayAndRecord 会让引擎启动时拉起 input node——
-    //    麦克风未授权时其格式为 0 声道 → AUIOBase "no channels in channel map" +
-    //    AudioConverter -50 刷屏（实测）。切到 PlayAndRecord 推迟到授权后的 startMic。
+    // ⚠️ 这里**只建图不启动引擎**（懒启动，见 ensureAudioEngine）：
+    //    ① 引擎一启动就会拉起 full-duplex IO，麦克风未授权时 input 侧 0 声道 →
+    //       AUIOBase "no channels in channel map" + AudioConverter -50 刷屏（connect 即出现）；
+    //    ② connect 阶段没有任何音频要播，启动引擎纯属浪费。首次播放/录音时再 start。
 #if TARGET_OS_MACCATALYST
+    // 会话分类只在 connect 时设一次 Playback（此时不碰 inputNode）；startMic 授权后再切
+    // PlayAndRecord（实测 Playback 下触碰 inputNode 会让引擎直接启动失败）。
     [self applyAudioSessionCategory:AVAudioSessionCategoryPlayback];
 #endif
+}
+
+/// 懒启动音频引擎（首帧下行/试听/录音前调用）。引擎已在运行则为空操作。
+- (void)ensureAudioEngine {
+    if (!self.audioEngine) [self setupAudio];
+    if (self.audioEngine.isRunning) return;
     [self.audioEngine prepare];
-    NSError *startErr = nil;
-    [self.audioEngine startAndReturnError:&startErr];
-    if (startErr) NSLog(@"[XiaoZhi] audio engine error: %@", startErr);
+    NSError *err = nil;
+    if (![self.audioEngine startAndReturnError:&err]) {
+        NSLog(@"[XiaoZhi] audio engine start 失败: %@", err);
+        return;
+    }
     XZPlayerPlay(self.playerNode);
 }
 
@@ -418,7 +432,7 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
                                                        interleaved:NO];
     [self.audioEngine disconnectNodeOutput:self.playerNode];
     XZEngineConnect(self.audioEngine, self.playerNode, self.audioEngine.mainMixerNode, f);
-    XZPlayerPlay(self.playerNode);
+    if (self.audioEngine.isRunning) XZPlayerPlay(self.playerNode); // 未启动则留给懒启动
     NSLog(@"[XiaoZhi] player 重连为 %.0fHz/1ch（下行采样率变化）", f.sampleRate);
 }
 
@@ -449,11 +463,19 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
 }
 
 - (void)startMic {
-    // 授权后才切 PlayAndRecord（startAsr 的授权回调先行调用），保证 inputNode 格式有效
+    if (!self.audioEngine) [self setupAudio];
+    // 授权后才切 PlayAndRecord（startAsr 的授权回调先行调用）：
+    // ⚠️ 实测（本机 Catalyst 复现）在 Playback 分类下触碰 inputNode 会让引擎直接
+    //    startAndReturnError 失败（coreaudio 560227702）——必须先切分类再碰输入节点。
 #if TARGET_OS_MACCATALYST
     [self applyAudioSessionCategory:AVAudioSessionCategoryPlayAndRecord];
+    AVAudioSession *session = [AVAudioSession sharedInstance];
+    if (![session.category isEqualToString:AVAudioSessionCategoryPlayAndRecord]) {
+        NSLog(@"[XiaoZhi] 会话分类切换未生效（当前 %@），放弃本次录音", session.category);
+        return;
+    }
 #endif
-    // category 切换后引擎需重启以应用新路由
+    // 懒启动的引擎此时可能未运行；切分类后重建输入路径（stop→重读格式→installTap→start）
     [self.audioEngine stop];
     self.micNode = self.audioEngine.inputNode;
     AVAudioFormat *fmt = [self.micNode outputFormatForBus:0];
@@ -561,6 +583,7 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
 
 - (void)playPcm:(NSData *)pcm {
     if (!self.playerNode || pcm.length == 0) return;
+    [self ensureAudioEngine]; // 懒启动：首帧下行到达时才拉引擎（connect 阶段零音频活动）
     uint32_t sr = self.downlinkSampleRate ?: kDownlinkSampleRate;
     AVAudioFormat *fmt = [[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatFloat32
                                                         sampleRate:sr
@@ -707,6 +730,12 @@ static OSStatus XZDecodeInputProc(AudioConverterRef conv, UInt32 *ioNumPackets, 
 - (NSData *)decodeOpus:(NSData *)opus {
     if (!self.downlinkDecoder) [self rebuildDownlinkDecoder];
     if (!self.downlinkDecoder) return nil;
+    // ⚠️ 每包解码前必须 AudioConverterReset：实测（本机复现）同一 Opus 解码转换器
+    //    连续解码时，第一次调用解出 1380 帧后，后续调用一律输出 0 帧且不再调用输入
+    //    回调（转换器把「输入结束」粘住了，EOF 状态不可自愈）。表现正好是用户日志里
+    //    「重建解码器后每包只成功一次」。Reset 后 5/5 包全部解出（首包 2.5ms pre-skip
+    //    修剪 1380 帧、其余 1440 帧，样本数正确无漂移）。转换器仍复用，重置代价可忽略。
+    AudioConverterReset(self.downlinkDecoder);
     float pcm[8192];
     AudioBufferList out = {0};
     out.mNumberBuffers = 1;
@@ -722,9 +751,9 @@ static OSStatus XZDecodeInputProc(AudioConverterRef conv, UInt32 *ioNumPackets, 
         0,
         {0},
     };
-    AudioStreamPacketDescription inPktDescs[1];
+    // 输出为 LPCM（非分包格式），outPacketDescription 必须为 NULL（传非 NULL 数组无益且语义错误）
     OSStatus st = AudioConverterFillComplexBuffer(self.downlinkDecoder, XZDecodeInputProc,
-                                                   &feed, &ioFrames, &out, inPktDescs);
+                                                   &feed, &ioFrames, &out, NULL);
     if (st != noErr || ioFrames == 0) {
         // 解码失败自愈：重建解码器；日志节流（每 20 次打一条），避免下行期间刷屏
         self.decodeFailCount++;
@@ -736,6 +765,11 @@ static OSStatus XZDecodeInputProc(AudioConverterRef conv, UInt32 *ioNumPackets, 
         return nil;
     }
     self.decodeFailCount = 0;
+    if (!self.loggedFirstDecode) {
+        self.loggedFirstDecode = YES;
+        NSLog(@"[XiaoZhi] 首个下行包解码成功: %u bytes → %u frames @ %uHz（首包含 pre-skip 修剪）",
+              (unsigned)opus.length, (unsigned)ioFrames, sr);
+    }
     return [NSData dataWithBytes:pcm length:ioFrames * sizeof(float)];
 }
 

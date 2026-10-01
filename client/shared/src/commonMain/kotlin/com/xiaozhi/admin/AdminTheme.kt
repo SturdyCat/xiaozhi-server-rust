@@ -298,11 +298,11 @@ fun ViewContainer<*, *>.labeledField(
 // ===================== 按钮 =====================
 
 /**
- * 主按钮：高 48（触屏）、paddingH 20、minWidth 96、radiusSm、allCenter；
- * bg accent（禁用 accentDisable + 文字 0xFFF4FCF8）；文字 textOnAccent body(17)/500。
- * - danger=true：录音等待止类按钮用红色系（danger/dangerDisable）。
- * - loading=true：按钮内显示菊花（白色 ActivityIndicator）+ 文案，配合 enabled=false
- *   表达「处理中」并阻止重复点击（文案由调用方经 vif/velse 分支切换）。
+ * 主按钮：高 48、paddingH 16、minWidth 88、radiusSm；
+ * bg accent（正常）/ insetBg 灰（禁用与加载中——「处理中」视觉即禁用，杜绝重复点击的直觉）；
+ * 文字 textOnAccent body(17)/500；文字 lines(1) 防折行。
+ * - danger=true：录音等待止类按钮用红色系（danger；禁用/加载同样灰底）。
+ * - loading=true：菊花（白色，灰底可见）+ 进行中文案，且事件层屏蔽点击。
  */
 fun ViewContainer<*, *>.primaryButton(
     text: String,
@@ -311,26 +311,26 @@ fun ViewContainer<*, *>.primaryButton(
     loading: Boolean = false,
     onClick: () -> Unit,
 ) {
+    val active = enabled && !loading
     val bg = when {
-        danger && (!enabled && !loading) -> AdminColors.dangerDisable
+        !active -> AdminColors.insetBg // 禁用与处理中统一灰底（动作不可用语义）
         danger -> AdminColors.danger
-        !enabled && !loading -> AdminColors.accentDisable
         else -> AdminColors.accent
     }
     View {
         attr {
             height(48f)
-            minWidth(96f)
-            paddingLeft(AdminSpace.lg)
-            paddingRight(AdminSpace.lg)
+            minWidth(88f)
+            paddingLeft(AdminSpace.md)
+            paddingRight(AdminSpace.md)
             borderRadius(AdminShape.radiusSm)
             flexDirectionRow()
             allCenter()
             backgroundColor(bg)
         }
-        event { click { if (enabled && !loading) onClick() } }
+        event { click { if (active) onClick() } }
         if (loading) {
-            // 白色菊花（暗色/彩色底上可见）：isGrayStyle(false) → "white"
+            // 白色菊花（灰底上可见）：isGrayStyle(false) → "white"
             ActivityIndicator {
                 attr {
                     isGrayStyle(false)
@@ -342,31 +342,33 @@ fun ViewContainer<*, *>.primaryButton(
             attr {
                 fontSize(AdminType.body)
                 fontWeightMedium()
-                color(if (enabled || loading) AdminColors.textOnAccent else Color(0xFFF4FCF8L))
+                color(if (active) AdminColors.textOnAccent else AdminColors.textTertiary)
+                lines(1)
                 text(text)
             }
         }
     }
 }
 
-/** 次按钮：高 44、radiusSm、bg insetBg、文字 textPrimary body(17)/500。支持禁用/加载态。 */
+/** 次按钮：高 44、radiusSm、bg insetBg、文字 textPrimary body(17)/500。禁用/加载灰化。 */
 fun ViewContainer<*, *>.secondaryButton(
     text: String,
     enabled: Boolean = true,
     loading: Boolean = false,
     onClick: () -> Unit,
 ) {
+    val active = enabled && !loading
     View {
         attr {
             height(44f)
-            paddingLeft(AdminSpace.lg)
-            paddingRight(AdminSpace.lg)
+            paddingLeft(AdminSpace.md)
+            paddingRight(AdminSpace.md)
             borderRadius(AdminShape.radiusSm)
             flexDirectionRow()
             allCenter()
-            backgroundColor(if (enabled && !loading) AdminColors.insetBg else AdminColors.trackBg)
+            backgroundColor(if (active) AdminColors.insetBg else AdminColors.trackBg)
         }
-        event { click { if (enabled && !loading) onClick() } }
+        event { click { if (active) onClick() } }
         if (loading) {
             ActivityIndicator {
                 attr {
@@ -379,7 +381,8 @@ fun ViewContainer<*, *>.secondaryButton(
             attr {
                 fontSize(AdminType.body)
                 fontWeightMedium()
-                color(if (enabled && !loading) AdminColors.textPrimary else AdminColors.textTertiary)
+                color(if (active) AdminColors.textPrimary else AdminColors.textTertiary)
+                lines(1)
                 text(text)
             }
         }
@@ -662,11 +665,18 @@ fun ViewContainer<*, *>.waveformPlayer(
             }
             var i = 0
             while (i < WAVE_BARS) {
-                // 64 桶两两取大映射到 32 根柱
-                val v = maxOf(wave().getOrElse(i * 2) { 0.1f }, wave().getOrElse(i * 2 + 1) { 0.1f })
-                val played = progress() * WAVE_BARS > i
+                val idx = i
                 View {
                     attr {
+                        // ⚠️ wave()/progress() 必须在 attr 闭包内调用：
+                        // Kuikly 只跟踪闭包内的 observable 读取——若在循环体（构建期）先算出
+                        // played/v 再被闭包捕获，进度更新时柱子颜色/高度不会重算（实测「回放
+                        // 无时间轴动画」的根因）。
+                        val v = maxOf(
+                            wave().getOrElse(idx * 2) { 0.1f },
+                            wave().getOrElse(idx * 2 + 1) { 0.1f },
+                        )
+                        val played = progress() * WAVE_BARS > idx
                         flex(1f)
                         height(6f + v * 36f)
                         marginRight(2f)

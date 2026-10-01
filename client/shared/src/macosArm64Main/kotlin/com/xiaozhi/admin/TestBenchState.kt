@@ -392,7 +392,10 @@ fun ViewContainer<*, *>.renderBench(bench: TestBenchState, ctx: Pager, wide: () 
                     }
                 }
                 actionRow {
-                    // 五态按钮：每态一个 vif 分支（裸读 when 不随状态更新——见函数头注释）
+                    // 五态按钮：每态一个 vif 分支（裸读 when 不随状态更新——见函数头注释）。
+                    // ⚠️ 按钮行只放按钮：Kuikly Flex 无 shrink/wrap，行内元素总宽超出卡片
+                    //    内宽（双列窄卡约 256px）会把内容画到容器外（实测「文字跑到按钮外」），
+                    //    状态徽标因此移到下一行。
                     vif({ bench.asrPhase == "starting" }) {
                         primaryButton("正在启动…", enabled = false, loading = true) { }
                     }
@@ -414,11 +417,17 @@ fun ViewContainer<*, *>.renderBench(bench: TestBenchState, ctx: Pager, wide: () 
                             }
                         }
                     }
-                    View { attr { width(AdminSpace.md) } }
                     // 发送识别：仅在已录（且未在录/未在识别）时出现
                     vif({ bench.asrPhase == "recorded" }) {
-                        primaryButton("发送识别") { bench.sendAsr(ctx) }
                         View { attr { width(AdminSpace.md) } }
+                        primaryButton("发送识别") { bench.sendAsr(ctx) }
+                    }
+                }
+                // 状态徽标：独立一行（避免与按钮挤同一行导致横向溢出）
+                View {
+                    attr {
+                        flexDirectionRow()
+                        marginTop(AdminSpace.sm)
                     }
                     vif({ bench.asrPhase == "recording" }) {
                         statusBadge({ "recording" }, { "录音中" })
@@ -428,7 +437,12 @@ fun ViewContainer<*, *>.renderBench(bench: TestBenchState, ctx: Pager, wide: () 
                             statusBadge({ "busy" }, { "识别中" })
                         }
                         velse {
-                            statusBadge({ "idle" }, { "空闲" })
+                            vif({ bench.asrPhase == "recorded" }) {
+                                statusBadge({ "connected" }, { "已录音，可试听/发送识别" })
+                            }
+                            velse {
+                                statusBadge({ "idle" }, { "空闲" })
+                            }
                         }
                     }
                 }
