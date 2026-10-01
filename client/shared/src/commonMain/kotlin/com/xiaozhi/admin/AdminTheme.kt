@@ -58,17 +58,22 @@ object AdminColors {
     val accent = Color(0xFF07C160L)
     val accentHover = Color(0xFF06B257L)
     val accentActive = Color(0xFF059A4CL)
-    val accentDisable = Color(0xFF3A5A47L)
     val accentTintBg = Color(0x332B5E3FL)
     val accentTintText = Color(0xFF4CD964L)
 
     val danger = Color(0xFFFF453AL)
     val dangerHover = Color(0xFFE53429L)
     val dangerActive = Color(0xFFD12E24L)
-    /** 禁用态红（录音按钮禁用/加载时用；比 danger 暗、去饱和，与 accentDisable 同风格） */
-    val dangerDisable = Color(0xFF5A3230L)
     val dangerTintBg = Color(0x33FF453AL)
     val dangerTintText = Color(0xFFFF6961L)
+
+    /** 禁用/处理中按钮背景：中性灰（iOS 暗色 systemGray2）。比页面/卡片底色明显亮一档，
+     *  一眼可辨「不可用」；⛔ 不要用 insetBg/trackBg（#3A3A3C）当禁用底——与暗色主题
+     *  背景几乎同色，看起来像「没画按钮」而不是「按钮被禁用」。 */
+    val disabledBg = Color(0xFF636366L)
+
+    /** 禁用/处理中按钮文字：浅灰（在中灰底上可读，明显弱于正常态白字） */
+    val disabledText = Color(0xFFD1D1D6L)
 
     val warning = Color(0xFFFF9F0AL)
     val warningTintBg = Color(0x33FF9F0AL)
@@ -299,7 +304,7 @@ fun ViewContainer<*, *>.labeledField(
 
 /**
  * 主按钮：高 48、paddingH 16、minWidth 88、radiusSm；
- * bg accent（正常）/ insetBg 灰（禁用与加载中——「处理中」视觉即禁用，杜绝重复点击的直觉）；
+ * bg accent（正常）/ disabledBg 中性灰（禁用与加载中——「处理中」视觉即禁用，杜绝重复点击的直觉）；
  * 文字 textOnAccent body(17)/500；文字 lines(1) 防折行。
  * - danger=true：录音等待止类按钮用红色系（danger；禁用/加载同样灰底）。
  * - loading=true：菊花（白色，灰底可见）+ 进行中文案，且事件层屏蔽点击。
@@ -313,7 +318,7 @@ fun ViewContainer<*, *>.primaryButton(
 ) {
     val active = enabled && !loading
     val bg = when {
-        !active -> AdminColors.insetBg // 禁用与处理中统一灰底（动作不可用语义）
+        !active -> AdminColors.disabledBg // 禁用与处理中统一中性灰底（动作不可用语义）
         danger -> AdminColors.danger
         else -> AdminColors.accent
     }
@@ -342,7 +347,7 @@ fun ViewContainer<*, *>.primaryButton(
             attr {
                 fontSize(AdminType.body)
                 fontWeightMedium()
-                color(if (active) AdminColors.textOnAccent else AdminColors.textTertiary)
+                color(if (active) AdminColors.textOnAccent else AdminColors.disabledText)
                 lines(1)
                 text(text)
             }
@@ -350,7 +355,7 @@ fun ViewContainer<*, *>.primaryButton(
     }
 }
 
-/** 次按钮：高 44、radiusSm、bg insetBg、文字 textPrimary body(17)/500。禁用/加载灰化。 */
+/** 次按钮：高 44、radiusSm、bg insetBg、文字 textPrimary body(17)/500。禁用/加载同样灰底灰字。 */
 fun ViewContainer<*, *>.secondaryButton(
     text: String,
     enabled: Boolean = true,
@@ -366,7 +371,7 @@ fun ViewContainer<*, *>.secondaryButton(
             borderRadius(AdminShape.radiusSm)
             flexDirectionRow()
             allCenter()
-            backgroundColor(if (active) AdminColors.insetBg else AdminColors.trackBg)
+            backgroundColor(if (active) AdminColors.insetBg else AdminColors.disabledBg)
         }
         event { click { if (active) onClick() } }
         if (loading) {
@@ -381,7 +386,7 @@ fun ViewContainer<*, *>.secondaryButton(
             attr {
                 fontSize(AdminType.body)
                 fontWeightMedium()
-                color(if (active) AdminColors.textPrimary else AdminColors.textTertiary)
+                color(if (active) AdminColors.textPrimary else AdminColors.disabledText)
                 lines(1)
                 text(text)
             }
@@ -637,14 +642,14 @@ fun ViewContainer<*, *>.waveformPlayer(
             marginTop(AdminSpace.fieldGap)
         }
         event { click { if (enabled()) onToggle() } }
-        // 播放/停止圆钮
+        // 播放/停止圆钮（禁用=中性灰，与按钮家族禁用态一致）
         View {
             attr {
                 width(44f)
                 height(44f)
                 borderRadius(AdminShape.radiusPill)
                 allCenter()
-                backgroundColor(if (enabled()) AdminColors.accent else AdminColors.accentDisable)
+                backgroundColor(if (enabled()) AdminColors.accent else AdminColors.disabledBg)
             }
             Text {
                 attr {
