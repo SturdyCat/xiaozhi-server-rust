@@ -10,6 +10,7 @@ import com.tencent.kuikly.core.directives.velse
 import com.tencent.kuikly.core.directives.vif
 import com.tencent.kuikly.core.reactive.collection.ObservableList
 import com.tencent.kuikly.core.views.ActivityIndicator
+import com.tencent.kuikly.core.views.AlertDialog
 import com.tencent.kuikly.core.views.Input
 import com.tencent.kuikly.core.views.Scroller
 import com.tencent.kuikly.core.views.Text
@@ -484,13 +485,14 @@ fun ViewContainer<*, *>.switchRow(label: String, checked: Boolean, onToggle: () 
 // ===================== 下拉选择 =====================
 
 /**
- * 下拉选择字段：label + 选择框（显示当前项 + ▾/▴）+ 展开面板（独立 Scroller，高 320，可滚动）。
+ * 下拉选择字段：字段框（当前项 + ▾/▴）+ 官方 AlertDialog 弹层选择。
  *
+ * 弹层用官方 AlertDialog（Modal 渲染）：不占布局（不把下方内容推开）、蒙层点击关闭、
+ * 自带显隐过渡；customContentView 自定义暗色卡片（标题 + 可滚动选项列表 + 取消）。
  * 响应式约定（⚠️ Kuikly 只对闭包内的 observable 读取做响应式跟踪）：
  * - isOpen：lambda，由调用方持有展开态（放状态类里避免 body 重建丢失）；
  * - options：返回 **ObservableList** 的 lambda + 内部用 vfor 渲染——选项列表本身可变
- *   （如音色列表随性别切换增删），普通 List 在构建期一次性铺开不会随数据更新；
- * - selectedId/currentLabel：lambda，选中态变化即时刷新。
+ *   （如音色列表随性别切换增删），普通 List 在构建期一次性铺开不会随数据更新。
  */
 fun ViewContainer<*, *>.dropdownField(
     label: String,
@@ -530,46 +532,82 @@ fun ViewContainer<*, *>.dropdownField(
             }
         }
     }
-    vif({ isOpen() }) {
-        Scroller {
-            attr {
-                height(320f)
-                backgroundColor(AdminColors.cardBg)
-                border(Border(1f, BorderStyle.SOLID, AdminColors.divider))
-                borderRadius(AdminShape.radiusSm)
-                marginTop(AdminSpace.xs)
-            }
-            vfor(options) { opt ->
+    // 官方 AlertDialog 弹层（Modal 渲染，KRModalView iOS/macOS Catalyst 均有实现）
+    AlertDialog {
+        attr {
+            showAlert(isOpen())
+            inWindow(true)
+            customContentView {
                 View {
                     attr {
-                        height(44f)
-                        flexDirectionRow()
-                        alignItemsCenter()
-                        paddingLeft(AdminSpace.sm)
-                        paddingRight(AdminSpace.md)
-                    }
-                    event { click { onSelect(opt.first) } }
-                    vif({ opt.first == selectedId() }) {
-                        View {
-                            attr {
-                                width(3f)
-                                height(20f)
-                                borderRadius(AdminShape.radiusPill)
-                                backgroundColor(AdminColors.accent)
-                                marginRight(AdminSpace.xs)
-                            }
-                        }
+                        width(340f)
+                        backgroundColor(AdminColors.cardBg)
+                        borderRadius(AdminShape.radiusLg)
+                        border(Border(1f, BorderStyle.SOLID, AdminColors.divider))
+                        padding(AdminSpace.cardPadding)
                     }
                     Text {
                         attr {
-                            flex(1f)
-                            fontSize(AdminType.body)
-                            color(if (opt.first == selectedId()) AdminColors.accentTintText else AdminColors.textPrimary)
-                            text(opt.second)
+                            fontSize(AdminType.section)
+                            fontWeightMedium()
+                            color(AdminColors.textPrimary)
+                            marginBottom(AdminSpace.sm)
+                            text(label)
                         }
                     }
+                    Scroller {
+                        attr {
+                            height(320f)
+                            backgroundColor(AdminColors.insetBg)
+                            borderRadius(AdminShape.radiusSm)
+                        }
+                        vfor(options) { opt ->
+                            val selected = opt.first == selectedId()
+                            View {
+                                attr {
+                                    height(44f)
+                                    flexDirectionRow()
+                                    alignItemsCenter()
+                                    paddingLeft(AdminSpace.sm)
+                                    paddingRight(AdminSpace.md)
+                                }
+                                event {
+                                    click {
+                                        onSelect(opt.first)
+                                        onToggle()
+                                    }
+                                }
+                                vif({ opt.first == selectedId() }) {
+                                    View {
+                                        attr {
+                                            width(3f)
+                                            height(20f)
+                                            borderRadius(AdminShape.radiusPill)
+                                            backgroundColor(AdminColors.accent)
+                                            marginRight(AdminSpace.xs)
+                                        }
+                                    }
+                                }
+                                Text {
+                                    attr {
+                                        flex(1f)
+                                        fontSize(AdminType.body)
+                                        color(if (opt.first == selectedId()) AdminColors.accentTintText else AdminColors.textPrimary)
+                                        text(opt.second)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    View { attr { height(AdminSpace.sm) } }
+                    secondaryButton("取消") { onToggle() }
                 }
             }
+        }
+        event {
+            // 蒙层点击关闭（官方注释：用于自定义前景 UI 场景）
+            clickBackgroundMask { onToggle() }
+            willDismiss { onToggle() }
         }
     }
 }
