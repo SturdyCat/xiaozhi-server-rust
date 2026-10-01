@@ -178,6 +178,10 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
     self.ttsDecodedPackets = 0;
     self.ttsFailCount = 0;
     self.decodeFailCount = 0;
+    // 每次新合成开始时重置一次解码器状态：与编码端「每句一个新编码器」的状态边界对齐
+    // （句内全程连续解码、帧间状态保留；句间边界各重置一次，避免上句残留状态污染新句开头）。
+    // ⚠️ Reset 不会清除 primeInfo 属性（转换器配置与运行状态分离），粘滞防护仍有效。
+    if (self.downlinkDecoder) AudioConverterReset(self.downlinkDecoder);
     // ⚠️ 不在这里启动音频引擎：实机对比发现「点击即启动引擎」会在麦克风未授权时
     //    触发 AUIOBase/-50 刷屏；改为首帧到达（playPcm→ensureAudioEngine）时才启动，
     //    与实测零噪音路径一致（synthesize 需 1s+，引擎启动 ~百 ms，无听感影响）。
@@ -354,15 +358,17 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
     }
     if ([type isEqualToString:@"tts"]) {
         NSString *state = dict[@"state"];
-        if ([state isEqualToString:@"stop"] && self.speakCallback) {
-            // 每次合成收尾汇总：实机日志可直接确认「多少包解码成功 / 多少帧 / 失败几包」
+        if ([state isEqualToString:@"stop"]) {
+            // 每次合成收尾无条件汇总：实机日志可直接确认「多少包解码成功 / 多少帧 / 失败几包」
             NSUInteger frames = self.ttsPcm.length / sizeof(float);
             uint32_t sr = self.downlinkSampleRate ?: kDownlinkSampleRate;
             NSLog(@"[XiaoZhi] TTS 下行统计：解码 %lu 包 / %lu 帧（%.2fs），失败 %lu 包",
                   (unsigned long)self.ttsDecodedPackets, (unsigned long)frames,
                   frames / (double)sr, (unsigned long)self.ttsFailCount);
-            [self invoke:self.speakCallback result:@{@"state": @"stop"} success:YES error:nil];
-            self.speakCallback = nil;
+            if (self.speakCallback) {
+                [self invoke:self.speakCallback result:@{@"state": @"stop"} success:YES error:nil];
+                self.speakCallback = nil;
+            }
         }
         return;
     }
@@ -372,7 +378,10 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
     if (opus.length == 0) return;
     NSData *pcm = [self decodeOpus:opus];
     if (!pcm.length) return;
-    // 累积到 TTS 缓冲（24k float32，与下行采样率一致），tts stop 后供试听/波形
+    // 累积到 TTS 缓冲（24k float32，与下行采样率一致），tts stop 后供试听/波形。
+    // 懒初始化：正常流程 speak 已建好缓冲；但下行若未经 speak 到达（诊断/mock 场景），
+    // 对 nil 调 appendData 是静默空操作，会丢缓冲——这里兜底。
+    if (!self.ttsPcm) self.ttsPcm = [NSMutableData data];
     [self.ttsPcm appendData:pcm];
     [self playPcm:pcm];
 }
@@ -746,20 +755,28 @@ static OSStatus XZDecodeInputProc(AudioConverterRef conv, UInt32 *ioNumPackets, 
     if (st != noErr) {
         NSLog(@"[XiaoZhi] 下行 Opus 解码器创建失败: %d", (int)st);
         self.downlinkDecoder = NULL;
-    } else {
-        self.downlinkDecoder = conv;
+        return;
     }
+    // ⚠️ 关键：禁用 pre-skip 修剪（primeInfo leadingFrames=0）。默认行为下首包解出
+    //   1380 帧（<整帧 1440）→ 转换器为「凑满请求量」二次索要输入 → 被拒（输入耗尽）
+    //   → 进入 EOF 粘滞：之后所有 Fill 直接返回 0 帧且不再回调输入（只能 Reset 才能解）。
+    //   禁用修剪后每包都精确产出整帧 → 单次索要即满足 → 不触发粘滞 →
+    //   整段语音可全程复用同一解码器（帧间 overlap 状态跨包保留 = 无缝衔接）。
+    //   本机对照实验：连续 5 包全 1440 帧、输入回调各 1 次；拼接流包边界二阶差分
+    //   仅为帧内的 0.1x（无爆音/断点证据）。
+    AudioConverterPrimeInfo pi = { .leadingFrames = 0, .trailingFrames = 0 };
+    AudioConverterSetProperty(conv, kAudioConverterPrimeInfo, sizeof(pi), &pi);
+    self.downlinkDecoder = conv;
 }
 
 - (NSData *)decodeOpus:(NSData *)opus {
     if (!self.downlinkDecoder) [self rebuildDownlinkDecoder];
     if (!self.downlinkDecoder) return nil;
-    // ⚠️ 每包解码前必须 AudioConverterReset：实测（本机复现）同一 Opus 解码转换器
-    //    连续解码时，第一次调用解出 1380 帧后，后续调用一律输出 0 帧且不再调用输入
-    //    回调（转换器把「输入结束」粘住了，EOF 状态不可自愈）。表现正好是用户日志里
-    //    「重建解码器后每包只成功一次」。Reset 后 5/5 包全部解出（首包 2.5ms pre-skip
-    //    修剪 1380 帧、其余 1440 帧，样本数正确无漂移）。转换器仍复用，重置代价可忽略。
-    AudioConverterReset(self.downlinkDecoder);
+    // ⚠️ 这里**不做**每包 AudioConverterReset（历史实现为绕过 EOF 粘滞曾每包 Reset）：
+    //    每包 Reset 会丢弃解码器的帧间 overlap/预测状态，每个 60ms 边界都引入一次状态
+    //    断层——实听「声音不连续」的一条来源。现在禁用 pre-skip 修剪后粘滞不再触发
+    //    （见 rebuildDownlinkDecoder 注释），解码器整段连续工作；仅在新一次合成开始时
+    //    重置一次（与编码端「每句一个新编码器」的状态边界对齐，见 speak:）。
     uint32_t sr = self.downlinkSampleRate ?: kDownlinkSampleRate;
     UInt32 frameSamples = (UInt32)(sr * kFrameDurationMs / 1000.0); // 24k/60ms = 1440
     float pcm[8192];
@@ -768,8 +785,7 @@ static OSStatus XZDecodeInputProc(AudioConverterRef conv, UInt32 *ioNumPackets, 
     out.mBuffers[0].mNumberChannels = 1;
     out.mBuffers[0].mDataByteSize = sizeof(pcm);
     out.mBuffers[0].mData = pcm;
-    // 精确请求一帧输出（而非一次要 8192）：请求量≈单包产出时，转换器多数情况一次拉取
-    // 即完成，不再为「填满输出」二次索要输入（二次索要的 EOF 记账是实机警告的来源之一）。
+    // 请求整帧输出（与单包产出精确匹配：修剪已禁用，每包恰产出 frameSamples 帧）
     UInt32 ioFrames = frameSamples;
     struct XZDecFeed feed = {
         opus.bytes,
@@ -782,7 +798,7 @@ static OSStatus XZDecodeInputProc(AudioConverterRef conv, UInt32 *ioNumPackets, 
     OSStatus st = AudioConverterFillComplexBuffer(self.downlinkDecoder, XZDecodeInputProc,
                                                    &feed, &ioFrames, &out, NULL);
     if (st != noErr || ioFrames == 0) {
-        // 解码失败自愈：重建解码器；日志前 3 次 + 每 20 次（避免下行期间刷屏但保证可见性）
+        // 解码失败自愈：重建解码器（重建设置 primeInfo）；日志前 3 次 + 每 20 次
         self.decodeFailCount++;
         self.ttsFailCount++;
         if (self.decodeFailCount <= 3 || self.decodeFailCount % 20 == 1) {
@@ -796,7 +812,7 @@ static OSStatus XZDecodeInputProc(AudioConverterRef conv, UInt32 *ioNumPackets, 
     self.ttsDecodedPackets++;
     if (!self.loggedFirstDecode) {
         self.loggedFirstDecode = YES;
-        NSLog(@"[XiaoZhi] 首个下行包解码成功: %u bytes → %u frames @ %uHz（首包含 pre-skip 修剪）",
+        NSLog(@"[XiaoZhi] 首个下行包解码成功: %u bytes → %u frames @ %uHz",
               (unsigned)opus.length, (unsigned)ioFrames, sr);
     }
     return [NSData dataWithBytes:pcm length:ioFrames * sizeof(float)];

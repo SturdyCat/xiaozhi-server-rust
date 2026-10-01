@@ -10,7 +10,7 @@ use axum::extract::ws::{Message, Utf8Bytes, WebSocket};
 use futures_util::{FutureExt, StreamExt};
 use uuid::Uuid;
 
-use crate::audio::opus::{decode_opus_frame, encode_opus_frame};
+use crate::audio::opus::{decode_opus_frame, OpusFrameEncoder};
 use crate::audio::resample::resample;
 use crate::engine::Engines;
 use crate::protocol::{BinVersion, ClientMessage, ServerMessage, unwrap_uplink, wrap_downlink};
@@ -415,9 +415,12 @@ async fn send_tts_audio(
     let pcm_down = resample(pcm, tts_sr, params.downlink_sr);
     let frame_samples =
         (params.downlink_sr as f32 * params.downlink_frame_ms as f32 / 1000.0) as usize;
+    // 整段下行共用一个流式编码器：逐帧新建会让每个 60ms 边界都是「流重启」→
+    // 实听「声音不连续」（详见 opus.rs 的 OpusFrameEncoder 注释）。
+    let mut encoder = OpusFrameEncoder::new(params.downlink_sr)?;
     let mut frames_sent: usize = 0;
     for chunk in frame_chunks(&pcm_down, frame_samples.max(1)) {
-        let opus = match encode_opus_frame(&chunk, params.downlink_sr) {
+        let opus = match encoder.encode_frame(&chunk) {
             Ok(o) => o,
             Err(e) => {
                 tracing::warn!("Opus 编码失败: {e}");
