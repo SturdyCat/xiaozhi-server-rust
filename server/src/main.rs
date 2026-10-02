@@ -1,7 +1,24 @@
-//! xiaozhi-server-rust 入口。
+//! xiaozhi-server-rust 入口（单二进制、单进程）。
 //!
-//! 启动 Axum 服务，加载配置（优先环境变量 `XIAOZHI_CONFIG`，其次 `--config`
-//! 参数，否则回退内置 mock 默认配置），初始化共享引擎（ASR/TTS/LLM）。
+//! 启动流程：[`load_config`] 加载配置 → 构建进程级共享引擎 [`crate::engine::Engines`]
+//! （ASR/TTS/LLM，模型重、只加载一次）→ 启动 tokio 多线程 runtime（worker 数由
+//! `[server].worker_threads` 控制，默认 2，避免占满低功耗主机）→ `axum::serve` 监听。
+//!
+//! ## 配置加载优先级（权威说明）
+//!
+//! 见 [`load_config_inner`]：
+//! 1. 环境变量 `XIAOZHI_CONFIG` 指向的 TOML 文件（成功则记录 `config_path`）；
+//! 2. 否则命令行 `--config <path>`；
+//! 3. 两者都缺失或读取失败 → 回退 [`crate::config::Config::default()`]（全 `mock`）。
+//!
+//! 任一级失败都告警后回退，保证进程总能起来（便于零配置联调）。
+//! 返回的 `(Config, Option<config_path>)` 中，`config_path` 为 `None` 表示用的是内置默认，
+//! 此时 `PUT /api/config` 无法持久化（需以 `--config` 指定文件后重启）。
+//!
+//! 环境变量覆盖（**仅影响本次运行，不写回文件**）：
+//! - `XIAOZHI_CONFIG`：同优先级的配置文件路径。
+//! - `XIAOZHI_ADMIN_DIR`：覆盖 `[server].admin_dir`（Docker 镜像内置 `/app/web` 即此机制）。
+//! `GET /api/config` 展示的仍是文件原值，不会体现 env 覆盖。
 
 mod asr;
 mod audio;

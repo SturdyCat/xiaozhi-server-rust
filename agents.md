@@ -3,6 +3,8 @@
 > 本文件供 CodeBuddy / Claude Code / Cursor / Codex 等 AI 编码助手在本仓库工作时阅读。
 > 它聚焦**本仓库特有的环境坑与协议约束**，通用 Rust 知识不在此赘述。
 
+> 📌 模块级职责与复杂逻辑以 `server/src/*.rs` 顶部的 `//!` 模块注释为**权威说明**（配置加载优先级、`/api/config` 读写语义、引擎线程预算、协议二进制封装、四大引擎的 `spawn_blocking` 隔离等均已下沉到源码）。本文件聚焦 AI 易踩的**陷阱速查**；陷阱涉及的具体实现以源码 `//!` 注释为准，下文各条已加交叉链接。
+
 ## 1. 项目是什么
 
 `xiaozhi-server-rust` 是一个用 Rust 实现的 **小智（xiaozhi-esp32）语音终端服务端**：
@@ -106,6 +108,8 @@ pub enum ServerMessage { Hello { .. }, Stt { .. }, Llm { .. }, Tts { .. }, Syste
 
 > 这一 bug **`cargo check` 完全无法发现**，只有真实 WebSocket 客户端（`tests/mock_client.py`）才能暴露。任何修改协议枚举的 PR 都必须重跑 mock 联调。
 
+> 协议枚举定义与 serde 约束的权威说明见 `server/src/protocol.rs` 模块注释。
+
 ### 5.2 LLM 默认是 mock，不是真网
 
 需要真实对话时，把 `llm.backend` 改为 `"http"` 并填 `api_base` / `api_key`。若误以为默认会真网调用而联调失败，先确认是 mock。
@@ -117,13 +121,17 @@ pub enum ServerMessage { Hello { .. }, Stt { .. }, Llm { .. }, Tts { .. }, Syste
 - 上行按版本剥离头部（`unwrap_uplink`）。v1 裸 Opus；v2 16 字节头；v3 4 字节头。
 - 建议先用 v1 真机验证，再切 v2/v3。
 
+> 二进制帧字节布局（v1/v2/v3）的权威表见 `server/src/protocol.rs` 模块注释。
+
 ### 5.4 服务器 hello 的 `audio_params` = 下行解码参数
 
 设备读取服务器 hello 的 `audio_params.sample_rate` / `frame_duration` 来解码下行 TTS 音频。上行仍按设备自己的 16k。下行采样率由 `audio.downlink_sample_rate`（默认 24000）决定。
 
+> 上行/下行协商逻辑见 `server/src/ws.rs` 的 `handle_handshake`。
+
 ### 5.5 构建镜像的 Rust 版本必须与生成 `Cargo.lock` 的 cargo 对齐（当前 1.90）
 
-`Cargo.lock` 由本机 cargo **1.90** 生成，锁定的传递依赖需要较新 Rust：`idna_adapter`（`reqwest → url → idna`）要求 `edition2024`（Cargo ≥ 1.85 才能解析）；`time` / `icu_*` 要求 `rustc 1.88`。`Dockerfile` 构建阶段用 **`rust:1.90-bookworm`**（与本机 cargo 同版本，保证 lock 一定可编译）。
+`Cargo.lock` 由本机 cargo **1.90** 生成，锁定的传递依赖需要较新 Rust：`idna_adapter`（`reqwest → url → idna`）要求 `edition2024`（Cargo ≥ 1.85 才能解析）；`time` / `icu_*` 要求 `rustc 1.88`。`Dockerfile` 构建阶段用 **`rust:1.90-bookworm`**（与本机 cargo 同版本，保证 lock 一定可编译）。构建镜像版本约束见根 `Dockerfile`。
 
 **不要降级镜像 Rust**；也不要在无 lock 限定的情况下 `cargo update` 导致依赖需要更高 Rust。若升级了本机 cargo，记得同步抬高此处的镜像版本。
 

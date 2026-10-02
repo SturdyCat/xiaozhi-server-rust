@@ -8,6 +8,26 @@
 //! - 设备 hello 的 `version` 字段 = **二进制协议版本（1/2/3）**。
 //! - 服务器下行二进制帧必须使用与设备相同的版本。
 //! - 服务器 hello 的 `audio_params` 被设备用作**下行（TTS）解码参数**。
+//!
+//! ## serde 小写 `type` 标签（AI 易踩陷阱）
+//!
+//! 固件发送/期望**小写** `type` 标签（`hello`/`listen`/`abort`…），故枚举用
+//! `rename_all = "snake_case"`（单词变体仍为小写，多单词如 `AsrTest` → `asr_test`）。
+//! 漏写会在运行时报 `unknown variant hello`，且 `cargo check` **无法发现**，
+//! 只有真实 WebSocket 客户端能暴露。详情与排查见 `../agents.md` §5.1。
+//!
+//! ## 二进制帧封装（权威）
+//!
+//! 上行剥离 [`unwrap_uplink`]、下行打包 [`wrap_downlink`] 是唯一的封装/解封装出口；
+//! 浏览器测试台按同样规则嗅探（首字节特征判定 v2/v3，否则视为 v1）。字节布局：
+//!
+//! | 版本 | 封装格式 |
+//! |---|---|
+//! | v1 | 裸 Opus 字节（无头） |
+//! | v2 | `u16` version \| `u16` type(0=OPUS) \| `u32` reserved \| `u32` ts_ms \| `u32` size \| payload |
+//! | v3 | `u8` type(0=OPUS) \| `u8` reserved \| `u16` size \| payload |
+//!
+//! 上行按版本剥离头部，下行严格使用与设备相同的版本；建议先用 v1 真机验证再切 v2/v3。
 
 use serde::{Deserialize, Serialize};
 
@@ -202,6 +222,17 @@ impl BinVersion {
             _ => BinVersion::V1,
         }
     }
+
+    /// 帧内 version 字段值。下行打包必须用与设备协商相同的值：
+    /// 固件上行 v2 帧写 `htons(version_)`（=2），下行解码虽不校验该字段，
+    /// 但对称填 2 才是正确语义（对齐 xiaozhi-esp32 `websocket_protocol.cc`）。
+    pub fn version_code(self) -> u16 {
+        match self {
+            BinVersion::V1 => 1,
+            BinVersion::V2 => 2,
+            BinVersion::V3 => 3,
+        }
+    }
 }
 
 /// 下行封装：将 Opus 帧按版本打包。
@@ -213,7 +244,8 @@ pub fn wrap_downlink(v: BinVersion, opus: &[u8], ts_ms: u32) -> Vec<u8> {
         BinVersion::V1 => opus.to_vec(),
         BinVersion::V2 => {
             let mut b = Vec::with_capacity(16 + opus.len());
-            b.extend_from_slice(&1u16.to_le_bytes()); // version
+            // version 字段必须等于与设备协商的版本（固件上行 v2 也写 2），不可硬编码。
+            b.extend_from_slice(&v.version_code().to_le_bytes());
             b.extend_from_slice(&0u16.to_le_bytes()); // type = OPUS
             b.extend_from_slice(&0u32.to_le_bytes()); // reserved
             b.extend_from_slice(&ts_ms.to_le_bytes());
@@ -276,6 +308,8 @@ mod tests {
         let opus = [9u8, 8, 7, 6];
         let wrapped = wrap_downlink(BinVersion::V2, &opus, 1234);
         assert_eq!(wrapped.len(), 16 + opus.len());
+        // v2 帧首 2 字节是 version 字段，必须等于 2（对齐固件上行 v2 写 htons(2)）。
+        assert_eq!(u16::from_le_bytes([wrapped[0], wrapped[1]]), 2);
         assert_eq!(unwrap_uplink(BinVersion::V2, &wrapped), &opus);
     }
 

@@ -5,6 +5,10 @@
 //!   `VoiceActivityDetector` + Silero VAD。
 //!
 //! VAD 在服务器端运行：把连续上行音频切分为有效语音段，再送 ASR。
+//!
+//! ⚠️ [`VadEngine::accept`] 每帧调用，Silero 推理为**同步 CPU 调用**；虽单次轻量，
+//! 但每帧都跑，调用方（[`crate::session`]）在解码后的音频循环里直接同步调用即可
+//! （不似 ASR/TTS 那样单次耗时数秒，无需 `spawn_blocking`）。
 
 #[cfg(feature = "sherpa")]
 use anyhow::Result;

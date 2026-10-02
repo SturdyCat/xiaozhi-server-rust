@@ -5,6 +5,10 @@
 //!   `OfflineTts` + `OfflineTtsKokoroModelConfig`（Kokoro INT8）。
 //!
 //! 合成结果为单声道 f32 PCM；下行前由音频层做（按需）重采样与 Opus 编码。
+//!
+//! ⚠️ [`TtsEngine::synthesize`] 是**同步阻塞的 CPU 密集调用**（Kokoro 推理，
+//! 实测单次 8~20s）。调用方（[`crate::session`]）必须用 `spawn_blocking` 隔离，
+//! 否则独占 tokio worker，期间同 runtime 的其他会话/HTTP 全部卡死。
 
 use crate::config::TtsConfig;
 use anyhow::Result;
@@ -86,7 +90,7 @@ impl TtsEngine for SherpaTts {
 
 /// 根据配置构造 TTS 引擎。
 pub fn build_tts(cfg: &TtsConfig) -> Result<Arc<dyn TtsEngine>> {
-    if cfg.backend.eq_ignore_ascii_case("sherpa") {
+    if cfg.is_sherpa() {
         #[cfg(feature = "sherpa")]
         {
             let engine = SherpaTts::new(cfg).context("创建 Kokoro TTS 失败")?;
@@ -103,7 +107,7 @@ pub fn build_tts(cfg: &TtsConfig) -> Result<Arc<dyn TtsEngine>> {
 /// 按指定语言构造 TTS 引擎（网页测试台的多语言切换用）。
 /// 非 sherpa 后端时与 `build_tts` 等价（mock 与语言无关）。
 pub fn build_tts_with_lang(cfg: &TtsConfig, lang: &str) -> Result<Arc<dyn TtsEngine>> {
-    if cfg.backend.eq_ignore_ascii_case("sherpa") {
+    if cfg.is_sherpa() {
         #[cfg(feature = "sherpa")]
         {
             let mut c = cfg.clone();

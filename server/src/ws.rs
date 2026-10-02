@@ -1,11 +1,31 @@
-//! WebSocket 网关：握手、协议版本/音频参数协商、鉴权，然后转入会话状态机。
+//! WebSocket 网关：HTTP 路由、握手与协商、鉴权，然后转入会话状态机
+//! （[`crate::session::run_session`]）。
+//!
+//! ## 路由
+//! - `GET /api/health`：健康检查，返回 `xiaozhi-server-rust ok`。
+//! - `GET /api/ws`：WebSocket 会话入口（先 [`auth_ok`] 鉴权，再 [`handle_handshake`] 协商）。
+//! - `GET/PUT/POST /api/config`：管理页面读写当前配置（语义见下）。
+//! - 其余路径：静态托管 `[server].admin_dir`（h5App 构建产物，含 `index.html`）；
+//!   目录不存在时 [`admin_missing`] 返回友好提示而非崩溃；SPA 未知路径回退 `index.html`。
+//!
+//! ## 鉴权
+//! `[server].expected_token` 为空则不校验；非空时设备走 `Authorization: Bearer <token>`，
+//! 浏览器 WebSocket 无法自定义请求头，额外允许 `?token=<token>` 查询参数兜底
+//! （管理页面通过 URL 带 token 联调；设备侧仍走 Authorization 头）。见 [`auth_ok`]。
+//!
+//! ## `/api/config` 读写语义
+//! - `GET`：若启动指定了配置文件则实时读盘，否则返回内存中的默认（mock）配置。
+//! - `PUT`/`POST`：写回启动加载的配置文件（TOML，**原注释会被覆盖丢失**）。
+//!   内置默认（mock）启动、`config_path` 为 `None` 时返回 400（无法持久化）。
+//! - ⚠️ 引擎相关参数（ASR/TTS/LLM）在启动时构建，改配置后**需重启 server** 才生效；
+//!   仅 `[server]` 部分（监听 / token / 管理页目录）下次启动生效。
 
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
 use axum::{
-    extract::{ws::WebSocketUpgrade, ws::WebSocket, ws::Message, ws::Utf8Bytes, Json, Query, State},
+    extract::{ws::WebSocketUpgrade, ws::WebSocket, ws::Message, Json, Query, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
@@ -18,7 +38,7 @@ use uuid::Uuid;
 use crate::config::{Config, ServerConfig};
 use crate::engine::Engines;
 use crate::protocol::{AudioParams, BinVersion, ClientHello, ClientMessage, ServerMessage};
-use crate::session::{run_session, SessionParams};
+use crate::session::{run_session, send_text, SessionParams};
 
 /// 构造 Axum 路由：API（健康检查 / WebSocket）之外，其余路径静态托管
 /// `config.server.admin_dir` 指向的管理页面（h5App 构建产物，含 index.html）。
@@ -157,18 +177,18 @@ async fn handle_handshake(
     let session_id = Uuid::new_v4().to_string();
 
     // 服务器 hello：写入下行音频参数（设备据此解码播放）。
+    // session_id 与会话主循环共用同一个（对齐设备侧关联语义），故 clone 一份进 hello。
     let server_hello = ServerMessage::Hello {
         transport: "websocket",
-        session_id: Some(session_id),
+        session_id: Some(session_id.clone()),
         audio_params: Some(AudioParams {
-            format: "opus".to_string(),
+            format: AudioParams::default().format,
             sample_rate: downlink_sr,
             channels: engines.config.audio.channels,
             frame_duration: downlink_frame_ms,
         }),
     };
-    socket
-        .send(Message::Text(Utf8Bytes::from(server_hello.to_json())))
+    send_text(&mut socket, &server_hello)
         .await
         .map_err(|e| anyhow::anyhow!("发送 server hello 失败: {e}"))?;
 
@@ -179,7 +199,7 @@ async fn handle_handshake(
         downlink_sr,
         downlink_frame_ms,
     };
-    run_session(socket, engines, params).await
+    run_session(socket, engines, params, session_id).await
 }
 
 async fn recv_hello(socket: &mut WebSocket) -> anyhow::Result<ClientHello> {

@@ -1,8 +1,19 @@
-//! 服务配置：从 TOML 文件加载，并提供 mock 友好的默认值。
+//! 服务配置：从 TOML 文件加载（`Config::load`），并提供 mock 友好的默认值。
 //!
-//! - 真实部署：用 `--config config.toml` 加载完整配置（路径指向模型文件）。
-//! - 本地无模型测试：不带 `--config` 时回退到 [`Config::default()`]，
-//!   其 `asr.backend` / `tts.backend` 均为 `mock`，可直接 `cargo run`。
+//! ## 后端门控与 mock 默认
+//!
+//! - 默认（无 `--config`）即 [`Config::default()`]：`asr`/`tts`/`llm` 全是 `mock`，
+//!   因此裸 `cargo run` 即可端到端跑通协议链路，无需任何外部服务或模型文件。
+//! - `[asr]`/`[vad]`/`[tts]` 的模型路径等字段**仅在 `sherpa` feature 下被消费**；
+//!   mock 模式下这些字段仅作为配置 schema 保留（`#[allow(dead_code)]`），可留空。
+//! - 切换真实引擎：把对应 `backend` 改为 `"sherpa"` 并填模型路径，编译加 `--features sherpa`，
+//!   运行时需系统 `libopus` + 本地模型文件（见 `../README.md` 与 `../agents.md` §5）。
+//!
+//! ## 加载优先级与持久化
+//!
+//! 配置从哪来、能否被管理页写回，由 `main.rs` 的 `load_config` 决定
+//!（`XIAOZHI_CONFIG` → `--config` → 内置默认）；`GET/PUT /api/config` 的读写语义
+//! 见 `../server/src/ws.rs`。本文件只负责结构与默认值。
 
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -88,6 +99,18 @@ pub struct VadConfig {
     pub min_speech_duration: f32,
 }
 
+impl VadConfig {
+    /// 是否启用真实 VAD：模型路径非空即视为真实引擎。
+    ///
+    /// 与 ASR/TTS 不同，VAD 是**独立轻量模型**，可独立于 ASR/TTS 单独启用
+    /// ——「真 VAD + mock ASR/TTS」是合法组合（用于纯离线切句）。
+    /// 因此 VAD 走自己的判定入口，不与 ASR/TTS 的 `backend="sherpa"` 强耦合。
+    #[allow(dead_code)]
+    pub fn is_real(&self) -> bool {
+        !self.model.is_empty()
+    }
+}
+
 // 模型路径等字段仅 `sherpa` feature 下消费；mock 模式下仅作为配置 schema 保留。
 #[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -135,6 +158,10 @@ pub struct LlmConfig {
     pub max_history: usize,
     #[serde(default = "default_temperature")]
     pub temperature: f32,
+    /// 是否流式（SSE）。默认 `true`：逐 token 返回，配合 session 按句下发降低首字延迟；
+    /// `false` 退回整段（兼容不支持 SSE 的端点）。
+    #[serde(default = "default_stream")]
+    pub stream: bool,
 }
 
 impl Default for ServerConfig {
@@ -207,6 +234,7 @@ impl Default for LlmConfig {
             system_prompt: default_system_prompt(),
             max_history: default_max_history(),
             temperature: default_temperature(),
+            stream: default_stream(),
         }
     }
 }
@@ -227,6 +255,33 @@ impl Config {
 
     pub fn tts_is_mock(&self) -> bool {
         self.tts.backend.eq_ignore_ascii_case("mock")
+    }
+
+    /// 是否处于「真实音频模式」：`sherpa` feature 且 ASR/TTS 均为真实引擎。
+    /// 会话内多处需要此判定，统一在此派生，避免各处重复计算导致漂移。
+    pub fn real_audio(&self) -> bool {
+        cfg!(feature = "sherpa") && !self.asr_is_mock() && !self.tts_is_mock()
+    }
+}
+
+impl AsrConfig {
+    /// 是否为 `sherpa` 真实引擎（而非 `mock`）。
+    pub fn is_sherpa(&self) -> bool {
+        self.backend.eq_ignore_ascii_case("sherpa")
+    }
+}
+
+impl TtsConfig {
+    /// 是否为 `sherpa` 真实引擎（而非 `mock`）。
+    pub fn is_sherpa(&self) -> bool {
+        self.backend.eq_ignore_ascii_case("sherpa")
+    }
+}
+
+impl LlmConfig {
+    /// 是否为 `mock` 本地回显（而非真实 HTTP）。
+    pub fn is_mock(&self) -> bool {
+        self.backend.eq_ignore_ascii_case("mock")
     }
 }
 
@@ -300,7 +355,7 @@ fn default_speed() -> f32 {
     1.0
 }
 fn default_api_base() -> String {
-    "https://api.example.com/v1/chat/completions".into()
+    "https://api.example.com/v1/responses".into()
 }
 fn default_llm_backend() -> String {
     "mock".into()
@@ -316,6 +371,9 @@ fn default_max_history() -> usize {
 }
 fn default_temperature() -> f32 {
     0.7
+}
+fn default_stream() -> bool {
+    true
 }
 
 impl Default for Config {
@@ -359,7 +417,7 @@ impl Default for Config {
                 lang: default_tts_lang(),
                 speaker: 0,
                 speed: default_speed(),
-                num_threads: default_num_threads(),
+                num_threads: default_tts_threads(),
             },
             llm: LlmConfig {
                 backend: default_llm_backend(),
@@ -369,6 +427,7 @@ impl Default for Config {
                 system_prompt: default_system_prompt(),
                 max_history: default_max_history(),
                 temperature: default_temperature(),
+                stream: default_stream(),
             },
         }
     }

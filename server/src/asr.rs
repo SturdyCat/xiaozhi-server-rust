@@ -6,6 +6,10 @@
 //!
 //! 注意：SenseVoice 在 sherpa-onnx 中是**离线**识别器，方案为
 //! VAD 切出语音段后逐段送入识别（非 `OnlineRecognizer` 流式）。
+//!
+//! ⚠️ [`AsrEngine::recognize`] 是**同步阻塞的 CPU 密集调用**（SenseVoice 推理）。
+//! 调用方（[`crate::session`]）必须用 `tokio::task::spawn_blocking` 隔离，
+//! 否则独占 tokio worker，期间同 runtime 的其他会话/HTTP 全部卡死。
 
 use crate::config::AsrConfig;
 use anyhow::Result;
@@ -74,7 +78,7 @@ impl AsrEngine for SherpaAsr {
 
 /// 根据配置构造 ASR 引擎。
 pub fn build_asr(cfg: &AsrConfig) -> Result<Arc<dyn AsrEngine>> {
-    if cfg.backend.eq_ignore_ascii_case("sherpa") {
+    if cfg.is_sherpa() {
         #[cfg(feature = "sherpa")]
         {
             let engine = SherpaAsr::new(cfg).context("创建 SenseVoice 识别器失败")?;

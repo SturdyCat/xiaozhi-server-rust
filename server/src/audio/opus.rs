@@ -14,41 +14,53 @@
 pub struct OpusFrameEncoder {
     enc: audiopus::coder::Encoder,
     out: Vec<u8>,
+    /// 复用的 i16 缓冲：每帧编码前填充，避免下行热路径每帧堆分配。
+    pcm: Vec<i16>,
+}
+
+/// 把整数采样率映射为 `audiopus::SampleRate`；编码/解码构造共用，避免 5 臂 match 重复。
+#[cfg(feature = "sherpa")]
+fn to_sample_rate(sr: u32) -> anyhow::Result<audiopus::SampleRate> {
+    use audiopus::SampleRate;
+    Ok(match sr {
+        8000 => SampleRate::Hz8000,
+        12000 => SampleRate::Hz12000,
+        16000 => SampleRate::Hz16000,
+        24000 => SampleRate::Hz24000,
+        48000 => SampleRate::Hz48000,
+        _ => anyhow::bail!("不支持的 Opus 采样率 {sr}"),
+    })
 }
 
 #[cfg(feature = "sherpa")]
 impl OpusFrameEncoder {
     /// `sample_rate` 为下行采样率（Opus 仅支持 8k/12k/16k/24k/48k）。
     pub fn new(sample_rate: u32) -> anyhow::Result<Self> {
-        use audiopus::{coder::Encoder, Application, Channels, SampleRate};
+        use audiopus::{coder::Encoder, Application, Channels};
 
-        let sr = match sample_rate {
-            8000 => SampleRate::Hz8000,
-            12000 => SampleRate::Hz12000,
-            16000 => SampleRate::Hz16000,
-            24000 => SampleRate::Hz24000,
-            48000 => SampleRate::Hz48000,
-            _ => anyhow::bail!("不支持的 Opus 采样率 {sample_rate}"),
-        };
+        let sr = to_sample_rate(sample_rate)?;
 
         let enc = Encoder::new(sr, Channels::Mono, Application::Voip)
             .map_err(|e| anyhow::anyhow!("创建 Opus 编码器失败: {e:?}"))?;
         Ok(Self {
             enc,
             out: vec![0u8; 4000],
+            pcm: Vec::with_capacity(2880),
         })
     }
 
     /// 编码一帧（须为整帧长）。同一实例连续调用即构成连续 Opus 流。
     pub fn encode_frame(&mut self, samples: &[f32]) -> anyhow::Result<Vec<u8>> {
-        // audiopus 接受 i16 输入；按帧长整帧编码。
-        let pcm: Vec<i16> = samples
-            .iter()
-            .map(|s| (s.clamp(-1.0, 1.0) * 32767.0) as i16)
-            .collect();
+        // audiopus 接受 i16 输入；按帧长整帧编码（复用 self.pcm 缓冲，避免每帧分配）。
+        self.pcm.clear();
+        self.pcm.extend(
+            samples
+                .iter()
+                .map(|s| (s.clamp(-1.0, 1.0) * 32767.0) as i16),
+        );
         let len = self
             .enc
-            .encode(&pcm, &mut self.out)
+            .encode(&self.pcm, &mut self.out)
             .map_err(|e| anyhow::anyhow!("Opus 编码失败: {e:?}"))?;
         Ok(self.out[..len].to_vec())
     }
@@ -83,16 +95,9 @@ pub struct OpusFrameDecoder {
 #[cfg(feature = "sherpa")]
 impl OpusFrameDecoder {
     pub fn new(sample_rate: u32) -> anyhow::Result<Self> {
-        use audiopus::{coder::Decoder, Channels, SampleRate};
+        use audiopus::{coder::Decoder, Channels};
 
-        let sr = match sample_rate {
-            8000 => SampleRate::Hz8000,
-            12000 => SampleRate::Hz12000,
-            16000 => SampleRate::Hz16000,
-            24000 => SampleRate::Hz24000,
-            48000 => SampleRate::Hz48000,
-            _ => anyhow::bail!("不支持的 Opus 采样率 {sample_rate}"),
-        };
+        let sr = to_sample_rate(sample_rate)?;
 
         let dec = Decoder::new(sr, Channels::Mono)
             .map_err(|e| anyhow::anyhow!("创建 Opus 解码器失败: {e:?}"))?;
