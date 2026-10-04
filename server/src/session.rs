@@ -13,8 +13,9 @@ use futures_util::{FutureExt, StreamExt};
 
 use crate::audio::opus::{OpusFrameDecoder, OpusFrameEncoder};
 use crate::audio::resample::resample;
+use crate::config::Config;
 use crate::engine::Engines;
-use crate::llm::LlmEvent;
+use crate::llm::{LlmEvent, build_llm};
 use crate::protocol::{BinVersion, ClientMessage, ServerMessage, unwrap_uplink, wrap_downlink};
 use crate::vad::VadEngine;
 
@@ -325,6 +326,53 @@ impl<'a> Session<'a> {
                     frames as u32 * self.params.downlink_frame_ms,
                     self.params.downlink_frame_ms
                 );
+            }
+            ClientMessage::LlmTest { text, .. } => {
+                if text.trim().is_empty() {
+                    return Ok(());
+                }
+                // 测试台 LLM 连通性验证：按**磁盘上最新配置**临时构建 LLM 客户端——
+                // 引擎在启动时构建（engine.rs），改完配置无需重启即可验证刚保存的
+                // api_base/api_key/model；未指定配置文件（内置 mock 默认）或读盘失败
+                // 时退回启动时的内存配置。单轮直调、不读写会话历史。
+                let llm_cfg = match &self.engines.config_path {
+                    Some(p) => Config::load(p).map(|c| c.llm).unwrap_or_else(|e| {
+                        tracing::warn!("session {session_id} LLM 测试读配置失败（用启动配置）: {e}");
+                        self.engines.config.llm.clone()
+                    }),
+                    None => self.engines.config.llm.clone(),
+                };
+                tracing::info!(
+                    "session {session_id} LLM 测试：backend={} model={} api_base={}",
+                    llm_cfg.backend,
+                    llm_cfg.model,
+                    llm_cfg.api_base
+                );
+                let llm = build_llm(&llm_cfg);
+                let t0 = std::time::Instant::now();
+                let result = llm.chat_stream(&[], &text, None, |_| true).await;
+                let elapsed = t0.elapsed().as_millis() as u64;
+                let (state, reply) = match result {
+                    Ok(r) => ("ok", r.text),
+                    Err(e) => {
+                        tracing::warn!("session {session_id} LLM 测试失败（耗时 {elapsed}ms）: {e:#}");
+                        ("error", format!("{e:#}"))
+                    }
+                };
+                tracing::info!(
+                    "session {session_id} LLM 测试完成：{state}，耗时 {elapsed}ms（{} 字）",
+                    reply.chars().count()
+                );
+                send_text(
+                    &mut self.socket,
+                    &ServerMessage::LlmTestResult {
+                        session_id,
+                        state: state.to_string(),
+                        text: Some(reply),
+                        elapsed_ms: Some(elapsed),
+                    },
+                )
+                .await?;
             }
             ClientMessage::Hello(_) => {
                 tracing::warn!("会话内收到重复 hello，忽略");

@@ -9,7 +9,7 @@ import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
  *
  * 通过 Kuikly Module 机制桥接原生（macOS）侧实现的 [XiaoZhiModule]（OpenKuiklyIOSRender 下
  * 同名 KRBaseModule 子类），负责：
- * - 与 server 的 WebSocket 测试协议建连 / 收发（hello / asr_test / tts_test）
+ * - 与 server 的 WebSocket 测试协议建连 / 收发（hello / asr_test / tts_test / llm_test）
  * - 麦克风采集（Opus 编码后上行）与 TTS 音频播放
  *
  * 原生实现见 client/apps/macosApp/XiaoZhiModule.m。web/Android/iOS 不注册该模块，
@@ -138,6 +138,21 @@ class XiaoZhiModule : Module() {
                 put("lang", lang)
                 put("speed", speed)
             },
+            callback = callback,
+            syncCall = false,
+        )
+    }
+
+    /**
+     * LLM 对话测试：发送 llm_test（服务端按磁盘上最新 [llm] 配置直调 LLM，单轮无历史）。
+     * 结果经回调返回：{state: "ok"|"error", text: 回复正文或错误信息, elapsedMs: 服务端耗时}。
+     * 与 speak 相同为「稍后一次性回调」，keepCallbackAlive=false。
+     */
+    fun llmTest(text: String, callback: CallbackFn? = null) {
+        toNative(
+            keepCallbackAlive = false,
+            methodName = "llmTest",
+            param = JSONObject().apply { put("text", text) },
             callback = callback,
             syncCall = false,
         )

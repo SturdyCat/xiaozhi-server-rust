@@ -52,6 +52,7 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
 @property (nonatomic, assign) BOOL recording;
 @property (nonatomic, copy, nullable) id asrCallback;   // keepCallbackAlive：待服务端回 stt 时回调
 @property (nonatomic, copy, nullable) id speakCallback; // 待 tts stop 时回调
+@property (nonatomic, copy, nullable) id llmCallback;   // 待服务端回 llm_test 时回调
 @property (nonatomic, assign) uint32_t downlinkSampleRate;
 // ===== Opus 编解码（系统 AudioToolbox，实测可用；Catalyst 下无需第三方库）=====
 @property (nonatomic, assign) AudioConverterRef downlinkDecoder; // Opus(下行率) → LPCM float32
@@ -218,6 +219,17 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
         @"speaker": params[@"speaker"] ?: @(0),
         @"lang": params[@"lang"] ?: @"zh",
         @"speed": params[@"speed"] ?: @(1.0)
+    }];
+}
+
+// llmTest(text) → 发送 llm_test；服务端按磁盘上最新 [llm] 配置直调 LLM（单轮无历史），
+// 结果经 llm_test 回调返回：{state: "ok"|"error", text: 回复正文或错误信息, elapsedMs}。
+- (void)llmTest:(NSDictionary *)args {
+    NSDictionary *params = [self parseParams:args[KR_PARAM_KEY]];
+    self.llmCallback = args[KR_CALLBACK_KEY];
+    [self sendJSON:@{
+        @"type": @"llm_test",
+        @"text": params[@"text"] ?: @""
     }];
 }
 
@@ -399,6 +411,17 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
                 [self invoke:self.speakCallback result:@{@"state": @"stop"} success:YES error:nil];
                 self.speakCallback = nil;
             }
+        }
+        return;
+    }
+    if ([type isEqualToString:@"llm_test"]) {
+        if (self.llmCallback) {
+            [self invoke:self.llmCallback result:@{
+                @"state": dict[@"state"] ?: @"error",
+                @"text": dict[@"text"] ?: @"",
+                @"elapsedMs": dict[@"elapsed_ms"] ?: @(0)
+            } success:YES error:nil];
+            self.llmCallback = nil; // one-shot
         }
         return;
     }

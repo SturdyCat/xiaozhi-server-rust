@@ -232,6 +232,54 @@ class TestBenchState {
     }
 
     // ============================================================
+    // LLM 对话测试：发 llm_test → 服务端按最新配置直调 LLM → llm_test 回调
+    // ============================================================
+
+    var llmPrompt by observable("你好，请用一句话介绍你自己")
+
+    /** 回复正文（state=error 时是服务端返回的可读错误信息） */
+    var llmReply by observable("")
+    var llmBusy by observable(false)
+    var llmOk by observable(false)
+
+    /** 服务端直调 LLM 的总耗时（含到 LLM API 的网络往返），由 llm_test 回包携带 */
+    var llmElapsedMs by observable(0)
+
+    fun testLlm(ctx: Pager) {
+        if (llmBusy) return
+        if (!connected) {
+            statusMsg = "请先在「连接」卡片建立连接"
+            return
+        }
+        if (llmPrompt.isBlank()) {
+            statusMsg = "请输入测试提示词"
+            return
+        }
+        llmBusy = true
+        llmReply = ""
+        llmOk = false
+        llmElapsedMs = 0
+        statusMsg = "LLM 测试中…"
+        xz(ctx).llmTest(llmPrompt) { result ->
+            llmBusy = false
+            llmOk = result?.optString("state", "error") == "ok"
+            llmElapsedMs = result?.optInt("elapsedMs", 0) ?: 0
+            llmReply = result?.optString("text", "")?.ifBlank {
+                // 空回复单独提示（state=ok 但正文为空，如模型只回了工具调用）
+                if (llmOk) "（LLM 返回了空回复）" else ""
+            } ?: ""
+            statusMsg = if (llmOk) "LLM 正常（服务端耗时 ${llmElapsedMs}ms）" else "LLM 测试失败：$llmReply"
+        }
+        // 超时兜底：真实 API 网络+推理可能较慢；60s 未回恢复按钮
+        ctx.setTimeout(60_000) {
+            if (llmBusy) {
+                llmBusy = false
+                statusMsg = "LLM 测试超时：请检查 api_base/api_key 或服务器日志"
+            }
+        }
+    }
+
+    // ============================================================
     // 播放器控制（录音 / TTS 共用；100ms 轮询驱动进度）
     // ============================================================
 
@@ -381,8 +429,8 @@ object VoiceCatalog {
 data class VoiceOption(val id: String, val sid: Int)
 
 /**
- * 渲染测试台三个分组卡片（连接 / ASR 识别测试 / TTS 合成测试）。
- * 宽屏（wide()=true）：连接 + ASR 一行两列，TTS（奇数张）独占整行；窄屏：纵向单列。
+ * 渲染测试台四个分组卡片（连接 / ASR 识别测试 / TTS 合成测试 / LLM 对话测试）。
+ * 宽屏（wide()=true）：连接 + ASR 一行两列、TTS + LLM 一行两列；窄屏：纵向单列。
  *
  * ⚠️ 响应式铁律（本项目反复踩坑）：凡依赖 observable 的文案/启用态/分支，必须写在
  * vif/velse 条件闭包或 attr 闭包内——构建期裸读（if/when 直接读 observable）只求值一次，
@@ -587,6 +635,82 @@ fun ViewContainer<*, *>.renderBench(bench: TestBenchState, ctx: Pager, wide: () 
                         durationText = { formatDuration(bench.ttsDuration) },
                         enabled = { !bench.ttsBusy },
                     ) { bench.togglePlayback(ctx, "tts") }
+                }
+            },
+            AdminCard("LLM 对话测试") {
+                Text {
+                    attr {
+                        fontSize(AdminType.caption)
+                        color(AdminColors.textSecondary)
+                        marginTop(AdminSpace.xs)
+                        text("流程：发送提示词 → 服务器按最新保存的 [llm] 配置直调 LLM → 返回回复（改配置后无需重启即可验证）")
+                    }
+                }
+                labeledField("测试提示词", { bench.llmPrompt }, { bench.llmPrompt = it }, height = 80f)
+                actionRow {
+                    // 按钮行只放按钮（见 ASR 卡注释）；未连接不置灰（enabled 在构建期读取
+                    // connected 不会随状态刷新），由 testLlm 内守卫并提示。
+                    vif({ bench.llmBusy }) {
+                        primaryButton("测试中…", enabled = false, loading = true) { }
+                    }
+                    velse {
+                        primaryButton("发送测试") { bench.testLlm(ctx) }
+                    }
+                }
+                // 状态徽标：独立一行（每态一个 vif 分支——裸读 when 不随状态更新）
+                View {
+                    attr {
+                        flexDirectionRow()
+                        marginTop(AdminSpace.sm)
+                    }
+                    vif({ bench.llmBusy }) {
+                        statusBadge({ "busy" }, { "测试中" })
+                    }
+                    velse {
+                        vif({ bench.llmReply.isNotEmpty() && bench.llmOk }) {
+                            statusBadge({ "connected" }, { "正常 · ${bench.llmElapsedMs}ms" })
+                        }
+                        velse {
+                            vif({ bench.llmReply.isNotEmpty() }) {
+                                statusBadge({ "error" }, { "失败" })
+                            }
+                            velse {
+                                statusBadge({ "idle" }, { "空闲" })
+                            }
+                        }
+                    }
+                }
+                View { attr { height(AdminSpace.md) } }
+                groupedCard("LLM 回复", withDivider = false) {
+                    vif({ bench.llmReply.isEmpty() }) {
+                        Text {
+                            attr {
+                                fontSize(AdminType.body)
+                                color(AdminColors.textTertiary)
+                                text("回复将显示在此（配置页可修改 backend/api_base/api_key/model）")
+                            }
+                        }
+                    }
+                    velse {
+                        Text {
+                            attr {
+                                fontSize(AdminType.body)
+                                color(if (bench.llmOk) AdminColors.textPrimary else AdminColors.danger)
+                                text(bench.llmReply)
+                            }
+                        }
+                        // 服务端直调耗时：llm_test 回包携带（含到 LLM API 的网络往返）
+                        vif({ bench.llmOk && bench.llmElapsedMs > 0 }) {
+                            Text {
+                                attr {
+                                    fontSize(AdminType.micro)
+                                    color(AdminColors.textTertiary)
+                                    marginTop(AdminSpace.xs)
+                                    text("服务端耗时 ${bench.llmElapsedMs} ms")
+                                }
+                            }
+                        }
+                    }
                 }
             },
         ),

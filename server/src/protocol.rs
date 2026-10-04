@@ -146,6 +146,13 @@ pub enum ClientMessage {
         #[serde(default)]
         speed: Option<f32>,
     },
+    /// 测试台专用：直接调用 LLM 验证连通性（跳过 ASR/TTS，单轮无历史）。
+    /// 服务端按磁盘上最新 `[llm]` 配置临时构建客户端，改完配置无需重启即可验证。
+    LlmTest {
+        #[serde(default)]
+        session_id: Option<String>,
+        text: String,
+    },
 }
 
 /// 服务器 → 设备 的文本消息。
@@ -180,6 +187,18 @@ pub enum ServerMessage {
         state: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         text: Option<String>,
+    },
+    /// 测试台专用：LLM 测试结果（结束时一次性下发；`state=ok` 时 `text` 为回复正文，
+    /// `state=error` 时 `text` 为可读错误信息；`elapsed_ms` 为服务端直调 LLM 的总耗时）。
+    #[serde(rename = "llm_test")]
+    LlmTestResult {
+        session_id: String,
+        /// ok | error
+        state: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        text: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        elapsed_ms: Option<u64>,
     },
     System {
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -319,5 +338,35 @@ mod tests {
         let wrapped = wrap_downlink(BinVersion::V3, &opus, 0);
         assert_eq!(wrapped.len(), 4 + opus.len());
         assert_eq!(unwrap_uplink(BinVersion::V3, &wrapped), &opus);
+    }
+
+    #[test]
+    fn llm_test_client_message_deserializes_snake_case() {
+        // ClientMessage 用 rename_all = "snake_case"：多单词变体必须是 llm_test（小写下划线），
+        // 写错（如 llmTest）会在运行时报 unknown variant 且 cargo check 无法发现。
+        let cm: ClientMessage =
+            serde_json::from_str(r#"{"type":"llm_test","text":"你好"}"#).expect("解析失败");
+        assert!(
+            matches!(cm, ClientMessage::LlmTest { text, .. } if text == "你好"),
+            "应反序列化为 LlmTest 变体"
+        );
+    }
+
+    #[test]
+    fn llm_test_result_serializes_with_snake_case_tag() {
+        // ServerMessage 用 rename_all = "lowercase"（LlmTestResult 默认会变成 "llmtest"），
+        // 显式 rename 后 tag 必须是 "llm_test"，与上行命名对称。
+        let sm = ServerMessage::LlmTestResult {
+            session_id: "s1".to_string(),
+            state: "ok".to_string(),
+            text: Some("回复".to_string()),
+            elapsed_ms: Some(123),
+        };
+        let v: serde_json::Value = serde_json::from_str(&sm.to_json()).expect("序列化失败");
+        assert_eq!(v["type"], "llm_test");
+        assert_eq!(v["session_id"], "s1");
+        assert_eq!(v["state"], "ok");
+        assert_eq!(v["text"], "回复");
+        assert_eq!(v["elapsed_ms"], 123);
     }
 }

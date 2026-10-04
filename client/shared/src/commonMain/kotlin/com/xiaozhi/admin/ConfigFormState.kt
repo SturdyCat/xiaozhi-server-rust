@@ -73,6 +73,7 @@ class ConfigFormState {
     var llmSystemPrompt by observable("")
     var llmMaxHistory by observable("10")
     var llmTemperature by observable("0.7")
+    var llmStream by observable("true")
 
     // ===== 状态 =====
     var dirty by observable(false)
@@ -148,6 +149,9 @@ class ConfigFormState {
                 put("system_prompt", llmSystemPrompt)
                 put("max_history", llmMaxHistory.toIntOrNull() ?: 10)
                 put("temperature", llmTemperature.toDoubleOrNull() ?: 0.7)
+                // ⚠️ stream 必须回传：serde 端有 default，漏传会被重置为 true，
+                // 手工在 TOML 里设的 stream=false 经 UI 保存一次就会丢。
+                put("stream", llmStream.toBooleanStrictOrNull() ?: true)
             })
         }
         // ⚠️ 必须显式带 Content-Type: application/json：
@@ -223,6 +227,7 @@ class ConfigFormState {
             llmSystemPrompt = l.optString("system_prompt", llmSystemPrompt)
             llmMaxHistory = l.optInt("max_history", llmMaxHistory.toIntOrNull() ?: 10).toString()
             llmTemperature = l.optDouble("temperature", llmTemperature.toDoubleOrNull() ?: 0.7).toString()
+            llmStream = l.optBoolean("stream", llmStream.toBooleanStrictOrNull() ?: true).toString()
         }
     }
 
@@ -311,6 +316,9 @@ fun ViewContainer<*, *>.renderForm(form: ConfigFormState, wide: () -> Boolean = 
                 labeledField("system_prompt", { form.llmSystemPrompt }, { form.llmSystemPrompt = it; markDirty() }, height = 100f)
                 labeledField("max_history", { form.llmMaxHistory }, { form.llmMaxHistory = it; markDirty() })
                 labeledField("temperature", { form.llmTemperature }, { form.llmTemperature = it; markDirty() })
+                switchRow("stream（SSE 流式）", form.llmStream == "true") {
+                    form.llmStream = if (form.llmStream == "true") "false" else "true"; markDirty()
+                }
             },
         ),
     )

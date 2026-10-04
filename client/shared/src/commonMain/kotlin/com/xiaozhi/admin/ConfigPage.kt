@@ -3,6 +3,8 @@ package com.xiaozhi.admin
 import com.tencent.kuikly.core.annotations.Page
 import com.tencent.kuikly.core.base.ViewBuilder
 import com.tencent.kuikly.core.base.ViewContainer
+import com.tencent.kuikly.core.directives.velse
+import com.tencent.kuikly.core.directives.vif
 import com.tencent.kuikly.core.pager.Pager
 import com.tencent.kuikly.core.reactive.handler.observable
 import com.tencent.kuikly.core.views.Scroller
@@ -42,10 +44,13 @@ class ConfigPage : Pager() {
 
             // ⚠️ 非限定调用（接收者=当前容器），组件才能挂进正确的父容器
             largeTitleBar({ "配置" }, trailing = {
-                primaryButton(
-                    if (ctx.form.saving) "保存中…" else "保存配置",
-                    enabled = !ctx.form.saving,
-                ) { ctx.form.save(ctx) }
+                // 忙碌态 vif/velse 分支重建（构建期裸读 saving 不响应式更新）；loading=true → 官方 ActivityIndicator 菊花
+                vif({ ctx.form.saving }) {
+                    primaryButton("保存中…", enabled = false, loading = true) { }
+                }
+                velse {
+                    primaryButton("保存配置") { ctx.form.save(ctx) }
+                }
             })
 
             Scroller {

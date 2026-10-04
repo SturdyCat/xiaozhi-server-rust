@@ -61,9 +61,13 @@ num_threads = 4
 [llm]
 # "mock" 使用本地回显（零配置联调）；"http" 调用真实 OpenAI 兼容接口。
 backend = "http"
-api_base = "https://api.example.com/v1/chat/completions"
+# OpenAI **Responses API** 端点（POST /v1/responses，非 chat/completions）；
+# 请求体为 model/instructions/input[]/stream，SSE 流式见下方 stream。
+api_base = "https://api.example.com/v1/responses"
 api_key = "YOUR_API_KEY"
 model = "gpt-4o"
 system_prompt = "你是一个有用且简洁的中文语音助手。"
 max_history = 10
 temperature = 0.7
+# SSE 流式（逐 token 返回，配合按句下发降低首字延迟）；false 退回整段解析
+stream = true

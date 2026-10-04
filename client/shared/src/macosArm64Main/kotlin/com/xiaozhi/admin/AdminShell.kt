@@ -136,12 +136,16 @@ class AdminShell : Pager() {
                             },
                             trailing = {
                                 vif({ ctx.selectedSection == "config" }) {
-                                    primaryButton(
-                                        if (ctx.form.saving) "保存中…" else "保存配置",
-                                        enabled = !ctx.form.saving,
-                                    ) {
-                                        ctx.form.save(ctx, ctx.conn.baseUrl)
-                                        ctx.toast = ctx.form.statusMsg
+                                    // 忙碌态 vif/velse 分支重建（构建期裸读 saving 不响应式更新，
+                                    // 且 event 层 active 定死 true 挡不住重复点击）；loading=true → 官方 ActivityIndicator 菊花。
+                                    vif({ ctx.form.saving }) {
+                                        primaryButton("保存中…", enabled = false, loading = true) { }
+                                    }
+                                    velse {
+                                        primaryButton("保存配置") {
+                                            ctx.form.save(ctx, ctx.conn.baseUrl)
+                                            ctx.toast = ctx.form.statusMsg
+                                        }
                                     }
                                 }
                                 vif({ ctx.selectedSection == "testbench" }) {
