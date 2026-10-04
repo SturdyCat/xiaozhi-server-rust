@@ -23,10 +23,13 @@
 mod asr;
 mod audio;
 mod config;
+mod downlink;
 mod engine;
 mod llm;
 mod protocol;
 mod session;
+mod sse;
+mod splitter;
 mod tts;
 mod vad;
 mod ws;

@@ -182,10 +182,10 @@ async fn handle_handshake(
         transport: "websocket",
         session_id: Some(session_id.clone()),
         audio_params: Some(AudioParams {
-            format: AudioParams::default().format,
             sample_rate: downlink_sr,
             channels: engines.config.audio.channels,
             frame_duration: downlink_frame_ms,
+            ..AudioParams::default()
         }),
     };
     send_text(&mut socket, &server_hello)

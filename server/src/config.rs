@@ -18,7 +18,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct Config {
     #[serde(default)]
     pub server: ServerConfig,
@@ -45,7 +45,7 @@ pub struct ServerConfig {
     #[serde(default = "default_worker_threads")]
     pub worker_threads: u32,
     /// 管理页面（h5App 构建产物）静态目录；server 在 `/` 直接托管该目录。
-    /// 为空或目录不存在时，`/` 返回友好提示而非崩溃。默认 "../client/apps/h5App/dist"。
+    /// 为空或目录不存在时，`/` 返回友好提示而非崩溃。默认 "../client/apps/h5App/web"。
     #[serde(default = "default_admin_dir")]
     pub admin_dir: String,
 }
@@ -376,59 +376,3 @@ fn default_stream() -> bool {
     true
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Config {
-            server: ServerConfig {
-                listen: default_listen(),
-                expected_token: String::new(),
-                worker_threads: default_worker_threads(),
-                admin_dir: default_admin_dir(),
-            },
-            audio: AudioConfig {
-                downlink_sample_rate: default_downlink_sr(),
-                downlink_frame_duration_ms: default_frame_ms(),
-                channels: default_channels(),
-                binary_protocol_version: default_bin_ver(),
-            },
-            asr: AsrConfig {
-                backend: default_asr_backend(),
-                model: String::new(),
-                tokens: String::new(),
-                language: default_language(),
-                use_itn: default_true(),
-                num_threads: default_num_threads(),
-                provider: default_provider(),
-            },
-            vad: VadConfig {
-                model: String::new(),
-                threshold: default_threshold(),
-                min_silence_duration: default_min_silence(),
-                min_speech_duration: default_min_speech(),
-            },
-            tts: TtsConfig {
-                backend: default_tts_backend(),
-                model: String::new(),
-                voices: String::new(),
-                tokens: String::new(),
-                data_dir: String::new(),
-                dict_dir: String::new(),
-                lexicon: String::new(),
-                lang: default_tts_lang(),
-                speaker: 0,
-                speed: default_speed(),
-                num_threads: default_tts_threads(),
-            },
-            llm: LlmConfig {
-                backend: default_llm_backend(),
-                api_base: default_api_base(),
-                api_key: String::new(),
-                model: default_llm_model(),
-                system_prompt: default_system_prompt(),
-                max_history: default_max_history(),
-                temperature: default_temperature(),
-                stream: default_stream(),
-            },
-        }
-    }
-}

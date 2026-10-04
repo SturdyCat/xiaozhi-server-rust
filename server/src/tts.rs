@@ -88,13 +88,19 @@ impl TtsEngine for SherpaTts {
     }
 }
 
+/// sherpa 真引擎构造（两入口共用）：集中 `SherpaTts::new` 与报错文案，避免重复。
+#[cfg(feature = "sherpa")]
+fn build_sherpa_tts(cfg: &TtsConfig) -> Result<Arc<dyn TtsEngine>> {
+    let engine = SherpaTts::new(cfg).context("创建 Kokoro TTS 失败")?;
+    Ok(Arc::new(engine))
+}
+
 /// 根据配置构造 TTS 引擎。
 pub fn build_tts(cfg: &TtsConfig) -> Result<Arc<dyn TtsEngine>> {
     if cfg.is_sherpa() {
         #[cfg(feature = "sherpa")]
         {
-            let engine = SherpaTts::new(cfg).context("创建 Kokoro TTS 失败")?;
-            return Ok(Arc::new(engine));
+            return build_sherpa_tts(cfg);
         }
         #[cfg(not(feature = "sherpa"))]
         {
@@ -112,7 +118,7 @@ pub fn build_tts_with_lang(cfg: &TtsConfig, lang: &str) -> Result<Arc<dyn TtsEng
         {
             let mut c = cfg.clone();
             c.lang = lang.to_string();
-            let engine = SherpaTts::new(&c)
+            let engine = build_sherpa_tts(&c)
                 .with_context(|| format!("创建 lang={lang} 的 Kokoro TTS 失败"))?;
             return Ok(Arc::new(engine));
         }
