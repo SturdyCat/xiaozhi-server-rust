@@ -64,7 +64,7 @@ cd server && ~/.cargo/bin/cargo run -- --config config.toml
 
 配置字段说明见 [`server/config.example.toml`](./server/config.example.toml)。关键项：
 
-- `server.listen`：监听地址，默认 `0.0.0.0:8000`。
+- `server.port`：监听端口，默认 `8000`（服务器永远监听 `0.0.0.0`，外部可达性由端口映射/防火墙决定）。
 - `server.expected_token`：Bearer token；为空表示不校验 `Authorization` 头。
 - `audio.downlink_sample_rate` / `downlink_frame_duration_ms`：下行（TTS）采样率与帧长，写入服务器 hello。
 - `audio.binary_protocol_version`：下行二进制协议版本（1/2/3）。**建议先用 1 真机验证，再切 2/3。**

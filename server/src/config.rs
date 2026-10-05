@@ -37,8 +37,10 @@ pub struct Config {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ServerConfig {
-    #[serde(default = "default_listen")]
-    pub listen: String,
+    /// 监听端口。服务器**永远监听 0.0.0.0**（容器/局域网可达性由端口映射或防火墙决定），
+    /// 唯一可配的是端口。
+    #[serde(default = "default_port")]
+    pub port: u16,
     /// 期望的 Bearer token；为空字符串表示不校验 `Authorization`。
     #[serde(default)]
     pub expected_token: String,
@@ -153,7 +155,7 @@ pub struct LlmConfig {
 impl Default for ServerConfig {
     fn default() -> Self {
         ServerConfig {
-            listen: default_listen(),
+            port: default_port(),
             expected_token: String::new(),
             worker_threads: default_worker_threads(),
             admin_dir: default_admin_dir(),
@@ -240,8 +242,8 @@ impl Config {
 }
 
 // ---- 默认值辅助函数（默认即生产路径，与 config.example.toml / 容器挂载一致）----
-fn default_listen() -> String {
-    "0.0.0.0:8000".into()
+fn default_port() -> u16 {
+    8000
 }
 fn default_downlink_sr() -> u32 {
     24_000

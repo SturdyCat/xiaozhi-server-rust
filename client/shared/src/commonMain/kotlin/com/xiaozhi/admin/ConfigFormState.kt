@@ -27,7 +27,7 @@ import com.tencent.kuikly.core.reactive.handler.observable
 class ConfigFormState(private val scope: PagerScope) {
 
     // ===== [server] =====
-    var listen by scope.observable("")
+    var port by scope.observable("8000")
     var expectedToken by scope.observable("")
     var workerThreads by scope.observable("2")
     var adminDir by scope.observable("")
@@ -106,7 +106,7 @@ class ConfigFormState(private val scope: PagerScope) {
         saving = true
         val body = JSONObject().apply {
             put("server", JSONObject().apply {
-                put("listen", listen)
+                put("port", port.toIntOrNull() ?: 8000)
                 put("expected_token", expectedToken)
                 put("worker_threads", workerThreads.toIntOrNull() ?: 2)
                 put("admin_dir", adminDir)
@@ -183,7 +183,7 @@ class ConfigFormState(private val scope: PagerScope) {
      */
     fun fill(obj: JSONObject) {
         obj.optJSONObject("server")?.let { s ->
-            listen = s.optString("listen", listen)
+            port = s.optInt("port", port.toIntOrNull() ?: 8000).toString()
             expectedToken = s.optString("expected_token", expectedToken)
             workerThreads = s.optInt("worker_threads", workerThreads.toIntOrNull() ?: 2).toString()
             adminDir = s.optString("admin_dir", adminDir)
@@ -271,7 +271,7 @@ fun ViewContainer<*, *>.renderForm(
 
 fun ViewContainer<*, *>.serverConfigCard(form: ConfigFormState) {
     groupedCard("Server") {
-        labeledField("listen", { form.listen }, { form.listen = it; form.dirty = true }, "0.0.0.0:8000")
+        labeledField("port", { form.port }, { form.port = it; form.dirty = true }, "8000")
         labeledField("expected_token", { form.expectedToken }, { form.expectedToken = it; form.dirty = true })
         labeledField("worker_threads", { form.workerThreads }, { form.workerThreads = it; form.dirty = true })
         labeledField("admin_dir", { form.adminDir }, { form.adminDir = it; form.dirty = true })
