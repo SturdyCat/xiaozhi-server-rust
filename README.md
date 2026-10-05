@@ -69,6 +69,8 @@ cd server && ~/.cargo/bin/cargo run -- --config config.toml
 - `audio.downlink_sample_rate` / `downlink_frame_duration_ms`：下行（TTS）采样率与帧长，写入服务器 hello。
 - `audio.binary_protocol_version`：下行二进制协议版本（1/2/3）。**建议先用 1 真机验证，再切 2/3。**
 - `llm.api_base` / `api_key` / `model` / `system_prompt`：OpenAI 兼容 Responses API（LLM 恒为真实 HTTP，无 mock）。
+- `tts.backend`：`sherpa`（本地 Kokoro INT8，默认）或 `xfyun`（科大讯飞在线合成，需在 `[tts.xfyun]` 填 app_id/api_key/api_secret/voice）。
+
 
 ---
 

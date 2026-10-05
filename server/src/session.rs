@@ -16,9 +16,7 @@ use futures_util::StreamExt;
 use crate::audio::opus::OpusFrameDecoder;
 use crate::asr::AsrEngine;
 use crate::config::Config;
-use crate::downlink::{
-    poll_abort, send_sentence_audio, send_tts_audio, send_tts_state,
-};
+use crate::downlink::{poll_abort, send_sentence_audio_stream, send_tts_state};
 use crate::engine::Engines;
 use crate::llm::{LlmEvent, build_llm};
 use crate::protocol::{BinVersion, ClientMessage, ServerMessage, unwrap_uplink};
@@ -252,33 +250,101 @@ impl<'a> Session<'a> {
                 let speaker = speaker.unwrap_or(self.engines.config.tts.speaker);
                 let speed = speed.unwrap_or(self.engines.config.tts.speed);
                 tracing::info!("session {session_id} 测试合成：lang={lang} speaker={speaker} speed={speed}");
+                // 热切换：先按磁盘最新配置刷新 TTS 引擎（管理页保存后无需重启即可测新配置）。
+                // 刷新失败（读盘/构建失败）以 tts_test 结果回报，测试台对话框直接可见。
+                let engines = self.engines.clone();
+                let refresh = tokio::task::spawn_blocking(move || engines.refresh_tts_from_disk())
+                    .await
+                    .map_err(|e| anyhow::anyhow!("TTS 热切换任务异常: {e}"))?;
+                if let Err(msg) = refresh {
+                    tracing::warn!("session {session_id} {msg}");
+                    send_text(
+                        &mut self.socket,
+                        &ServerMessage::TtsTestResult {
+                            session_id,
+                            state: "error".to_string(),
+                            engine: Some(self.engines.tts_name().to_string()),
+                            text: Some(msg),
+                        },
+                    )
+                    .await?;
+                    return Ok(());
+                }
                 let tts = self.engines.tts_for(&lang);
+                let tts_sr = tts.output_sample_rate();
+                let engine_name = tts.name().to_string();
                 let t0 = std::time::Instant::now();
-                // 推理是同步阻塞的 CPU 密集调用（实测单次 8~20s）：必须放 spawn_blocking，
-                // 否则整个 tokio worker 线程被独占，期间同 runtime 的其他会话/HTTP 全部卡死。
+                // 流式合成：spawn_blocking 跑引擎，分片经 channel 边收边下发（首片即出声）。
+                // 失败经 tts_test 结果回报测试台（不再静默）。
+                let (tx, chunk_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<f32>>();
                 let text_c = text.clone();
-                let synthesis = blocking_result(move || tts.synthesize(&text_c, speed, speaker)).await;
-                let (pcm, tts_sr) = match synthesis {
-                    Ok(x) => x,
-                    Err(e) => {
-                        tracing::warn!("测试合成失败（耗时 {}ms）: {e}", t0.elapsed().as_millis());
-                        return Ok(());
+                let producer = tokio::task::spawn_blocking(move || {
+                    tts.synthesize_stream(
+                        &text_c,
+                        speed,
+                        speaker,
+                        Box::new(move |_sr, chunk| {
+                            tx.send(chunk.to_vec()).is_ok()
+                        }),
+                    )
+                });
+                let frames = send_sentence_audio_stream(
+                    &mut self.socket,
+                    &self.params,
+                    &mut self.downlink_ts,
+                    &self.abort,
+                    &self.session_id,
+                    &text,
+                    tts_sr,
+                    chunk_rx,
+                )
+                .await?;
+                match producer.await {
+                    Ok(Ok(())) => {
+                        tracing::info!(
+                            "session {session_id} 测试合成完成（{engine_name}）：耗时 {}ms，{} 帧 / {tts_sr}Hz",
+                            t0.elapsed().as_millis(),
+                            frames
+                        );
+                        // 成功回报（音频已下发；state=ok, text=耗时）
+                        send_text(
+                            &mut self.socket,
+                            &ServerMessage::TtsTestResult {
+                                session_id,
+                                state: "ok".to_string(),
+                                engine: Some(engine_name),
+                                text: Some(format!("{}ms", t0.elapsed().as_millis())),
+                            },
+                        )
+                        .await?;
                     }
-                };
-                tracing::info!(
-                    "session {session_id} 合成完成：耗时 {}ms，音频 {:.2}s / {tts_sr}Hz（{} 样本，RTF={:.2}）",
-                    t0.elapsed().as_millis(),
-                    pcm.len() as f32 / tts_sr as f32,
-                    pcm.len(),
-                    t0.elapsed().as_secs_f32() / (pcm.len() as f32 / tts_sr as f32).max(0.01)
-                );
-                let frames =
-                    send_tts_audio(&mut self.socket, &self.params, &mut self.downlink_ts, &self.abort, &self.session_id, &text, &pcm, tts_sr).await?;
-                tracing::info!(
-                    "session {session_id} 下行发送完成：{frames} 帧（{}ms / {}ms 帧）",
-                    frames as u32 * self.params.downlink_frame_ms,
-                    self.params.downlink_frame_ms
-                );
+                    Ok(Err(e)) => {
+                        tracing::warn!("session {session_id} 测试合成失败（耗时 {}ms）: {e}", t0.elapsed().as_millis());
+                        send_text(
+                            &mut self.socket,
+                            &ServerMessage::TtsTestResult {
+                                session_id,
+                                state: "error".to_string(),
+                                engine: Some(engine_name),
+                                text: Some(e.to_string()),
+                            },
+                        )
+                        .await?;
+                    }
+                    Err(e) => {
+                        tracing::warn!("session {session_id} 测试合成任务异常: {e}");
+                        send_text(
+                            &mut self.socket,
+                            &ServerMessage::TtsTestResult {
+                                session_id,
+                                state: "error".to_string(),
+                                engine: Some(engine_name),
+                                text: Some(format!("合成任务异常: {e}")),
+                            },
+                        )
+                        .await?;
+                    }
+                }
             }
             ClientMessage::LlmTest { text, .. } => {
                 // 测试台专用端点：仅 hello.test=true 的会话受理。
@@ -438,30 +504,49 @@ impl<'a> Session<'a> {
                         send_tts_state(&mut self.socket, &self.session_id, "start").await?;
                         tts_started = true;
                     }
-                    // 合成是同步阻塞的 CPU 调用：spawn_blocking 隔离（勿在 async 线程直接跑）
+                    // 流式合成：spawn_blocking 里跑引擎（同步阻塞），分片经 channel 回流；
+                    // 本 task 边收边重采样/编码/下发——首片即发声（TTFA 从「整句合成完」
+                    // 提前到「首片合成完」）。abort 时回调返回 false，引擎尽早停止合成。
                     let tts = self.engines.tts();
+                    let tts_sr = tts.output_sample_rate();
                     let speed = self.engines.config.tts.speed;
                     let speaker = self.engines.config.tts.speaker;
                     let t_tts = std::time::Instant::now();
                     let s = sentence.clone();
-                    match blocking_result(move || tts.synthesize(&s, speed, speaker)).await {
-                        Ok((pcm, tts_sr)) => {
-                            if poll_abort(&mut self.socket, &self.session_id, &self.abort) {
-                                interrupted = true;
-                                break;
-                            }
-                            let frames =
-                                send_sentence_audio(&mut self.socket, &self.params, &mut self.downlink_ts, &self.abort, &self.session_id, &sentence, &pcm, tts_sr).await?;
-                            sentences_done += 1;
-                            if sentences_done == 1 {
-                                tracing::info!(
-                                    "session {session_id} 首句下发（TTFA≈{}ms，句子合成 {}ms，{frames} 帧）",
-                                    t0.elapsed().as_millis(),
-                                    t_tts.elapsed().as_millis()
-                                );
-                            }
-                        }
-                        Err(e) => tracing::warn!("session {session_id} 句子合成失败: {e}"),
+                    let (tx, chunk_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<f32>>();
+                    let producer = tokio::task::spawn_blocking(move || {
+                        tts.synthesize_stream(
+                            &s,
+                            speed,
+                            speaker,
+                            Box::new(move |_sr, chunk| tx.send(chunk.to_vec()).is_ok()),
+                        )
+                    });
+                    let frames = send_sentence_audio_stream(
+                        &mut self.socket,
+                        &self.params,
+                        &mut self.downlink_ts,
+                        &self.abort,
+                        &self.session_id,
+                        &sentence,
+                        tts_sr,
+                        chunk_rx,
+                    )
+                    .await?;
+                    match producer.await {
+                        Ok(Ok(())) => {}
+                        Ok(Err(e)) => tracing::warn!(
+                            "session {session_id} 句子合成失败（耗时 {}ms）: {e}",
+                            t_tts.elapsed().as_millis()
+                        ),
+                        Err(e) => tracing::warn!("session {session_id} 合成任务异常: {e}"),
+                    }
+                    sentences_done += 1;
+                    if sentences_done == 1 {
+                        tracing::info!(
+                            "session {session_id} 首句下发（TTFA≈{}ms，{frames} 帧）",
+                            t0.elapsed().as_millis()
+                        );
                     }
                     if poll_abort(&mut self.socket, &self.session_id, &self.abort) {
                         interrupted = true;

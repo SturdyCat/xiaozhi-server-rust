@@ -11,9 +11,12 @@
 //! 各段错峰执行，控制在 4 核以内为其他服务留余量；容器侧由 `docker-compose.yml` 的
 //! `cpus:"3.5"` 进一步限核。详见 [`crate::session`] 与各引擎模块注释。
 //!
-//! ## TTS 语言池
+//! ## TTS 语言池与热切换
 //! Kokoro 的 `lang` 在建模时固定，故 [`Engines::tts_for`] 按语言按需构建并缓存
-//! 引擎（首次约数秒），配置默认语言直接返回 [`Engines::tts`] 默认引擎。
+//! 引擎（首次约数秒），配置默认语言直接返回默认引擎。
+//! TTS 引擎存于 `RwLock`，[`Engines::refresh_tts_from_disk`] 在会话开始 / 测试台 tts_test
+//! 时读取磁盘配置：`[tts]` 引擎签名（backend / 关键参数）变化即重建并热替换——
+//! 管理页改配置保存后，无需重启即对**新会话**与测试台生效。
 
 use crate::asr::{build_asr, AsrEngine};
 use crate::config::Config;
@@ -29,12 +32,15 @@ use {
 };
 use anyhow::Result;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 /// 进程内共享的引擎（ASR / TTS / LLM）与每会话 VAD 工厂。
 pub struct Engines {
     pub asr: Arc<dyn AsrEngine>,
-    tts: Arc<dyn TtsEngine>,
+    /// 当前生效的 TTS 引擎（可热替换；读多写少 → RwLock）。
+    tts: RwLock<Arc<dyn TtsEngine>>,
+    /// 当前 TTS 引擎的签名（`TtsConfig::engine_signature`），热切换判定用。
+    tts_sig: RwLock<String>,
     /// 按语言缓存的 TTS 引擎（sherpa 的 Kokoro `lang` 在建模时固定，
     /// 测试台切换语言时按需构建对应引擎；配置默认语言直接返回默认引擎）。
     tts_pool: Mutex<HashMap<String, Arc<dyn TtsEngine>>>,
@@ -55,10 +61,12 @@ impl Engines {
         }
         let asr = build_asr(&config.asr)?;
         let tts = build_tts(&config.tts)?;
+        let tts_sig = config.tts.engine_signature();
         let llm = build_llm(&config.llm);
         Ok(Arc::new(Self {
             asr,
-            tts,
+            tts: RwLock::new(tts),
+            tts_sig: RwLock::new(tts_sig),
             tts_pool: Mutex::new(HashMap::new()),
             llm,
             config: Arc::new(config.clone()),
@@ -68,15 +76,20 @@ impl Engines {
 
     /// 默认 TTS 引擎（服务器配置语言；设备流水线路径用）。
     pub fn tts(&self) -> Arc<dyn TtsEngine> {
-        self.tts.clone()
+        self.tts.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// 按语言获取 TTS 引擎：已缓存直接返回；否则按需构建并缓存（首次约数秒）。
     /// 构建失败时回退默认引擎并告警。配置默认语言直接返回默认引擎。
+    /// 讯飞在线引擎与语言无关（音色由 `[tts.xfyun].voice` 决定），直接返回默认引擎。
     pub fn tts_for(&self, lang: &str) -> Arc<dyn TtsEngine> {
         let lang = lang.trim();
-        if lang.is_empty() || !cfg!(feature = "sherpa") || lang == self.config.tts.lang {
-            return self.tts.clone();
+        if lang.is_empty()
+            || !cfg!(feature = "sherpa")
+            || self.config.tts.backend_kind() == crate::config::TtsBackendKind::Xfyun
+            || lang == self.config.tts.lang
+        {
+            return self.tts();
         }
         // 先查缓存（持锁）；命中直接返回，未命中立即释放锁，
         // 避免下面的模型加载（数秒）在持锁状态下阻塞其他会话的 tts_for。
@@ -91,7 +104,7 @@ impl Engines {
             Ok(e) => e,
             Err(err) => {
                 tracing::warn!("构建 lang={lang} 的 TTS 引擎失败（耗时 {}ms），回退默认引擎: {err:#}", t0.elapsed().as_millis());
-                return self.tts.clone();
+                return self.tts();
             }
         };
         // 重新加锁写入；插入前再查一次，避免并发构建重复加载同一模型。
@@ -105,6 +118,44 @@ impl Engines {
             );
         }
         built
+    }
+
+    /// 从磁盘配置热刷新 TTS 引擎（会话开始 / 测试台 tts_test 前调用）：
+    /// 读盘解析 `[tts]`，引擎签名（backend / 关键参数）变化才重建并替换。
+    /// 未指定配置文件或读盘失败时保持现状（日志 warn）。**阻塞调用**（sherpa 重建
+    /// 可能加载模型数秒），调用方须包 `spawn_blocking`。
+    pub fn refresh_tts_from_disk(&self) -> Result<(), String> {
+        let Some(path) = &self.config_path else {
+            return Ok(()); // 内置默认配置，无可刷新
+        };
+        let fresh = match Config::load(path) {
+            Ok(c) => c,
+            Err(e) => return Err(format!("读取配置失败（保持当前 TTS 引擎）: {e}")),
+        };
+        let sig = fresh.tts.engine_signature();
+        if sig == *self.tts_sig.read().unwrap_or_else(|e| e.into_inner()) {
+            return Ok(());
+        }
+        let kind = fresh.tts.backend_kind();
+        match build_tts(&fresh.tts) {
+            Ok(engine) => {
+                *self.tts.write().unwrap_or_else(|e| e.into_inner()) = engine;
+                *self.tts_sig.write().unwrap_or_else(|e| e.into_inner()) = sig;
+                // 语言池属于旧引擎（如 sherpa 的按语言缓存），清掉避免串用
+                self.tts_pool.lock().unwrap_or_else(|e| e.into_inner()).clear();
+                tracing::info!("TTS 引擎已热切换：backend={}", kind.as_str());
+                Ok(())
+            }
+            Err(e) => Err(format!(
+                "TTS 引擎切换失败（保持当前引擎，backend={}）: {e:#}",
+                kind.as_str()
+            )),
+        }
+    }
+
+    /// 当前 TTS 引擎标识（测试台结果回报用）。
+    pub fn tts_name(&self) -> &'static str {
+        self.tts().name()
     }
 
     /// 为每个会话创建一个独立的 VAD 实例（内部有状态）。

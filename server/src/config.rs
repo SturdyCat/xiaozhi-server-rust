@@ -107,6 +107,9 @@ impl VadConfig {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TtsConfig {
+    /// 引擎选择：`"sherpa"`（本地 Kokoro，默认）| `"xfyun"`（科大讯飞在线 TTS）。
+    #[serde(default = "default_tts_backend")]
+    pub backend: String,
     /// Kokoro INT8 模型路径（sherpa-onnx 离线合成器）。
     #[serde(default = "default_tts_model")]
     pub model: String,
@@ -129,6 +132,68 @@ pub struct TtsConfig {
     pub speed: f32,
     #[serde(default = "default_tts_threads")]
     pub num_threads: u32,
+    /// 科大讯飞在线 TTS（backend = "xfyun" 时使用）。
+    #[serde(default)]
+    pub xfyun: XfyunTtsConfig,
+}
+
+/// 科大讯飞在线语音合成（WebSocket v2/tts）凭据与音色。
+/// 在讯飞开放平台创建「在线语音合成」应用后取得 APPID/APPKEY/APPSECRET。
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct XfyunTtsConfig {
+    /// 应用 APPID（请求 common.app_id）。
+    #[serde(default)]
+    pub app_id: String,
+    /// APPKEY（签名 api_key=）。
+    #[serde(default)]
+    pub api_key: String,
+    /// APPSECRET（HMAC-SHA256 签名密钥）。
+    #[serde(default)]
+    pub api_secret: String,
+    /// 发音人（vcn），如 xiaoyan / x4_lingxiaoxuan_oral 等；默认 xiaoyan（讯飞默认女声）。
+    #[serde(default = "default_xfyun_voice")]
+    pub voice: String,
+}
+
+/// TTS 引擎种类（由 `[tts].backend` 派生；未知值按 sherpa 处理）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TtsBackendKind {
+    /// 本地 Kokoro INT8（sherpa-onnx）。
+    Sherpa,
+    /// 科大讯飞在线语音合成（WebSocket v2/tts）。
+    Xfyun,
+}
+
+impl TtsBackendKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TtsBackendKind::Sherpa => "sherpa",
+            TtsBackendKind::Xfyun => "xfyun",
+        }
+    }
+}
+
+impl TtsConfig {
+    /// `backend` 字段 → 引擎种类（`"xfyun"` 忽略大小写匹配；其余一律 sherpa）。
+    pub fn backend_kind(&self) -> TtsBackendKind {
+        if self.backend.eq_ignore_ascii_case("xfyun") {
+            TtsBackendKind::Xfyun
+        } else {
+            TtsBackendKind::Sherpa
+        }
+    }
+
+    /// 引擎签名（热切换判定用）：backend 或关键参数变化时才重建引擎。
+    /// ⚠️ 仅内存内部使用，**不要打日志**（含密钥字段）。
+    pub fn engine_signature(&self) -> String {
+        match self.backend_kind() {
+            TtsBackendKind::Xfyun => format!(
+                "xfyun|{}|{}|{}|{}",
+                self.xfyun.app_id, self.xfyun.api_key, self.xfyun.api_secret, self.xfyun.voice
+            ),
+            TtsBackendKind::Sherpa => format!("sherpa|{}|{}|{}", self.model, self.lang, self.num_threads),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -197,6 +262,7 @@ impl Default for VadConfig {
 impl Default for TtsConfig {
     fn default() -> Self {
         TtsConfig {
+            backend: default_tts_backend(),
             model: default_tts_model(),
             voices: default_tts_voices(),
             tokens: default_tts_tokens(),
@@ -207,6 +273,7 @@ impl Default for TtsConfig {
             speaker: 0,
             speed: default_speed(),
             num_threads: default_tts_threads(),
+            xfyun: XfyunTtsConfig::default(),
         }
     }
 }
@@ -309,6 +376,12 @@ fn default_min_silence() -> f32 {
 }
 fn default_min_speech() -> f32 {
     0.25
+}
+fn default_tts_backend() -> String {
+    "sherpa".into()
+}
+fn default_xfyun_voice() -> String {
+    "xiaoyan".into()
 }
 fn default_tts_model() -> String {
     "/models/Kokoro/model.int8.onnx".into()

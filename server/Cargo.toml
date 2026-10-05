@@ -30,6 +30,13 @@ tower-http = { version = "0.6", features = ["fs"] }
 sherpa-onnx = { version = "1.13.8", optional = true }
 audiopus = { version = "0.2", optional = true }
 rubato = { version = "0.15", optional = true }
+tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots", "url"] }
+hmac = "0.13.0"
+sha2 = "0.11.0"
+base64 = "0.23.1"
+httpdate = "1.0.3"
+rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }
+webpki-roots = "0.26"
 
 [profile.release]
 opt-level = 3

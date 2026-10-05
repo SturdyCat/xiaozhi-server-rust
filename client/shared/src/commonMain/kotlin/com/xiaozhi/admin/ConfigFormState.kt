@@ -2,10 +2,14 @@ package com.xiaozhi.admin
 
 import com.tencent.kuikly.core.base.PagerScope
 import com.tencent.kuikly.core.base.ViewContainer
+import com.tencent.kuikly.core.directives.vif
 import com.tencent.kuikly.core.module.NetworkModule
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.pager.Pager
+import com.tencent.kuikly.core.reactive.collection.ObservableList
 import com.tencent.kuikly.core.reactive.handler.observable
+import com.tencent.kuikly.core.reactive.handler.observableList
+import com.tencent.kuikly.core.views.Text
 
 /**
  * 配置表单状态（跨端，commonMain，无平台依赖）。
@@ -52,7 +56,8 @@ class ConfigFormState(private val scope: PagerScope) {
     var vadMinSilence by scope.observable("0.25")
     var vadMinSpeech by scope.observable("0.25")
 
-    // ===== [tts] =====（无 mock：TTS 恒为 Kokoro，无 backend 字段）
+    // ===== [tts] =====（backend 二选一：sherpa=本地 Kokoro / xfyun=科大讯飞在线）
+    var ttsBackend by scope.observable("sherpa")
     var ttsModel by scope.observable("")
     var ttsVoices by scope.observable("")
     var ttsTokens by scope.observable("")
@@ -63,6 +68,12 @@ class ConfigFormState(private val scope: PagerScope) {
     var ttsSpeaker by scope.observable("0")
     var ttsSpeed by scope.observable("1.0")
     var ttsNumThreads by scope.observable("1")
+
+    // ===== [tts.xfyun] =====（backend=xfyun 时使用；讯飞开放平台「在线语音合成」控制台获取）
+    var xfyunAppId by scope.observable("")
+    var xfyunApiKey by scope.observable("")
+    var xfyunApiSecret by scope.observable("")
+    var xfyunVoice by scope.observable("xiaoyan")
 
     // ===== [llm] =====（无 mock：LLM 恒为 OpenAI 兼容 HTTP，无 backend 字段）
     var llmApiBase by scope.observable("")
@@ -82,6 +93,21 @@ class ConfigFormState(private val scope: PagerScope) {
 
     /** 配置页标签页 UI 状态（Server/Audio/ASR/VAD/TTS/LLM 六个 tab，见 renderForm）。 */
     val tabUi = TabUiState(scope)
+
+    /** 当前展开的下拉（TTS backend 选择等，"" = 全部收起）；放状态类避免 Pager body 重建丢失展开态。 */
+    var openDropdown by scope.observable("")
+
+    /** TTS backend 下拉选项（官方 AlertDialog 基座；ObservableList 供 vfor 响应式渲染）。 */
+    val ttsBackendOptions: ObservableList<Pair<String, String>> by scope.observableList()
+
+    init {
+        ttsBackendOptions.addAll(
+            listOf(
+                "sherpa" to "sherpa（本地 Kokoro）",
+                "xfyun" to "xfyun（科大讯飞在线）",
+            ),
+        )
+    }
 
     // ============================================================
     // 网络：load / save
@@ -132,6 +158,7 @@ class ConfigFormState(private val scope: PagerScope) {
                 put("min_speech_duration", vadMinSpeech.toDoubleOrNull() ?: 0.25)
             })
             put("tts", JSONObject().apply {
+                put("backend", ttsBackend)
                 put("model", ttsModel)
                 put("voices", ttsVoices)
                 put("tokens", ttsTokens)
@@ -142,6 +169,12 @@ class ConfigFormState(private val scope: PagerScope) {
                 put("speaker", ttsSpeaker.toIntOrNull() ?: 0)
                 put("speed", ttsSpeed.toDoubleOrNull() ?: 1.0)
                 put("num_threads", ttsNumThreads.toIntOrNull() ?: 1)
+                put("xfyun", JSONObject().apply {
+                    put("app_id", xfyunAppId)
+                    put("api_key", xfyunApiKey)
+                    put("api_secret", xfyunApiSecret)
+                    put("voice", xfyunVoice)
+                })
             })
             put("llm", JSONObject().apply {
                 put("api_base", llmApiBase)
@@ -209,6 +242,7 @@ class ConfigFormState(private val scope: PagerScope) {
             vadMinSpeech = v.optDouble("min_speech_duration", vadMinSpeech.toDoubleOrNull() ?: 0.25).toString()
         }
         obj.optJSONObject("tts")?.let { t ->
+            ttsBackend = t.optString("backend", ttsBackend)
             ttsModel = t.optString("model", ttsModel)
             ttsVoices = t.optString("voices", ttsVoices)
             ttsTokens = t.optString("tokens", ttsTokens)
@@ -219,6 +253,12 @@ class ConfigFormState(private val scope: PagerScope) {
             ttsSpeaker = t.optInt("speaker", ttsSpeaker.toIntOrNull() ?: 0).toString()
             ttsSpeed = t.optDouble("speed", ttsSpeed.toDoubleOrNull() ?: 1.0).toString()
             ttsNumThreads = t.optInt("num_threads", ttsNumThreads.toIntOrNull() ?: 1).toString()
+            t.optJSONObject("xfyun")?.let { x ->
+                xfyunAppId = x.optString("app_id", xfyunAppId)
+                xfyunApiKey = x.optString("api_key", xfyunApiKey)
+                xfyunApiSecret = x.optString("api_secret", xfyunApiSecret)
+                xfyunVoice = x.optString("voice", xfyunVoice)
+            }
         }
         obj.optJSONObject("llm")?.let { l ->
             llmApiBase = l.optString("api_base", llmApiBase)
@@ -239,7 +279,7 @@ class ConfigFormState(private val scope: PagerScope) {
 /**
  * 渲染配置标签页（tabbedPanel：官方 Tabs + PageList）：Server / Audio / ASR / VAD / TTS / LLM 六个 tab，
  * 保持全量配置汇总——每个 tab 一张配置卡，宽窄屏均整卡铺满（tab 内自带纵向滚动）。
- * backend 用官方 AlertDialog 基座下拉（dropdownField），use_itn 用官方 switchRow，多行散文用 labeledTextArea（官方 TextArea）。
+ * [tts].backend（sherpa/xfyun）用官方 AlertDialog 基座下拉（dropdownField），use_itn 用官方 switchRow，多行散文用 labeledTextArea（官方 TextArea）。
  *
  * ⚠️ 必须在目标容器闭包内**非限定**调用 `renderForm(form)`：
  * 扩展接收者即调用处容器，Tabs/PageList 才能正确挂进去。
@@ -312,7 +352,23 @@ fun ViewContainer<*, *>.vadConfigCard(form: ConfigFormState) {
 
 fun ViewContainer<*, *>.ttsConfigCard(form: ConfigFormState) {
     groupedCard("TTS") {
-        // 无 backend 选择：TTS 恒为 Kokoro（sherpa），mock 已移除
+        // backend 二选一（官方 AlertDialog 基座下拉）：sherpa=本地 Kokoro / xfyun=科大讯飞在线。
+        // 保存后无需重启：服务端在新会话/测试台 tts_test 时读盘热切换引擎。
+        dropdownField(
+            label = "backend",
+            currentLabel = {
+                if (form.ttsBackend == "xfyun") "xfyun（科大讯飞在线）" else "sherpa（本地 Kokoro）"
+            },
+            options = { form.ttsBackendOptions },
+            selectedId = { form.ttsBackend },
+            isOpen = { form.openDropdown == "tts_backend" },
+            onToggle = { form.openDropdown = if (form.openDropdown == "tts_backend") "" else "tts_backend" },
+            onSelect = {
+                form.ttsBackend = it
+                form.dirty = true
+                form.openDropdown = ""
+            },
+        )
         labeledField("model", { form.ttsModel }, { form.ttsModel = it; form.dirty = true })
         labeledField("voices", { form.ttsVoices }, { form.ttsVoices = it; form.dirty = true })
         labeledField("tokens", { form.ttsTokens }, { form.ttsTokens = it; form.dirty = true })
@@ -323,6 +379,21 @@ fun ViewContainer<*, *>.ttsConfigCard(form: ConfigFormState) {
         labeledField("speaker", { form.ttsSpeaker }, { form.ttsSpeaker = it; form.dirty = true })
         labeledField("speed", { form.ttsSpeed }, { form.ttsSpeed = it; form.dirty = true })
         labeledField("num_threads", { form.ttsNumThreads }, { form.ttsNumThreads = it; form.dirty = true })
+        // xfyun 凭据与音色：backend=xfyun 时显示（vif 闭包内读 observable 才能响应式切换）
+        vif({ form.ttsBackend == "xfyun" }) {
+            dividerH()
+            Text {
+                attr {
+                    fontSize(AdminType.caption)
+                    color(AdminColors.textSecondary)
+                    text("科大讯飞在线合成（在讯飞开放平台「在线语音合成」控制台获取密钥）")
+                }
+            }
+            labeledField("app_id", { form.xfyunAppId }, { form.xfyunAppId = it; form.dirty = true })
+            labeledField("api_key", { form.xfyunApiKey }, { form.xfyunApiKey = it; form.dirty = true })
+            labeledField("api_secret", { form.xfyunApiSecret }, { form.xfyunApiSecret = it; form.dirty = true })
+            labeledField("voice（发音人 vcn）", { form.xfyunVoice }, { form.xfyunVoice = it; form.dirty = true }, "xiaoyan")
+        }
     }
 }
 

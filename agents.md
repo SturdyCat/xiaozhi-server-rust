@@ -74,7 +74,7 @@ cd server && ~/.cargo/bin/cargo run --features sherpa -- --config config.toml
 - `default = []`：无真实引擎，仅供 `cargo check/test` 编译（运行会报错）。
 - `sherpa = ["dep:sherpa-onnx", "dep:audiopus", "dep:rubato"]`：真实引擎（**无 mock**：ASR=SenseVoice、TTS=Kokoro、LLM=HTTP、VAD=Silero）。
 
-> 无 `backend` 配置项（已随 mock 移除；旧 config.toml 里的 `backend` 键会被 serde 静默忽略，管理页保存一次即写成新 schema）。默认（无配置文件）模型路径即 `/models/...` 生产值；`[llm]` 需填 `api_base`/`api_key`。ESP 接入走完整正式流水线；macApp 测试台 hello 带 `test:true`，走 `asr_test/tts_test/llm_test` 三个独立服务端点（非测试会话发送这三类消息会被忽略）。
+> TTS 有 `[tts].backend`（`sherpa`=本地 Kokoro / `xfyun`=科大讯飞在线，见 `[tts.xfyun]`），改后保存即热切换（新会话/测试台 tts_test 读盘重建引擎）；ASR/LLM 无 `backend` 配置项（已随 mock 移除，未知键被 serde 静默忽略）。默认（无配置文件）模型路径即 `/models/...` 生产值；`[llm]` 需填 `api_base`/`api_key`。ESP 接入走完整正式流水线；macApp 测试台 hello 带 `test:true`，走 `asr_test/tts_test/llm_test` 三个独立服务端点（非测试会话发送这三类消息会被忽略）。
 
 ## 5. 🚨 关键约束与陷阱（AI 最容易踩）
 
@@ -105,6 +105,16 @@ pub enum ServerMessage { Hello { .. }, Stt { .. }, Llm { .. }, Tts { .. }, Syste
 ### 5.2 LLM 恒为真实 HTTP（无 mock）
 
 LLM 只有 OpenAI 兼容 Responses API 一条路径；联调失败先检查 `[llm].api_base`/`api_key`/`model` 配置（服务端启动即构建引擎，模型/配置缺失会给出明确报错）。
+
+### 5.2b 讯飞在线 TTS（[tts].backend="xfyun"）要点
+
+- 协议 = `wss://tts-api.xfyun.cn/v2/tts`（**经典 v2**，非 AIUI 交互链路）：URL 签名鉴权
+  （`authorization`/`date`/`host` 三参数，HMAC-SHA256；`date` 必须 RFC1123/GMT，服务端容忍 ±300s）。
+- **测试台/流水线共用流式**：服务端合成过程中边收 base64 PCM 边下发（首片即出声）；
+  重采样器与 Opus 编码器**跨分片复用**（各自独立会在边界产生相位跳变/爆音）。
+- 合成失败（构建失败/凭据错误/网络）经 `tts_test` 结果帧回报测试台（`{type:"tts_test", state, engine, text}`），
+  不再静默——卡片会显示「合成失败：原因」。
+- 密钥只在服务端配置里；管理页保存后无需重启（热切换：会话/tts_test 时读盘比对 `[tts]` 签名重建）。
 
 ### 5.3 二进制协议版本 = 设备 hello 的 `version`
 

@@ -33,6 +33,7 @@ mod splitter;
 mod tts;
 mod vad;
 mod ws;
+mod xfyun_tts;
 
 use anyhow::Result;
 use axum::serve;

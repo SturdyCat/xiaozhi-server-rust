@@ -52,7 +52,8 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
 @property (nonatomic, strong, nullable) AVAudioInputNode *micNode;
 @property (nonatomic, assign) BOOL recording;
 @property (nonatomic, copy, nullable) id asrCallback;   // keepCallbackAlive：待服务端回 stt 时回调
-@property (nonatomic, copy, nullable) id speakCallback; // 待 tts stop 时回调
+@property (nonatomic, copy, nullable) id speakCallback; // 待 tts stop（或 tts_test 错误帧）时回调
+@property (nonatomic, copy, nullable) NSString *speakEngine;  // 本次合成引擎名（tts_test 成功帧携带）
 @property (nonatomic, copy, nullable) id llmCallback;   // 待服务端回 llm_test 时回调
 @property (nonatomic, assign) uint32_t downlinkSampleRate;
 // ===== Opus 编解码（系统 AudioToolbox，实测可用；Catalyst 下无需第三方库）=====
@@ -202,6 +203,7 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
 - (void)speak:(NSDictionary *)args {
     NSDictionary *params = [self parseParams:args[KR_PARAM_KEY]];
     self.speakCallback = args[KR_CALLBACK_KEY];
+    self.speakEngine = nil;
     self.ttsPcm = [NSMutableData data];
     self.ttsDecodedPackets = 0;
     self.ttsFailCount = 0;
@@ -225,6 +227,10 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
         @"speed": params[@"speed"] ?: @(1.0)
     }];
 }
+
+// 备注：speak(...) 发送的即 tts_test；服务端先回一帧 tts_test 结果（含 engine 与错误原因），
+// 再照常下发音频并以 tts stop 收尾。handleText 的 tts_test 分支：error 就地消费回调、
+// ok 仅记 engine 名，tts stop 时统一回报 {state:"stop"|"error", engine, text}。
 
 // llmTest(text) → 发送 llm_test；服务端按磁盘上最新 [llm] 配置直调 LLM（单轮无历史），
 // 结果经 llm_test 回调返回：{state: "ok"|"error", text: 回复正文或错误信息, elapsedMs}。
@@ -422,7 +428,10 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
                   (unsigned long)self.ttsDecodedPackets, (unsigned long)frames,
                   frames / (double)sr, (unsigned long)self.ttsFailCount);
             if (self.speakCallback) {
-                [self invoke:self.speakCallback result:@{@"state": @"stop"} success:YES error:nil];
+                [self invoke:self.speakCallback result:@{
+                    @"state": @"stop",
+                    @"engine": self.speakEngine ?: @""
+                } success:YES error:nil];
                 self.speakCallback = nil;
             }
         }
@@ -436,6 +445,22 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
                 @"elapsedMs": dict[@"elapsed_ms"] ?: @(0)
             } success:YES error:nil];
             self.llmCallback = nil; // one-shot
+        }
+        return;
+    }
+    if ([type isEqualToString:@"tts_test"]) {
+        // 服务端合成结果帧（音频下发前到达，含引擎名与错误原因）：
+        // - state=error：不会再有 tts stop，就地消费回调（one-shot）；
+        // - state=ok：仅记下引擎名，等 tts stop 统一回报（音频随后照常下发）。
+        NSString *st = dict[@"state"] ?: @"error";
+        self.speakEngine = dict[@"engine"] ?: @"";
+        if ([st isEqualToString:@"error"] && self.speakCallback) {
+            [self invoke:self.speakCallback result:@{
+                @"state": @"error",
+                @"engine": self.speakEngine ?: @"",
+                @"text": dict[@"text"] ?: @""
+            } success:YES error:nil];
+            self.speakCallback = nil;
         }
         return;
     }

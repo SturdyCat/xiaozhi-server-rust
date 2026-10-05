@@ -12,9 +12,10 @@ use axum::extract::ws::{Message, WebSocket};
 use futures_util::{FutureExt, StreamExt};
 
 use crate::audio::opus::OpusFrameEncoder;
-use crate::audio::resample::resample;
+use crate::audio::resample::StreamingResampler;
 use crate::protocol::{ClientMessage, ServerMessage, wrap_downlink};
 use crate::session::{send_binary, send_text, SessionParams};
+use tokio::sync::mpsc;
 
 /// 非阻塞抽取 socket 中已到达的打断/关闭消息（流水线各等待点轮询）。
 ///
@@ -70,17 +71,34 @@ pub(crate) async fn send_tts_state(
     .await
 }
 
-/// 发送单句：`sentence_start(text)` → 重采样/Opus 分帧逐帧二进制（逐帧轮询打断）。
-/// 返回实际下发的帧数（供日志统计耗时/流量）。
-pub(crate) async fn send_sentence_audio(
+/// 末段 PCM 不足一整帧时补零到整帧（Opus 只接受合法帧长，否则 BadArgument）。
+/// 流式路径用它对最后一个残帧补零；整帧数据直接走 `wrap_downlink`，无需补零。
+pub(crate) fn pad_tail(pcm: &[f32], frame: usize) -> Vec<f32> {
+    let frame = frame.max(1);
+    if pcm.is_empty() || pcm.len() >= frame {
+        return Vec::new();
+    }
+    let mut v = Vec::with_capacity(frame);
+    v.extend_from_slice(pcm);
+    v.resize(frame, 0.0);
+    v
+}
+
+/// 流式单句下发：`sentence_start(text)` → 从 `rx` 收增量 PCM 分片，
+/// **边收边**重采样（跨分片连续相位）+ 流式 Opus 编码 + 逐帧二进制下发；
+/// `rx` 关闭后冲刷残帧并返回（调用方随后发 `tts stop`）。
+///
+/// 关键：重采样器与 Opus 编码器都是**跨分片复用**的流式实例——每个分片单独处理
+/// 会在边界产生相位跳变（重采样）与流重启（Opus），实听即"爆音/断续"。
+pub(crate) async fn send_sentence_audio_stream(
     socket: &mut WebSocket,
     params: &SessionParams,
     downlink_ts: &mut u32,
     abort: &Arc<AtomicBool>,
     session_id: &str,
     text: &str,
-    pcm: &[f32],
     tts_sr: u32,
+    mut rx: mpsc::UnboundedReceiver<Vec<f32>>,
 ) -> Result<usize> {
     send_text(
         socket,
@@ -92,39 +110,40 @@ pub(crate) async fn send_sentence_audio(
     )
     .await?;
 
-    let pcm_down = resample(pcm, tts_sr, params.downlink_sr);
-    let pcm_down: &[f32] = pcm_down.as_ref();
-    let frame_samples =
-        (params.downlink_sr as f32 * params.downlink_frame_ms as f32 / 1000.0) as usize;
-    // 整段下行共用一个流式编码器：逐帧新建会让每个 60ms 边界都是「流重启」→
-    // 实听「声音不连续」（详见 opus.rs 的 OpusFrameEncoder 注释）。
+    let frame = ((params.downlink_sr as f32 * params.downlink_frame_ms as f32 / 1000.0) as usize).max(1);
+    let mut resampler = StreamingResampler::new(tts_sr, params.downlink_sr);
     let mut encoder = OpusFrameEncoder::new(params.downlink_sr)?;
+    let mut carry: Vec<f32> = Vec::new(); // 不足整帧的尾部（跨分片积攒）
     let mut frames_sent: usize = 0;
-    let frame = frame_samples.max(1);
-    let n = pcm_down.len();
-    let n_full = n / frame;
-    for i in 0..n_full {
-        let opus = match encoder.encode_frame(&pcm_down[i * frame..(i + 1) * frame]) {
-            Ok(o) => o,
-            Err(e) => {
-                tracing::warn!("Opus 编码失败: {e}");
-                break;
-            }
-        };
-        let framed = wrap_downlink(params.downlink_bin_ver, &opus, *downlink_ts);
-        *downlink_ts += params.downlink_frame_ms;
-        frames_sent += 1;
-        send_binary(socket, framed).await?;
 
-        // 每帧后非阻塞轮询 abort / close
-        if poll_abort(socket, session_id, abort) {
-            tracing::info!("session {} 中断 TTS 播报（{text}）", session_id);
-            break;
+    // 收分片 → 重采样 → 攒满整帧即编码下发
+    loop {
+        let chunk = rx.recv().await;
+        let Some(chunk) = chunk else { break };
+        let down = resampler.push(&chunk);
+        carry.extend_from_slice(&down);
+        while carry.len() >= frame {
+            let opus = match encoder.encode_frame(&carry[..frame]) {
+                Ok(o) => o,
+                Err(e) => {
+                    tracing::warn!("Opus 编码失败: {e}");
+                    break;
+                }
+            };
+            carry.drain(..frame);
+            let framed = wrap_downlink(params.downlink_bin_ver, &opus, *downlink_ts);
+            *downlink_ts += params.downlink_frame_ms;
+            frames_sent += 1;
+            send_binary(socket, framed).await?;
+            if poll_abort(socket, session_id, abort) {
+                tracing::info!("session {} 中断流式 TTS 下发（{text}）", session_id);
+                return Ok(frames_sent);
+            }
         }
     }
-    // 残帧补零到整帧再编码（Opus 只接受合法帧长），避免最后不足一帧被丢弃。
-    if n % frame > 0 && !abort.load(Ordering::Relaxed) {
-        let tail = pad_tail(&pcm_down[n_full * frame..], frame);
+    // 尾帧：残样本补零到整帧（Opus 只接受合法帧长）
+    if !carry.is_empty() && !abort.load(Ordering::Relaxed) {
+        let tail = pad_tail(&carry, frame);
         match encoder.encode_frame(&tail) {
             Ok(opus) => {
                 let framed = wrap_downlink(params.downlink_bin_ver, &opus, *downlink_ts);
@@ -132,42 +151,10 @@ pub(crate) async fn send_sentence_audio(
                 frames_sent += 1;
                 send_binary(socket, framed).await?;
             }
-            Err(e) => tracing::warn!("Opus 编码失败（尾帧）: {e}"),
+            Err(e) => tracing::warn!("Opus 编码失败（流式尾帧）: {e}"),
         }
     }
     Ok(frames_sent)
-}
-
-/// 测试台整段路径：`start` → 单句全量 → `stop`（网页测试台 `tts_test` 共用）。
-pub(crate) async fn send_tts_audio(
-    socket: &mut WebSocket,
-    params: &SessionParams,
-    downlink_ts: &mut u32,
-    abort: &Arc<AtomicBool>,
-    session_id: &str,
-    text: &str,
-    pcm: &[f32],
-    tts_sr: u32,
-) -> Result<usize> {
-    send_tts_state(socket, session_id, "start").await?;
-    let frames = send_sentence_audio(socket, params, downlink_ts, abort, session_id, text, pcm, tts_sr).await?;
-    send_tts_state(socket, session_id, "stop").await?;
-    Ok(frames)
-}
-
-/// 末段 PCM 不足一整帧时补零到整帧（Opus 只接受合法帧长，否则 BadArgument）。
-///
-/// 下行热路径请直接 `pcm.chunks(frame)` 遍历整帧（零拷贝），仅对最后一个不足整帧的
-/// 切片调用本函数补零后再编码，避免把整段 PCM 物化为 `Vec<Vec<f32>>` 造成整段拷贝。
-pub(crate) fn pad_tail(pcm: &[f32], frame: usize) -> Vec<f32> {
-    let frame = frame.max(1);
-    if pcm.is_empty() || pcm.len() >= frame {
-        return Vec::new();
-    }
-    let mut v = Vec::with_capacity(frame);
-    v.extend_from_slice(pcm);
-    v.resize(frame, 0.0);
-    v
 }
 
 #[cfg(test)]

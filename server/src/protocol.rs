@@ -205,6 +205,19 @@ pub enum ServerMessage {
         #[serde(skip_serializing_if = "Option::is_none")]
         elapsed_ms: Option<u64>,
     },
+    /// 测试台专用：TTS 合成测试结果（音频下发前/后一次性回报；`state=ok` 时
+    /// `text` 为服务端合成耗时 ms，`state=error` 时为可读错误信息——引擎缺失/凭据错误
+    /// 等失败不再静默，测试台对话框直接可见）。
+    #[serde(rename = "tts_test")]
+    TtsTestResult {
+        session_id: String,
+        /// ok | error
+        state: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        engine: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        text: Option<String>,
+    },
     System {
         #[serde(skip_serializing_if = "Option::is_none")]
         session_id: Option<String>,

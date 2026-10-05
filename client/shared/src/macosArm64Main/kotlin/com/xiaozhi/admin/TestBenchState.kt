@@ -62,6 +62,12 @@ class TestBenchState(private val scope: PagerScope) {
 
     var ttsText by scope.observable("你好，小智")
 
+    /** 最近一次合成立即失败的原因（服务端 tts_test 结果帧；空=无错误）。 */
+    var ttsError by scope.observable("")
+
+    /** 最近一次合成使用的引擎名（服务端回报：sherpa / xfyun）。 */
+    var ttsEngine by scope.observable("")
+
     /** 合成语言：auto 自动（Kokoro 需明确 lang，auto 走服务器默认）/ zh / en */
     var ttsLang by scope.observable("auto")
     var ttsSpeed by scope.observable("1.0") // 参考 kokoro.js demo：语速
@@ -270,15 +276,25 @@ class TestBenchState(private val scope: PagerScope) {
         ttsReady = false
         ttsPlaying = false
         ttsProgress = 0f
+        ttsError = ""
         statusMsg = "合成中…"
         val speed = ttsSpeed.toDoubleOrNull() ?: 1.0
         val lang = resolveLang(ttsLang)
-        xz(ctx).speak(ttsText, ttsSpeaker, lang, speed) { _ ->
+        xz(ctx).speak(ttsText, ttsSpeaker, lang, speed) { result ->
+            ttsEngine = result?.optString("engine", "") ?: ""
+            if (result?.optString("state", "stop") == "error") {
+                // 服务端合成失败（引擎切换失败/凭据错误/网络等）：错误原因显示在卡片
+                ttsBusy = false
+                speaking = false
+                ttsError = result.optString("text", "合成失败")
+                statusMsg = "TTS 失败：$ttsError"
+                return@speak
+            }
             // tts stop：合成结束（第一遍已实时播完/在播尾帧）
             ttsBusy = false
             speaking = false
             ttsReady = true
-            statusMsg = "TTS 播放完成，可回听"
+            statusMsg = "TTS 播放完成，可回听（${ttsEngine.ifEmpty { "未知引擎" }}）"
             refreshWave(ctx, "tts")
         }
         // 合成+下发超时兜底：60s 未收到 tts stop 则恢复按钮（模型首次加载可能较慢）
@@ -774,6 +790,25 @@ private fun ViewContainer<*, *>.benchTtsPage(
                         enabled = { bench.asrPhase != "recording" && bench.asrPhase != "starting" && bench.asrPhase != "recognizing" },
                     ) {
                         bench.speak(ctx)
+                    }
+                    // 服务端回报的引擎名（sherpa/xfyun）；成功合成后可见
+                    vif({ bench.ttsEngine.isNotEmpty() }) {
+                        View { attr { width(AdminSpace.md) } }
+                        statusBadge(
+                            { if (bench.ttsError.isNotEmpty()) "error" else "connected" },
+                            { "${bench.ttsEngine}${if (bench.ttsError.isNotEmpty()) " · 失败" else " · 就绪"}" },
+                        )
+                    }
+                }
+                // 合成失败原因（引擎切换失败/凭据错误等）——服务端 tts_test 结果帧携带
+                vif({ bench.ttsError.isNotEmpty() }) {
+                    Text {
+                        attr {
+                            fontSize(AdminType.caption)
+                            color(AdminColors.dangerTintText)
+                            marginTop(AdminSpace.sm)
+                            text("合成失败：${bench.ttsError}")
+                        }
                     }
                 }
                 // TTS 波形回放（合成完成后显示，可反复回听；播放进度流过点亮）
