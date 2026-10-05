@@ -43,14 +43,14 @@ services:
       # 可选：调整日志级别（默认 info）；如 debug / warn
       RUST_LOG: info
       # 自动下载模型：missing(默认，缺失才下) | force(每次重下) | off(不下载)
+      # 模型统一从 HuggingFace 直连下载（无需代理）；SENSEVOICE_URL/KOKORO_URL/SILERO_VAD_URL
+      # 可覆盖为内网镜像仓库 ID。
       XIAOZHI_AUTO_DOWNLOAD_MODELS: "missing"
-      # GitHub 代理前缀（默认 https://tvv.tw/）：直连 github.com/release-assets
-      # 不可达的环境靠它下载模型；GITHUB_PROXY=off 可关闭走直连。
-      GITHUB_PROXY: "https://tvv.tw/"
     volumes:
-      # 配置：默认直接挂 server/config.example.toml（已含 /models/... 路径，开箱即用）；
-      #       若已 cp 为 server/config.toml，把上面 XIAOZHI_CONFIG 路径一并改掉即可。
-      - ./server/config.toml:/etc/xiaozhi/config.toml:ro
+      # 配置：挂载宿主 server/config.toml（请先 `cp server/config.example.toml server/config.toml`）。
+      # ⚠️ 必须是**可写**挂载：管理页「保存配置」走 PUT /api/config 回写此文件，
+      #   若加了 :ro 会导致写入失败、接口返回 HTTP 500（GET 正常、PUT 失败，web 与 macApp 表现一致）。
+      - ./server/config.toml:/etc/xiaozhi/config.toml
       # 模型：宿主 ./models 挂载进容器；首启缺失时由入口脚本自动下载并写入（需可写），
       #       下载后持久化，后续启动检测到文件即跳过。
       - ./models:/models

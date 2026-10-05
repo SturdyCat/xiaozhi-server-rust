@@ -8,7 +8,6 @@ import com.tencent.kuikly.core.directives.vif
 import com.tencent.kuikly.core.module.Module
 import com.tencent.kuikly.core.pager.Pager
 import com.tencent.kuikly.core.reactive.handler.observable
-import com.tencent.kuikly.core.views.Scroller
 import com.tencent.kuikly.core.views.Text
 import com.tencent.kuikly.core.views.View
 
@@ -17,7 +16,10 @@ import com.tencent.kuikly.core.views.View
  *
  * 启动流程：先显示「连接服务器」页（ConnectState，输入地址 → GET /api/config 读配置 →
  * 自动 WS 连接 → 进入主壳）；主壳内 sidebar + 内容区在同一 Pager 内用可观察状态
- * selectedSection 切换「概览 / 测试台 / 配置」三个 section，不 push 新窗口。
+ * selectedSection 切换「测试台 / 配置」两个 section，不 push 新窗口。
+ * 两个 section 均为官方 Tabs + PageList 标签页布局（tabbedPanel）：
+ * 测试台四个 tab（连接 / ASR 识别 / TTS 合成 / LLM 对话），每个 tab 左侧功能卡、
+ * 右侧对应配置卡（改动即存表单，配合顶栏「保存配置」一键写回）；配置页六个 tab 保持全量配置汇总。
  * 视觉走现代 macOS 原生风（Apple HIG），见 AdminTheme.kt 的 token 与组件。
  *
  * 跨端说明：
@@ -28,11 +30,16 @@ import com.tencent.kuikly.core.views.View
 @Page("router")
 class AdminShell : Pager() {
 
-    val conn = ConnectState()
-    val bench = TestBenchState()
-    val form = ConfigFormState()
-    var selectedSection by observable("home")
-    var toast by observable("")
+    val conn = ConnectState(this)
+    val bench = TestBenchState(this)
+    val form = ConfigFormState(this)
+    var selectedSection by observable("testbench")
+
+    /** 顶部 toast（跨端统一实现：状态 + 渲染见 commonMain 的 ToastState / ToastHost）。 */
+    val toast = ToastState(this)
+
+    /** 顶部弹出一条提示（成功=ok / 失败=error / 提示=info），3 秒后自动消失。 */
+    fun showToast(message: String, level: String = "info") = toast.show(message, level)
 
     override fun createExternalModules(): Map<String, Module> {
         return mapOf(XiaoZhiModule.MODULE_NAME to XiaoZhiModule())
@@ -51,10 +58,16 @@ class AdminShell : Pager() {
         // 但 AdminTheme 组件与 section 渲染扩展必须在目标容器闭包内「非限定」调用，
         // 让接收者=目标容器（若写 ctx.xxx() 会把节点挂到根容器，布局逃逸）。
         val ctx = this
-        // 宽屏响应式：以 lambda 形式传给各 section，在 cardGrid 的 vif 闭包内读取 pageViewWidth
-        // （响应式字段），窗口 resize 跨过 900 阈值时自动 双列 ⇄ 单列 切换。
+        // 宽屏响应式：以 lambda 形式传给各 section，在 twoPane 的 vif 闭包内读取 pageViewWidth
+        // （响应式字段），窗口 resize 跨过 900 阈值时自动 并排 ⇄ 堆叠 切换。
         // ⚠️ 不能在 body 顶层一次性求值成 Boolean——构建期求值不会随 resize 重算。
+        // ⚠️ 这些 lambda 必须定义在 body 顶层（return 块外）：DslMarker 会屏蔽嵌套 builder
+        // 闭包内对 Pager 成员的隐式接收者访问（pagerData 报 "cannot be called in this context"）。
         val twoColumn = { pagerData.pageViewWidth >= 900f }
+        // pageItem 尺寸（官方 PageList 要求显式设置，见 tabbedPanel 注释）：
+        // 宽 = 窗口宽 - 侧边栏(240) - 分隔(1)；高 = 窗口高 - 顶避让(36) - 标题栏(64) - 标题分隔(1) - tab栏(44)
+        val contentPageWidth = { pagerData.pageViewWidth - 241f }
+        val contentPageHeight = { pagerData.pageViewHeight - 145f }
         return {
             attr {
                 flex(1f)
@@ -73,7 +86,7 @@ class AdminShell : Pager() {
                         flexDirectionRow()
                     }
 
-                    // ===== 侧边栏（启动即进入主界面：不显示 App 名称标题，导航项直接作为起点） =====
+                    // ===== 侧边栏（导航项直接作为起点，无 App 名称标题）=====
                     // ⚠️ paddingTop = 标题栏避让区：macOS 红黄绿窗口按钮浮在窗口左上角（约 y=12、高 12），
                     //    本壳隐藏了系统导航栏（SceneDelegate→KuiklyRenderViewController setNavigationBarHidden:YES），
                     //    故内容直接铺满窗口；预留 36pt 顶距让首个导航项避开窗口按钮，避免重叠。
@@ -86,12 +99,9 @@ class AdminShell : Pager() {
                         }
                         // ⚠️ 非限定调用：接收者=侧边栏 View，导航项才能挂进侧边栏（经 ctx. 调用会逃逸到根容器）
                         // ⚠️ 选中态传 lambda（在 attr/vif 闭包内读取 observable），点击后高亮才能响应式更新
-                        sidebarItem("概览", { ctx.selectedSection == "home" }) { ctx.selectedSection = "home" }
                         sidebarItem("测试台", { ctx.selectedSection == "testbench" }) { ctx.selectedSection = "testbench" }
                         // 「配置」项：form.dirty 时右侧显示小橙点（warning 色）
                         sidebarItem("配置", { ctx.selectedSection == "config" }, showDot = { ctx.form.dirty }) { ctx.selectedSection = "config" }
-                        // 「状态」项：置灰禁用，点击无反应
-                        sidebarItem("状态", { ctx.selectedSection == "status" }, enabled = false) { }
                         // 底部弹性占位 + 切换服务器（回到启动连接页，本地/远程调试切换入口）+ 版本信息
                         View { attr { flex(1f) } }
                         sidebarItem("切换服务器", { false }) { ctx.conn.backToConnect(ctx) }
@@ -116,6 +126,8 @@ class AdminShell : Pager() {
 
                     // ===== 内容区 =====
                     // ⚠️ 同侧边栏，预留 36pt 顶距避让 macOS 窗口按钮，使顶栏与侧边栏顶端对齐、不压住红黄绿。
+                    // section 内容为 tabbedPanel（Tabs+PageList，flex(1)），不再套页面级 Scroller——
+                    // 每个 tab 页内自带纵向 Scroller。
                     View {
                         attr {
                             flex(1f)
@@ -125,79 +137,54 @@ class AdminShell : Pager() {
 
                         // 顶栏标题/右侧操作区随 section 响应式切换：
                         // 标题经 largeTitleBar 的 title lambda 在 attr 闭包内读取 selectedSection；
-                        // 右侧操作区统一传入，内部用 vif 按 section 显隐（构建期 when 一次性求值不会更新）。
+                        // 测试台各 tab 内嵌了对应配置卡，「保存配置」两个 section 都要可用。
                         largeTitleBar(
                             title = {
-                                when (ctx.selectedSection) {
-                                    "testbench" -> "测试台"
-                                    "config" -> "配置"
-                                    else -> "概览"
-                                }
+                                if (ctx.selectedSection == "config") "配置" else "测试台"
                             },
                             trailing = {
-                                vif({ ctx.selectedSection == "config" }) {
-                                    // 忙碌态 vif/velse 分支重建（构建期裸读 saving 不响应式更新，
-                                    // 且 event 层 active 定死 true 挡不住重复点击）；loading=true → 官方 ActivityIndicator 菊花。
-                                    vif({ ctx.form.saving }) {
-                                        primaryButton("保存中…", enabled = false, loading = true) { }
+                                vif({ ctx.selectedSection == "config" || ctx.selectedSection == "testbench" }) {
+                                    // 三态按钮：saving 时菊花 + 灰底 + 拦截点击（loading 在 attr/event 闭包内实时读取，保存期间不会重复提交）。
+                                    primaryButton(
+                                        "保存配置",
+                                        loading = { ctx.form.saving },
+                                        loadingText = "保存中…",
+                                    ) {
+                                        ctx.form.save(ctx, ctx.conn.baseUrl)
+                                        ctx.showToast(ctx.form.statusMsg, ctx.form.statusLevel)
                                     }
-                                    velse {
-                                        primaryButton("保存配置") {
-                                            ctx.form.save(ctx, ctx.conn.baseUrl)
-                                            ctx.toast = ctx.form.statusMsg
-                                        }
-                                    }
-                                }
-                                vif({ ctx.selectedSection == "testbench" }) {
-                                    statusBadge({ ctx.bench.connectionState }, { connectionLabel(ctx.bench.connectionState) })
                                 }
                             },
                         )
 
-                        Scroller {
-                            attr {
-                                flex(1f)
-                                paddingLeft(AdminSpace.xl)
-                                paddingRight(AdminSpace.xl)
-                                paddingTop(AdminSpace.xxl)
-                                paddingBottom(AdminSpace.xxxl)
-                            }
-                            // ⚠️ 非限定调用（接收者=Scroller），卡片/表单才能挂进 Scroller
-                            vif({ ctx.selectedSection == "home" }) { homeSection(ctx, twoColumn) }
-                            vif({ ctx.selectedSection == "testbench" }) { renderBench(ctx.bench, ctx, twoColumn) }
-                            vif({ ctx.selectedSection == "config" }) { renderForm(ctx.form, twoColumn) }
-                        }
+                        // 顶部 toast（跨端统一：成功=绿 / 失败=红 / 信息=中性），3 秒自动消失
+                        ToastHost(ctx.toast)
 
-                        // 底部 toast（全局状态提示）
-                        vif({ ctx.toast.isNotEmpty() }) {
-                            View {
-                                attr {
-                                    height(44f)
-                                    flexDirectionRow()
-                                    alignItemsCenter()
-                                    paddingLeft(AdminSpace.xl)
-                                    backgroundColor(AdminColors.accentTintBg)
-                                }
-                                Text {
-                                    attr {
-                                        fontSize(AdminType.caption)
-                                        color(AdminColors.textAccent)
-                                        text(ctx.toast)
-                                    }
-                                }
-                            }
+                        // section 切换：vif 闭包内读取 selectedSection（observable），切换时重建对应 tabbedPanel
+                        //（tab 选中态等存于各状态类的 TabUiState，重建不丢）
+                        vif({ ctx.selectedSection == "testbench" }) {
+                            renderBench(
+                                ctx.bench, ctx.form, ctx, twoColumn,
+                                pageWidth = contentPageWidth,
+                                pageHeight = contentPageHeight,
+                            )
+                        }
+                        vif({ ctx.selectedSection == "config" }) {
+                            renderForm(
+                                ctx.form,
+                                pageWidth = contentPageWidth,
+                                pageHeight = contentPageHeight,
+                            )
                         }
                     }
                 }
             }
         }
     }
-
-    // 概览 section 渲染：见文件底部 ViewContainer.homeSection(shell) 扩展
 }
 
 // ============================================================
-// 文件级：连接状态文案 / 侧边栏项 / 概览 section
+// 文件级：连接状态文案 / 侧边栏项
 // ============================================================
 
 fun connectionLabel(state: String): String = when (state) {
@@ -277,74 +264,4 @@ fun ViewContainer<*, *>.sidebarItem(
             }
         }
     }
-}
-
-/**
- * 概览：4 张卡——连接状态 / 最近识别 / TTS 快捷 / 快捷入口。
- * 宽屏（twoColumn）：双列 cardGrid；窄屏：纵向单列。
- *
- * ⚠️ 必须在目标容器（Scroller）闭包内**非限定**调用 `homeSection(ctx, twoColumn)`：
- * Kuikly 的 View{} DSL 静态绑定到词法作用域最近的 ViewContainer 接收者，
- * 以成员函数经 ctx 调用会把卡片挂到 Pager 根容器，导致布局逃逸。
- * AdminCard 的 content（ViewBuilder，带接收者）在 groupedCard 卡片容器内执行，节点挂进卡片。
- */
-fun ViewContainer<*, *>.homeSection(shell: AdminShell, wide: () -> Boolean) {
-    cardGrid(
-        wide = wide,
-        cards = listOf(
-            AdminCard("连接状态") {
-                statusBadge({ shell.bench.connectionState }, { connectionLabel(shell.bench.connectionState) })
-                View { attr { height(AdminSpace.md) } }
-                labeledField("server url", { shell.bench.serverUrl }, { shell.bench.serverUrl = it }, "ws://127.0.0.1:8000/api/ws")
-                actionRow {
-                    vif({ shell.bench.connected }) {
-                        primaryButton("断开") { shell.bench.disconnect(shell) }
-                    }
-                    velse {
-                        primaryButton("连接") { shell.bench.connect(shell) }
-                    }
-                }
-            },
-            AdminCard("最近识别") {
-                vif({ shell.bench.asrText.isEmpty() }) {
-                    Text {
-                        attr {
-                            fontSize(AdminType.body)
-                            color(AdminColors.textTertiary)
-                            text("暂无识别记录")
-                        }
-                    }
-                }
-                velse {
-                    Text {
-                        attr {
-                            fontSize(AdminType.body)
-                            color(AdminColors.textPrimary)
-                            text(shell.bench.asrText)
-                        }
-                    }
-                    View { attr { height(AdminSpace.sm) } }
-                    secondaryButton("复制") { shell.toast = "已复制识别结果" }
-                }
-            },
-            AdminCard("TTS 快捷") {
-                labeledField("合成文字", { shell.bench.ttsText }, { shell.bench.ttsText = it }, "输入要合成的文字", height = 100f)
-                actionRow {
-                    vif({ shell.bench.ttsBusy }) {
-                        primaryButton("合成中…", enabled = false, loading = true) { }
-                    }
-                    velse {
-                        primaryButton("合成并播放") { shell.bench.speak(shell) }
-                    }
-                }
-            },
-            AdminCard("快捷入口") {
-                actionRow {
-                    secondaryButton("打开测试台") { shell.selectedSection = "testbench" }
-                    View { attr { width(AdminSpace.md) } }
-                    secondaryButton("打开配置") { shell.selectedSection = "config" }
-                }
-            },
-        ),
-    )
 }

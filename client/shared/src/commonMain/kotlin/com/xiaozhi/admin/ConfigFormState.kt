@@ -1,10 +1,13 @@
 package com.xiaozhi.admin
 
+import com.tencent.kuikly.core.base.PagerScope
 import com.tencent.kuikly.core.base.ViewContainer
 import com.tencent.kuikly.core.module.NetworkModule
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.pager.Pager
+import com.tencent.kuikly.core.reactive.collection.ObservableList
 import com.tencent.kuikly.core.reactive.handler.observable
+import com.tencent.kuikly.core.reactive.handler.observableList
 
 /**
  * 配置表单状态（跨端，commonMain，无平台依赖）。
@@ -23,63 +26,81 @@ import com.tencent.kuikly.core.reactive.handler.observable
  * （Scroller）闭包内**非限定**调用；若经 `ctx.groupedCard(...)` 调用，接收者是 Pager 根容器，
  * 节点会逃逸出 Scroller，导致布局错乱。
  */
-class ConfigFormState {
+class ConfigFormState(private val scope: PagerScope) {
 
     // ===== [server] =====
-    var listen by observable("")
-    var expectedToken by observable("")
-    var workerThreads by observable("2")
-    var adminDir by observable("")
+    var listen by scope.observable("")
+    var expectedToken by scope.observable("")
+    var workerThreads by scope.observable("2")
+    var adminDir by scope.observable("")
 
     // ===== [audio] =====
-    var downlinkSampleRate by observable("24000")
-    var downlinkFrameMs by observable("60")
-    var channels by observable("1")
-    var binaryProtocolVersion by observable("1")
+    var downlinkSampleRate by scope.observable("24000")
+    var downlinkFrameMs by scope.observable("60")
+    var channels by scope.observable("1")
+    var binaryProtocolVersion by scope.observable("1")
 
     // ===== [asr] =====
-    var asrBackend by observable("mock")
-    var asrModel by observable("")
-    var asrTokens by observable("")
-    var asrLanguage by observable("auto")
-    var asrUseItn by observable("true")
-    var asrNumThreads by observable("2")
-    var asrProvider by observable("cpu")
+    var asrBackend by scope.observable("mock")
+    var asrModel by scope.observable("")
+    var asrTokens by scope.observable("")
+    var asrLanguage by scope.observable("auto")
+    var asrUseItn by scope.observable("true")
+    var asrNumThreads by scope.observable("2")
+    var asrProvider by scope.observable("cpu")
 
     // ===== [vad] =====
-    var vadModel by observable("")
-    var vadThreshold by observable("0.5")
-    var vadMinSilence by observable("0.25")
-    var vadMinSpeech by observable("0.25")
+    var vadModel by scope.observable("")
+    var vadThreshold by scope.observable("0.5")
+    var vadMinSilence by scope.observable("0.25")
+    var vadMinSpeech by scope.observable("0.25")
 
     // ===== [tts] =====
-    var ttsBackend by observable("mock")
-    var ttsModel by observable("")
-    var ttsVoices by observable("")
-    var ttsTokens by observable("")
-    var ttsDataDir by observable("")
-    var ttsDictDir by observable("")
-    var ttsLexicon by observable("")
-    var ttsLang by observable("zh")
-    var ttsSpeaker by observable("0")
-    var ttsSpeed by observable("1.0")
-    var ttsNumThreads by observable("1")
+    var ttsBackend by scope.observable("mock")
+    var ttsModel by scope.observable("")
+    var ttsVoices by scope.observable("")
+    var ttsTokens by scope.observable("")
+    var ttsDataDir by scope.observable("")
+    var ttsDictDir by scope.observable("")
+    var ttsLexicon by scope.observable("")
+    var ttsLang by scope.observable("zh")
+    var ttsSpeaker by scope.observable("0")
+    var ttsSpeed by scope.observable("1.0")
+    var ttsNumThreads by scope.observable("1")
 
     // ===== [llm] =====
-    var llmBackend by observable("mock")
-    var llmApiBase by observable("")
-    var llmApiKey by observable("")
-    var llmModel by observable("")
-    var llmSystemPrompt by observable("")
-    var llmMaxHistory by observable("10")
-    var llmTemperature by observable("0.7")
-    var llmStream by observable("true")
+    var llmBackend by scope.observable("mock")
+    var llmApiBase by scope.observable("")
+    var llmApiKey by scope.observable("")
+    var llmModel by scope.observable("")
+    var llmSystemPrompt by scope.observable("")
+    var llmMaxHistory by scope.observable("10")
+    var llmTemperature by scope.observable("0.7")
+    var llmStream by scope.observable("true")
 
     // ===== 状态 =====
-    var dirty by observable(false)
-    var saving by observable(false)
-    var statusMsg by observable("")
-    var lastSavedAt by observable("")
+    var dirty by scope.observable(false)
+    var saving by scope.observable(false)
+    var statusMsg by scope.observable("")
+    var statusLevel by scope.observable("info")
+    var lastSavedAt by scope.observable("")
+
+    /** 配置页标签页 UI 状态（Server/Audio/ASR/VAD/TTS/LLM 六个 tab，见 renderForm）。 */
+    val tabUi = TabUiState(scope)
+
+    /** 当前展开的下拉（backend 选择等，"" = 全部收起）；放状态类避免 Pager body 重建丢失展开态。 */
+    var openDropdown by scope.observable("")
+
+    // ===== backend 选项（官方 AlertDialog 下拉的数据源；ObservableList 供 vfor 响应式渲染）=====
+    val asrBackendOptions: ObservableList<Pair<String, String>> by scope.observableList()
+    val ttsBackendOptions: ObservableList<Pair<String, String>> by scope.observableList()
+    val llmBackendOptions: ObservableList<Pair<String, String>> by scope.observableList()
+
+    init {
+        asrBackendOptions.addAll(listOf("mock" to "mock", "sherpa" to "sherpa"))
+        ttsBackendOptions.addAll(listOf("mock" to "mock", "sherpa" to "sherpa"))
+        llmBackendOptions.addAll(listOf("mock" to "mock", "http" to "http"))
+    }
 
     // ============================================================
     // 网络：load / save
@@ -92,8 +113,10 @@ class ConfigFormState {
             if (success) {
                 fill(data)
                 statusMsg = "已加载配置"
+                statusLevel = "ok"
             } else {
                 statusMsg = "加载失败: $errorMsg"
+                statusLevel = "error"
             }
         }
     }
@@ -168,8 +191,10 @@ class ConfigFormState {
                 dirty = false
                 lastSavedAt = "已保存"
                 statusMsg = "保存成功（引擎参数需重启生效）"
+                statusLevel = "ok"
             } else {
                 statusMsg = "保存失败: ${if (errorMsg.isNotEmpty()) errorMsg else "HTTP $code"}"
+                statusLevel = "error"
             }
         }
     }
@@ -237,89 +262,146 @@ class ConfigFormState {
 }
 
 /**
- * 渲染 6 张分组卡片（Server/Audio/ASR/VAD/TTS/LLM），经 cardGrid 响应式排版
- * （wide() 为 true 双列，false 单列）。
- * backend 用 segmentedControl，use_itn 用 switchRow，多行字段用 labeledField(height=100)。
+ * 渲染配置标签页（tabbedPanel：官方 Tabs + PageList）：Server / Audio / ASR / VAD / TTS / LLM 六个 tab，
+ * 保持全量配置汇总——每个 tab 一张配置卡，宽窄屏均整卡铺满（tab 内自带纵向滚动）。
+ * backend 用官方 AlertDialog 基座下拉（dropdownField），use_itn 用官方 switchRow，多行散文用 labeledTextArea（官方 TextArea）。
  *
- * ⚠️ 必须在目标容器（Scroller）闭包内**非限定**调用 `renderForm(form, wide)`：
- * 扩展接收者即 Scroller，卡片才能正确挂进 Scroller。
- * ⚠️ wide 须为 lambda（如 `{ pagerData.pageViewWidth >= 900f }`），在 cardGrid 的
- * vif 闭包内读取才能随窗口 resize 响应式重排。
+ * ⚠️ 必须在目标容器闭包内**非限定**调用 `renderForm(form)`：
+ * 扩展接收者即调用处容器，Tabs/PageList 才能正确挂进去。
+ * 各配置卡（serverConfigCard 等）同时被测试台对应 tab 复用（AdminShell/testbench 右栏）。
  */
-fun ViewContainer<*, *>.renderForm(form: ConfigFormState, wide: () -> Boolean = { false }) {
-    fun markDirty() {
-        form.dirty = true
-    }
-
-    cardGrid(
-        wide = wide,
-        cards = listOf(
-            AdminCard("Server") {
-                labeledField("listen", { form.listen }, { form.listen = it; markDirty() }, "0.0.0.0:8000")
-                labeledField("expected_token", { form.expectedToken }, { form.expectedToken = it; markDirty() })
-                labeledField("worker_threads", { form.workerThreads }, { form.workerThreads = it; markDirty() })
-                labeledField("admin_dir", { form.adminDir }, { form.adminDir = it; markDirty() })
-            },
-            AdminCard("Audio") {
-                labeledField("downlink_sample_rate", { form.downlinkSampleRate }, { form.downlinkSampleRate = it; markDirty() })
-                labeledField("downlink_frame_duration_ms", { form.downlinkFrameMs }, { form.downlinkFrameMs = it; markDirty() })
-                labeledField("channels", { form.channels }, { form.channels = it; markDirty() })
-                labeledField("binary_protocol_version", { form.binaryProtocolVersion }, { form.binaryProtocolVersion = it; markDirty() })
-            },
-            AdminCard("ASR") {
-                fieldLabel("backend")
-                val asrOpts = listOf("mock", "sherpa")
-                segmentedControl(asrOpts, if (form.asrBackend == "sherpa") 1 else 0) { i ->
-                    form.asrBackend = asrOpts[i]; markDirty()
-                }
-                labeledField("model", { form.asrModel }, { form.asrModel = it; markDirty() })
-                labeledField("tokens", { form.asrTokens }, { form.asrTokens = it; markDirty() })
-                labeledField("language", { form.asrLanguage }, { form.asrLanguage = it; markDirty() }, "auto/zh/en/ja/ko/yue")
-                switchRow("use_itn", form.asrUseItn == "true") {
-                    form.asrUseItn = if (form.asrUseItn == "true") "false" else "true"; markDirty()
-                }
-                labeledField("num_threads", { form.asrNumThreads }, { form.asrNumThreads = it; markDirty() })
-                labeledField("provider", { form.asrProvider }, { form.asrProvider = it; markDirty() })
-            },
-            AdminCard("VAD") {
-                labeledField("model", { form.vadModel }, { form.vadModel = it; markDirty() })
-                labeledField("threshold", { form.vadThreshold }, { form.vadThreshold = it; markDirty() })
-                labeledField("min_silence_duration", { form.vadMinSilence }, { form.vadMinSilence = it; markDirty() })
-                labeledField("min_speech_duration", { form.vadMinSpeech }, { form.vadMinSpeech = it; markDirty() })
-            },
-            AdminCard("TTS") {
-                fieldLabel("backend")
-                val ttsOpts = listOf("mock", "sherpa")
-                segmentedControl(ttsOpts, if (form.ttsBackend == "sherpa") 1 else 0) { i ->
-                    form.ttsBackend = ttsOpts[i]; markDirty()
-                }
-                labeledField("model", { form.ttsModel }, { form.ttsModel = it; markDirty() })
-                labeledField("voices", { form.ttsVoices }, { form.ttsVoices = it; markDirty() }, height = 100f)
-                labeledField("tokens", { form.ttsTokens }, { form.ttsTokens = it; markDirty() })
-                labeledField("data_dir", { form.ttsDataDir }, { form.ttsDataDir = it; markDirty() })
-                labeledField("dict_dir", { form.ttsDictDir }, { form.ttsDictDir = it; markDirty() })
-                labeledField("lexicon", { form.ttsLexicon }, { form.ttsLexicon = it; markDirty() }, height = 100f)
-                labeledField("lang", { form.ttsLang }, { form.ttsLang = it; markDirty() })
-                labeledField("speaker", { form.ttsSpeaker }, { form.ttsSpeaker = it; markDirty() })
-                labeledField("speed", { form.ttsSpeed }, { form.ttsSpeed = it; markDirty() })
-                labeledField("num_threads", { form.ttsNumThreads }, { form.ttsNumThreads = it; markDirty() })
-            },
-            AdminCard("LLM") {
-                fieldLabel("backend")
-                val llmOpts = listOf("mock", "http")
-                segmentedControl(llmOpts, if (form.llmBackend == "http") 1 else 0) { i ->
-                    form.llmBackend = llmOpts[i]; markDirty()
-                }
-                labeledField("api_base", { form.llmApiBase }, { form.llmApiBase = it; markDirty() })
-                labeledField("api_key", { form.llmApiKey }, { form.llmApiKey = it; markDirty() })
-                labeledField("model", { form.llmModel }, { form.llmModel = it; markDirty() })
-                labeledField("system_prompt", { form.llmSystemPrompt }, { form.llmSystemPrompt = it; markDirty() }, height = 100f)
-                labeledField("max_history", { form.llmMaxHistory }, { form.llmMaxHistory = it; markDirty() })
-                labeledField("temperature", { form.llmTemperature }, { form.llmTemperature = it; markDirty() })
-                switchRow("stream（SSE 流式）", form.llmStream == "true") {
-                    form.llmStream = if (form.llmStream == "true") "false" else "true"; markDirty()
-                }
-            },
+fun ViewContainer<*, *>.renderForm(
+    form: ConfigFormState,
+    pageWidth: () -> Float,
+    pageHeight: () -> Float,
+) {
+    tabbedPanel(
+        ui = form.tabUi,
+        pageWidth = pageWidth,
+        pageHeight = pageHeight,
+        pages = listOf(
+            TabPage("Server") { serverConfigCard(form) },
+            TabPage("Audio") { audioConfigCard(form) },
+            TabPage("ASR") { asrConfigCard(form) },
+            TabPage("VAD") { vadConfigCard(form) },
+            TabPage("TTS") { ttsConfigCard(form) },
+            TabPage("LLM") { llmConfigCard(form) },
         ),
     )
+}
+
+// ============================================================
+// 各配置分组卡（renderForm 与测试台 tab 右栏共用；字段变更统一 markDirty）
+// ============================================================
+
+fun ViewContainer<*, *>.serverConfigCard(form: ConfigFormState) {
+    groupedCard("Server") {
+        labeledField("listen", { form.listen }, { form.listen = it; form.dirty = true }, "0.0.0.0:8000")
+        labeledField("expected_token", { form.expectedToken }, { form.expectedToken = it; form.dirty = true })
+        labeledField("worker_threads", { form.workerThreads }, { form.workerThreads = it; form.dirty = true })
+        labeledField("admin_dir", { form.adminDir }, { form.adminDir = it; form.dirty = true })
+    }
+}
+
+fun ViewContainer<*, *>.audioConfigCard(form: ConfigFormState) {
+    groupedCard("Audio") {
+        labeledField("downlink_sample_rate", { form.downlinkSampleRate }, { form.downlinkSampleRate = it; form.dirty = true })
+        labeledField("downlink_frame_duration_ms", { form.downlinkFrameMs }, { form.downlinkFrameMs = it; form.dirty = true })
+        labeledField("channels", { form.channels }, { form.channels = it; form.dirty = true })
+        labeledField("binary_protocol_version", { form.binaryProtocolVersion }, { form.binaryProtocolVersion = it; form.dirty = true })
+    }
+}
+
+fun ViewContainer<*, *>.asrConfigCard(form: ConfigFormState) {
+    groupedCard("ASR") {
+        // backend 选择：官方 AlertDialog 基座下拉（官方 SegmentedControlIOS 是 iOS 渲染器专属、web 无实现，跨端统一用下拉）
+        dropdownField(
+            label = "backend",
+            currentLabel = { form.asrBackend },
+            options = { form.asrBackendOptions },
+            selectedId = { form.asrBackend },
+            isOpen = { form.openDropdown == "asr_backend" },
+            onToggle = { form.openDropdown = if (form.openDropdown == "asr_backend") "" else "asr_backend" },
+            onSelect = {
+                form.asrBackend = it
+                form.dirty = true
+                form.openDropdown = ""
+            },
+        )
+        labeledField("model", { form.asrModel }, { form.asrModel = it; form.dirty = true })
+        labeledField("tokens", { form.asrTokens }, { form.asrTokens = it; form.dirty = true })
+        labeledField("language", { form.asrLanguage }, { form.asrLanguage = it; form.dirty = true }, "auto/zh/en/ja/ko/yue")
+        switchRow("use_itn", form.asrUseItn == "true") {
+            form.asrUseItn = if (form.asrUseItn == "true") "false" else "true"; form.dirty = true
+        }
+        labeledField("num_threads", { form.asrNumThreads }, { form.asrNumThreads = it; form.dirty = true })
+        labeledField("provider", { form.asrProvider }, { form.asrProvider = it; form.dirty = true })
+    }
+}
+
+fun ViewContainer<*, *>.vadConfigCard(form: ConfigFormState) {
+    groupedCard("VAD") {
+        labeledField("model", { form.vadModel }, { form.vadModel = it; form.dirty = true })
+        labeledField("threshold", { form.vadThreshold }, { form.vadThreshold = it; form.dirty = true })
+        labeledField("min_silence_duration", { form.vadMinSilence }, { form.vadMinSilence = it; form.dirty = true })
+        labeledField("min_speech_duration", { form.vadMinSpeech }, { form.vadMinSpeech = it; form.dirty = true })
+    }
+}
+
+fun ViewContainer<*, *>.ttsConfigCard(form: ConfigFormState) {
+    groupedCard("TTS") {
+        // backend 选择：官方 AlertDialog 基座下拉（跨端统一）
+        dropdownField(
+            label = "backend",
+            currentLabel = { form.ttsBackend },
+            options = { form.ttsBackendOptions },
+            selectedId = { form.ttsBackend },
+            isOpen = { form.openDropdown == "tts_backend" },
+            onToggle = { form.openDropdown = if (form.openDropdown == "tts_backend") "" else "tts_backend" },
+            onSelect = {
+                form.ttsBackend = it
+                form.dirty = true
+                form.openDropdown = ""
+            },
+        )
+        labeledField("model", { form.ttsModel }, { form.ttsModel = it; form.dirty = true })
+        labeledField("voices", { form.ttsVoices }, { form.ttsVoices = it; form.dirty = true })
+        labeledField("tokens", { form.ttsTokens }, { form.ttsTokens = it; form.dirty = true })
+        labeledField("data_dir", { form.ttsDataDir }, { form.ttsDataDir = it; form.dirty = true })
+        labeledField("dict_dir", { form.ttsDictDir }, { form.ttsDictDir = it; form.dirty = true })
+        labeledField("lexicon", { form.ttsLexicon }, { form.ttsLexicon = it; form.dirty = true })
+        labeledField("lang", { form.ttsLang }, { form.ttsLang = it; form.dirty = true })
+        labeledField("speaker", { form.ttsSpeaker }, { form.ttsSpeaker = it; form.dirty = true })
+        labeledField("speed", { form.ttsSpeed }, { form.ttsSpeed = it; form.dirty = true })
+        labeledField("num_threads", { form.ttsNumThreads }, { form.ttsNumThreads = it; form.dirty = true })
+    }
+}
+
+fun ViewContainer<*, *>.llmConfigCard(form: ConfigFormState) {
+    groupedCard("LLM") {
+        // backend 选择：官方 AlertDialog 基座下拉（跨端统一）
+        dropdownField(
+            label = "backend",
+            currentLabel = { form.llmBackend },
+            options = { form.llmBackendOptions },
+            selectedId = { form.llmBackend },
+            isOpen = { form.openDropdown == "llm_backend" },
+            onToggle = { form.openDropdown = if (form.openDropdown == "llm_backend") "" else "llm_backend" },
+            onSelect = {
+                form.llmBackend = it
+                form.dirty = true
+                form.openDropdown = ""
+            },
+        )
+        labeledField("api_base", { form.llmApiBase }, { form.llmApiBase = it; form.dirty = true })
+        labeledField("api_key", { form.llmApiKey }, { form.llmApiKey = it; form.dirty = true })
+        labeledField("model", { form.llmModel }, { form.llmModel = it; form.dirty = true })
+        // 系统提示词是散文输入：官方 TextArea 多行（此前用单行 Input 输不了换行）
+        labeledTextArea("system_prompt", { form.llmSystemPrompt }, { form.llmSystemPrompt = it; form.dirty = true }, height = 100f)
+        labeledField("max_history", { form.llmMaxHistory }, { form.llmMaxHistory = it; form.dirty = true })
+        labeledField("temperature", { form.llmTemperature }, { form.llmTemperature = it; form.dirty = true })
+        switchRow("stream（SSE 流式）", form.llmStream == "true") {
+            form.llmStream = if (form.llmStream == "true") "false" else "true"; form.dirty = true
+        }
+    }
 }

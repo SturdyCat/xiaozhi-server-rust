@@ -19,7 +19,8 @@ provider:
 ## UI 构建规范
 
 - **使用 Flexbox 布局**：考虑不同屏幕尺寸和方向，确保响应式设计，注意 Kuikly API 使用上的一些差异
-- **组件使用**：优先选择使用 Kuikly 内置组件，复杂组件可以在跨平台层组合实现
+- **组件使用**：优先选择使用 Kuikly 内置组件，复杂组件可以在跨平台层组合实现。⛔ **不得自造样式/结构替代官方组件机制**（如自画 tab 选中胶囊替代 `indicatorInTabItem`、手写翻页替代 `PageList`）：官方组件跨端一致、自带原生观感与事件语义；写 UI 前先对照官方组件清单（kuikly.tds.qq.com/API/components/ 或 `.agents/skills/kuikly-ui-framework/references/KuiklyUI/docs/`）
+- **Tabs+PageList 联动（官方配对）**：TabItem 用官方结构（margin + allCenter + Text，选中态靠 `state.selected` 变色）；指示条用 `indicatorInTabItem`（absolutePosition 底部短条）；**PageList 必须显式设置 `pageItemWidth`/`pageItemHeight`**（官方示例按导航/tab 栏高度手算）——不设则 item 无尺寸约束、整页塌成单行（实测）；PageList `scroll` 事件回传 ScrollParams 喂 `Tabs.scrollParams`，点击 tab 用 `scrollToPageIndex(index)` 翻页
 - **组件属性**：使用 `attr {}` 块设置样式，使用 `event {}` 块设置事件，使用 `ref {}` 块设置组件引用
 - **组合优先原则**：优先在跨平台层采用组合小型组件的方式实现 ComposeView，而不是扩展现有组件
 - **返回ViewBuilder的函数需显式调用**：将 UI 构建逻辑抽取为返回 `ViewBuilder`的函数时，调用需通过`.invoke(this)`或`apply()`显式执行

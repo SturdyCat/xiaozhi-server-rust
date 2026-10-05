@@ -8,6 +8,7 @@ import com.tencent.kuikly.core.directives.vif
 import com.tencent.kuikly.core.module.NetworkModule
 import com.tencent.kuikly.core.module.SharedPreferencesModule
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
+import com.tencent.kuikly.core.base.PagerScope
 import com.tencent.kuikly.core.reactive.handler.observable
 import com.tencent.kuikly.core.views.Text
 import com.tencent.kuikly.core.views.View
@@ -28,26 +29,26 @@ import com.tencent.kuikly.core.views.View
  * 响应式约定：状态依赖 UI 一律在 attr/vif 闭包内读取 observable（按钮文案随 busy 变化用
  * vif/velse 分支重建——构建期裸读不触发更新，见 kuikly-ui-framework 技能文档）。
  */
-class ConnectState {
+class ConnectState(private val scope: PagerScope) {
 
     /** 连接页输入框内容（原样保留用户输入，归一化在 connect 时进行） */
-    var serverInput by observable("")
+    var serverInput by scope.observable("")
 
     /** 归一化解析出的 WS 地址（实时展示，便于确认远程地址拼对没有） */
-    var resolvedWs by observable("")
+    var resolvedWs by scope.observable("")
 
     /** 流程忙（读配置 / WS 握手中），按钮禁用防重复点击 */
-    var busy by observable(false)
+    var busy by scope.observable(false)
 
     /** 状态行文案 + 级别（info/error/ok 决定颜色） */
-    var statusMsg by observable(HINT_INIT)
-    var statusLevel by observable("info")
+    var statusMsg by scope.observable(HINT_INIT)
+    var statusLevel by scope.observable("info")
 
     /** connect=连接页 / main=主壳 */
-    var stage by observable("connect")
+    var stage by scope.observable("connect")
 
     /** 已连接服务器的 http 基址（无尾斜杠），配置页 load/save 经此跨机访问 */
-    var baseUrl by observable("")
+    var baseUrl by scope.observable("")
 
     private var launched = false
 
@@ -128,7 +129,7 @@ class ConnectState {
                         statusLevel = "ok"
                         statusMsg = "已连接 $ws"
                         stage = "main"
-                        shell.toast = "已连接 $base（配置已同步，token 取自 server.expected_token）"
+                        shell.showToast("已连接 $base（配置已同步，token 取自 server.expected_token）", "ok")
                     } else {
                         statusLevel = "error"
                         statusMsg = "配置已读取，但 WebSocket 连接失败: ${shell.bench.statusMsg}（可在测试台改 token 重试，或直接进入）"
@@ -141,7 +142,7 @@ class ConnectState {
     fun skip(shell: AdminShell) {
         if (busy) return
         stage = "main"
-        shell.toast = if (baseUrl.isEmpty()) "未连接服务器：请稍后在侧边栏「切换服务器」连接" else "已进入主界面（WebSocket 未连接）"
+        shell.showToast(if (baseUrl.isEmpty()) "未连接服务器：请稍后在侧边栏「切换服务器」连接" else "已进入主界面（WebSocket 未连接）", "info")
     }
 
     /** 主壳 → 连接页（侧边栏「切换服务器」）：断开当前 WS，保留输入便于改地址 */
@@ -255,14 +256,13 @@ fun ViewContainer<*, *>.renderConnect(conn: ConnectState, shell: AdminShell) {
                 }
             }
             actionRow {
-                // 忙碌态用 vif/velse 分支重建（构建期裸读 busy 不会响应式更新按钮文案）；
-                // 菊花 + 禁用表达「处理中」，同时从事件层堵住重复点击。
-                vif({ conn.busy }) {
-                    primaryButton("连接中…", enabled = false, loading = true) { }
-                }
-                velse {
-                    primaryButton("连接") { conn.connect(shell) }
-                }
+                // 三态按钮：loading 时自动显示菊花 + 灰底 + 拦截点击（busy 在 attr/event 闭包内实时读取，
+                // 故「点了之后立刻进入处理中」可见，重复点击被挡住）。
+                primaryButton(
+                    "连接",
+                    loading = { conn.busy },
+                    loadingText = "连接中…",
+                ) { conn.connect(shell) }
                 View { attr { width(AdminSpace.md) } }
                 secondaryButton("直接进入") { conn.skip(shell) }
             }

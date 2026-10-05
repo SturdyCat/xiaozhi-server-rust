@@ -3,19 +3,29 @@ package com.xiaozhi.admin
 import com.tencent.kuikly.core.base.Border
 import com.tencent.kuikly.core.base.BorderStyle
 import com.tencent.kuikly.core.base.Color
+import com.tencent.kuikly.core.base.PagerScope
 import com.tencent.kuikly.core.base.ViewBuilder
 import com.tencent.kuikly.core.base.ViewContainer
+import com.tencent.kuikly.core.base.ViewRef
 import com.tencent.kuikly.core.directives.vfor
 import com.tencent.kuikly.core.directives.velse
 import com.tencent.kuikly.core.directives.vif
+import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.reactive.collection.ObservableList
-import com.tencent.kuikly.core.views.ActivityIndicator
+import com.tencent.kuikly.core.reactive.handler.observable
 import com.tencent.kuikly.core.views.AlertDialog
 import com.tencent.kuikly.core.views.Input
+import com.tencent.kuikly.core.views.PageList
+import com.tencent.kuikly.core.views.PageListView
 import com.tencent.kuikly.core.views.Scroller
+import com.tencent.kuikly.core.views.ScrollParams
 import com.tencent.kuikly.core.views.Switch
+import com.tencent.kuikly.core.views.TabItem
+import com.tencent.kuikly.core.views.Tabs
 import com.tencent.kuikly.core.views.Text
+import com.tencent.kuikly.core.views.TextArea
 import com.tencent.kuikly.core.views.View
+import com.tencent.kuikly.core.views.compose.Button
 
 /**
  * 小智管理后台 · 设计 Token 与可复用组件（纯 UI，无平台依赖）。
@@ -158,16 +168,11 @@ fun ViewContainer<*, *>.dividerH() {
     }
 }
 
-// ===================== 卡片与双列网格 =====================
-
-/**
- * 卡片描述：标题 + 内容。供 cardGrid 统一排版（单列 / 宽屏双列），内容延迟渲染。
- */
-class AdminCard(val title: String, val withDivider: Boolean = true, val content: ViewBuilder)
+// ===================== 卡片 =====================
 
 /**
  * 分组卡片：cardBg、radiusLg(12)、1px divider 边框、内边距 cardPadding(20)。
- * 不带左右外边距——页面留白由 Scroller 的 pagePadding 提供，双列间距由 cardGrid 控制，
+ * 不带左右外边距——页面留白由 tab 页 Scroller 提供，双列间距由 cardRow 控制，
  * 避免嵌套容器时边距叠加（嵌套卡片在内层卡片里也正好贴 padding）。
  */
 fun ViewContainer<*, *>.groupedCard(title: String, withDivider: Boolean = true, content: ViewBuilder) {
@@ -186,10 +191,12 @@ fun ViewContainer<*, *>.groupedCard(title: String, withDivider: Boolean = true, 
     }
 }
 
+// ===================== 卡片行 =====================
+
 /**
  * 卡片行原语：一行最多两列、等宽（各 flex(1)），列间距 gutter；right 为 null 时左卡独占整行。
  * left/right 为 ViewBuilder，在对应列容器闭包内调用（接收者=列容器，节点正确挂载）。
- * cardGrid 与各 section 的手工双列（homeSection/renderBench）都基于它。
+ * 测试台各 tab 页「功能卡 + 配置卡」并排、配置页等均基于它。
  */
 fun ViewContainer<*, *>.cardRow(left: ViewBuilder, right: ViewBuilder? = null) {
     View {
@@ -209,36 +216,147 @@ fun ViewContainer<*, *>.cardRow(left: ViewBuilder, right: ViewBuilder? = null) {
 }
 
 /**
- * 卡片网格（响应式封装）：wide() 为 true 时卡片两两一行、等宽双列（cardRow）；
- * 否则单列纵向排。卡片数量奇数时最后一行独占整行。
- *
- * ⚠️ wide 必须是 lambda 且只在 vif 闭包内读取（如 `{ pagerData.pageViewWidth >= 900f }`）：
- * Kuikly 只对 attr/vif 闭包内的 observable 读取做响应式跟踪，构建期一次性求值的 Boolean
- * 在窗口 resize 后不会重算（这就是此前「缩小窗口双列不变单列」的根因）。
- * pageViewWidth 是响应式字段（见 kuikly-ui-framework 技能文档 pager-lifecycle.md），
- * 窗口尺寸变化会触发 vif 分支重建，实现双列 ⇄ 单列切换。
+ * 双栏页：宽屏（wide()=true）左右等宽并排，窄屏纵向堆叠。
+ * wide 须为 lambda（如 `{ pagerData.pageViewWidth >= 900f }`），在 vif 闭包内读取
+ * pageViewWidth（响应式字段），窗口 resize 跨过阈值时自动 并排 ⇄ 堆叠 切换。
  */
-fun ViewContainer<*, *>.cardGrid(cards: List<AdminCard>, wide: () -> Boolean) {
+fun ViewContainer<*, *>.twoPane(wide: () -> Boolean, left: ViewBuilder, right: ViewBuilder) {
     vif({ wide() }) {
-        // vif 闭包内仅一个普通根节点（列容器），内部循环铺 cardRow
-        View {
-            attr { flexDirectionColumn() }
-            var index = 0
-            while (index < cards.size) {
-                val left = cards[index]
-                val right = cards.getOrNull(index + 1)
-                cardRow(
-                    { groupedCard(left.title, left.withDivider, left.content) },
-                    right?.let { card -> { groupedCard(card.title, card.withDivider, card.content) } },
-                )
-                index += 2
-            }
-        }
+        cardRow(left, right)
     }
     velse {
         View {
             attr { flexDirectionColumn() }
-            cards.forEach { card -> groupedCard(card.title, card.withDivider, card.content) }
+            left()
+            right()
+        }
+    }
+}
+
+// ===================== Tabs 标签页 =====================
+
+/**
+ * Tabs 标签页 UI 状态：官方 Tabs ↔ PageList 联动的两根数据线——
+ * PageList `scroll` 事件回传 ScrollParams 喂给 Tabs.scrollParams，驱动指示条与 tab 选中态同步。
+ * 由各状态类经 PagerScope 创建（如 form.tabUi），section 重建后当前 tab 不丢。
+ */
+class TabUiState(scope: PagerScope) {
+    /** 当前页 index（由 PageList pageIndexDidChanged 回写），重建后 defaultPageIndex 用。 */
+    var tabIndex by scope.observable(0)
+
+    /** PageList scroll 事件回传的滚动参数（对齐官方示例：nullable，首帧未滚动时为 null）。 */
+    var tabScroll by scope.observable<ScrollParams?>(null)
+
+    /** PageList 引用：点击 tab 时 scrollToPageIndex 翻页。 */
+    var pageListRef: ViewRef<PageListView<*, *>>? = null
+
+    /** 点击 tab：滚动 PageList 到对应页（scroll 事件回流后 Tabs 指示条/选中态自动同步）。 */
+    fun switchTo(index: Int) {
+        pageListRef?.view?.scrollToPageIndex(index, false)
+    }
+}
+
+/** 单个标签页：title = tab 项文案；content 在该页的 Scroller 闭包内执行（节点挂进该页）。 */
+class TabPage(val title: String, val content: ViewBuilder)
+
+/**
+ * 标签页面板：**官方 Tabs + PageList 原生联动结构**（对齐官方文档
+ * kuikly.tds.qq.com/API/components/tabs.html 与 TabsExamplePage.kt 示例，不自造样式）：
+ * - tab 项 = TabItem(margin + allCenter) + Text（选中态文字色随 state.selected 切换）；
+ * - 指示条 = indicatorInTabItem（absolutePosition 底部短条，官方原样）；
+ * - PageList 必须显式设 pageItemWidth/pageItemHeight（官方示例同款）——不设时 item 无尺寸约束
+ *   会塌成一行（实测「tab 内容都看不到」的根因）；
+ * - 点击 tab → scrollToPageIndex 翻页；翻页/拖动 → scroll 事件 → ui.tabScroll → Tabs 同步。
+ *
+ * ⚠️ pageWidth/pageHeight 必须由调用方按自身布局算好（官方示例亦按导航/tab 高度手算），
+ * 且以 lambda 传入、在 PageList attr 闭包内求值——pagerData.pageViewWidth/Height 是响应式
+ * 字段，窗口 resize 时 pageItem 尺寸才会重算。
+ * ⚠️ 必须在目标容器闭包内**非限定**调用（经 ctx. 调用会把节点挂到根容器，布局逃逸）。
+ */
+fun ViewContainer<*, *>.tabbedPanel(
+    pages: List<TabPage>,
+    ui: TabUiState,
+    pageWidth: () -> Float,
+    pageHeight: () -> Float,
+) {
+    Tabs {
+        attr {
+            indicatorAlignCenter()
+            height(44f) // Tabs 源码强约束：必须显式 height，否则运行时抛错
+            defaultInitIndex(ui.tabIndex)
+            // 官方指示条原样：tab 项底部 absolutePosition 短条，随 scrollParams 联动滚动
+            indicatorInTabItem {
+                View {
+                    attr {
+                        absolutePosition(left = 15f, right = 15f, bottom = 5f)
+                        height(6f)
+                        borderRadius(3f)
+                        backgroundColor(AdminColors.accent)
+                    }
+                }
+            }
+            ui.tabScroll?.also { scrollParams(it) }
+        }
+        pages.forEachIndexed { index, page ->
+            TabItem { state ->
+                attr {
+                    marginLeft(10f)
+                    marginRight(10f)
+                    allCenter()
+                }
+                event {
+                    click { ui.switchTo(index) }
+                }
+                Text {
+                    attr {
+                        text(page.title)
+                        fontSize(AdminType.body)
+                        if (state.selected) {
+                            color(AdminColors.accentTintText)
+                        } else {
+                            color(AdminColors.textSecondary)
+                        }
+                    }
+                }
+            }
+        }
+    }
+    PageList {
+        attr {
+            flexDirectionRow()
+            pageItemWidth(pageWidth())
+            pageItemHeight(pageHeight())
+            defaultPageIndex(ui.tabIndex)
+            // 首屏全量加载：官方文档要求 defaultPageIndex > 0 时 Tabs 首渲染才能正确联动到对应 item
+            firstContentLoadMaxIndex(pages.size)
+            offscreenPageLimit(1)
+        }
+        ref { ui.pageListRef = it }
+        event {
+            scroll { params -> ui.tabScroll = params }
+            pageIndexDidChanged { params ->
+                ui.tabIndex = (params as JSONObject).optInt("index")
+            }
+        }
+        pages.forEach { page ->
+            // 每个 PageList item = 一页（尺寸由 pageItemWidth/Height 约束）；页内 Scroller 纵向滚动
+            View {
+                attr {
+                    flexDirectionColumn()
+                }
+                Scroller {
+                    attr {
+                        flex(1f)
+                        paddingLeft(AdminSpace.xl)
+                        paddingRight(AdminSpace.xl)
+                        paddingTop(AdminSpace.xxl)
+                        paddingBottom(AdminSpace.xxxl)
+                    }
+                    // ⚠️ ViewBuilder 值须显式传接收者调用：page.content(this) 把页面内容挂进本页 Scroller
+                    // （隐式 page.content() 编译报 "No value passed for parameter 'p1'"）
+                    page.content(this)
+                }
+            }
         }
     }
 }
@@ -300,148 +418,174 @@ fun ViewContainer<*, *>.labeledField(
     }
 }
 
+/**
+ * 标签 + 多行输入框（官方 TextArea 基座）：散文/提示词/系统提示等多行文本。
+ * 官方 TextArea = 多行 Input（属性/事件同 Input，textDidChange 回调必须显式设置）。
+ * 容器承担背景/边框/内边距（叶子组件不支持 padding，见文件头铁律），TextArea 透明背景 flex(1) 填满。
+ */
+fun ViewContainer<*, *>.labeledTextArea(
+    label: String,
+    getValue: () -> String,
+    onChange: (String) -> Unit,
+    placeholder: String = "",
+    height: Float = 100f,
+) {
+    fieldLabel(label)
+    View {
+        attr {
+            height(height)
+            backgroundColor(AdminColors.fieldBg)
+            border(Border(1f, BorderStyle.SOLID, AdminColors.divider))
+            borderRadius(AdminShape.radiusSm)
+            paddingLeft(AdminSpace.sm)
+            paddingRight(AdminSpace.sm)
+            paddingTop(AdminSpace.xs)
+            paddingBottom(AdminSpace.xs)
+        }
+        TextArea {
+            attr {
+                flex(1f)
+                backgroundColor(AdminColors.transparent)
+                fontSize(AdminType.body)
+                color(AdminColors.textPrimary)
+                text(getValue())
+                placeholder(placeholder)
+            }
+            event { textDidChange { params -> onChange(params.text) } }
+        }
+    }
+}
+
 // ===================== 按钮 =====================
 
+/** 按钮视觉变体：主按钮（实心强调色）/ 次按钮（浅底内嵌）。危险态（danger）仅主按钮适用。 */
+enum class ButtonVariant { PRIMARY, SECONDARY }
+
 /**
- * 主按钮：高 48、paddingH 16、minWidth 88、radiusSm；
- * bg accent（正常）/ disabledBg 中性灰（禁用与加载中——「处理中」视觉即禁用，杜绝重复点击的直觉）；
- * 文字 textOnAccent body(17)/500；文字 lines(1) 防折行。
- * - danger=true：录音等待止类按钮用红色系（danger；禁用/加载同样灰底）。
- * - loading=true：菊花（白色，灰底可见）+ 进行中文案，且事件层屏蔽点击。
+ * 全站唯一按钮封装（appButton）：所有可点击的 CTA 按钮**必须**经由它。
+ *
+ * 基座 = **官方 Button 组件**（`com.tencent.kuikly.core.views.compose.Button`，ButtonView）：
+ * 内部 `justifyContentCenter + alignItemsCenter` + 自适应宽度 Text——文字居中由布局层保证，
+ * 与 Catalyst 文字测量/对齐无关（手搓 View+Text 的 textAlignCenter/flex 方案实测不可靠，
+ * 「连接/断开」二字多次偏侧就是它）。官方 Button 还自带按压态高亮（highlightBackgroundColor）。
+ *
+ * 三态（正常 / 加载中 / 禁用）由 lambda 响应式驱动（⚠️ Kuikly 响应式铁律）：
+ * enabled/loading/danger/dynamicText 必须是 lambda，在 attr/titleAttr 闭包内读取才随状态刷新。
+ * - loading=true：中性灰底 + 禁用文字 + 文案切为 loadingText（官方 Button 无子节点插槽，
+ *   塞不了菊花——官方机制优先，进度反馈靠文案 + 页面内状态徽标），且点击被拦截
+ *   （isActive() 在 event 闭包内实时重读 observable，处理中真挡得住重复点击）。
+ * - danger=true（仅主按钮）：红色系（断开/停止等破坏性操作）。
+ * - dynamicText：响应式文案（如 连接↔断开 随状态切换）；提供时优先于 text。
+ *
+ * [primaryButton] / [secondaryButton] 仅是本函数的语义别名，最终都收敛到这一个封装。
+ */
+fun ViewContainer<*, *>.appButton(
+    text: String,
+    variant: ButtonVariant = ButtonVariant.PRIMARY,
+    enabled: () -> Boolean = { true },
+    danger: () -> Boolean = { false },
+    loading: () -> Boolean = { false },
+    dynamicText: (() -> String)? = null,
+    loadingText: String? = null,
+    onClick: () -> Unit,
+) {
+    // 实时「是否可点」：在 event/attr/titleAttr 闭包内调用，读取最新 observable（非构建期快照）
+    val isActive: () -> Boolean = { enabled() && !loading() }
+    val isPrimary = variant == ButtonVariant.PRIMARY
+    Button {
+        attr {
+            height(if (isPrimary) 48f else 44f)
+            if (isPrimary) minWidth(88f)
+            paddingLeft(AdminSpace.md)
+            paddingRight(AdminSpace.md)
+            borderRadius(AdminShape.radiusSm)
+            backgroundColor(
+                when {
+                    !isActive() -> AdminColors.disabledBg // 禁用与处理中统一中性灰底（动作不可用语义）
+                    isPrimary && danger() -> AdminColors.danger
+                    isPrimary -> AdminColors.accent
+                    else -> AdminColors.insetBg
+                },
+            )
+            // 官方按压态高亮（touchDown/touchUp 内部自治）；禁用/处理中不高亮（透明）
+            highlightBackgroundColor(
+                when {
+                    !isActive() -> AdminColors.transparent
+                    isPrimary && danger() -> AdminColors.dangerActive
+                    isPrimary -> AdminColors.accentActive
+                    else -> AdminColors.cardHover
+                },
+            )
+            // titleAttr 属 ButtonAttr（须写在 attr 块内）；即 TextAttr，闭包内读 observable，
+            // 由 Text 自身的 attr 响应式绑定驱动——状态变化时文字/颜色实时刷新
+            titleAttr {
+                fontSize(AdminType.body)
+                fontWeightMedium()
+                lines(1)
+                text(
+                    when {
+                        loading() -> loadingText ?: dynamicText?.invoke() ?: text
+                        else -> dynamicText?.invoke() ?: text
+                    },
+                )
+                color(
+                    when {
+                        !isActive() -> AdminColors.disabledText
+                        isPrimary -> AdminColors.textOnAccent
+                        else -> AdminColors.textPrimary
+                    },
+                )
+            }
+        }
+        event { click { if (isActive()) onClick() } }
+    }
+}
+
+/**
+ * 主按钮（三态）：[appButton] 的 PRIMARY 别名——实心强调色，danger 可用于断开/停止等破坏性操作。
+ * 参数语义同 [appButton]。
  */
 fun ViewContainer<*, *>.primaryButton(
     text: String,
-    enabled: Boolean = true,
-    danger: Boolean = false,
-    loading: Boolean = false,
+    enabled: () -> Boolean = { true },
+    danger: () -> Boolean = { false },
+    loading: () -> Boolean = { false },
+    dynamicText: (() -> String)? = null,
+    loadingText: String? = null,
     onClick: () -> Unit,
-) {
-    val active = enabled && !loading
-    val bg = when {
-        !active -> AdminColors.disabledBg // 禁用与处理中统一中性灰底（动作不可用语义）
-        danger -> AdminColors.danger
-        else -> AdminColors.accent
-    }
-    View {
-        attr {
-            height(48f)
-            minWidth(88f)
-            paddingLeft(AdminSpace.md)
-            paddingRight(AdminSpace.md)
-            borderRadius(AdminShape.radiusSm)
-            flexDirectionRow()
-            allCenter()
-            backgroundColor(bg)
-        }
-        event { click { if (active) onClick() } }
-        if (loading) {
-            // 白色菊花（灰底上可见）：isGrayStyle(false) → "white"
-            ActivityIndicator {
-                attr {
-                    isGrayStyle(false)
-                    marginRight(AdminSpace.xs)
-                }
-            }
-        }
-        Text {
-            attr {
-                fontSize(AdminType.body)
-                fontWeightMedium()
-                color(if (active) AdminColors.textOnAccent else AdminColors.disabledText)
-                lines(1)
-                text(text)
-            }
-        }
-    }
-}
+) = appButton(
+    text, ButtonVariant.PRIMARY,
+    enabled = enabled, danger = danger, loading = loading,
+    dynamicText = dynamicText, loadingText = loadingText, onClick = onClick,
+)
 
-/** 次按钮：高 44、radiusSm、bg insetBg、文字 textPrimary body(17)/500。禁用/加载同样灰底灰字。 */
+/**
+ * 次按钮（三态）：[appButton] 的 SECONDARY 别名——浅底内嵌样式，用于次要动作。
+ * 参数语义同 [appButton]。
+ */
 fun ViewContainer<*, *>.secondaryButton(
     text: String,
-    enabled: Boolean = true,
-    loading: Boolean = false,
+    enabled: () -> Boolean = { true },
+    loading: () -> Boolean = { false },
+    dynamicText: (() -> String)? = null,
+    loadingText: String? = null,
     onClick: () -> Unit,
-) {
-    val active = enabled && !loading
-    View {
-        attr {
-            height(44f)
-            paddingLeft(AdminSpace.md)
-            paddingRight(AdminSpace.md)
-            borderRadius(AdminShape.radiusSm)
-            flexDirectionRow()
-            allCenter()
-            backgroundColor(if (active) AdminColors.insetBg else AdminColors.disabledBg)
-        }
-        event { click { if (active) onClick() } }
-        if (loading) {
-            ActivityIndicator {
-                attr {
-                    isGrayStyle(true)
-                    marginRight(AdminSpace.xs)
-                }
-            }
-        }
-        Text {
-            attr {
-                fontSize(AdminType.body)
-                fontWeightMedium()
-                color(if (active) AdminColors.textPrimary else AdminColors.disabledText)
-                lines(1)
-                text(text)
-            }
-        }
-    }
-}
+) = appButton(
+    text, ButtonVariant.SECONDARY,
+    enabled = enabled, loading = loading,
+    dynamicText = dynamicText, loadingText = loadingText, onClick = onClick,
+)
 
-/** 卡片内动作行：横向排按钮/徽标，顶部留 sm(12) 间距；元素间距由调用处 `View { width(12f) }` 控制。 */
+/** 卡片内动作行：横向排按钮/徽标，顶部留 sm(12) 间距；元素间距由调用处 `View { width(12f) }` 控制。
+ *  ⚠️ allCenter()：行内元素水平+垂直居中（按钮不再贴左，连接按钮等 CTA 居中更清晰）。 */
 fun ViewContainer<*, *>.actionRow(content: ViewBuilder) {
     View {
         attr {
             flexDirectionRow()
-            alignItemsCenter()
+            allCenter()
             marginTop(AdminSpace.sm)
         }
         content()
-    }
-}
-
-// ===================== 分段控件 =====================
-
-/**
- * 分段控件：轨道 trackBg、radiusPill、内距 2、高 38（段高 34，触屏友好）；
- * 普通段文字 bodySm(16)/500 textSecondary，选中段 bg cardBg + 文字 textPrimary。
- */
-fun ViewContainer<*, *>.segmentedControl(options: List<String>, selectedIndex: Int, onSelect: (Int) -> Unit) {
-    View {
-        attr {
-            flexDirectionRow()
-            height(38f)
-            backgroundColor(AdminColors.trackBg)
-            borderRadius(AdminShape.radiusPill)
-            padding(2f)
-        }
-        options.forEachIndexed { index, label ->
-            val selected = index == selectedIndex
-            View {
-                attr {
-                    flex(1f)
-                    height(34f)
-                    borderRadius(AdminShape.radiusSm)
-                    allCenter()
-                    backgroundColor(if (selected) AdminColors.cardBg else AdminColors.transparent)
-                }
-                event { click { onSelect(index) } }
-                Text {
-                    attr {
-                        fontSize(AdminType.bodySm)
-                        fontWeightMedium()
-                        color(if (selected) AdminColors.textPrimary else AdminColors.textSecondary)
-                        text(label)
-                    }
-                }
-            }
-        }
     }
 }
 

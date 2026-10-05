@@ -4,6 +4,7 @@ import com.tencent.kuikly.core.base.ViewContainer
 import com.tencent.kuikly.core.directives.velse
 import com.tencent.kuikly.core.directives.vif
 import com.tencent.kuikly.core.pager.Pager
+import com.tencent.kuikly.core.base.PagerScope
 import com.tencent.kuikly.core.reactive.collection.ObservableList
 import com.tencent.kuikly.core.reactive.handler.observable
 import com.tencent.kuikly.core.reactive.handler.observableList
@@ -21,62 +22,62 @@ import com.tencent.kuikly.core.views.View
  *   本类不是 Pager，故方法都接收 ctx: Pager 来 acquireModule。
  *   渲染见文件底部的 ViewContainer.renderBench(bench, ctx) 扩展。
  */
-class TestBenchState {
+class TestBenchState(private val scope: PagerScope) {
 
-    var serverUrl by observable("ws://127.0.0.1:8000/api/ws")
-    var token by observable("")
-    var connected by observable(false)
-    var connectionState by observable("idle") // idle / connecting / connected / error
+    var serverUrl by scope.observable("ws://127.0.0.1:8000/api/ws")
+    var token by scope.observable("")
+    var connected by scope.observable(false)
+    var connectionState by scope.observable("idle") // idle / connecting / connected / error
 
     /** ASR 阶段：idle(未录) / starting(启动中) / recording(录音中) / recorded(已录待识别) / recognizing(识别中) */
-    var asrPhase by observable("idle")
-    var asrText by observable("")
+    var asrPhase by scope.observable("idle")
+    var asrText by scope.observable("")
 
     /** 录音计秒（秒，小数）：录音中由原生样本计数 200ms 轮询刷新 */
-    var recSeconds by observable(0.0)
+    var recSeconds by scope.observable(0.0)
 
     /** 上次识别的耗时（ms）：sendAsr 发出 → 收到 stt 的服务端往返 */
-    var asrElapsedMs by observable(0)
+    var asrElapsedMs by scope.observable(0)
 
     // 录音试听播放器（原生 recordingPcm）
-    var recWave by observable(emptyList<Float>())
-    var recProgress by observable(0f)
-    var recPlaying by observable(false)
-    var recDuration by observable(0.0)
+    var recWave by scope.observable(emptyList<Float>())
+    var recProgress by scope.observable(0f)
+    var recPlaying by scope.observable(false)
+    var recDuration by scope.observable(0.0)
 
     // TTS 回放播放器（原生 ttsPcm）
-    var ttsReady by observable(false)
-    var ttsWave by observable(emptyList<Float>())
-    var ttsProgress by observable(0f)
-    var ttsPlaying by observable(false)
-    var ttsDuration by observable(0.0)
+    var ttsReady by scope.observable(false)
+    var ttsWave by scope.observable(emptyList<Float>())
+    var ttsProgress by scope.observable(0f)
+    var ttsPlaying by scope.observable(false)
+    var ttsDuration by scope.observable(0.0)
 
     /** 合成中（发 tts_test → 收到 tts stop）：按钮菊花 + 禁止再次合成 */
-    var ttsBusy by observable(false)
-    var speaking by observable(false)
+    var ttsBusy by scope.observable(false)
+    var speaking by scope.observable(false)
 
-    var ttsText by observable("你好，小智")
+    var ttsText by scope.observable("你好，小智")
 
     /** 合成语言：auto 自动（Kokoro 需明确 lang，auto 走服务器默认）/ zh / en */
-    var ttsLang by observable("auto")
-    var ttsSpeed by observable("1.0") // 参考 kokoro.js demo：语速
+    var ttsLang by scope.observable("auto")
+    var ttsSpeed by scope.observable("1.0") // 参考 kokoro.js demo：语速
 
     /** 语音角色 sid（Kokoro voices.bin 的索引）。UI 用「性别 + 音色」两级选择派生本值。 */
-    var ttsSpeaker by observable(3) // 默认 zf_001（中文女声，sid=3；见 VoiceCatalog 注释）
+    var ttsSpeaker by scope.observable(3) // 默认 zf_001（中文女声，sid=3；见 VoiceCatalog 注释）
 
     /** 音色性别筛选：female(中文女声) / male(中文男声) / en(英文女声) */
-    var voiceGender by observable("female")
+    var voiceGender by scope.observable("female")
 
     /** 已选音色（见 VoiceCatalog；与 ttsSpeaker 同步） */
-    var voiceId by observable("zf_001")
+    var voiceId by scope.observable("zf_001")
 
     /** 当前展开的下拉（"" = 全部收起）；放状态类里避免 Pager body 重建时丢失展开态 */
-    var openDropdown by observable("")
+    var openDropdown by scope.observable("")
 
     // ===== 下拉选项（ObservableList：音色列表随性别切换增删，vfor 响应式渲染）=====
-    val langOptions: ObservableList<Pair<String, String>> by observableList()
-    val genderOptions: ObservableList<Pair<String, String>> by observableList()
-    val voiceOptions: ObservableList<Pair<String, String>> by observableList()
+    val langOptions: ObservableList<Pair<String, String>> by scope.observableList()
+    val genderOptions: ObservableList<Pair<String, String>> by scope.observableList()
+    val voiceOptions: ObservableList<Pair<String, String>> by scope.observableList()
 
     init {
         langOptions.addAll(LANG_OPTIONS)
@@ -90,7 +91,10 @@ class TestBenchState {
         voiceOptions.addAll(VoiceCatalog.options(voiceGender).map { it.id to "${it.id}（sid ${it.sid}）" })
     }
 
-    var statusMsg by observable("")
+    var statusMsg by scope.observable("")
+
+    /** 测试台标签页 UI 状态（连接 / ASR 识别 / TTS 合成 / LLM 对话 四个 tab，见 renderBench）。 */
+    val tabUi = TabUiState(scope)
 
     // ============================================================
     // 桥接：经 Pager 取 XiaoZhiModule
@@ -235,15 +239,15 @@ class TestBenchState {
     // LLM 对话测试：发 llm_test → 服务端按最新配置直调 LLM → llm_test 回调
     // ============================================================
 
-    var llmPrompt by observable("你好，请用一句话介绍你自己")
+    var llmPrompt by scope.observable("你好，请用一句话介绍你自己")
 
     /** 回复正文（state=error 时是服务端返回的可读错误信息） */
-    var llmReply by observable("")
-    var llmBusy by observable(false)
-    var llmOk by observable(false)
+    var llmReply by scope.observable("")
+    var llmBusy by scope.observable(false)
+    var llmOk by scope.observable(false)
 
     /** 服务端直调 LLM 的总耗时（含到 LLM API 的网络往返），由 llm_test 回包携带 */
-    var llmElapsedMs by observable(0)
+    var llmElapsedMs by scope.observable(0)
 
     fun testLlm(ctx: Pager) {
         if (llmBusy) return
@@ -429,37 +433,87 @@ object VoiceCatalog {
 data class VoiceOption(val id: String, val sid: Int)
 
 /**
- * 渲染测试台四个分组卡片（连接 / ASR 识别测试 / TTS 合成测试 / LLM 对话测试）。
- * 宽屏（wide()=true）：连接 + ASR 一行两列、TTS + LLM 一行两列；窄屏：纵向单列。
+ * 渲染测试台标签页（tabbedPanel：官方 Tabs + PageList）：连接 / ASR 识别 / TTS 合成 / LLM 对话 四个 tab。
+ * 每个 tab 宽屏左侧功能卡、右侧对应配置卡（连接→Server+Audio、ASR→ASR+VAD、TTS→TTS、LLM→LLM），
+ * 改配置不必切走，配合顶栏「保存配置」一键写回；窄屏纵向堆叠（twoPane）。
  *
  * ⚠️ 响应式铁律（本项目反复踩坑）：凡依赖 observable 的文案/启用态/分支，必须写在
  * vif/velse 条件闭包或 attr 闭包内——构建期裸读（if/when 直接读 observable）只求值一次，
  * 状态变化后 UI 不会更新（实测「按钮三态不出现」的根因）。本文件所有分支均为 vif/velse 链。
- * ⚠️ 必须在目标容器（Scroller）闭包内**非限定**调用 `renderBench(bench, ctx, wide)`：
+ * ⚠️ 必须在目标容器闭包内**非限定**调用 `renderBench(bench, form, ctx, wide)`：
  * Kuikly 的 View{} DSL 静态绑定到词法作用域最近的 ViewContainer 接收者，
- * 以 `ctx.groupedCard(...)` 方式调用会把卡片挂到 Pager 根容器，导致布局逃逸。
- * ⚠️ wide 须为 lambda（如 `{ pagerData.pageViewWidth >= 900f }`），在 cardGrid 的
+ * 以 `ctx.tabbedPanel(...)` 方式调用会把节点挂到 Pager 根容器，导致布局逃逸。
+ * ⚠️ wide 须为 lambda（如 `{ pagerData.pageViewWidth >= 900f }`），在 twoPane 的
  * vif 闭包内读取才能随窗口 resize 响应式重排。
  */
-fun ViewContainer<*, *>.renderBench(bench: TestBenchState, ctx: Pager, wide: () -> Boolean) {
-    cardGrid(
+fun ViewContainer<*, *>.renderBench(
+    bench: TestBenchState,
+    form: ConfigFormState,
+    ctx: Pager,
+    wide: () -> Boolean,
+    pageWidth: () -> Float,
+    pageHeight: () -> Float,
+) {
+    tabbedPanel(
+        ui = bench.tabUi,
+        pageWidth = pageWidth,
+        pageHeight = pageHeight,
+        pages = listOf(
+            TabPage("连接") { benchConnectPage(bench, form, ctx, wide) },
+            TabPage("ASR 识别") { benchAsrPage(bench, form, ctx, wide) },
+            TabPage("TTS 合成") { benchTtsPage(bench, form, ctx, wide) },
+            TabPage("LLM 对话") { benchLlmPage(bench, form, ctx, wide) },
+        ),
+    )
+}
+
+/** 连接 tab：左=连接卡（地址/token/连接按钮+状态徽标），右=Server + Audio 配置卡。 */
+private fun ViewContainer<*, *>.benchConnectPage(
+    bench: TestBenchState,
+    form: ConfigFormState,
+    ctx: Pager,
+    wide: () -> Boolean,
+) {
+    twoPane(
         wide = wide,
-        cards = listOf(
-            AdminCard("连接") {
+        left = {
+            groupedCard("连接") {
                 labeledField("server url", { bench.serverUrl }, { bench.serverUrl = it }, "ws://127.0.0.1:8000/api/ws")
                 labeledField("token（可选）", { bench.token }, { bench.token = it })
                 actionRow {
-                    vif({ bench.connected }) {
-                        primaryButton("断开") { bench.disconnect(ctx) }
-                    }
-                    velse {
-                        primaryButton("连接") { bench.connect(ctx) }
+                    // 连接/断开合为一个三态按钮：未连=绿「连接」、已连=红「断开」、连接中=灰底「连接中…」+拦截点击。
+                    primaryButton(
+                        text = "连接",
+                        danger = { bench.connected },
+                        loading = { bench.connectionState == "connecting" },
+                        loadingText = "连接中…",
+                        dynamicText = { if (bench.connected) "断开" else "连接" },
+                    ) {
+                        if (bench.connected) bench.disconnect(ctx) else bench.connect(ctx)
                     }
                     View { attr { width(AdminSpace.md) } }
                     statusBadge({ bench.connectionState }, { connectionLabel(bench.connectionState) })
                 }
-            },
-            AdminCard("ASR 识别测试") {
+            }
+        },
+        right = {
+            serverConfigCard(form)
+            audioConfigCard(form)
+        },
+    )
+}
+
+/** ASR 识别 tab：左=识别测试卡（录音→试听→发送识别 + 结果），右=ASR + VAD 配置卡。 */
+private fun ViewContainer<*, *>.benchAsrPage(
+    bench: TestBenchState,
+    form: ConfigFormState,
+    ctx: Pager,
+    wide: () -> Boolean,
+) {
+    twoPane(
+        wide = wide,
+        left = {
+            groupedCard("ASR 识别测试") {
                 Text {
                     attr {
                         fontSize(AdminType.caption)
@@ -469,29 +523,25 @@ fun ViewContainer<*, *>.renderBench(bench: TestBenchState, ctx: Pager, wide: () 
                     }
                 }
                 actionRow {
-                    // 五态按钮：每态一个 vif 分支（裸读 when 不随状态更新——见函数头注释）。
-                    // ⚠️ 按钮行只放按钮：Kuikly Flex 无 shrink/wrap，行内元素总宽超出卡片
-                    //    内宽（双列窄卡约 256px）会把内容画到容器外（实测「文字跑到按钮外」），
-                    //    状态徽标因此移到下一行。
-                    vif({ bench.asrPhase == "starting" }) {
-                        primaryButton("正在启动…", enabled = false, loading = true) { }
-                    }
-                    velse {
-                        vif({ bench.asrPhase == "recording" }) {
-                            primaryButton("停止录音", danger = true) { bench.stopRecording(ctx) }
-                        }
-                        velse {
-                            vif({ bench.asrPhase == "recognizing" }) {
-                                primaryButton("识别中…", enabled = false, loading = true) { }
+                    // 三态按钮：一个按钮承载 开始/停止/重新录音/加载中 全部状态（文案随 asrPhase 响应式切换）。
+                    // ⚠️ 按钮行只放按钮：状态徽标在下方独立一行（见后）。
+                    primaryButton(
+                        text = "开始录音",
+                        danger = { bench.asrPhase == "recording" },
+                        loading = { bench.asrPhase == "starting" || bench.asrPhase == "recognizing" },
+                        dynamicText = {
+                            when (bench.asrPhase) {
+                                "starting" -> "正在启动…"
+                                "recording" -> "停止录音"
+                                "recognizing" -> "识别中…"
+                                "recorded" -> "重新录音"
+                                else -> "开始录音"
                             }
-                            velse {
-                                vif({ bench.asrPhase == "recorded" }) {
-                                    primaryButton("重新录音") { bench.startAsr(ctx) }
-                                }
-                                velse {
-                                    primaryButton("开始录音") { bench.startAsr(ctx) }
-                                }
-                            }
+                        },
+                    ) {
+                        when (bench.asrPhase) {
+                            "recording" -> bench.stopRecording(ctx)
+                            "recorded", "idle" -> bench.startAsr(ctx)
                         }
                     }
                     // 发送识别：仅在已录（且未在录/未在识别）时出现
@@ -568,9 +618,28 @@ fun ViewContainer<*, *>.renderBench(bench: TestBenchState, ctx: Pager, wide: () 
                         secondaryButton("复制") { /* 剪贴板需平台模块，从略，见交付备注 */ }
                     }
                 }
-            },
-            AdminCard("TTS 合成测试") {
-                labeledField("合成文字", { bench.ttsText }, { bench.ttsText = it }, "输入要合成的文字", height = 100f)
+            }
+        },
+        right = {
+            asrConfigCard(form)
+            vadConfigCard(form)
+        },
+    )
+}
+
+/** TTS 合成 tab：左=合成测试卡（文字/语言/音色/语速 + 波形回放），右=TTS 配置卡。 */
+private fun ViewContainer<*, *>.benchTtsPage(
+    bench: TestBenchState,
+    form: ConfigFormState,
+    ctx: Pager,
+    wide: () -> Boolean,
+) {
+    twoPane(
+        wide = wide,
+        left = {
+            groupedCard("TTS 合成测试") {
+                // 散文输入：官方 TextArea 多行（可换行）
+                labeledTextArea("合成文字", { bench.ttsText }, { bench.ttsText = it }, "输入要合成的文字", height = 100f)
                 // 语言：下拉（auto 走服务器默认；zh/en 显式指定）
                 dropdownField(
                     label = "语言",
@@ -614,16 +683,13 @@ fun ViewContainer<*, *>.renderBench(bench: TestBenchState, ctx: Pager, wide: () 
                 )
                 labeledField("语速 (0.5~2.0)", { bench.ttsSpeed }, { bench.ttsSpeed = it })
                 actionRow {
-                    vif({ bench.ttsBusy }) {
-                        primaryButton("合成中…", enabled = false, loading = true) { }
-                    }
-                    velse {
-                        primaryButton(
-                            "合成并播放",
-                            enabled = bench.asrPhase != "recording" && bench.asrPhase != "starting" && bench.asrPhase != "recognizing",
-                        ) {
-                            bench.speak(ctx)
-                        }
+                    primaryButton(
+                        "合成并播放",
+                        loading = { bench.ttsBusy },
+                        loadingText = "合成中…",
+                        enabled = { bench.asrPhase != "recording" && bench.asrPhase != "starting" && bench.asrPhase != "recognizing" },
+                    ) {
+                        bench.speak(ctx)
                     }
                 }
                 // TTS 波形回放（合成完成后显示，可反复回听；播放进度流过点亮）
@@ -636,8 +702,25 @@ fun ViewContainer<*, *>.renderBench(bench: TestBenchState, ctx: Pager, wide: () 
                         enabled = { !bench.ttsBusy },
                     ) { bench.togglePlayback(ctx, "tts") }
                 }
-            },
-            AdminCard("LLM 对话测试") {
+            }
+        },
+        right = {
+            ttsConfigCard(form)
+        },
+    )
+}
+
+/** LLM 对话 tab：左=对话测试卡（提示词/发送 + 回复），右=LLM 配置卡。 */
+private fun ViewContainer<*, *>.benchLlmPage(
+    bench: TestBenchState,
+    form: ConfigFormState,
+    ctx: Pager,
+    wide: () -> Boolean,
+) {
+    twoPane(
+        wide = wide,
+        left = {
+            groupedCard("LLM 对话测试") {
                 Text {
                     attr {
                         fontSize(AdminType.caption)
@@ -646,16 +729,15 @@ fun ViewContainer<*, *>.renderBench(bench: TestBenchState, ctx: Pager, wide: () 
                         text("流程：发送提示词 → 服务器按最新保存的 [llm] 配置直调 LLM → 返回回复（改配置后无需重启即可验证）")
                     }
                 }
-                labeledField("测试提示词", { bench.llmPrompt }, { bench.llmPrompt = it }, height = 80f)
+                // 散文输入：官方 TextArea 多行（可换行）
+                labeledTextArea("测试提示词", { bench.llmPrompt }, { bench.llmPrompt = it }, height = 80f)
                 actionRow {
-                    // 按钮行只放按钮（见 ASR 卡注释）；未连接不置灰（enabled 在构建期读取
-                    // connected 不会随状态刷新），由 testLlm 内守卫并提示。
-                    vif({ bench.llmBusy }) {
-                        primaryButton("测试中…", enabled = false, loading = true) { }
-                    }
-                    velse {
-                        primaryButton("发送测试") { bench.testLlm(ctx) }
-                    }
+                    // 三态按钮：测试中显示菊花 + 禁用，点击立刻有反馈（不像此前「点了没反应」）。
+                    primaryButton(
+                        "发送测试",
+                        loading = { bench.llmBusy },
+                        loadingText = "测试中…",
+                    ) { bench.testLlm(ctx) }
                 }
                 // 状态徽标：独立一行（每态一个 vif 分支——裸读 when 不随状态更新）
                 View {
@@ -687,7 +769,7 @@ fun ViewContainer<*, *>.renderBench(bench: TestBenchState, ctx: Pager, wide: () 
                             attr {
                                 fontSize(AdminType.body)
                                 color(AdminColors.textTertiary)
-                                text("回复将显示在此（配置页可修改 backend/api_base/api_key/model）")
+                                text("回复将显示在此（右侧配置卡可修改 backend/api_base/api_key/model）")
                             }
                         }
                     }
@@ -712,8 +794,11 @@ fun ViewContainer<*, *>.renderBench(bench: TestBenchState, ctx: Pager, wide: () 
                         }
                     }
                 }
-            },
-        ),
+            }
+        },
+        right = {
+            llmConfigCard(form)
+        },
     )
 }
 

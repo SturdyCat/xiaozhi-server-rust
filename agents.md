@@ -164,9 +164,8 @@ export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:$PKG_CONFIG_PATH"
 
 报错 `tokens.txt does not exist` / `创建 SenseVoice 识别器失败` 的根因是 `/models` 里没有模型文件。Docker 入口脚本在 `exec` 服务器**之前**会自检关键文件（`silero_vad.onnx`、`SenseVoiceSmall/model.int8.onnx`、`Kokoro/model.int8.onnx` 等，**官方包内文件名是 `model.int8.onnx`，不是 `model.onnx`**）：
 
-- **缺失 → 自动从 k2-fsa/sherpa-onnx 官方 release 下载**到挂载的 `/models`（默认行为），下载后持久化，后续启动检测到即跳过。
-- **默认走 GitHub 代理 `https://tvv.tw/`**（`GITHUB_PROXY` 覆盖，`off` 直连）：部署环境直连 `github.com`/`release-assets.githubusercontent.com` 常超时（curl 卡 134s）；代理仅对 github.com 直链套用，内网镜像 URL 不受影响。
-- 下载地址可被 `SENSEVOICE_URL` / `KOKORO_URL` / `SILERO_VAD_URL` 覆盖（内网镜像）。
+- **缺失 → 自动从 HuggingFace（csukuangfj 官方镜像仓库）直连下载**到挂载的 `/models`（默认行为，无需代理），下载后持久化，后续启动检测到即跳过。
+- 下载地址（现均为 HuggingFace 仓库 ID）可被 `SENSEVOICE_URL` / `KOKORO_URL` / `SILERO_VAD_URL` 覆盖（内网镜像仓库）。
 - curl 带 `--connect-timeout 15 --retry 3`（避免连接假死 134s）；下载/解压失败会让入口**中止启动**（未设 `XIAOZHI_ALLOW_MISSING_MODELS` 时），避免带着缺模型崩溃重启循环。
 - 行为开关 `XIAOZHI_AUTO_DOWNLOAD_MODELS`：`missing`（默认）/`force`（每次重下）/`off`（不下载）。
 - 运行期镜像需装 `curl` + `bzip2`（`tar` 自带）用于下载与解包；`docker-compose.yml` 的 `./models` 挂载**必须可写**（不要 `:ro`）。
@@ -214,8 +213,10 @@ client/                        # Kuikly 多端工程（管理后台 web + macOS 
 
 - **web 双 bundle 架构**（对齐 xiaoya-player）：`shared` 持有 js 目标 → Kuikly 插件 `packLocalJSBundleRelease` 产业务包 `nativevue2.js`；`apps/h5App` 是壳（渲染器 + 入口）→ webpack 产 `h5App.js`；`web/index.html` 先载业务包、后载壳。**js 消费方无法解析无 js 目标的 KMP 模块**——不要把 js 目标从 shared 挪走。
 - **Web 渲染器真实坐标是 `com.tencent.kuikly-open.core-render-web:h5`**（artifactId 为 `h5`）。`com.tencent.kuikly-open:core-render-web` 在腾讯镜像上 404（实测 Could not resolve）。
-- **DSL 陷阱**：容器带 `@ScopeMarker`（@DslMarker）——body 的嵌套容器里不能隐式访问 Pager 成员；官方口径 `val ctx = this` + `ctx.xxx`。可复用 UI 片段写成**文件级** `private fun ViewContainer<*,*>.xxx()` 扩展（类内成员扩展实测编译失败）。
-- **API 位置**：`Color`/`Border`/`BorderStyle` 在 `com.tencent.kuikly.core.base`（不在 base.attr）；传统 DSL 无 `Button`（用 View + event click 模拟）；无 `paddingHorizontal/Vertical`（用 padding(left/right/top/bottom)）；Input 文本变化事件是 `event { textDidChange { } }`。
+- **DSL 陷阱**：容器带 `@ScopeMarker`（@DslMarker）——body 的嵌套容器里不能隐式访问 Pager 成员；官方口径 `val ctx = this` + `ctx.xxx`。可复用 UI 片段写成**文件级** `private fun ViewContainer<*,*>.xxx()` 扩展（类内成员扩展实测编译失败）。持有 `ViewBuilder` 值在嵌套闭包内执行必须显式传接收者（`page.content(this)`），隐式 `page.content()` 报 `No value passed for parameter 'p1'`。
+- **UI 必须用 Kuikly 官方组件与布局（用户多次强调，勿自造样式替代官方机制）**：写 UI 前先查 `.agents/skills/kuikly-*`（kuikly-ui-framework 内含官方文档/源码克隆 `references/KuiklyUI/`）与官方组件清单；编码规范见 `.codebuddy/rules/kuiklyDSL.mdc`。已整改：下拉=官方 AlertDialog、开关=官方 Switch、标签页=官方 **Tabs+PageList**（TabItem 官方结构 + `indicatorInTabItem` 官方指示条，不自画选中胶囊）、按钮=官方 compose Button、backend 选择=官方 AlertDialog 下拉（手搓 segmentedControl 已删——官方 SegmentedControlIOS 是 iOS 渲染器专属、web 无实现）、多行散文=官方 TextArea（`labeledTextArea`）。**PageList 必须显式设 `pageItemWidth`/`pageItemHeight`**（官方示例按导航/tab 高度手算；AdminShell/ConfigPage 各自算好传入 `tabbedPanel`），不设则 item 无尺寸约束整页塌成单行（实测）。Tabs↔PageList 联动 = PageList `scroll` 事件回传 ScrollParams 喂 `Tabs.scrollParams`、点击 tab `scrollToPageIndex(index)` 翻页；封装见 AdminTheme.kt `tabbedPanel`。
+- **组件官方化审计结论（2026-10-05 全量）**：AdminTheme.kt 是唯一组件层，全部基于官方组件组合（Text/View flex/官方 Button/Input/TextArea/Switch/AlertDialog/Tabs/PageList/Scroller/ActivityIndicator）；无官方对应物的组合件仅剩：`statusBadge`（官方无徽标）、`waveformPlayer`（官方无音频波形/播放器 UI）、`sidebarItem`+`largeTitleBar`+`groupedCard`+`ToastHost`（官方无侧边栏/导航/卡片/Toast 组件，属 View+Text 官方布局组合）。新增 UI 一律先查官方清单，禁止绕过 AdminTheme 直接散写。
+- **API 位置**：`Color`/`Border`/`BorderStyle` 在 `com.tencent.kuikly.core.base`（不在 base.attr）；**按钮用官方 compose Button**（`com.tencent.kuikly.core.views.compose.Button`：`titleAttr` 设文字/颜色且须写在 attr 块内、`highlightBackgroundColor` 按压高亮；文字居中由 ButtonView 内部 `justifyContentCenter+alignItemsCenter` 保证——手搓 View+Text 按钮（allCenter/textAlignCenter/flex）在 Catalyst 上居中实测不可靠，「连接/断开」多次偏侧即此因；官方 Button 无子节点插槽，loading 态用灰底+文案切换，不塞菊花）；无 `paddingHorizontal/Vertical`（用 padding(left/right/top/bottom)）；Input 文本变化事件是 `event { textDidChange { } }`。
 - **Docker 构建内存**（ACR 构建机实测 OOM 表现：日志戛然而止 + rpc EOF）：web 阶段 Gradle/Kotlin daemon/webpack-Node 三处显式限堆（1280m/1024m/1024m，取 xiaoya 实测口径）+ `-PwebSourceMap=false` 关 source map；⛔ 不要调高。
 - **settings.gradle.kts 勿设 PREFER_SETTINGS**（会丢 Kotlin/JS 插件自动加的 nodejs.org dist 仓库，org.nodejs:node 必然解析失败）；根工程/子模块勿声明项目级 repositories（多余仓库的 DNS 异常会中断整条解析链）。
 

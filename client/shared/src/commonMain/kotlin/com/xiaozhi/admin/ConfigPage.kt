@@ -7,7 +7,6 @@ import com.tencent.kuikly.core.directives.velse
 import com.tencent.kuikly.core.directives.vif
 import com.tencent.kuikly.core.pager.Pager
 import com.tencent.kuikly.core.reactive.handler.observable
-import com.tencent.kuikly.core.views.Scroller
 import com.tencent.kuikly.core.views.View
 
 /**
@@ -20,7 +19,12 @@ import com.tencent.kuikly.core.views.View
 @Page("config")
 class ConfigPage : Pager() {
 
-    val form = ConfigFormState()
+    val form = ConfigFormState(this)
+
+    /** 顶部 toast（跨端统一实现：状态 + 渲染见 commonMain 的 ToastState / ToastHost）。 */
+    val toast = ToastState(this)
+
+    fun showToast(message: String, level: String = "info") = toast.show(message, level)
 
     override fun pageDidAppear() {
         super.pageDidAppear()
@@ -31,10 +35,11 @@ class ConfigPage : Pager() {
         // Kuikly DSL 约定：嵌套容器闭包内无法隐式访问 Pager 成员（@DslMarker），
         // 用局部 val ctx 捕获 Pager 取状态；组件扩展则在目标容器闭包内非限定调用。
         val ctx = this
-        // 宽屏响应式：以 lambda 传给 renderForm，在 cardGrid 的 vif 闭包内读取 pageViewWidth
-        // （响应式字段），窗口 resize 跨过 900 阈值时自动 双列 ⇄ 单列 切换。
-        // ⚠️ 不能在 body 顶层一次性求值成 Boolean——构建期求值不会随 resize 重算。
-        val wide = { pagerData.pageViewWidth >= 900f }
+        // pageItem 尺寸（官方 PageList 要求显式设置，见 tabbedPanel 注释）：
+        // 宽 = 窗口宽；高 = 窗口高 - 标题栏(64) - 分隔(1) - tab栏(44)。
+        // ⚠️ lambda 定义在 body 顶层：DslMarker 会屏蔽 return 块内嵌套闭包对 Pager 成员的隐式访问。
+        val pageWidth = { pagerData.pageViewWidth }
+        val pageHeight = { pagerData.pageViewHeight - 109f }
         return {
             attr {
                 flex(1f)
@@ -44,27 +49,27 @@ class ConfigPage : Pager() {
 
             // ⚠️ 非限定调用（接收者=当前容器），组件才能挂进正确的父容器
             largeTitleBar({ "配置" }, trailing = {
-                // 忙碌态 vif/velse 分支重建（构建期裸读 saving 不响应式更新）；loading=true → 官方 ActivityIndicator 菊花
-                vif({ ctx.form.saving }) {
-                    primaryButton("保存中…", enabled = false, loading = true) { }
-                }
-                velse {
-                    primaryButton("保存配置") { ctx.form.save(ctx) }
+                // 三态按钮：saving 时菊花 + 灰底 + 拦截点击，保存期间不会重复提交。
+                primaryButton(
+                    "保存配置",
+                    loading = { ctx.form.saving },
+                    loadingText = "保存中…",
+                ) {
+                    ctx.form.save(ctx)
+                    // 保存结果经统一 toast 顶部弹出（成功=绿 / 失败=红）
+                    ctx.showToast(ctx.form.statusMsg, ctx.form.statusLevel)
                 }
             })
 
-            Scroller {
-                attr {
-                    flex(1f)
-                    // groupedCard 不再自带左右外边距，页面留白由 Scroller 统一提供
-                    paddingLeft(AdminSpace.xl)
-                    paddingRight(AdminSpace.xl)
-                    paddingTop(AdminSpace.xl)
-                    paddingBottom(AdminSpace.xxxl)
-                }
-                // 非限定调用：接收者=Scroller，卡片才能挂进 Scroller
-                renderForm(ctx.form, wide)
-            }
+            // 顶部 toast（跨端统一），3 秒自动消失
+            ToastHost(ctx.toast)
+
+            // 配置标签页（tabbedPanel：官方 Tabs+PageList，六个 tab 全量配置汇总）
+            renderForm(
+                ctx.form,
+                pageWidth = pageWidth,
+                pageHeight = pageHeight,
+            )
         }
     }
 }

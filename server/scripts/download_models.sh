@@ -5,54 +5,60 @@
 # 容器内也可由 docker-entrypoint.sh 自动完成同样的事情（XIAOZHI_AUTO_DOWNLOAD_MODELS=missing）。
 # 本脚本用于「先在宿主机预置、再挂载」的场景，或离线环境手动搬运。
 #
-# 模型来源：k2-fsa/sherpa-onnx 官方 release（URL 以官方发布页为准）。
-#   - SenseVoice INT8 : sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09（model.int8.onnx）
-#   - Kokoro INT8     : kokoro-int8-multi-lang-v1_1（中英双语，含 lexicon-zh/dict/双 lexicon）
+# 模型来源：HuggingFace 的 csukuangfj 官方镜像仓库（无需代理，环境需能访问 huggingface.co）。
+#   - SenseVoice INT8 : sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09（model.int8.onnx + tokens.txt）
+#   - Kokoro INT8     : kokoro-int8-multi-lang-v1_1（中英双语，含 lexicon-zh/dict/双 lexicon/espeak-ng-data）
 #   - Silero VAD      : silero_vad.onnx
+# 镜像站点/内网不可达时，把 SENSEVOICE_URL/KOKORO_URL/SILERO_VAD_URL 改成你的镜像仓库 ID 即可。
 
 set -euo pipefail
 
 MODELS_DIR="${1:-./models}"
-SENSEVOICE_URL="${SENSEVOICE_URL:-https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09.tar.bz2}"
-KOKORO_URL="${KOKORO_URL:-https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-int8-multi-lang-v1_1.tar.bz2}"
-SILERO_VAD_URL="${SILERO_VAD_URL:-https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx}"
+SENSEVOICE_URL="${SENSEVOICE_URL:-csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09}"
+KOKORO_URL="${KOKORO_URL:-csukuangfj/kokoro-int8-multi-lang-v1_1}"
+SILERO_VAD_URL="${SILERO_VAD_URL:-csukuangfj/vad}"
 
-# GitHub 直链代理：默认走 tvv.tw（github.com / release-assets 直连常不可达）。
-# GITHUB_PROXY=off 直连；显式覆盖为内网镜像/代理地址时不会被二次套用。
-GITHUB_PROXY="${GITHUB_PROXY:-https://tvv.tw/}"
-case "$GITHUB_PROXY" in
-  off|OFF|"") GITHUB_PROXY="" ;;
-esac
+# ============ HuggingFace 直连下载（无需代理）============
 
-apply_proxy() {
-  case "$1" in
-    http://github.com/*|https://github.com/*)
-      [ -n "$GITHUB_PROXY" ] && printf '%s' "$GITHUB_PROXY$1" || printf '%s' "$1"
-      ;;
-    *) printf '%s' "$1" ;;
-  esac
+hf_list() {
+  curl -fsSL "https://huggingface.co/api/models/$1/tree/main?recursive=true" \
+    | grep '"type": *"file"' | grep '"path":' \
+    | sed 's/.*"path":[[:space:]]*"\([^"]*\)".*/\1/'
+}
+
+hf_sync() {
+  local repo="$1" dest="$2" pat="${3:-}"   # $3 可选：仅下载文件名精确匹配 pat 的条目
+  echo "==> 从 HuggingFace 同步 $repo → $dest${pat:+"（仅 $pat）"}"
+  local list="/tmp/hf_$(echo "$repo" | tr '/' '_')_files"
+  hf_list "$repo" > "$list"
+  if [ ! -s "$list" ]; then
+    echo "错误：无法从 HuggingFace 列出 $repo 的文件（仓库名是否正确？能否访问 huggingface.co？）" >&2
+    rm -f "$list"
+    return 1
+  fi
+  while IFS= read -r p; do
+    [ -z "$p" ] && continue
+    [ -n "$pat" ] && [ "$p" != "$pat" ] && continue   # 仅取指定文件（如 silero_vad.onnx），跳过仓库内无关文件
+    local target="$dest/$p"
+    mkdir -p "$(dirname "$target")"
+    echo "    ↓ $p"
+    curl $CURL_OPTS -o "$target" "https://huggingface.co/$repo/resolve/main/$p" || return 1
+  done < "$list"
+  rm -f "$list"
 }
 
 CURL_OPTS="-fSL --connect-timeout 15 --retry 3 --retry-delay 2"
 
 mkdir -p "$MODELS_DIR"/SenseVoiceSmall "$MODELS_DIR"/Kokoro
 
-if [ -n "$GITHUB_PROXY" ]; then
-  echo "==> GitHub 代理=$GITHUB_PROXY （GITHUB_PROXY=off 可关闭）"
-fi
-
 echo "==> [1/3] Silero VAD"
-curl $CURL_OPTS -o "$MODELS_DIR/silero_vad.onnx" "$(apply_proxy "$SILERO_VAD_URL")" || exit 1
+hf_sync "$SILERO_VAD_URL" "$MODELS_DIR" "silero_vad.onnx" || exit 1
 
 echo "==> [2/3] SenseVoice INT8"
-curl $CURL_OPTS -o /tmp/sensevoice.tar.bz2 "$(apply_proxy "$SENSEVOICE_URL")" || exit 1
-tar -xjf /tmp/sensevoice.tar.bz2 -C "$MODELS_DIR"/SenseVoiceSmall --strip-components=1 || exit 1
-rm -f /tmp/sensevoice.tar.bz2
+hf_sync "$SENSEVOICE_URL" "$MODELS_DIR"/SenseVoiceSmall || exit 1
 
 echo "==> [3/3] Kokoro INT8 多语种（en+zh）"
-curl $CURL_OPTS -o /tmp/kokoro.tar.bz2 "$(apply_proxy "$KOKORO_URL")" || exit 1
-tar -xjf /tmp/kokoro.tar.bz2 -C "$MODELS_DIR"/Kokoro --strip-components=1 || exit 1
-rm -f /tmp/kokoro.tar.bz2
+hf_sync "$KOKORO_URL" "$MODELS_DIR"/Kokoro || exit 1
 
 echo "==> 完成。核对关键文件："
 for f in "$MODELS_DIR/silero_vad.onnx" "$MODELS_DIR/SenseVoiceSmall/model.int8.onnx" "$MODELS_DIR/SenseVoiceSmall/tokens.txt" "$MODELS_DIR/Kokoro/model.int8.onnx" "$MODELS_DIR/Kokoro/voices.bin" "$MODELS_DIR/Kokoro/tokens.txt" "$MODELS_DIR/Kokoro/espeak-ng-data" "$MODELS_DIR/Kokoro/lexicon-us-en.txt" "$MODELS_DIR/Kokoro/lexicon-zh.txt"; do

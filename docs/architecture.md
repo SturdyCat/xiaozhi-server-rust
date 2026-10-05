@@ -65,7 +65,7 @@ xiaozhi-server-rust/
 │       ├── audio/           # opus 编解码（audiopus）、线性重采样（rubato）
 │       └── config.rs        # TOML 配置结构与加载（serde）
 ├── client/                      # Kuikly 多端工程（管理后台 web + macOS 测试台）
-├── docker-entrypoint.sh         # 容器入口：模型自检 + 自动下载 + 代理
+├── docker-entrypoint.sh         # 容器入口：模型自检 + 自动下载（HuggingFace 直连，无需代理）
 ├── scripts/download_models.sh    # 宿主机预置模型（与入口同源 URL）
 ├── config.example.toml          # 配置样例（[server]/[audio]/[asr]/[vad]/[tts]/[llm]）
 ├── Dockerfile                   # rust:1.90 多阶段构建，RUSTFLAGS=-C target-cpu=x86-64-v2
@@ -158,7 +158,7 @@ sequenceDiagram
 2. **构建目标指令集**：Docker 构建 `RUSTFLAGS="-C target-cpu=x86-64-v2"`——部署机 N5105（Tremont）无 AVX，禁止 `native`（CI 机构建会把 AVX 嵌进二进制，部署时 SIGILL）。
 3. **API 版本锁定**：sherpa-onnx Rust crate 锁定 1.13.8（`create(&config)` 返回 `Option`、`get_result()` 在 stream 上、`generate_with_config` 需显式回调类型等，见 agents.md §5）。
 4. **模型文件名**：官方包内为 `model.int8.onnx`（非 `model.onnx`）；Kokoro 使用 `kokoro-int8-multi-lang-v1_1`（中英双语完整包，含 lexicon-zh / dict / espeak-ng-data）。
-5. **容器首启自动下载**：`docker-entrypoint.sh` 自检关键模型文件，缺失则从 k2-fsa 官方 release 下载到挂载的 `/models`（默认走 `GITHUB_PROXY=https://tvv.tw/` 代理，`off` 可直连）；开关 `XIAOZHI_AUTO_DOWNLOAD_MODELS = missing | force | off`，下载失败中止启动（`XIAOZHI_ALLOW_MISSING_MODELS` 可放行）。
+5. **容器首启自动下载**：`docker-entrypoint.sh` 自检关键模型文件，缺失则从 HuggingFace（csukuangfj 官方镜像仓库）直连下载到挂载的 `/models`（无需代理）；开关 `XIAOZHI_AUTO_DOWNLOAD_MODELS = missing | force | off`，下载失败中止启动（`XIAOZHI_ALLOW_MISSING_MODELS` 可放行）。
 6. **配置回退链**：`XIAOZHI_CONFIG` 环境变量 → `--config` 参数 → 内置 mock 默认配置，任何一级失败告警后回退，保证进程总能起来（便于零配置联调）。加载优先级与 env 覆盖语义见 `../server/src/main.rs` 模块注释。
 7. **并发模型**：每个 WS 连接一个 tokio task（session），引擎跨会话共享；音频编解码均为纯函数，无共享可变状态。并发与 CPU 预算细节见 `../server/src/engine.rs` 模块注释。
 8. **CPU 占用上限**：tokio worker（默认 2，`[server].worker_threads`）+ ASR 识别（`[asr].num_threads`=2）+ TTS 合成（`[tts].num_threads`，默认 4）+ VAD（1），各段错峰执行，峰值控制在 4 核内为小主机留余量；容器侧由 `docker-compose.yml` 的 `cpus:"3.5"` 限核。线程预算设计见 `../server/src/engine.rs`。
@@ -192,11 +192,10 @@ flowchart TB
             BIN[/app/server]
         end
     end
-    GH[k2-fsa/sherpa-onnx release]
-    PROXY[tvv.tw GitHub 代理]
+    HF[HuggingFace: csukuangfj 镜像仓库]
 
     EP -- "1. 检查 /models 关键文件" --> MODELS
-    EP -- "2. 缺失则下载（GITHUB_PROXY）" --> PROXY --> GH
+    EP -- "2. 缺失则从 HuggingFace 直连下载" --> HF
     EP -- "3. exec" --> BIN
     CFG -. 挂载 :ro .-> BIN
     MODELS -. 挂载 :rw .-> BIN

@@ -104,26 +104,40 @@ async fn get_config(State(engines): State<Arc<Engines>>) -> Response {
 /// 仅 [server] 部分（监听地址 / token / 管理页目录）可在下次启动时生效。
 async fn put_config(State(engines): State<Arc<Engines>>, Json(body): Json<Config>) -> Response {
     let path = match &engines.config_path {
-        Some(p) => p,
+        Some(p) => p.clone(),
         None => {
             return (
                 StatusCode::BAD_REQUEST,
                 "server 以内置默认（mock）配置启动，未指定配置文件，无法持久化。请用 --config 指定 config.toml 后重启。",
             )
-                .into_response()
+            .into_response()
         }
     };
-    match toml::to_string_pretty(&body) {
-        Ok(toml_str) => match std::fs::write(path, toml_str) {
-            Ok(_) => (
-                StatusCode::OK,
-                format!("配置已保存到 {path}；引擎相关参数需重启 server 生效。"),
-            )
-                .into_response(),
-            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("写入配置失败: {e}")).into_response(),
-        },
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("序列化配置失败: {e}")).into_response(),
+    let toml_str = match toml::to_string_pretty(&body) {
+        Ok(s) => s,
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, format!("序列化配置失败: {e}")).into_response();
+        }
+    };
+    // 原子写：先写同目录临时文件再 rename，避免写到一半被中断（如容器被杀）导致配置损坏。
+    let tmp = format!("{}.{}.tmp", path, Uuid::new_v4());
+    if let Err(e) = std::fs::write(&tmp, &toml_str) {
+        let hint = if e.kind() == std::io::ErrorKind::PermissionDenied {
+            "（配置文件或所在目录为只读，无法写入。请检查部署挂载是否误加了 :ro，或改用可写路径后重启 server。）"
+        } else {
+            ""
+        };
+        return (StatusCode::INTERNAL_SERVER_ERROR, format!("写入配置失败: {e}{hint}")).into_response();
     }
+    if let Err(e) = std::fs::rename(&tmp, &path) {
+        let _ = std::fs::remove_file(&tmp);
+        return (StatusCode::INTERNAL_SERVER_ERROR, format!("写入配置失败: {e}")).into_response();
+    }
+    (
+        StatusCode::OK,
+        format!("配置已保存到 {path}；引擎相关参数需重启 server 生效。"),
+    )
+        .into_response()
 }
 
 async fn ws_handler(

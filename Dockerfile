@@ -145,11 +145,10 @@ VOLUME ["/models"]
 #   XIAOZHI_CONFIG：容器内配置文件（compose 挂载 server/config.example.toml 即可开箱即用）
 #   XIAOZHI_ADMIN_DIR：管理页静态目录覆盖（见 main.rs load_config），指向上方 /app/web
 #   XIAOZHI_AUTO_DOWNLOAD_MODELS：missing(默认,缺失才下) | force | off
-#   GITHUB_PROXY：模型下载的 GitHub 直链代理（off 关闭）
+#   （模型统一从 HuggingFace 直连下载，无需代理；SENSEVOICE_URL/KOKORO_URL/SILERO_VAD_URL 可覆盖为内网镜像仓库 ID）
 ENV XIAOZHI_CONFIG=/etc/xiaozhi/config.toml \
     XIAOZHI_ADMIN_DIR=/app/web \
     XIAOZHI_AUTO_DOWNLOAD_MODELS=missing \
-    GITHUB_PROXY=https://tvv.tw/ \
     RUST_LOG=info
 
 EXPOSE 8000

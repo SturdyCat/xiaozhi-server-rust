@@ -94,7 +94,7 @@ cd server && ~/.cargo/bin/cargo run -- --config config.toml
 ./server/scripts/download_models.sh /host/models
 ```
 
-脚本会拉取 Silero VAD、SenseVoice INT8、Kokoro INT8（默认取官方 release 的 `*-int8-*` 量化包），并提示核对文件路径。下载后按 `config.example.toml` 的 `[asr]` / `[vad]` / `[tts]` 路径对齐 `model` / `tokens` / `voices` 等。
+脚本会拉取 Silero VAD、SenseVoice INT8、Kokoro INT8（默认从 HuggingFace 的 csukuangfj 官方镜像仓库递归同步，无需代理），并提示核对文件路径。下载后按 `config.example.toml` 的 `[asr]` / `[vad]` / `[tts]` 路径对齐 `model` / `tokens` / `voices` 等。
 
 > 用 Docker 部署时**无需手动下载**：容器入口会自动检测并下载（见上文 [模型自动下载](#模型自动下载)），除非你处于离线/内网环境。
 
@@ -124,15 +124,14 @@ docker run -d --name xiaozhi \
 
 ### 模型自动下载
 
-容器入口（`docker-entrypoint.sh`）会在启动时检测关键模型文件（`silero_vad.onnx`、`SenseVoiceSmall/tokens.txt`、`Kokoro/model.onnx`）：
+容器入口（`docker-entrypoint.sh`）会在启动时检测关键模型文件（`silero_vad.onnx`、`SenseVoiceSmall/tokens.txt`、`Kokoro/model.int8.onnx`）：
 
-- **缺失则自动下载**到挂载的 `/models`（默认行为，首次启动拉取后持久化，后续跳过）。
-- **默认走 GitHub 代理 `https://tvv.tw/`**（`GITHUB_PROXY` 可换其他代理，`off` 直连）——部署环境直连 `github.com` / `release-assets.githubusercontent.com` 常超时不可达；代理仅对 github.com 直链套用，覆盖为内网镜像地址时不受影响。
-- 下载地址可用环境变量覆盖：`SENSEVOICE_URL` / `KOKORO_URL` / `SILERO_VAD_URL`（便于内网镜像）。
+- **缺失则自动下载**到挂载的 `/models`（默认行为，首次启动从 HuggingFace 直连拉取后持久化，后续跳过；无需代理）。
+- 下载地址（现均为 HuggingFace 仓库 ID）可用环境变量覆盖：`SENSEVOICE_URL` / `KOKORO_URL` / `SILERO_VAD_URL`（便于内网镜像）。
 - 行为开关 `XIAOZHI_AUTO_DOWNLOAD_MODELS`：`missing`（默认，缺失才下）/ `force`（每次重下）/ `off`（不下载，依赖挂载或预置）。
 
-> 因此**不手动预置模型也能直接 `docker compose up` 跑起来**；直连不可达时靠 `GITHUB_PROXY` 代理兜底。
-> 离线/内网环境：先 `GITHUB_PROXY=off ./scripts/download_models.sh /host/models` 预置（内网镜像则设对应 URL），再挂载，或设 `XIAOZHI_AUTO_DOWNLOAD_MODELS=off`。
+> 因此**不手动预置模型也能直接 `docker compose up` 跑起来**（模型从 HuggingFace 自动拉取）。
+> 离线/内网环境：先 `SENSEVOICE_URL=<内网镜像仓库> ./scripts/download_models.sh /host/models` 预置，再挂载，或设 `XIAOZHI_AUTO_DOWNLOAD_MODELS=off`。
 
 ### 部署机指令集
 
