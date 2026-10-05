@@ -118,9 +118,11 @@ pub fn build_tts_with_lang(cfg: &TtsConfig, lang: &str) -> Result<Arc<dyn TtsEng
         {
             let mut c = cfg.clone();
             c.lang = lang.to_string();
+            // build_sherpa_tts 已返回 Arc<dyn TtsEngine>——不要再 Arc::new 包一层
+            //（56e80f1 重构引入的双层 Arc，只在 sherpa feature 下编译，Docker 构建才暴露）。
             let engine = build_sherpa_tts(&c)
                 .with_context(|| format!("创建 lang={lang} 的 Kokoro TTS 失败"))?;
-            return Ok(Arc::new(engine));
+            return Ok(engine);
         }
         #[cfg(not(feature = "sherpa"))]
         {
