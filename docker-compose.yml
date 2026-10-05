@@ -36,6 +36,10 @@ services:
     cpus: "3.5"
     ports:
       - "8000:8000"
+    # ⚠️ [server].listen 必须保持 "0.0.0.0:8000"（config.example.toml 默认值）：
+    #   容器内进程只拥有 0.0.0.0/容器自身 IP，写成宿主机局域网 IP（如 192.168.x.x）
+    #   会 EADDRNOTAVAIL 崩溃循环；外部可达性由上面的 ports 映射决定，管理页
+    #   「保存配置」也会回写该字段——改完 listen 记得改回 0.0.0.0 再重启。
     environment:
       # 指向容器内配置文件（见下方 volumes 挂载）。
       # 设为不存在的路径会触发告警并回退到内置 mock 默认配置（适合无模型联调）。

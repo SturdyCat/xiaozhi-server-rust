@@ -75,7 +75,24 @@ async fn run(config: Config, config_path: Option<String>) -> Result<()> {
     let engines = Engines::new(&config, config_path)?;
     let app = router(engines);
 
-    let listener = TcpListener::bind(&config.server.listen).await?;
+    // 绑定失败给出可行动的错误（裸 os error 99 "Cannot assign requested address" 看不出原因）：
+    // 典型场景 = Docker 里把 [server].listen 写成了宿主机 LAN IP——容器网络命名空间不拥有
+    // 该地址（EADDRNOTAVAIL），外部可达性应由 compose 的 ports 端口映射决定。
+    let listener = match TcpListener::bind(&config.server.listen).await {
+        Ok(l) => l,
+        Err(e) if e.kind() == std::io::ErrorKind::AddrNotAvailable => {
+            return Err(anyhow::anyhow!(e).context(format!(
+                "绑定监听 {} 失败：该地址不属于本机任何网卡。\
+                 Docker 部署请把 [server].listen 改回 \"0.0.0.0:8000\"（外部访问由 compose 的 ports 映射决定，不要填宿主机局域网 IP）；\
+                 裸机部署则填本机网卡 IP。",
+                config.server.listen
+            )));
+        }
+        Err(e) => {
+            return Err(anyhow::anyhow!(e)
+                .context(format!("绑定监听 {} 失败", config.server.listen)));
+        }
+    };
     tracing::info!("xiaozhi-server-rust 监听于 {}", config.server.listen);
     serve(listener, app).await?;
     Ok(())
