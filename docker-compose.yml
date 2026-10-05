@@ -44,10 +44,14 @@ services:
       XIAOZHI_CONFIG: /etc/xiaozhi/config.toml
       # 可选：调整日志级别（默认 info）；如 debug / warn
       RUST_LOG: info
-      # 自动下载模型：missing(默认，缺失才下) | force(每次重下) | off(不下载)
-      # 模型统一从 HuggingFace 直连下载（无需代理）；SENSEVOICE_URL/KOKORO_URL/SILERO_VAD_URL
-      # 可覆盖为内网镜像仓库 ID。
+      # 自动下载模型：missing(默认，缺失才下) | force(强制重下) | off(不下载)
+      # 模型从 k2-fsa/sherpa-onnx 官方 GitHub Release 下载整包 tar.bz2 并解压覆盖。
       XIAOZHI_AUTO_DOWNLOAD_MODELS: "missing"
+      # GitHub 代理前缀（和以前一样：配置了才走代理，不配置直连原始地址）。
+      # 直连 github.com / release-assets 不可达的环境按需配置；off 亦表示直连。
+      GITHUB_PROXY: "https://tvv.tw/"
+      # 下载地址可被 SENSEVOICE_URL/KOKORO_URL/SILERO_VAD_URL 覆盖为完整直链（内网镜像，
+      # 显式 URL 不会被二次套代理），需要时自行添加。
     volumes:
       # 配置：挂载宿主 server/config.toml（请先 `cp server/config.example.toml server/config.toml`）。
       # ⚠️ 必须是**可写**挂载：管理页「保存配置」走 PUT /api/config 回写此文件，

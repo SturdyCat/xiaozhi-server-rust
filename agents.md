@@ -156,8 +156,8 @@ export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:$PKG_CONFIG_PATH"
 
 报错 `tokens.txt does not exist` / `创建 SenseVoice 识别器失败` 的根因是 `/models` 里没有模型文件。Docker 入口脚本在 `exec` 服务器**之前**会自检关键文件（`silero_vad.onnx`、`SenseVoiceSmall/model.int8.onnx`、`Kokoro/model.int8.onnx` 等，**官方包内文件名是 `model.int8.onnx`，不是 `model.onnx`**）：
 
-- **缺失 → 自动从 HuggingFace（csukuangfj 官方镜像仓库）直连下载**到挂载的 `/models`（默认行为，无需代理），下载后持久化，后续启动检测到即跳过。
-- 下载地址（现均为 HuggingFace 仓库 ID）可被 `SENSEVOICE_URL` / `KOKORO_URL` / `SILERO_VAD_URL` 覆盖（内网镜像仓库）。
+- **缺失 → 自动从 k2-fsa/sherpa-onnx 官方 GitHub Release 下载整包 tar.bz2 并解压**到挂载的 `/models`（默认行为），下载后持久化，后续启动检测到即跳过（按模型粒度幂等 + .part 断点续传）。
+- 默认**直连原始地址**；docker compose 配置了 `GITHUB_PROXY` 才走代理（如 `https://tvv.tw/`）。`SENSEVOICE_URL` / `KOKORO_URL` / `SILERO_VAD_URL` 可覆盖为完整直链（内网镜像，不会被二次套代理）。
 - curl 带 `--connect-timeout 15 --retry 3`（避免连接假死 134s）；下载/解压失败会让入口**中止启动**（未设 `XIAOZHI_ALLOW_MISSING_MODELS` 时），避免带着缺模型崩溃重启循环。
 - 行为开关 `XIAOZHI_AUTO_DOWNLOAD_MODELS`：`missing`（默认）/`force`（每次重下）/`off`（不下载）。
 - 运行期镜像需装 `curl` + `bzip2`（`tar` 自带）用于下载与解包；`docker-compose.yml` 的 `./models` 挂载**必须可写**（不要 `:ro`）。

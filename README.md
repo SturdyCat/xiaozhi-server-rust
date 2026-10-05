@@ -37,7 +37,7 @@ API 已对照 1.13.8 rustdoc 校验：`OfflineSenseVoiceModelConfig`、`OfflineT
 
 ```bash
 cp server/config.example.toml server/config.toml   # 填 expected_token / llm.api_key
-docker compose up -d --build                       # 首启自动从 HuggingFace 下载模型到 ./models
+docker compose up -d --build                       # 首启自动从 GitHub Release 下载模型包到 ./models
 curl http://127.0.0.1:8000/api/health              # => xiaozhi-server-rust ok
 ```
 
@@ -86,7 +86,7 @@ cd server && ~/.cargo/bin/cargo run -- --config config.toml
 ./server/scripts/download_models.sh /host/models
 ```
 
-脚本会拉取 Silero VAD、SenseVoice INT8、Kokoro INT8（默认从 HuggingFace 的 csukuangfj 官方镜像仓库递归同步，无需代理），并提示核对文件路径。下载后按 `config.example.toml` 的 `[asr]` / `[vad]` / `[tts]` 路径对齐 `model` / `tokens` / `voices` 等。
+脚本会从 k2-fsa/sherpa-onnx 官方 GitHub Release 下载整包 tar.bz2 并本地解压（代理由 compose 的 `GITHUB_PROXY` 决定，不配置则直连原始地址），并提示核对文件路径。下载后按 `config.example.toml` 的 `[asr]` / `[vad]` / `[tts]` 路径对齐 `model` / `tokens` / `voices` 等。
 
 > 用 Docker 部署时**无需手动下载**：容器入口会自动检测并下载（见上文 [模型自动下载](#模型自动下载)），除非你处于离线/内网环境。
 
@@ -118,11 +118,11 @@ docker run -d --name xiaozhi \
 
 容器入口（`docker-entrypoint.sh`）会在启动时检测关键模型文件（`silero_vad.onnx`、`SenseVoiceSmall/tokens.txt`、`Kokoro/model.int8.onnx`）：
 
-- **缺失则自动下载**到挂载的 `/models`（默认行为，首次启动从 HuggingFace 直连拉取后持久化，后续跳过；无需代理）。
-- 下载地址（现均为 HuggingFace 仓库 ID）可用环境变量覆盖：`SENSEVOICE_URL` / `KOKORO_URL` / `SILERO_VAD_URL`（便于内网镜像）。
+- **缺失则自动下载**到挂载的 `/models`（默认行为，从官方 GitHub Release 拉整包 tar.bz2 本地解压，按模型幂等 + 断点续传）。
+- 默认**直连原始地址**；docker compose 配置了 `GITHUB_PROXY` 才走代理（如 `https://tvv.tw/`）。下载地址可用 `SENSEVOICE_URL` / `KOKORO_URL` / `SILERO_VAD_URL` 覆盖为完整直链（内网镜像，不会被二次套代理）。
 - 行为开关 `XIAOZHI_AUTO_DOWNLOAD_MODELS`：`missing`（默认，缺失才下）/ `force`（每次重下）/ `off`（不下载，依赖挂载或预置）。
 
-> 因此**不手动预置模型也能直接 `docker compose up` 跑起来**（模型从 HuggingFace 自动拉取）。
+> 因此**不手动预置模型也能直接 `docker compose up` 跑起来**（模型从 GitHub Release 自动拉取，代理可配）。
 > 离线/内网环境：先 `SENSEVOICE_URL=<内网镜像仓库> ./scripts/download_models.sh /host/models` 预置，再挂载，或设 `XIAOZHI_AUTO_DOWNLOAD_MODELS=off`。
 
 ### 部署机指令集
