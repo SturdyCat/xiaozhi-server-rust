@@ -24,6 +24,7 @@ use crate::sse::SseParser;
 use anyhow::{Context, Result};
 use futures_util::StreamExt;
 use serde_json::{json, Value};
+use uuid::Uuid;
 
 /// 设备/服务端可向 LLM 声明的工具规格（Responses 扁平结构 `tools[]` 项）。
 #[derive(Debug, Clone)]
@@ -119,13 +120,24 @@ fn parse_whole_response(v: &Value) -> (String, Vec<ToolCall>) {
 pub struct LlmClient {
     client: reqwest::Client,
     cfg: LlmConfig,
+    /// 会话标识（`x-opencode-session`）：进程内稳定，供 opencode zen 等网关做请求路由
+    /// 与 prompt cache 优化——不带该头会被以 400 `MissingSessionID` 拒绝
+    /// （见 https://opencode.ai/docs/go/ ：客户端须自带 UA + 每会话稳定 session id）。
+    session_id: String,
 }
 
 impl LlmClient {
     pub fn new(cfg: &LlmConfig) -> Self {
+        // 自报家门的 User-Agent：opencode 等网关要求客户端以自有名称标识，
+        // 勿用通用 HTTP 库名。构建失败（TLS 后端异常）回退默认客户端，不阻断启动。
+        let client = reqwest::Client::builder()
+            .user_agent(concat!("xiaozhi-server-rust/", env!("CARGO_PKG_VERSION")))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
         Self {
-            client: reqwest::Client::new(),
+            client,
             cfg: cfg.clone(),
+            session_id: Uuid::new_v4().to_string(),
         }
     }
 
@@ -192,6 +204,9 @@ impl LlmClient {
             .client
             .post(&self.cfg.api_base)
             .bearer_auth(&self.cfg.api_key)
+            // opencode zen 网关要求每会话稳定 session id（缺失 → 400 MissingSessionID）；
+            // 其他网关会忽略未知头，无害。
+            .header("x-opencode-session", &self.session_id)
             .json(&body)
             .send()
             .await

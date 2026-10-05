@@ -1,14 +1,18 @@
 package com.xiaozhi.admin
 
+import com.tencent.kuikly.core.base.PagerScope
 import com.tencent.kuikly.core.base.ViewContainer
+import com.tencent.kuikly.core.base.ViewRef
 import com.tencent.kuikly.core.directives.velse
 import com.tencent.kuikly.core.directives.vif
 import com.tencent.kuikly.core.pager.Pager
-import com.tencent.kuikly.core.base.PagerScope
 import com.tencent.kuikly.core.reactive.collection.ObservableList
 import com.tencent.kuikly.core.reactive.handler.observable
 import com.tencent.kuikly.core.reactive.handler.observableList
 import com.tencent.kuikly.core.timer.setTimeout
+import com.tencent.kuikly.core.views.DivView
+import com.tencent.kuikly.core.views.SelectableOption
+import com.tencent.kuikly.core.views.SelectionType
 import com.tencent.kuikly.core.views.Text
 import com.tencent.kuikly.core.views.View
 
@@ -95,6 +99,58 @@ class TestBenchState(private val scope: PagerScope) {
 
     /** 测试台标签页 UI 状态（连接 / ASR 识别 / TTS 合成 / LLM 对话 四个 tab，见 renderBench）。 */
     val tabUi = TabUiState(scope)
+
+    // ============================================================
+    // 文本选中 / 复制（ASR 结果、LLM 回复；官方 SelectionContainer 能力）
+    // ============================================================
+
+    /** 可选中的结果容器（渲染时经 ref 回填；长按 createSelection / 复制取选区都用它）。 */
+    var asrResultRef: ViewRef<DivView>? = null
+    var llmReplyRef: ViewRef<DivView>? = null
+
+    /** 「复制」按钮的卡片内反馈（各卡片独立，避免串台）。 */
+    var asrCopyHint by scope.observable("")
+    var llmCopyHint by scope.observable("")
+
+    /** 复制 ASR 识别结果（有选区复制选区，无选区复制整段）。 */
+    fun copyAsr(ctx: Pager) = copySelectionOr(ctx, asrResultRef, asrText) { asrCopyHint = it }
+
+    /** 复制 LLM 回复（有选区复制选区，无选区复制整段）。 */
+    fun copyLlm(ctx: Pager) = copySelectionOr(ctx, llmReplyRef, llmReply) { llmCopyHint = it }
+
+    /** 长按进入选中态（官方约定：渲染层只画选区，创建选区由业务手势触发）。 */
+    fun startSelection(ref: ViewRef<DivView>?, x: Float, y: Float) {
+        ref?.view?.createSelection(x, y, SelectionType.WORD)
+    }
+
+    /** 取选区文本（异步回调）→ 剪贴板；选区为空回退整段 fallback。 */
+    private fun copySelectionOr(
+        ctx: Pager,
+        ref: ViewRef<DivView>?,
+        fallback: String,
+        setHint: (String) -> Unit,
+    ) {
+        val view = ref?.view
+        if (view == null) {
+            finishCopy(ctx, fallback, setHint)
+            return
+        }
+        view.getSelection { result ->
+            // 选区为若干文本段（按阅读顺序），直接拼接；未长按选择时为空 → 整段复制
+            val sel = result.joinToString("")
+            finishCopy(ctx, sel.ifBlank { fallback }, setHint)
+        }
+    }
+
+    private fun finishCopy(ctx: Pager, text: String, setHint: (String) -> Unit) {
+        val t = text.trim()
+        if (t.isEmpty()) {
+            setHint("没有可复制的内容")
+            return
+        }
+        xz(ctx).copyText(t)
+        setHint("已复制 ${t.length} 字")
+    }
 
     // ============================================================
     // 桥接：经 Pager 取 XiaoZhiModule
@@ -596,26 +652,54 @@ private fun ViewContainer<*, *>.benchAsrPage(
                         }
                     }
                     velse {
-                        Text {
+                        // 官方文本选中容器：长按进入选中态（渲染层画选区），配「复制」按钮
+                        View {
+                            ref { bench.asrResultRef = it }
                             attr {
-                                fontSize(AdminType.body)
-                                color(AdminColors.textPrimary)
-                                text(bench.asrText)
+                                selectable(SelectableOption.ENABLE)
+                                selectionColor(AdminColors.accent)
                             }
-                        }
-                        // 识别耗时：sendAsr 发出 → 收到 stt 的服务端往返（stt 回调携带）
-                        vif({ bench.asrElapsedMs > 0 }) {
+                            event {
+                                longPress { p ->
+                                    if (p.state == "start") {
+                                        bench.startSelection(bench.asrResultRef, p.x, p.y)
+                                    }
+                                }
+                                selectEnd { bench.asrCopyHint = "已选中，点「复制」拷贝选中内容" }
+                            }
                             Text {
                                 attr {
-                                    fontSize(AdminType.micro)
-                                    color(AdminColors.textTertiary)
-                                    marginTop(AdminSpace.xs)
-                                    text("识别耗时 ${bench.asrElapsedMs} ms（发送→收到结果）")
+                                    fontSize(AdminType.body)
+                                    color(AdminColors.textPrimary)
+                                    text(bench.asrText)
+                                }
+                            }
+                            // 识别耗时：sendAsr 发出 → 收到 stt 的服务端往返（stt 回调携带）
+                            vif({ bench.asrElapsedMs > 0 }) {
+                                Text {
+                                    attr {
+                                        fontSize(AdminType.micro)
+                                        color(AdminColors.textTertiary)
+                                        marginTop(AdminSpace.xs)
+                                        text("识别耗时 ${bench.asrElapsedMs} ms（发送→收到结果）")
+                                    }
                                 }
                             }
                         }
                         View { attr { height(AdminSpace.sm) } }
-                        secondaryButton("复制") { /* 剪贴板需平台模块，从略，见交付备注 */ }
+                        actionRow {
+                            secondaryButton("复制") { bench.copyAsr(ctx) }
+                            vif({ bench.asrCopyHint.isNotEmpty() }) {
+                                View { attr { width(AdminSpace.sm) } }
+                                Text {
+                                    attr {
+                                        fontSize(AdminType.micro)
+                                        color(AdminColors.textTertiary)
+                                        text(bench.asrCopyHint)
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -774,21 +858,51 @@ private fun ViewContainer<*, *>.benchLlmPage(
                         }
                     }
                     velse {
-                        Text {
+                        // 官方文本选中容器：长按进入选中态（渲染层画选区），配「复制」按钮
+                        View {
+                            ref { bench.llmReplyRef = it }
                             attr {
-                                fontSize(AdminType.body)
-                                color(if (bench.llmOk) AdminColors.textPrimary else AdminColors.danger)
-                                text(bench.llmReply)
+                                selectable(SelectableOption.ENABLE)
+                                selectionColor(AdminColors.accent)
                             }
-                        }
-                        // 服务端直调耗时：llm_test 回包携带（含到 LLM API 的网络往返）
-                        vif({ bench.llmOk && bench.llmElapsedMs > 0 }) {
+                            event {
+                                longPress { p ->
+                                    if (p.state == "start") {
+                                        bench.startSelection(bench.llmReplyRef, p.x, p.y)
+                                    }
+                                }
+                                selectEnd { bench.llmCopyHint = "已选中，点「复制」拷贝选中内容" }
+                            }
                             Text {
                                 attr {
-                                    fontSize(AdminType.micro)
-                                    color(AdminColors.textTertiary)
-                                    marginTop(AdminSpace.xs)
-                                    text("服务端耗时 ${bench.llmElapsedMs} ms")
+                                    fontSize(AdminType.body)
+                                    color(if (bench.llmOk) AdminColors.textPrimary else AdminColors.danger)
+                                    text(bench.llmReply)
+                                }
+                            }
+                            // 服务端直调耗时：llm_test 回包携带（含到 LLM API 的网络往返）
+                            vif({ bench.llmOk && bench.llmElapsedMs > 0 }) {
+                                Text {
+                                    attr {
+                                        fontSize(AdminType.micro)
+                                        color(AdminColors.textTertiary)
+                                        marginTop(AdminSpace.xs)
+                                        text("服务端耗时 ${bench.llmElapsedMs} ms")
+                                    }
+                                }
+                            }
+                        }
+                        View { attr { height(AdminSpace.sm) } }
+                        actionRow {
+                            secondaryButton("复制") { bench.copyLlm(ctx) }
+                            vif({ bench.llmCopyHint.isNotEmpty() }) {
+                                View { attr { width(AdminSpace.sm) } }
+                                Text {
+                                    attr {
+                                        fontSize(AdminType.micro)
+                                        color(AdminColors.textTertiary)
+                                        text(bench.llmCopyHint)
+                                    }
                                 }
                             }
                         }

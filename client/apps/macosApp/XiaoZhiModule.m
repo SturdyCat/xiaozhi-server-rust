@@ -2,6 +2,7 @@
 #import <AVFoundation/AVFoundation.h>
 #import <AudioToolbox/AudioToolbox.h>
 #import <QuartzCore/QuartzCore.h> // CACurrentMediaTime（试听进度推算）
+#import <UIKit/UIKit.h>           // UIPasteboard（复制到系统剪贴板）
 
 // ⚠️ 参数/回调 key 不能自定义：KR_PARAM_KEY/KR_CALLBACK_KEY 是 OpenKuiklyIOSRender
 //    KRBaseModule.h 声明的 extern 常量（实际值为 @"param"/@"callback"）。
@@ -234,6 +235,16 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
         @"type": @"llm_test",
         @"text": params[@"text"] ?: @""
     }];
+}
+
+#pragma mark - 系统剪贴板
+
+// copyText(text) → 写入系统剪贴板（管理端复制识别结果/LLM 回复用）。
+// Catalyst 下 NSPasteboard/UIPasteboard 由渲染层 KRUIKit 兼容宏统一，这里直接用 UIPasteboard。
+- (void)copyText:(NSDictionary *)args {
+    NSDictionary *params = [self parseParams:args[KR_PARAM_KEY]];
+    NSString *text = params[@"text"] ?: @"";
+    [UIPasteboard generalPasteboard].string = text;
 }
 
 #pragma mark - 试听 / 波形（录音与 TTS 共用，缓冲统一 24k float32 单声道）

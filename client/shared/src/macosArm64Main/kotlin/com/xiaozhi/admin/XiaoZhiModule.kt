@@ -143,6 +143,17 @@ class XiaoZhiModule : Module() {
         )
     }
 
+    /** 复制文本到系统剪贴板（管理端「复制」按钮用；原生侧 UIPasteboard/NSPasteboard）。 */
+    fun copyText(text: String, callback: CallbackFn? = null) {
+        toNative(
+            keepCallbackAlive = false,
+            methodName = "copyText",
+            param = JSONObject().apply { put("text", text) },
+            callback = callback,
+            syncCall = false,
+        )
+    }
+
     /**
      * LLM 对话测试：发送 llm_test（服务端按磁盘上最新 [llm] 配置直调 LLM，单轮无历史）。
      * 结果经回调返回：{state: "ok"|"error", text: 回复正文或错误信息, elapsedMs: 服务端耗时}。
