@@ -76,7 +76,7 @@ impl OpusFrameEncoder {
     }
 
     pub fn encode_frame(&mut self, _samples: &[f32]) -> anyhow::Result<Vec<u8>> {
-        // mock 模式无 libopus：下行音频以空帧表示（本地联调仅验证协议回包）。
+        // 未启用 sherpa 的编译无 libopus：下行音频以空帧表示（仅占位编译，生产不含）。
         Ok(Vec::new())
     }
 }

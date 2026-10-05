@@ -51,12 +51,12 @@ export PATH="$HOME/.cargo/bin:$PATH"      # 或直接使用绝对路径 ~/.cargo
 完整示例：
 
 ```bash
-# 编译（默认 mock 特性，零依赖即可过）
+# 编译检查（无 feature，不下载原生库；运行必须 --features sherpa）
 ~/.cargo/bin/cargo build \
   --config 'source.ustc.registry="sparse+https://mirrors.ustc.edu.cn/crates.io-index/"'
 
-# 运行（mock 模式，无需模型与 libopus）
-cd server && ~/.cargo/bin/cargo run \
+# 类型检查 sherpa feature 代码（DOCS_RS=1 跳过原生库下载，见「验证不下载模型」）
+DOCS_RS=1 ~/.cargo/bin/cargo check --features sherpa \
   --config 'source.ustc.registry="sparse+https://mirrors.ustc.edu.cn/crates.io-index/"'
 
 # 单元测试
@@ -71,18 +71,10 @@ cd server && ~/.cargo/bin/cargo run --features sherpa -- --config config.toml
 
 `Cargo.toml` 中：
 
-- `default = []`：**纯 mock**。无需模型文件、无需系统 `libopus`，即可编译运行并做协议联调。
-- `sherpa = ["dep:sherpa-onnx", "dep:audiopus", "dep:rubato"]`：引入真实引擎。
+- `default = []`：无真实引擎，仅供 `cargo check/test` 编译（运行会报错）。
+- `sherpa = ["dep:sherpa-onnx", "dep:audiopus", "dep:rubato"]`：真实引擎（**无 mock**：ASR=SenseVoice、TTS=Kokoro、LLM=HTTP、VAD=Silero）。
 
-后端选择（见 `config.rs` / `config.example.toml`）：
-
-| 配置项 | 取值 | 行为 |
-|--------|------|------|
-| `asr.backend` | `mock` / `sherpa` | mock 回显固定文本；sherpa 用 SenseVoice |
-| `tts.backend` | `mock` / `sherpa` | mock 生成 0.5s 静音；sherpa 用 Kokoro |
-| `llm.backend` | `mock` / `http` | **默认 `mock`**（本地回显，零配置可跑通）；`http` 调真实 OpenAI 兼容接口 |
-
-> 默认（无配置文件）`asr`/`tts`/`llm` 全是 `mock`，因此**裸 `cargo run` 即可端到端跑通整个协议链路**，无需任何外部服务。
+> 无 `backend` 配置项（已随 mock 移除；旧 config.toml 里的 `backend` 键会被 serde 静默忽略，管理页保存一次即写成新 schema）。默认（无配置文件）模型路径即 `/models/...` 生产值；`[llm]` 需填 `api_base`/`api_key`。ESP 接入走完整正式流水线；macApp 测试台 hello 带 `test:true`，走 `asr_test/tts_test/llm_test` 三个独立服务端点（非测试会话发送这三类消息会被忽略）。
 
 ## 5. 🚨 关键约束与陷阱（AI 最容易踩）
 
@@ -106,13 +98,13 @@ pub enum ClientMessage { Hello(ClientHello), Listen { .. }, Abort { .. }, Mcp { 
 pub enum ServerMessage { Hello { .. }, Stt { .. }, Llm { .. }, Tts { .. }, System { .. }, Custom { .. }, Mcp { .. } }
 ```
 
-> 这一 bug **`cargo check` 完全无法发现**，只有真实 WebSocket 客户端（`tests/mock_client.py`）才能暴露。任何修改协议枚举的 PR 都必须重跑 mock 联调。
+> 这一 bug **`cargo check` 完全无法发现**，只有真实 WebSocket 客户端（`tests/mock_client.py`）才能暴露。任何修改协议枚举的 PR 都必须重跑协议联调。
 
 > 协议枚举定义与 serde 约束的权威说明见 `server/src/protocol.rs` 模块注释。
 
-### 5.2 LLM 默认是 mock，不是真网
+### 5.2 LLM 恒为真实 HTTP（无 mock）
 
-需要真实对话时，把 `llm.backend` 改为 `"http"` 并填 `api_base` / `api_key`。若误以为默认会真网调用而联调失败，先确认是 mock。
+LLM 只有 OpenAI 兼容 Responses API 一条路径；联调失败先检查 `[llm].api_base`/`api_key`/`model` 配置（服务端启动即构建引擎，模型/配置缺失会给出明确报错）。
 
 ### 5.3 二进制协议版本 = 设备 hello 的 `version`
 
@@ -181,7 +173,7 @@ export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:$PKG_CONFIG_PATH"
 server/                        # Rust 服务端
   src/
     main.rs       入口：加载配置 → 初始化引擎 → 启动 Axum
-    config.rs     TOML 配置 + mock 默认值（含 GET/POST /api/config 读写）
+    config.rs     TOML 配置（默认值=生产路径；含 GET/POST /api/config 读写）
     protocol.rs   消息枚举 + 二进制版本封装（v1/v2/v3）—— 改这里必看 §5.1
     ws.rs         WebSocket 网关：握手 / 协商 / 鉴权 + 静态托管管理页（/）
     session.rs    每连接会话状态机 + 语音流水线（支持 abort）
@@ -232,7 +224,7 @@ client/                        # Kuikly 多端工程（管理后台 web + macOS 
 ## 7. 运行与联调
 
 ```bash
-# 启动 mock 服务（后台）
+# 启动服务（后台；需 --features sherpa 与本地模型）
 ~/.cargo/bin/cargo run --config 'source.ustc.registry="sparse+https://mirrors.ustc.edu.cn/crates.io-index/"' &
 # 健康检查
 curl http://127.0.0.1:8000/api/health   # => xiaozhi-server-rust ok
@@ -249,14 +241,14 @@ python3 server/tests/mock_client.py
 
 ## 8. 配置加载优先级
 
-`XIAOZHI_CONFIG` 环境变量 → `--config <path>` 参数 → 内置默认（全 mock）。
+`XIAOZHI_CONFIG` 环境变量 → `--config <path>` 参数 → 内置默认（/models 生产路径）。
 
 ## 9. 已知限制 / 未实现
 
 - **激活流程（OTA/activate）本期未实现**：接受任意设备，`expected_token` 为空则跳过鉴权。
 - **VAD 模型加载**：每次会话 `VoiceActivityDetector::create` 会加载模型；连接数大时建议池化（待优化）。
 - **ASR 流式**：SenseVoice 为离线逐段识别；如需逐字流式可后续换 Zipformer `OnlineRecognizer`。
-- **mock 模式下行音频为空帧**：`encode_opus_frame` 在 mock 下返回空，仅用于验证协议回包。
+- **未启用 `sherpa` 的编译下行音频为空帧**：`encode_opus_frame` 占位实现返回空，仅供编译/测试。
 - 残留编译 warning（预留未用字段/变体），不影响功能。
 
 ## 10. 提交规范（重要）

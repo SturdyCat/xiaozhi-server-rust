@@ -1,9 +1,8 @@
 //! 远程 LLM 调用（OpenAI 兼容 **Responses API**：`POST {api_base}`，默认 `/v1/responses`）。
 //!
-//! - [`LlmClient`]：真实 HTTP 调用（OpenAI Responses 协议），支持 **SSE 流式**与
-//!   **原生工具调用**（扁平 `tools[].{type,name,description,parameters}` / `function_call` 项）。
-//! - [`MockLlm`]：无模型回显实现，用于**零配置本地联调**（无需真实 LLM 接口，
-//!   默认 `llm.backend = "mock"` 时启用，保证 `cargo run` 即可端到端跑通）。
+//! [`LlmClient`] 为唯一实现：真实 HTTP 调用（OpenAI Responses 协议），支持 **SSE 流式**与
+//! **原生工具调用**（扁平 `tools[].{type,name,description,parameters}` / `function_call` 项）。
+//! 无 mock——LLM 只有这一条真实路径。
 //!
 //! 多轮历史由 [`crate::session`] 维护；本模块只负责单次请求。
 //!
@@ -260,68 +259,12 @@ impl LlmClient {
     }
 }
 
-/// 无模型回显实现，用于本地零配置联调。
-pub struct MockLlm {
-    reply: String,
-}
+/// LLM 引擎：OpenAI 兼容 Responses API 的 HTTP 客户端（唯一实现，无 mock）。
+pub type Llm = LlmClient;
 
-impl MockLlm {
-    pub fn new() -> Self {
-        Self {
-            reply: "这是本地 mock 语音助手的回复。".to_string(),
-        }
-    }
-
-    /// 流式回显：一次性回传完整文案（模拟首字即达），便于联调时确认 ASR 链路。
-    pub async fn chat_stream(
-        &self,
-        _history: &[(String, String)],
-        user_text: &str,
-        _tools: Option<&[ToolSpec]>,
-        mut on_event: impl FnMut(LlmEvent) -> bool,
-    ) -> Result<LlmTurnResult> {
-        let text = if user_text.trim().is_empty() {
-            self.reply.clone()
-        } else {
-            format!("{}（你说：{}）", self.reply, user_text)
-        };
-        let _ = on_event(LlmEvent::Text(text.clone()));
-        let _ = on_event(LlmEvent::Done);
-        Ok(LlmTurnResult {
-            text,
-            tool_calls: Vec::new(),
-        })
-    }
-}
-
-/// LLM 引擎枚举：真实 HTTP 或本地 mock。
-pub enum Llm {
-    Http(LlmClient),
-    Mock(MockLlm),
-}
-
-impl Llm {
-    /// 回调返回 `false` 表示取消（见 [`LlmClient::chat_stream`]）。
-    pub async fn chat_stream(
-        &self,
-        history: &[(String, String)],
-        user_text: &str,
-        tools: Option<&[ToolSpec]>,
-        on_event: impl FnMut(LlmEvent) -> bool,
-    ) -> Result<LlmTurnResult> {
-        match self {
-            Llm::Http(c) => c.chat_stream(history, user_text, tools, on_event).await,
-            Llm::Mock(m) => m.chat_stream(history, user_text, tools, on_event).await,
-        }
-    }
-}
-
-/// 依据配置构造 LLM 引擎：`backend = "mock"` 用本地回显，否则真实 HTTP。
+/// 依据配置构造 LLM 引擎（真实 HTTP 客户端；api_key 为空时调用会在服务端报 401/403）。
 pub fn build_llm(cfg: &LlmConfig) -> Llm {
-    if cfg.is_mock() {
-        return Llm::Mock(MockLlm::new());
-    }
-    Llm::Http(LlmClient::new(cfg))
+    LlmClient::new(cfg)
 }
 
 #[cfg(test)]
@@ -360,7 +303,6 @@ mod tests {
     #[test]
     fn build_input_maps_history_roles() {
         let cfg = LlmConfig {
-            backend: "http".into(),
             api_base: "https://example.com/v1/responses".into(),
             api_key: String::new(),
             model: "gpt-4o".into(),
@@ -379,21 +321,5 @@ mod tests {
         assert_eq!(input[0]["content"][0]["type"], "input_text");
         assert_eq!(input[1]["content"][0]["type"], "output_text");
         assert_eq!(input[2]["content"][0]["text"], "天气如何");
-    }
-
-    #[tokio::test]
-    async fn mock_llm_stream_emits_single_text() {
-        let m = MockLlm::new();
-        let mut events = Vec::new();
-        let result = m
-            .chat_stream(&[], "你好", None, |e| {
-                events.push(e);
-                true
-            })
-            .await
-            .unwrap();
-        assert!(matches!(events.first(), Some(LlmEvent::Text(_))));
-        assert!(matches!(events.last(), Some(LlmEvent::Done)));
-        assert!(result.text.contains("你好"));
     }
 }

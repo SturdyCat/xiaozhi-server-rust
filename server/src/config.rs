@@ -1,13 +1,14 @@
-//! 服务配置：从 TOML 文件加载（`Config::load`），并提供 mock 友好的默认值。
+//! 服务配置：从 TOML 文件加载（`Config::load`），默认值即生产路径。
 //!
-//! ## 后端门控与 mock 默认
+//! ## 引擎与默认值
 //!
-//! - 默认（无 `--config`）即 [`Config::default()`]：`asr`/`tts`/`llm` 全是 `mock`，
-//!   因此裸 `cargo run` 即可端到端跑通协议链路，无需任何外部服务或模型文件。
-//! - `[asr]`/`[vad]`/`[tts]` 的模型路径等字段**仅在 `sherpa` feature 下被消费**；
-//!   mock 模式下这些字段仅作为配置 schema 保留（`#[allow(dead_code)]`），可留空。
-//! - 切换真实引擎：把对应 `backend` 改为 `"sherpa"` 并填模型路径，编译加 `--features sherpa`，
-//!   运行时需系统 `libopus` + 本地模型文件（见 `../README.md` 与 `../agents.md` §5）。
+//! - **无 mock**：ASR 恒为 SenseVoice（sherpa-onnx）、TTS 恒为 Kokoro（sherpa-onnx）、
+//!   LLM 恒为 OpenAI 兼容 HTTP（Responses API）。`--features sherpa` 是运行真实引擎的
+//!   前提，未启用时引擎构建直接报错（不再有 mock 回退）。
+//! - 默认（无 `--config`）即 [`Config::default()`]：模型路径指向 `/models/...`
+//!   （与 `config.example.toml`、容器挂载一致），LLM 需填 `api_base`/`api_key`。
+//! - 旧配置文件里残留的 `backend = "..."` 键会被 serde 静默忽略（无 `deny_unknown_fields`），
+//!   无需手工清理；管理页保存一次即写成新 schema。
 //!
 //! ## 加载优先级与持久化
 //!
@@ -64,16 +65,12 @@ pub struct AudioConfig {
     pub binary_protocol_version: u8,
 }
 
-// 模型路径等字段仅 `sherpa` feature 下消费；mock 模式下仅作为配置 schema 保留。
-#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AsrConfig {
-    /// `sherpa` 或 `mock`。
-    #[serde(default = "default_asr_backend")]
-    pub backend: String,
-    #[serde(default)]
+    /// SenseVoice INT8 模型路径（sherpa-onnx 离线识别器）。
+    #[serde(default = "default_asr_model")]
     pub model: String,
-    #[serde(default)]
+    #[serde(default = "default_asr_tokens")]
     pub tokens: String,
     #[serde(default = "default_language")]
     pub language: String,
@@ -85,11 +82,10 @@ pub struct AsrConfig {
     pub provider: String,
 }
 
-// 模型路径等字段仅 `sherpa` feature 下消费；mock 模式下仅作为配置 schema 保留。
-#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct VadConfig {
-    #[serde(default)]
+    /// Silero VAD 模型路径；为空视为未配置（sherpa 构建下引擎初始化会报错）。
+    #[serde(default = "default_vad_model")]
     pub model: String,
     #[serde(default = "default_threshold")]
     pub threshold: f32,
@@ -100,35 +96,27 @@ pub struct VadConfig {
 }
 
 impl VadConfig {
-    /// 是否启用真实 VAD：模型路径非空即视为真实引擎。
-    ///
-    /// 与 ASR/TTS 不同，VAD 是**独立轻量模型**，可独立于 ASR/TTS 单独启用
-    /// ——「真 VAD + mock ASR/TTS」是合法组合（用于纯离线切句）。
-    /// 因此 VAD 走自己的判定入口，不与 ASR/TTS 的 `backend="sherpa"` 强耦合。
+    /// 模型路径非空即视为配置了真实 VAD。
     #[allow(dead_code)]
     pub fn is_real(&self) -> bool {
         !self.model.is_empty()
     }
 }
 
-// 模型路径等字段仅 `sherpa` feature 下消费；mock 模式下仅作为配置 schema 保留。
-#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TtsConfig {
-    /// `sherpa` 或 `mock`。
-    #[serde(default = "default_tts_backend")]
-    pub backend: String,
-    #[serde(default)]
+    /// Kokoro INT8 模型路径（sherpa-onnx 离线合成器）。
+    #[serde(default = "default_tts_model")]
     pub model: String,
-    #[serde(default)]
+    #[serde(default = "default_tts_voices")]
     pub voices: String,
-    #[serde(default)]
+    #[serde(default = "default_tts_tokens")]
     pub tokens: String,
-    #[serde(default)]
+    #[serde(default = "default_tts_data_dir")]
     pub data_dir: String,
-    #[serde(default)]
+    #[serde(default = "default_tts_dict_dir")]
     pub dict_dir: String,
-    #[serde(default)]
+    #[serde(default = "default_tts_lexicon")]
     pub lexicon: String,
     /// Kokoro 语言（模型创建时固定；"zh"/"en"，中文场景用 "zh"）。
     #[serde(default = "default_tts_lang")]
@@ -143,9 +131,7 @@ pub struct TtsConfig {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct LlmConfig {
-    /// `mock` 使用本地回显（零配置联调）；`http` 调用真实 OpenAI 兼容接口。
-    #[serde(default = "default_llm_backend")]
-    pub backend: String,
+    /// OpenAI 兼容 Responses API 地址（如 `https://api.example.com/v1/responses`）。
     #[serde(default = "default_api_base")]
     pub api_base: String,
     #[serde(default)]
@@ -187,9 +173,8 @@ impl Default for AudioConfig {
 impl Default for AsrConfig {
     fn default() -> Self {
         AsrConfig {
-            backend: default_asr_backend(),
-            model: String::new(),
-            tokens: String::new(),
+            model: default_asr_model(),
+            tokens: default_asr_tokens(),
             language: default_language(),
             use_itn: default_true(),
             num_threads: default_num_threads(),
@@ -200,7 +185,7 @@ impl Default for AsrConfig {
 impl Default for VadConfig {
     fn default() -> Self {
         VadConfig {
-            model: String::new(),
+            model: default_vad_model(),
             threshold: default_threshold(),
             min_silence_duration: default_min_silence(),
             min_speech_duration: default_min_speech(),
@@ -210,13 +195,12 @@ impl Default for VadConfig {
 impl Default for TtsConfig {
     fn default() -> Self {
         TtsConfig {
-            backend: default_tts_backend(),
-            model: String::new(),
-            voices: String::new(),
-            tokens: String::new(),
-            data_dir: String::new(),
-            dict_dir: String::new(),
-            lexicon: String::new(),
+            model: default_tts_model(),
+            voices: default_tts_voices(),
+            tokens: default_tts_tokens(),
+            data_dir: default_tts_data_dir(),
+            dict_dir: default_tts_dict_dir(),
+            lexicon: default_tts_lexicon(),
             lang: default_tts_lang(),
             speaker: 0,
             speed: default_speed(),
@@ -227,7 +211,6 @@ impl Default for TtsConfig {
 impl Default for LlmConfig {
     fn default() -> Self {
         LlmConfig {
-            backend: default_llm_backend(),
             api_base: default_api_base(),
             api_key: String::new(),
             model: default_llm_model(),
@@ -249,43 +232,14 @@ impl Config {
         Ok(cfg)
     }
 
-    pub fn asr_is_mock(&self) -> bool {
-        self.asr.backend.eq_ignore_ascii_case("mock")
-    }
-
-    pub fn tts_is_mock(&self) -> bool {
-        self.tts.backend.eq_ignore_ascii_case("mock")
-    }
-
-    /// 是否处于「真实音频模式」：`sherpa` feature 且 ASR/TTS 均为真实引擎。
+    /// 是否处于「真实音频模式」：`sherpa` feature（唯一路径，无 mock）。
     /// 会话内多处需要此判定，统一在此派生，避免各处重复计算导致漂移。
     pub fn real_audio(&self) -> bool {
-        cfg!(feature = "sherpa") && !self.asr_is_mock() && !self.tts_is_mock()
+        cfg!(feature = "sherpa")
     }
 }
 
-impl AsrConfig {
-    /// 是否为 `sherpa` 真实引擎（而非 `mock`）。
-    pub fn is_sherpa(&self) -> bool {
-        self.backend.eq_ignore_ascii_case("sherpa")
-    }
-}
-
-impl TtsConfig {
-    /// 是否为 `sherpa` 真实引擎（而非 `mock`）。
-    pub fn is_sherpa(&self) -> bool {
-        self.backend.eq_ignore_ascii_case("sherpa")
-    }
-}
-
-impl LlmConfig {
-    /// 是否为 `mock` 本地回显（而非真实 HTTP）。
-    pub fn is_mock(&self) -> bool {
-        self.backend.eq_ignore_ascii_case("mock")
-    }
-}
-
-// ---- 默认值辅助函数 ----
+// ---- 默认值辅助函数（默认即生产路径，与 config.example.toml / 容器挂载一致）----
 fn default_listen() -> String {
     "0.0.0.0:8000".into()
 }
@@ -301,8 +255,11 @@ fn default_channels() -> u16 {
 fn default_bin_ver() -> u8 {
     1
 }
-fn default_asr_backend() -> String {
-    "mock".into()
+fn default_asr_model() -> String {
+    "/models/SenseVoiceSmall/model.int8.onnx".into()
+}
+fn default_asr_tokens() -> String {
+    "/models/SenseVoiceSmall/tokens.txt".into()
 }
 fn default_language() -> String {
     "auto".into()
@@ -312,6 +269,9 @@ fn default_true() -> bool {
 }
 fn default_num_threads() -> u32 {
     2
+}
+fn default_vad_model() -> String {
+    "/models/silero_vad.onnx".into()
 }
 /// TTS 合成线程数默认 4。
 /// 旧默认 1 的理由是「与 ASR 错峰」——实机实测该顾虑不成立：语音流水线本身
@@ -348,17 +308,29 @@ fn default_min_silence() -> f32 {
 fn default_min_speech() -> f32 {
     0.25
 }
-fn default_tts_backend() -> String {
-    "mock".into()
+fn default_tts_model() -> String {
+    "/models/Kokoro/model.int8.onnx".into()
+}
+fn default_tts_voices() -> String {
+    "/models/Kokoro/voices.bin".into()
+}
+fn default_tts_tokens() -> String {
+    "/models/Kokoro/tokens.txt".into()
+}
+fn default_tts_data_dir() -> String {
+    "/models/Kokoro/espeak-ng-data".into()
+}
+fn default_tts_dict_dir() -> String {
+    "/models/Kokoro/dict".into()
+}
+fn default_tts_lexicon() -> String {
+    "/models/Kokoro/lexicon-us-en.txt,/models/Kokoro/lexicon-zh.txt".into()
 }
 fn default_speed() -> f32 {
     1.0
 }
 fn default_api_base() -> String {
     "https://api.example.com/v1/responses".into()
-}
-fn default_llm_backend() -> String {
-    "mock".into()
 }
 fn default_llm_model() -> String {
     "gpt-4o".into()

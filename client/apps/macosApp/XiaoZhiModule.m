@@ -121,10 +121,13 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
     [self.webSocket resume];
     [self receiveLoop];
 
-    // hello：version=1 → 上行裸 Opus（v1）；audio_params 声明本端 16k/opus
+    // hello：version=1 → 上行裸 Opus（v1）；audio_params 声明本端 16k/opus。
+    // test=YES：标记本连接为管理端测试台（服务端据此受理 asr_test/tts_test/llm_test
+    // 三种独立服务请求；ESP 设备不带此参数，走正式流水线，测试端点被忽略）。
     [self sendJSON:@{
         @"type": @"hello",
         @"version": @(1),
+        @"test": @(YES),
         @"audio_params": @{
             @"format": @"opus",
             @"sample_rate": @(kUplinkSampleRate),

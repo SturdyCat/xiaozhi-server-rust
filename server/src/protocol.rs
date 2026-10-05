@@ -90,6 +90,11 @@ pub struct ClientHello {
     pub transport: Option<String>,
     #[serde(default)]
     pub audio_params: Option<AudioParams>,
+    /// 测试台标记：macApp 管理端的测试连接带 `test:true`，ESP 设备不带。
+    /// 仅测试会话受理 `asr_test`/`tts_test`/`llm_test` 三种独立服务请求；
+    /// 设备会话收到这三种消息会被忽略（正式流程不走测试端点）。
+    #[serde(default)]
+    pub test: bool,
 }
 
 /// 设备 → 服务器 的文本消息。

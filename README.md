@@ -18,8 +18,8 @@
 
 - 协议层严格对齐 `xiaozhi-esp32` 固件：设备 hello `version` 即二进制协议版本；服务器 hello 的 `audio_params` 作为**下行（TTS）解码参数**。
 - 上行采样率跟随设备（默认 16k），下行采样率由服务器决定（默认 24k），二者独立协商。
-- **Feature 门控**：`default`（纯 mock，无需模型文件与系统 Opus 库即可编译运行）；`sherpa`（引入 `sherpa-onnx` / `audiopus` / `rubato`，启用真实引擎）。
-- 内置 mock 后端（ASR 回显固定文本、TTS 生成静音、LLM 本地回显、VAD 跳过），可在**没有任何模型文件与 libopus** 的环境下完成编译与端到端协议联调。
+- **Feature 门控**：`default`（无真实引擎，仅供 `cargo check/test` 编译；运行必须 `--features sherpa`）；`sherpa`（引入 `sherpa-onnx` / `audiopus` / `rubato`，真实引擎）。
+- **无 mock**：ASR 恒为 SenseVoice、TTS 恒为 Kokoro、LLM 恒为 OpenAI 兼容 HTTP、VAD 恒为 Silero——ESP 接入走完整正式流水线；macApp 测试台连接带 `hello.test=true`，走 `asr_test`/`tts_test`/`llm_test` 三个独立服务请求-响应端点。
 - 可选 Bearer Token 鉴权（配置 `server.expected_token`）。
 
 ---
@@ -33,31 +33,25 @@ API 已对照 1.13.8 rustdoc 校验：`OfflineSenseVoiceModelConfig`、`OfflineT
 
 ---
 
-## 快速开始（mock 模式，零依赖）
-
-无需模型、无需 `libopus`，开箱编译运行：
+## 快速开始（Docker，正式流程）
 
 ```bash
-# 使用本地 cargo（本仓库在 macOS 上用 ~/.cargo/bin/cargo）
-cd server && ~/.cargo/bin/cargo run
+cp server/config.example.toml server/config.toml   # 填 expected_token / llm.api_key
+docker compose up -d --build                       # 首启自动从 HuggingFace 下载模型到 ./models
+curl http://127.0.0.1:8000/api/health              # => xiaozhi-server-rust ok
 ```
 
-默认监听 `0.0.0.0:8000`，使用内置 mock 配置（`asr.backend=mock`、`tts.backend=mock`、`expected_token=""`）。
+浏览器打开 `http://<host>:8000/` 即管理后台（配置读写 / 测试台）。
 
-健康检查：
+裸机运行（需本地模型 + libopus）：`cd server && cargo run --release --features sherpa -- --config config.toml`。
 
-```bash
-curl http://127.0.0.1:8000/api/health
-# => xiaozhi-server-rust ok
-```
-
-随后可运行 Python mock 客户端做协议联调（见下文 [测试](#测试)）。
+协议联调：`python3 server/tests/mock_client.py`（模拟管理端测试台，验证三个独立服务端点，见下文 [测试](#测试)）。
 
 ---
 
 ## 配置
 
-配置加载优先级：**`XIAOZHI_CONFIG` 环境变量** → **`--config <path>` 参数** → **内置默认（mock）**。
+配置加载优先级：**`XIAOZHI_CONFIG` 环境变量** → **`--config <path>` 参数** → **内置默认（/models 生产路径）**。
 
 ```bash
 # 方式一：环境变量
@@ -74,9 +68,7 @@ cd server && ~/.cargo/bin/cargo run -- --config config.toml
 - `server.expected_token`：Bearer token；为空表示不校验 `Authorization` 头。
 - `audio.downlink_sample_rate` / `downlink_frame_duration_ms`：下行（TTS）采样率与帧长，写入服务器 hello。
 - `audio.binary_protocol_version`：下行二进制协议版本（1/2/3）。**建议先用 1 真机验证，再切 2/3。**
-- `asr.backend` / `tts.backend`：`sherpa` 或 `mock`。
-- `llm.backend`：`mock`（本地回显，零配置联调，默认）或 `http`（真实 OpenAI 兼容接口）。
-- `llm.*`：`http` 模式下的 `api_base` / `api_key` / `model` / `system_prompt`。
+- `llm.api_base` / `api_key` / `model` / `system_prompt`：OpenAI 兼容 Responses API（LLM 恒为真实 HTTP，无 mock）。
 
 ---
 
@@ -144,7 +136,7 @@ docker run -d --name xiaozhi \
 - **设备 hello**：`{"type":"hello","version":1,"audio_params":{"format":"opus","sample_rate":16000,"channels":1,"frame_duration":60},"features":{...}}`。`version` = 二进制协议版本（1/2/3）。
 - **服务器 hello**：回 `transport`、`session_id`、`audio_params`（下行 TTS 解码参数）。
 - **一次对话**：`listen start` → `stt` → `llm`（首包）→ `tts start` → `tts sentence_start`（带文本）→ 若干**下行二进制 Opus 帧** → `tts stop`。
-- **上行音频**：设备以二进制帧（按协商版本封装）发送 Opus；服务器解码 → VAD → ASR。mock 模式忽略上行音频，由 `listen start` 直接触发模拟流水。
+- **上行音频**：设备以二进制帧（按协商版本封装）发送 Opus；服务器解码 → VAD → ASR → LLM → TTS（正式流水线，无 mock 捷径）。`listen start` 仅状态同步，不触发对话。
 - **abort**：任何阶段客户端可发 `{"type":"abort"}` 中断当前 TTS 下行。
 
 二进制帧封装（v1/v2/v3 字节布局）见 `server/src/protocol.rs` 的模块注释（权威说明）；`wrap_downlink` / `unwrap_uplink` 是唯一的封装/解封装出口。
@@ -161,17 +153,17 @@ docker run -d --name xiaozhi \
 cd server && ~/.cargo/bin/cargo test
 ```
 
-### 协议联调（Python mock 客户端）
+### 协议联调（Python 测试台客户端）
 
-`tests/mock_client.py` 是一个**零第三方依赖**的 WebSocket 客户端（纯标准库实现 RFC 6455 帧），验证握手、协商与一次完整对话回包：
+`tests/mock_client.py` 是一个**零第三方依赖**的 WebSocket 客户端（纯标准库实现 RFC 6455 帧）。它模拟 macApp 测试台（hello 带 `test:true`），逐项验证握手、协商与三个独立服务端点：
 
 ```bash
-# 先启动服务（mock 模式）
-cd server && ~/.cargo/bin/cargo run &
+# 先启动服务（需 --features sherpa 与本地模型；或直接用 Docker）
+cd server && cargo run --release --features sherpa -- --config config.toml &
 
 # 运行联调客户端
 python3 server/tests/mock_client.py
-# => 依次断言 server hello / stt / llm / tts start / tts sentence_start / 二进制帧 / tts stop
+# => 断言 server hello / asr_test→stt / tts_test→tts 序列+音频帧 / llm_test 回包
 # => 输出 PASS 或 FAIL
 ```
 
@@ -187,7 +179,7 @@ python3 server/tests/mock_client.py
 - **API**：
   - `GET /api/config` → 返回当前配置 JSON（启动时指定了文件则实时读盘）。
   - `POST /api/config`（亦接受 `PUT`）→ 接收完整配置 JSON 并写回启动加载的配置文件；**引擎相关参数（ASR/TTS/LLM）需重启 server 才生效**，`[server]` 部分下次启动生效。
-- **注意**：以内置默认（mock）配置启动（未指定文件）时保存无目标文件，会返回 400；请用 `--config` 指定 `config.toml` 后重启再保存。
+- **注意**：以内置默认配置启动（未指定文件）时保存无目标文件，会返回 400；请用 `--config` 指定 `config.toml` 后重启再保存。
 
 ```bash
 # 构建 web 管理页（产物目录含 index.html 与 nativevue2.js，由 [server].admin_dir 指向）
@@ -228,7 +220,7 @@ open macosApp.xcworkspace
 > 启动顺序不可省：必须先 ① 编出 `shared.framework`，② 的 xcodegen 才能把框架正确 embed 进 App；
 > 否则链接阶段报 `shared.framework not found`。Opus 编解码（`XiaoZhiModule.m`）仍为 TODO，联调前需补。
 
-> 协议要点与 `mock_client.py` 共用同一套 `hello / asr_test / tts_test` 语义，便于回归。
+> 协议要点与 `tests/mock_client.py` 共用同一套 `hello(test=true) / asr_test / tts_test / llm_test` 语义（macApp 测试台同款），便于回归。
 
 ---
 
@@ -267,7 +259,7 @@ open macosApp.xcworkspace
 - **本期未实现激活流程（OTA/activate）**：标准 xiaozhi-server 含激活/OTP，本期接受任意设备（可选 token 校验）。如需对接官方激活另开任务。
 - **VAD 模型加载**：每次会话 `VoiceActivityDetector::create` 会加载模型；连接数大时建议池化（待优化）。
 - **ASR 流式**：本期 SenseVoice 为离线逐段识别；如需逐字流式可后续换 Zipformer `OnlineRecognizer`。
-- **mock 模式下行音频为空帧**：`encode_opus_frame` 在 mock 下返回空，仅用于验证协议回包；真实音频需 `sherpa` feature + libopus。
+- **未启用 `sherpa` 的编译下行音频为空帧**：`encode_opus_frame` 占位实现返回空（仅供编译/测试）；真实音频需 `--features sherpa` + libopus。
 
 ---
 

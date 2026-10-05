@@ -9,9 +9,9 @@
 //! 见 [`load_config_inner`]：
 //! 1. 环境变量 `XIAOZHI_CONFIG` 指向的 TOML 文件（成功则记录 `config_path`）；
 //! 2. 否则命令行 `--config <path>`；
-//! 3. 两者都缺失或读取失败 → 回退 [`crate::config::Config::default()`]（全 `mock`）。
+//! 3. 两者都缺失或读取失败 → 回退 [`crate::config::Config::default()`]（/models 生产路径）。
 //!
-//! 任一级失败都告警后回退，保证进程总能起来（便于零配置联调）。
+//! 任一级失败都告警后回退，保证进程总能起来；引擎在启动时构建，模型缺失会给出明确报错。
 //! 返回的 `(Config, Option<config_path>)` 中，`config_path` 为 `None` 表示用的是内置默认，
 //! 此时 `PUT /api/config` 无法持久化（需以 `--config` 指定文件后重启）。
 //!
@@ -65,9 +65,7 @@ async fn run(config: Config, config_path: Option<String>) -> Result<()> {
         .init();
 
     tracing::info!(
-        "配置加载完成：ASR backend={}, TTS backend={}, 监听={}, tokio worker={} 线程",
-        config.asr.backend,
-        config.tts.backend,
+        "配置加载完成：ASR=SenseVoice, TTS=Kokoro, LLM=http, 监听={}, tokio worker={} 线程",
         config.server.listen,
         config.server.worker_threads.max(1)
     );
@@ -98,7 +96,7 @@ async fn run(config: Config, config_path: Option<String>) -> Result<()> {
     Ok(())
 }
 
-/// 配置加载优先级：`XIAOZHI_CONFIG` 环境变量 → `--config` 参数 → 内置默认（mock）。
+/// 配置加载优先级：`XIAOZHI_CONFIG` 环境变量 → `--config` 参数 → 内置默认（/models 生产路径）。
 /// 返回加载到的配置与（若有）配置文件路径，供 `PUT /api/config` 写回使用。
 fn load_config() -> (Config, Option<String>) {
     let (mut config, path) = load_config_inner();
@@ -118,7 +116,7 @@ fn load_config_inner() -> (Config, Option<String>) {
         if let Ok(c) = Config::load(&p) {
             return (c, Some(p));
         }
-        tracing::warn!("加载配置文件 {p} 失败，回退默认（mock）配置");
+        tracing::warn!("加载配置文件 {p} 失败，回退内置默认配置");
     }
     let args: Vec<String> = std::env::args().collect();
     if let Some(pos) = args.iter().position(|a| a == "--config") {

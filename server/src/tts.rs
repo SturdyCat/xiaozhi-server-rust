@@ -1,8 +1,5 @@
-//! 语音合成（TTS）引擎抽象。
-//!
-//! - [`MockTts`]：生成静音 PCM，无模型，用于本地联调下行链路。
-//! - `--features sherpa` 时 [`SherpaTts`] 使用 `sherpa-onnx`
-//!   `OfflineTts` + `OfflineTtsKokoroModelConfig`（Kokoro INT8）。
+//! 语音合成（TTS）引擎：`sherpa-onnx` `OfflineTts` +
+//! `OfflineTtsKokoroModelConfig`（Kokoro INT8）。无 mock——TTS 只有这一条真实路径。
 //!
 //! 合成结果为单声道 f32 PCM；下行前由音频层做（按需）重采样与 Opus 编码。
 //!
@@ -22,17 +19,7 @@ pub trait TtsEngine: Send + Sync {
     fn synthesize(&self, text: &str, speed: f32, speaker: i32) -> Result<(Vec<f32>, u32)>;
 }
 
-/// 无模型实现，生成 0.5s 静音（24k），便于本地联调。
-pub struct MockTts;
-
-impl TtsEngine for MockTts {
-    fn synthesize(&self, _text: &str, _speed: f32, _speaker: i32) -> Result<(Vec<f32>, u32)> {
-        let sr = 24_000u32;
-        let n = (sr as f32 * 0.5) as usize;
-        Ok((vec![0.0; n], sr))
-    }
-}
-
+/// Kokoro INT8 离线合成器（sherpa-onnx）。
 #[cfg(feature = "sherpa")]
 pub struct SherpaTts {
     tts: Arc<sherpa_onnx::OfflineTts>,
@@ -95,40 +82,33 @@ fn build_sherpa_tts(cfg: &TtsConfig) -> Result<Arc<dyn TtsEngine>> {
     Ok(Arc::new(engine))
 }
 
-/// 根据配置构造 TTS 引擎。
+/// 根据配置构造 TTS 引擎（仅 `sherpa` 一条路径；未启用 feature 直接报错）。
 pub fn build_tts(cfg: &TtsConfig) -> Result<Arc<dyn TtsEngine>> {
-    if cfg.is_sherpa() {
-        #[cfg(feature = "sherpa")]
-        {
-            return build_sherpa_tts(cfg);
-        }
-        #[cfg(not(feature = "sherpa"))]
-        {
-            anyhow::bail!("backend=sherpa 但当前未启用 `sherpa` feature，请用 --features sherpa 编译");
-        }
+    #[cfg(feature = "sherpa")]
+    {
+        build_sherpa_tts(cfg)
     }
-    Ok(Arc::new(MockTts))
+    #[cfg(not(feature = "sherpa"))]
+    {
+        let _ = cfg;
+        anyhow::bail!("本二进制未启用 `sherpa` feature，无法构建 TTS 引擎（请用 --features sherpa 编译）");
+    }
 }
 
-/// 按指定语言构造 TTS 引擎（网页测试台的多语言切换用）。
-/// 非 sherpa 后端时与 `build_tts` 等价（mock 与语言无关）。
+/// 按指定语言构造 TTS 引擎（测试台的多语言切换用）。
+/// Kokoro 的 `lang` 在建模时固定，切语言 = 重建引擎（engine.rs 按语言缓存）。
 pub fn build_tts_with_lang(cfg: &TtsConfig, lang: &str) -> Result<Arc<dyn TtsEngine>> {
-    if cfg.is_sherpa() {
-        #[cfg(feature = "sherpa")]
-        {
-            let mut c = cfg.clone();
-            c.lang = lang.to_string();
-            // build_sherpa_tts 已返回 Arc<dyn TtsEngine>——不要再 Arc::new 包一层
-            //（56e80f1 重构引入的双层 Arc，只在 sherpa feature 下编译，Docker 构建才暴露）。
-            let engine = build_sherpa_tts(&c)
-                .with_context(|| format!("创建 lang={lang} 的 Kokoro TTS 失败"))?;
-            return Ok(engine);
-        }
-        #[cfg(not(feature = "sherpa"))]
-        {
-            let _ = lang;
-            anyhow::bail!("backend=sherpa 但当前未启用 `sherpa` feature，请用 --features sherpa 编译");
-        }
+    #[cfg(feature = "sherpa")]
+    {
+        let mut c = cfg.clone();
+        c.lang = lang.to_string();
+        // build_sherpa_tts 已返回 Arc<dyn TtsEngine>——不要再 Arc::new 包一层
+        //（曾因双层 Arc 致 Docker sherpa 构建失败，见 18b6e8d）。
+        build_sherpa_tts(&c).with_context(|| format!("创建 lang={lang} 的 Kokoro TTS 失败"))
     }
-    Ok(Arc::new(MockTts))
+    #[cfg(not(feature = "sherpa"))]
+    {
+        let _ = (cfg, lang);
+        anyhow::bail!("本二进制未启用 `sherpa` feature，无法构建 TTS 引擎（请用 --features sherpa 编译）");
+    }
 }

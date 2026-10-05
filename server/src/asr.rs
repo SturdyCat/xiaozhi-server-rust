@@ -1,8 +1,5 @@
-//! 语音识别（ASR）引擎抽象。
-//!
-//! - 默认实现 [`MockAsr`]：无需模型，回显固定文本，便于本地联调协议。
-//! - `--features sherpa` 时 [`SherpaAsr`] 使用 `sherpa-onnx` 的
-//!   `OfflineRecognizer` + `OfflineSenseVoiceModelConfig`（SenseVoice INT8）。
+//! 语音识别（ASR）引擎：`sherpa-onnx` 的 `OfflineRecognizer` +
+//! `OfflineSenseVoiceModelConfig`（SenseVoice INT8）。无 mock——ASR 只有这一条真实路径。
 //!
 //! 注意：SenseVoice 在 sherpa-onnx 中是**离线**识别器，方案为
 //! VAD 切出语音段后逐段送入识别（非 `OnlineRecognizer` 流式）。
@@ -22,15 +19,7 @@ pub trait AsrEngine: Send + Sync {
     fn recognize(&self, samples: &[f32], sample_rate: u32) -> Result<String>;
 }
 
-/// 无模型回显实现，用于 `asr.backend = "mock"` 或默认配置。
-pub struct MockAsr;
-
-impl AsrEngine for MockAsr {
-    fn recognize(&self, _samples: &[f32], _sample_rate: u32) -> Result<String> {
-        Ok("这是本地语音助手的测试识别结果。".to_string())
-    }
-}
-
+/// SenseVoice INT8 离线识别器（sherpa-onnx）。
 #[cfg(feature = "sherpa")]
 pub struct SherpaAsr {
     recognizer: Arc<sherpa_onnx::OfflineRecognizer>,
@@ -76,18 +65,17 @@ impl AsrEngine for SherpaAsr {
     }
 }
 
-/// 根据配置构造 ASR 引擎。
+/// 根据配置构造 ASR 引擎（仅 `sherpa` 一条路径；未启用 feature 直接报错）。
 pub fn build_asr(cfg: &AsrConfig) -> Result<Arc<dyn AsrEngine>> {
-    if cfg.is_sherpa() {
-        #[cfg(feature = "sherpa")]
-        {
-            let engine = SherpaAsr::new(cfg).context("创建 SenseVoice 识别器失败")?;
-            return Ok(Arc::new(engine));
-        }
-        #[cfg(not(feature = "sherpa"))]
-        {
-            anyhow::bail!("backend=sherpa 但当前未启用 `sherpa` feature，请用 --features sherpa 编译");
-        }
+    #[cfg(feature = "sherpa")]
+    {
+        Ok(Arc::new(
+            SherpaAsr::new(cfg).context("创建 SenseVoice 识别器失败")?,
+        ))
     }
-    Ok(Arc::new(MockAsr))
+    #[cfg(not(feature = "sherpa"))]
+    {
+        let _ = cfg;
+        anyhow::bail!("本二进制未启用 `sherpa` feature，无法构建 ASR 引擎（请用 --features sherpa 编译）");
+    }
 }

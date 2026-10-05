@@ -12,16 +12,21 @@
 //! `cpus:"3.5"` 进一步限核。详见 [`crate::session`] 与各引擎模块注释。
 //!
 //! ## TTS 语言池
-//! Kokoro 的 `lang` 在建模时固定，故 [`Engines::tts_for`] 按语言按需构建并缓存引擎
-//! （首次约数秒），`mock` 与配置默认语言直接返回 [`Engines::tts`] 默认引擎。
+//! Kokoro 的 `lang` 在建模时固定，故 [`Engines::tts_for`] 按语言按需构建并缓存
+//! 引擎（首次约数秒），配置默认语言直接返回 [`Engines::tts`] 默认引擎。
 
 use crate::asr::{build_asr, AsrEngine};
 use crate::config::Config;
 use crate::llm::{build_llm, Llm};
 use crate::tts::{build_tts, build_tts_with_lang, TtsEngine};
-use crate::vad::{MockVad, VadEngine};
+#[cfg(not(feature = "sherpa"))]
+use crate::vad::MockVad;
+use crate::vad::VadEngine;
 #[cfg(feature = "sherpa")]
-use crate::vad::SherpaVad;
+use {
+    crate::vad::SherpaVad,
+    anyhow::Context,
+};
 use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -31,19 +36,23 @@ pub struct Engines {
     pub asr: Arc<dyn AsrEngine>,
     tts: Arc<dyn TtsEngine>,
     /// 按语言缓存的 TTS 引擎（sherpa 的 Kokoro `lang` 在建模时固定，
-    /// 网页测试台切换语言时按需构建对应引擎；mock 与语言无关）。
+    /// 测试台切换语言时按需构建对应引擎；配置默认语言直接返回默认引擎）。
     tts_pool: Mutex<HashMap<String, Arc<dyn TtsEngine>>>,
     pub llm: Llm,
-    vad_threshold: f32,
     pub config: Arc<Config>,
-    /// server 启动时实际加载的配置文件路径；为 `None` 表示用的是内置默认（mock）配置，
+    /// server 启动时实际加载的配置文件路径；为 `None` 表示用的是内置默认配置，
     /// 此时 `PUT /api/config` 无法持久化（需以 `--config` 指定文件后重启）。
     pub config_path: Option<String>,
 }
 
 impl Engines {
-    /// 依据配置构造引擎；`asr/tts.backend = "sherpa"` 时加载真实模型。
+    /// 依据配置构造引擎（无 mock：ASR/TTS 恒为真实实现，缺模型/缺 feature 直接报错）。
     pub fn new(config: &Config, config_path: Option<String>) -> Result<Arc<Self>> {
+        // 启动期快速失败：sherpa 构建下 VAD 模型路径必填（切句依赖它）。
+        #[cfg(feature = "sherpa")]
+        if config.vad.model.is_empty() {
+            anyhow::bail!("[vad].model 未配置（Silero VAD 模型路径，如 /models/silero_vad.onnx）");
+        }
         let asr = build_asr(&config.asr)?;
         let tts = build_tts(&config.tts)?;
         let llm = build_llm(&config.llm);
@@ -52,7 +61,6 @@ impl Engines {
             tts,
             tts_pool: Mutex::new(HashMap::new()),
             llm,
-            vad_threshold: config.vad.threshold,
             config: Arc::new(config.clone()),
             config_path,
         }))
@@ -64,14 +72,10 @@ impl Engines {
     }
 
     /// 按语言获取 TTS 引擎：已缓存直接返回；否则按需构建并缓存（首次约数秒）。
-    /// 构建失败时回退默认引擎并告警。mock 后端与语言无关，直接返回默认。
+    /// 构建失败时回退默认引擎并告警。配置默认语言直接返回默认引擎。
     pub fn tts_for(&self, lang: &str) -> Arc<dyn TtsEngine> {
         let lang = lang.trim();
-        if lang.is_empty()
-            || !cfg!(feature = "sherpa")
-            || self.config.tts_is_mock()
-            || lang == self.config.tts.lang
-        {
+        if lang.is_empty() || !cfg!(feature = "sherpa") || lang == self.config.tts.lang {
             return self.tts.clone();
         }
         // 先查缓存（持锁）；命中直接返回，未命中立即释放锁，
@@ -105,16 +109,18 @@ impl Engines {
 
     /// 为每个会话创建一个独立的 VAD 实例（内部有状态）。
     ///
-    /// VAD 与 ASR/TTS 独立判定：模型路径非空即启用真实 VAD（见 `VadConfig::is_real`）。
-    pub fn new_vad(&self) -> Box<dyn VadEngine> {
+    /// sherpa 构建恒为 Silero VAD（`[vad].model` 已在启动期校验非空）；
+    /// 未启用 feature 的编译返回占位实现（仅供检查/测试编译，生产不含）。
+    pub fn new_vad(&self) -> Result<Box<dyn VadEngine>> {
         #[cfg(feature = "sherpa")]
         {
-            if self.config.vad.is_real() {
-                if let Ok(v) = SherpaVad::new(&self.config.vad) {
-                    return Box::new(v);
-                }
-            }
+            Ok(Box::new(
+                SherpaVad::new(&self.config.vad).context("创建 Silero VAD 失败")?,
+            ))
         }
-        Box::new(MockVad::new(self.vad_threshold))
+        #[cfg(not(feature = "sherpa"))]
+        {
+            Ok(Box::new(MockVad::new(self.config.vad.threshold)))
+        }
     }
 }

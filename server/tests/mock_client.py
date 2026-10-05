@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """xiaozhi-server-rust 协议联调客户端（零第三方依赖，纯标准库实现 RFC 6455）。
 
+模拟 macApp 管理端测试台：hello 带 `test:true`，逐项验证三个**独立服务请求-响应**
+（服务端无 mock，直调真实引擎；ESP 设备正式流程由 VAD 切句驱动，不经过这些端点）。
+
 流程：
   1. 建立 WebSocket 连接到 /api/ws
-  2. 发送设备 hello（version=1，上行 16k opus）
+  2. 发送测试台 hello（version=1，test=true，上行 16k opus）
   3. 断言服务器 hello（含 downlink audio_params）
-  4. 发送 listen start
-  5. 断言完整对话回包：stt -> llm -> tts start -> tts sentence_start -> 二进制帧 -> tts stop
-
-mock 模式下：
-  - ASR 回显固定文本，LLM 由本地/远程接口返回（默认 api_base 为占位，需配置真实 key 才有文本）。
-  - 下行二进制帧为**空帧**（mock 下 encode_opus_frame 返回空），仅用于验证协议链路。
+  4. asr_test start → stop（不上行音频）→ 断言 stt 回包（空缓冲占位文案）
+  5. tts_test（"你好"）→ 断言 tts start → sentence_start → 二进制帧 → tts stop
+  6. llm_test → 断言 llm_test 回包到达（state=ok|error 均可，取决于 [llm] 配置）
 
 用法：
   python3 tests/mock_client.py [--host 127.0.0.1] [--port 8000] [--token <bearer>]
@@ -110,6 +110,18 @@ def ws_recv(sock: socket.socket) -> tuple[int, bytes]:
     return opcode, payload
 
 
+def recv_text_until(sock: socket.socket, mtype: str, max_frames: int = 2000) -> dict | None:
+    """持续读帧直到出现指定 type 的文本消息（跳过二进制/心跳），超限返回 None。"""
+    for _ in range(max_frames):
+        opcode, payload = ws_recv(sock)
+        if opcode != 0x1:
+            continue
+        msg = json.loads(payload.decode())
+        if msg.get("type") == mtype:
+            return msg
+    return None
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="xiaozhi-server-rust 协议联调客户端")
     ap.add_argument("--host", default="127.0.0.1")
@@ -121,10 +133,11 @@ def main() -> int:
     sock = ws_connect(args.host, args.port, "/api/ws", args.token)
     print("[+] 握手成功")
 
-    # 1) 设备 hello
+    # 1) 测试台 hello（test=true：受理 asr_test/tts_test/llm_test 独立服务请求）
     hello = {
         "type": "hello",
         "version": 1,
+        "test": True,
         "audio_params": {
             "format": "opus",
             "sample_rate": 16000,
@@ -134,7 +147,7 @@ def main() -> int:
         "features": {"mcp": False, "aec": False},
     }
     ws_send_text(sock, json.dumps(hello))
-    print("[>] 已发送 hello")
+    print("[>] 已发送 hello（test=true）")
 
     # 2) 服务器 hello
     opcode, payload = ws_recv(sock)
@@ -148,16 +161,25 @@ def main() -> int:
         f"frame={ap_params.get('frame_duration')}"
     )
 
-    # 3) listen start
-    ws_send_text(sock, json.dumps({"type": "listen", "state": "start", "mode": "manual"}))
-    print("[>] 已发送 listen start")
+    # 3) ASR 测试（独立服务请求-响应）：start → 不上行音频 → stop → stt 回包
+    #    （空缓冲返回占位文案，用于验证端点受理与回包链路；真实识别需上行有效 Opus 音频）
+    ws_send_text(sock, json.dumps({"type": "asr_test", "action": "start"}))
+    ws_send_text(sock, json.dumps({"type": "asr_test", "action": "stop"}))
+    print("[>] 已发送 asr_test start/stop")
+    errors: list[str] = []
+    msg = recv_text_until(sock, "stt")
+    if msg is None:
+        errors.append("缺少 stt（asr_test stop 无回包）")
+    else:
+        print(f"[<] stt：{msg.get('text')}")
 
-    # 4) 断言对话回包顺序
+    # 4) TTS 测试（独立服务请求-响应）：文本直接合成下行
+    ws_send_text(sock, json.dumps({"type": "tts_test", "text": "你好"}))
+    print("[>] 已发送 tts_test")
     got_types: list[str] = []
     binary_frames = 0
     received_stop = False
-
-    for _ in range(200):  # 上限保护，避免无限阻塞
+    for _ in range(2000):  # 上限保护，避免无限阻塞
         opcode, payload = ws_recv(sock)
         if opcode == 0x2:  # 下行二进制（TTS Opus 帧）
             binary_frames += 1
@@ -173,23 +195,27 @@ def main() -> int:
                 break
         else:
             got_types.append(mtype)
-
     print(f"[<] 文本消息序列：{got_types}")
     if binary_frames:
         print(f"[<] 收到下行二进制帧（TTS Opus）：{binary_frames} 个")
-
-    # 校验关键节点
-    errors: list[str] = []
-    if not got_types or got_types[0] != "stt":
-        errors.append("缺少 stt")
-    if "llm" not in got_types:
-        errors.append("缺少 llm")
     if "tts:start" not in got_types:
         errors.append("缺少 tts start")
     if "tts:sentence_start" not in got_types:
         errors.append("缺少 tts sentence_start")
     if not received_stop:
         errors.append("缺少 tts stop")
+    if not binary_frames:
+        errors.append("缺少下行二进制音频帧")
+
+    # 5) LLM 测试（独立服务请求-响应）：服务端按磁盘最新 [llm] 配置直调 LLM，
+    #    单轮无历史；state=ok|error 均算端点可达（error 取决于 api_key 配置）。
+    ws_send_text(sock, json.dumps({"type": "llm_test", "text": "你好"}))
+    print("[>] 已发送 llm_test")
+    msg = recv_text_until(sock, "llm_test")
+    if msg is None:
+        errors.append("缺少 llm_test 回包")
+    else:
+        print(f"[<] llm_test：state={msg.get('state')} text={str(msg.get('text'))[:60]!r}")
 
     try:
         sock.sendall(bytes([0x88, 0x00]))  # 发送 close
@@ -199,7 +225,7 @@ def main() -> int:
     if errors:
         print("[!] FAIL: " + "; ".join(errors))
         return 1
-    print("[+] PASS: 握手/协商/完整对话回包均符合预期")
+    print("[+] PASS: 握手/协商 + asr_test/tts_test/llm_test 三个独立服务端点均符合预期")
     return 0
 
 

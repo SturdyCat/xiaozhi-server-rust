@@ -23,8 +23,7 @@ channels = 1
 binary_protocol_version = 1
 
 [asr]
-# "sherpa" 使用真实 SenseVoice INT8；"mock" 无模型回显固定文本（本地联调）。
-backend = "sherpa"
+# ASR 恒为 SenseVoice INT8（sherpa-onnx 离线识别），无 mock。
 model = "/models/SenseVoiceSmall/model.int8.onnx"
 tokens = "/models/SenseVoiceSmall/tokens.txt"
 language = "auto"
@@ -40,8 +39,7 @@ min_silence_duration = 0.25
 min_speech_duration = 0.25
 
 [tts]
-# "sherpa" 使用真实 Kokoro INT8；"mock" 生成静音（本地联调）。
-backend = "sherpa"
+# TTS 恒为 Kokoro INT8（sherpa-onnx 离线合成），无 mock。
 model = "/models/Kokoro/model.int8.onnx"
 voices = "/models/Kokoro/voices.bin"
 tokens = "/models/Kokoro/tokens.txt"
@@ -59,8 +57,7 @@ speed = 1.0
 num_threads = 4
 
 [llm]
-# "mock" 使用本地回显（零配置联调）；"http" 调用真实 OpenAI 兼容接口。
-backend = "http"
+# LLM 恒为 OpenAI 兼容 Responses API（HTTP），无 mock。
 # OpenAI **Responses API** 端点（POST /v1/responses，非 chat/completions）；
 # 请求体为 model/instructions/input[]/stream，SSE 流式见下方 stream。
 api_base = "https://api.example.com/v1/responses"

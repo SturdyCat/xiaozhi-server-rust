@@ -1,8 +1,7 @@
-//! 语音活动检测（VAD）引擎抽象。
+//! 语音活动检测（VAD）引擎：`sherpa-onnx` `VoiceActivityDetector` + Silero VAD。
 //!
-//! - [`MockVad`]：能量阈值切分，无模型，用于本地联调。
-//! - `--features sherpa` 时 [`SherpaVad`] 使用 `sherpa-onnx`
-//!   `VoiceActivityDetector` + Silero VAD。
+//! [`MockVad`]（能量阈值占位）仅存在于**未启用 `sherpa` feature 的编译**中
+//! （供 `cargo check/test` 编译通过）；生产二进制恒为 [`SherpaVad`]，无 mock。
 //!
 //! VAD 在服务器端运行：把连续上行音频切分为有效语音段，再送 ASR。
 //!
@@ -25,17 +24,20 @@ pub trait VadEngine: Send {
     fn flush(&mut self, cb: &mut dyn FnMut(Vec<f32>));
 }
 
-/// 无模型能量阈值实现，用于 `mock` 模式。
+/// 能量阈值占位实现——**仅未启用 `sherpa` feature 的编译**（测试/检查用），生产不含。
+#[cfg(not(feature = "sherpa"))]
 pub struct MockVad {
     threshold: f32,
 }
 
+#[cfg(not(feature = "sherpa"))]
 impl MockVad {
     pub fn new(threshold: f32) -> Self {
         Self { threshold }
     }
 }
 
+#[cfg(not(feature = "sherpa"))]
 impl VadEngine for MockVad {
     fn accept(&mut self, samples: &[f32], cb: &mut dyn FnMut(Vec<f32>)) {
         let n = samples.len().max(1) as f32;
@@ -47,7 +49,7 @@ impl VadEngine for MockVad {
     }
 
     fn flush(&mut self, _cb: &mut dyn FnMut(Vec<f32>)) {
-        // mock：无残留语音段
+        // 占位：无残留语音段
     }
 }
 

@@ -1,8 +1,10 @@
 //! 每连接会话状态机与语音流水线。
 //!
-//! 两条路径：
-//! - 真实（`sherpa` feature 且 backend=sherpa）：上行 Opus → 解码 → VAD → ASR → stt → LLM → tts → 下行 Opus。
-//! - mock（默认）：收到 `listen start` 后直接触发 mock ASR → LLM → mock TTS，验证协议回包。
+//! 两条路径（由 hello 的 `test` 参数区分）：
+//! - ESP 设备（正式流程）：上行 Opus → 解码 → VAD → ASR → stt → LLM → tts → 下行 Opus。
+//! - macApp 测试台（hello 带 `test:true`）：`asr_test`/`tts_test`/`llm_test` 三种
+//!   **独立服务请求-响应**（各自直调对应真实引擎、各自回包），不进设备流水线；
+//!   设备会话收到这三类消息一律忽略。
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -65,6 +67,8 @@ pub struct Session<'a> {
     vad: Box<dyn VadEngine>,
     uplink_decoder: OpusFrameDecoder,
     real_audio: bool,
+    /// hello.test=true 的测试台会话：唯一能发起 asr_test/tts_test/llm_test 的连接。
+    is_test: bool,
     /// 打断标志（barge-in）：`handle_text` 收 abort、或流水线轮询到 socket 中 abort/断开时置位。
     /// 生产者（LLM 读流）与消费者（TTS 合成/下行）各阶段轮询，一轮对话结束重置。
     abort: Arc<AtomicBool>,
@@ -155,18 +159,9 @@ impl<'a> Session<'a> {
         };
         match msg {
             ClientMessage::Listen { state, .. } if state == "start" => {
-                if self.real_audio {
-                    tracing::info!("session {session_id} 进入 listening（真实音频模式）");
-                } else {
-                    let user_text = match self.engines.asr.recognize(&[], self.params.uplink_sr) {
-                        Ok(t) => t,
-                        Err(e) => {
-                            tracing::warn!("mock ASR 失败: {e}");
-                            return Ok(());
-                        }
-                    };
-                    self.stream_response(&user_text).await?;
-                }
+                // ESP 正式流程：listening 状态由设备侧 VAD 上报触发，语音段经二进制帧上行，
+                // 服务端 VAD 切句后走 ASR → LLM → TTS 流水线（见 handle_binary）。
+                tracing::info!("session {session_id} 进入 listening");
             }
             ClientMessage::Listen { state, .. } => {
                 tracing::info!("listen state={state}");
@@ -185,7 +180,13 @@ impl<'a> Session<'a> {
                 )
                 .await?;
             }
-            ClientMessage::AsrTest { action, .. } => match action.as_str() {
+            ClientMessage::AsrTest { action, .. } => {
+                // 测试台专用端点：仅 hello.test=true 的会话受理（设备正式流程不走测试端点）。
+                if !self.is_test {
+                    tracing::warn!("session {session_id} 非测试会话收到 asr_test，忽略");
+                    return Ok(());
+                }
+                match action.as_str() {
                 "start" => {
                     self.test_buf.clear();
                     self.test_recording = true;
@@ -228,6 +229,7 @@ impl<'a> Session<'a> {
                     .await?;
                 }
                 _ => tracing::warn!("未知 asr_test action: {action}"),
+                }
             },
             ClientMessage::TtsTest {
                 text,
@@ -236,6 +238,11 @@ impl<'a> Session<'a> {
                 speed,
                 ..
             } => {
+                // 测试台专用端点：仅 hello.test=true 的会话受理。
+                if !self.is_test {
+                    tracing::warn!("session {session_id} 非测试会话收到 tts_test，忽略");
+                    return Ok(());
+                }
                 if text.trim().is_empty() {
                     return Ok(());
                 }
@@ -274,13 +281,18 @@ impl<'a> Session<'a> {
                 );
             }
             ClientMessage::LlmTest { text, .. } => {
+                // 测试台专用端点：仅 hello.test=true 的会话受理。
+                if !self.is_test {
+                    tracing::warn!("session {session_id} 非测试会话收到 llm_test，忽略");
+                    return Ok(());
+                }
                 if text.trim().is_empty() {
                     return Ok(());
                 }
-                // 测试台 LLM 连通性验证：按**磁盘上最新配置**临时构建 LLM 客户端——
-                // 引擎在启动时构建（engine.rs），改完配置无需重启即可验证刚保存的
-                // api_base/api_key/model；未指定配置文件（内置 mock 默认）或读盘失败
-                // 时退回启动时的内存配置。单轮直调、不读写会话历史。
+                // 测试台 LLM 连通性验证（独立服务请求-响应，不进设备流水线、不读写会话历史）：
+                // 按**磁盘上最新配置**临时构建 LLM 客户端——引擎在启动时构建（engine.rs），
+                // 改完配置无需重启即可验证刚保存的 api_base/api_key/model；未指定配置文件
+                // （内置默认）或读盘失败时退回启动时的内存配置。
                 let llm_cfg = match &self.engines.config_path {
                     Some(p) => Config::load(p).map(|c| c.llm).unwrap_or_else(|e| {
                         tracing::warn!("session {session_id} LLM 测试读配置失败（用启动配置）: {e}");
@@ -289,8 +301,7 @@ impl<'a> Session<'a> {
                     None => self.engines.config.llm.clone(),
                 };
                 tracing::info!(
-                    "session {session_id} LLM 测试：backend={} model={} api_base={}",
-                    llm_cfg.backend,
+                    "session {session_id} LLM 测试：model={} api_base={}",
                     llm_cfg.model,
                     llm_cfg.api_base
                 );
@@ -336,7 +347,7 @@ impl<'a> Session<'a> {
         let Ok(pcm) = self.uplink_decoder.decode_frame(payload) else {
             return;
         };
-        // 网页测试台录音中：直接缓冲整段 PCM，跳过 VAD（mock 后端也可用）。
+        // 测试台录音中（hello.test=true 的会话）：直接缓冲整段 PCM，跳过 VAD。
         if self.test_recording {
             self.test_buf.extend_from_slice(&pcm);
             return;
@@ -512,14 +523,16 @@ impl<'a> Session<'a> {
     }
 }
 
-/// 会话主循环：收发消息、驱动流水线。
+/// 会话主循环：收发消息、驱动流水线。`is_test` 来自 hello 的 `test` 参数，
+/// 只有测试台会话能发起 asr_test/tts_test/llm_test（设备正式流程不经过测试端点）。
 pub async fn run_session(
     mut socket: WebSocket,
     engines: Arc<Engines>,
     params: SessionParams,
     session_id: String,
+    is_test: bool,
 ) -> anyhow::Result<()> {
-    let vad = engines.new_vad();
+    let vad = engines.new_vad()?;
     let uplink_decoder = OpusFrameDecoder::new(params.uplink_sr)?;
     let real_audio = engines.config.real_audio();
     let session = Session {
@@ -534,6 +547,7 @@ pub async fn run_session(
         vad,
         uplink_decoder,
         real_audio,
+        is_test,
         abort: Arc::new(AtomicBool::new(false)),
     };
     session.run().await

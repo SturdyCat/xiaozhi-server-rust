@@ -14,9 +14,9 @@
 //! （管理页面通过 URL 带 token 联调；设备侧仍走 Authorization 头）。见 [`auth_ok`]。
 //!
 //! ## `/api/config` 读写语义
-//! - `GET`：若启动指定了配置文件则实时读盘，否则返回内存中的默认（mock）配置。
+//! - `GET`：若启动指定了配置文件则实时读盘，否则返回内存中的内置默认配置（/models 生产路径）。
 //! - `PUT`/`POST`：写回启动加载的配置文件（TOML，**原注释会被覆盖丢失**）。
-//!   内置默认（mock）启动、`config_path` 为 `None` 时返回 400（无法持久化）。
+//!   内置默认启动、`config_path` 为 `None` 时返回 400（无法持久化）。
 //! - ⚠️ 引擎相关参数（ASR/TTS/LLM）在启动时构建，改配置后**需重启 server** 才生效；
 //!   仅 `[server]` 部分（监听 / token / 管理页目录）下次启动生效。
 
@@ -78,7 +78,7 @@ async fn admin_missing() -> Response {
 }
 
 /// 读取当前配置（供管理页面 UI 填充表单）。
-/// 启动时指定了配置文件则实时从磁盘读取，否则返回内存中的默认（mock）配置。
+/// 启动时指定了配置文件则实时从磁盘读取，否则返回内存中的内置默认配置（/models 生产路径）。
 async fn get_config(State(engines): State<Arc<Engines>>) -> Response {
     let cfg = match &engines.config_path {
         Some(p) => match Config::load(p) {
@@ -108,7 +108,7 @@ async fn put_config(State(engines): State<Arc<Engines>>, Json(body): Json<Config
         None => {
             return (
                 StatusCode::BAD_REQUEST,
-                "server 以内置默认（mock）配置启动，未指定配置文件，无法持久化。请用 --config 指定 config.toml 后重启。",
+                "server 以内置默认配置启动，未指定配置文件，无法持久化。请用 --config 指定 config.toml 后重启。",
             )
             .into_response()
         }
@@ -213,7 +213,10 @@ async fn handle_handshake(
         downlink_sr,
         downlink_frame_ms,
     };
-    run_session(socket, engines, params, session_id).await
+    if hello.test {
+        tracing::info!("session {session_id} 测试台连接（hello.test=true，受理 asr_test/tts_test/llm_test）");
+    }
+    run_session(socket, engines, params, session_id, hello.test).await
 }
 
 async fn recv_hello(socket: &mut WebSocket) -> anyhow::Result<ClientHello> {

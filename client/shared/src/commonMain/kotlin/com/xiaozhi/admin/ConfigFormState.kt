@@ -5,9 +5,7 @@ import com.tencent.kuikly.core.base.ViewContainer
 import com.tencent.kuikly.core.module.NetworkModule
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.pager.Pager
-import com.tencent.kuikly.core.reactive.collection.ObservableList
 import com.tencent.kuikly.core.reactive.handler.observable
-import com.tencent.kuikly.core.reactive.handler.observableList
 
 /**
  * 配置表单状态（跨端，commonMain，无平台依赖）。
@@ -40,8 +38,7 @@ class ConfigFormState(private val scope: PagerScope) {
     var channels by scope.observable("1")
     var binaryProtocolVersion by scope.observable("1")
 
-    // ===== [asr] =====
-    var asrBackend by scope.observable("mock")
+    // ===== [asr] =====（无 mock：ASR 恒为 SenseVoice，无 backend 字段）
     var asrModel by scope.observable("")
     var asrTokens by scope.observable("")
     var asrLanguage by scope.observable("auto")
@@ -55,8 +52,7 @@ class ConfigFormState(private val scope: PagerScope) {
     var vadMinSilence by scope.observable("0.25")
     var vadMinSpeech by scope.observable("0.25")
 
-    // ===== [tts] =====
-    var ttsBackend by scope.observable("mock")
+    // ===== [tts] =====（无 mock：TTS 恒为 Kokoro，无 backend 字段）
     var ttsModel by scope.observable("")
     var ttsVoices by scope.observable("")
     var ttsTokens by scope.observable("")
@@ -68,8 +64,7 @@ class ConfigFormState(private val scope: PagerScope) {
     var ttsSpeed by scope.observable("1.0")
     var ttsNumThreads by scope.observable("1")
 
-    // ===== [llm] =====
-    var llmBackend by scope.observable("mock")
+    // ===== [llm] =====（无 mock：LLM 恒为 OpenAI 兼容 HTTP，无 backend 字段）
     var llmApiBase by scope.observable("")
     var llmApiKey by scope.observable("")
     var llmModel by scope.observable("")
@@ -87,20 +82,6 @@ class ConfigFormState(private val scope: PagerScope) {
 
     /** 配置页标签页 UI 状态（Server/Audio/ASR/VAD/TTS/LLM 六个 tab，见 renderForm）。 */
     val tabUi = TabUiState(scope)
-
-    /** 当前展开的下拉（backend 选择等，"" = 全部收起）；放状态类避免 Pager body 重建丢失展开态。 */
-    var openDropdown by scope.observable("")
-
-    // ===== backend 选项（官方 AlertDialog 下拉的数据源；ObservableList 供 vfor 响应式渲染）=====
-    val asrBackendOptions: ObservableList<Pair<String, String>> by scope.observableList()
-    val ttsBackendOptions: ObservableList<Pair<String, String>> by scope.observableList()
-    val llmBackendOptions: ObservableList<Pair<String, String>> by scope.observableList()
-
-    init {
-        asrBackendOptions.addAll(listOf("mock" to "mock", "sherpa" to "sherpa"))
-        ttsBackendOptions.addAll(listOf("mock" to "mock", "sherpa" to "sherpa"))
-        llmBackendOptions.addAll(listOf("mock" to "mock", "http" to "http"))
-    }
 
     // ============================================================
     // 网络：load / save
@@ -137,7 +118,6 @@ class ConfigFormState(private val scope: PagerScope) {
                 put("binary_protocol_version", binaryProtocolVersion.toIntOrNull() ?: 1)
             })
             put("asr", JSONObject().apply {
-                put("backend", asrBackend)
                 put("model", asrModel)
                 put("tokens", asrTokens)
                 put("language", asrLanguage)
@@ -152,7 +132,6 @@ class ConfigFormState(private val scope: PagerScope) {
                 put("min_speech_duration", vadMinSpeech.toDoubleOrNull() ?: 0.25)
             })
             put("tts", JSONObject().apply {
-                put("backend", ttsBackend)
                 put("model", ttsModel)
                 put("voices", ttsVoices)
                 put("tokens", ttsTokens)
@@ -165,7 +144,6 @@ class ConfigFormState(private val scope: PagerScope) {
                 put("num_threads", ttsNumThreads.toIntOrNull() ?: 1)
             })
             put("llm", JSONObject().apply {
-                put("backend", llmBackend)
                 put("api_base", llmApiBase)
                 put("api_key", llmApiKey)
                 put("model", llmModel)
@@ -217,7 +195,6 @@ class ConfigFormState(private val scope: PagerScope) {
             binaryProtocolVersion = a.optInt("binary_protocol_version", binaryProtocolVersion.toIntOrNull() ?: 1).toString()
         }
         obj.optJSONObject("asr")?.let { a ->
-            asrBackend = a.optString("backend", asrBackend)
             asrModel = a.optString("model", asrModel)
             asrTokens = a.optString("tokens", asrTokens)
             asrLanguage = a.optString("language", asrLanguage)
@@ -232,7 +209,6 @@ class ConfigFormState(private val scope: PagerScope) {
             vadMinSpeech = v.optDouble("min_speech_duration", vadMinSpeech.toDoubleOrNull() ?: 0.25).toString()
         }
         obj.optJSONObject("tts")?.let { t ->
-            ttsBackend = t.optString("backend", ttsBackend)
             ttsModel = t.optString("model", ttsModel)
             ttsVoices = t.optString("voices", ttsVoices)
             ttsTokens = t.optString("tokens", ttsTokens)
@@ -245,7 +221,6 @@ class ConfigFormState(private val scope: PagerScope) {
             ttsNumThreads = t.optInt("num_threads", ttsNumThreads.toIntOrNull() ?: 1).toString()
         }
         obj.optJSONObject("llm")?.let { l ->
-            llmBackend = l.optString("backend", llmBackend)
             llmApiBase = l.optString("api_base", llmApiBase)
             llmApiKey = l.optString("api_key", llmApiKey)
             llmModel = l.optString("model", llmModel)
@@ -314,20 +289,7 @@ fun ViewContainer<*, *>.audioConfigCard(form: ConfigFormState) {
 
 fun ViewContainer<*, *>.asrConfigCard(form: ConfigFormState) {
     groupedCard("ASR") {
-        // backend 选择：官方 AlertDialog 基座下拉（官方 SegmentedControlIOS 是 iOS 渲染器专属、web 无实现，跨端统一用下拉）
-        dropdownField(
-            label = "backend",
-            currentLabel = { form.asrBackend },
-            options = { form.asrBackendOptions },
-            selectedId = { form.asrBackend },
-            isOpen = { form.openDropdown == "asr_backend" },
-            onToggle = { form.openDropdown = if (form.openDropdown == "asr_backend") "" else "asr_backend" },
-            onSelect = {
-                form.asrBackend = it
-                form.dirty = true
-                form.openDropdown = ""
-            },
-        )
+        // 无 backend 选择：ASR 恒为 SenseVoice（sherpa），mock 已移除
         labeledField("model", { form.asrModel }, { form.asrModel = it; form.dirty = true })
         labeledField("tokens", { form.asrTokens }, { form.asrTokens = it; form.dirty = true })
         labeledField("language", { form.asrLanguage }, { form.asrLanguage = it; form.dirty = true }, "auto/zh/en/ja/ko/yue")
@@ -350,20 +312,7 @@ fun ViewContainer<*, *>.vadConfigCard(form: ConfigFormState) {
 
 fun ViewContainer<*, *>.ttsConfigCard(form: ConfigFormState) {
     groupedCard("TTS") {
-        // backend 选择：官方 AlertDialog 基座下拉（跨端统一）
-        dropdownField(
-            label = "backend",
-            currentLabel = { form.ttsBackend },
-            options = { form.ttsBackendOptions },
-            selectedId = { form.ttsBackend },
-            isOpen = { form.openDropdown == "tts_backend" },
-            onToggle = { form.openDropdown = if (form.openDropdown == "tts_backend") "" else "tts_backend" },
-            onSelect = {
-                form.ttsBackend = it
-                form.dirty = true
-                form.openDropdown = ""
-            },
-        )
+        // 无 backend 选择：TTS 恒为 Kokoro（sherpa），mock 已移除
         labeledField("model", { form.ttsModel }, { form.ttsModel = it; form.dirty = true })
         labeledField("voices", { form.ttsVoices }, { form.ttsVoices = it; form.dirty = true })
         labeledField("tokens", { form.ttsTokens }, { form.ttsTokens = it; form.dirty = true })
@@ -379,20 +328,7 @@ fun ViewContainer<*, *>.ttsConfigCard(form: ConfigFormState) {
 
 fun ViewContainer<*, *>.llmConfigCard(form: ConfigFormState) {
     groupedCard("LLM") {
-        // backend 选择：官方 AlertDialog 基座下拉（跨端统一）
-        dropdownField(
-            label = "backend",
-            currentLabel = { form.llmBackend },
-            options = { form.llmBackendOptions },
-            selectedId = { form.llmBackend },
-            isOpen = { form.openDropdown == "llm_backend" },
-            onToggle = { form.openDropdown = if (form.openDropdown == "llm_backend") "" else "llm_backend" },
-            onSelect = {
-                form.llmBackend = it
-                form.dirty = true
-                form.openDropdown = ""
-            },
-        )
+        // 无 backend 选择：LLM 恒为 OpenAI 兼容 HTTP（Responses API），mock 已移除
         labeledField("api_base", { form.llmApiBase }, { form.llmApiBase = it; form.dirty = true })
         labeledField("api_key", { form.llmApiKey }, { form.llmApiKey = it; form.dirty = true })
         labeledField("model", { form.llmModel }, { form.llmModel = it; form.dirty = true })
