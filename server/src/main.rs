@@ -45,29 +45,6 @@ use crate::config::Config;
 use crate::engine::Engines;
 use crate::ws::router;
 
-// ===== 构建版本戳 =====
-// Docker 构建时经 build-arg → ENV 注入（见 Dockerfile GIT_BRANCH/GIT_COMMIT/BUILD_TIME），
-// option_env! 编译期读取；本地 cargo 直编（无注入）回退 dev/unknown。
-// 暴露在启动日志与 GET /api/health，用于核对部署机上运行的版本。
-pub fn git_branch() -> &'static str {
-    match option_env!("GIT_BRANCH") {
-        Some(b) if !b.is_empty() => b,
-        _ => "unknown",
-    }
-}
-pub fn git_commit() -> &'static str {
-    match option_env!("GIT_COMMIT") {
-        Some(c) if !c.is_empty() => c,
-        _ => "unknown",
-    }
-}
-pub fn build_time() -> &'static str {
-    match option_env!("BUILD_TIME") {
-        Some(t) if !t.is_empty() => t,
-        _ => "unknown",
-    }
-}
-
 fn main() -> Result<()> {
     // 配置在 runtime 构建前加载（worker_threads 需要它）。
     let (config, config_path) = load_config();
@@ -89,12 +66,6 @@ async fn run(config: Config, config_path: Option<String>) -> Result<()> {
         )
         .init();
 
-    tracing::info!(
-        "版本：branch={} commit={} build_time={}（GET /api/health 可随时核对）",
-        git_branch(),
-        git_commit(),
-        build_time()
-    );
     tracing::info!(
         "配置加载完成：ASR=SenseVoice, TTS=Kokoro, LLM=http, 监听=0.0.0.0:{}, tokio worker={} 线程",
         config.server.port,

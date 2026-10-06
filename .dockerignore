@@ -5,14 +5,8 @@
 # 注：模式均不带前导 `/`（docker 语义：不含 `/` 的模式匹配任意层级同名文件/目录）。
 
 # ---- monorepo 中与镜像无关的目录（全排）----
-# ⚠️ .git 只放行 HEAD/packed-refs/refs（版本戳探测：分支 + commit，纯文本几 KB），
-#    objects/ 等大文件仍排除；详见 Dockerfile 的「构建版本戳」段。
-#    注意必须用 `.git/*`（排除直接子项）+ `!` 放行的写法——排除整个 `.git` 目录后，
-#    子文件无法用 `!` 再放行（docker 语义：父目录被排除时子文件不可重包含）。
-.git/*
-!.git/HEAD
-!.git/packed-refs
-!.git/refs
+# .git 整体排除（objects/ 体积大；构建无需版本信息）
+.git
 .agents
 .codebuddy
 .workbuddy

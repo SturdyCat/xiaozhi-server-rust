@@ -38,11 +38,8 @@ API 已对照 1.13.8 rustdoc 校验：`OfflineSenseVoiceModelConfig`、`OfflineT
 ```bash
 cp server/config.example.toml server/config.toml   # 填 expected_token / llm.api_key
 docker compose up -d --build                       # 首启自动从 GitHub Release 下载模型包到 ./models
-curl http://127.0.0.1:8000/api/health              # => {"status":"ok",...,"git_branch":...}
+curl http://127.0.0.1:8000/api/health              # => {"status":"ok",...}
 ```
-
-> **核对部署版本**：`/api/health` 返回构建版本戳（git_branch / git_commit / build_time）——
-> 构建时自动从构建上下文的 `.git` 读取（无需任何构建参数），ACR 等不带 .git 的构建可用 build-arg `GIT_BRANCH`/`GIT_COMMIT` 覆盖。
 
 浏览器打开 `http://<host>:8000/` 即管理后台（配置读写 / 测试台）。
 

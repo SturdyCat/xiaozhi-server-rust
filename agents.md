@@ -165,14 +165,15 @@ export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:$PKG_CONFIG_PATH"
 - 注意：这样编出的二进制**动态依赖 Homebrew 的 opus**，仅用于本地验证代码能否编译，**与 Docker 部署无关**（Docker 走 Debian `libopus0` + 静态/系统链接，CI 已验证可过 `audopus_sys`）。
 - 若想严格复现源码编译路径，则需再 `brew install automake libtool`（并把 `libtoolize` 链到 `glibtoolize`），但 pkg-config 路径更省事，推荐。
 
-### 5.6b 构建版本戳（核对部署版本）
+### 5.6b 构建产物与「容器零日志 exit 0」陷阱
 
-Dockerfile 构建时**自动从构建上下文的 `.git` 探测**分支与 commit（`.dockerignore` 只放行
-`.git/HEAD`/`.git/refs`/`.git/packed-refs`，纯文本几 KB，objects 仍排除；无需 git 二进制，直接解析文件），
-连同 BUILD_TIME 一起经 `option_env!` 编译期打进二进制；启动日志与 `GET /api/health`（JSON）可核对部署版本。
-部署/构建**无需任何额外配置**（compose 不带 build-args；ACR 构建若不携带 .git，可在构建规则里配
-`GIT_BRANCH`/`GIT_COMMIT` build-arg 覆盖，非必填）。⚠️ Dockerfile 产物断言的哨兵串是健康检查 JSON 里的
-`git_branch` 键名（勿改回旧串）。配置文件不可写时 entrypoint 启动即打 ⚠️（保存 500 的根因多为挂载属主/权限）。
+Dockerfile 依赖缓存层用 dummy `fn main(){}` 先编译全部依赖（含 sherpa 原生库下载）；
+COPY 真实源码后**必须** `touch src` + `cargo clean -p xiaozhi-server-rust --release` 强制重编本 crate——
+否则 mtime 陷阱（COPY 保留的上下文 mtime 早于容器内编译时刻）会让 cargo 判定"没改过"而静默跳过，
+镜像里留的是占位二进制，容器启动即退出且零日志。**不要用 grep 在二进制里找哨兵串做产物断言**：
+断言依赖构建机 grep 实现对二进制的匹配行为（GNU/ugrep 别名差异），ACR 上连续两次假阴性
+（2026-10 连同版本戳特性一并移除）；「Compiling + 非 0.00s 耗时」日志即重编证据。
+配置文件不可写时 entrypoint 启动即打 ⚠️（保存 500 的根因多为挂载属主/权限）。
 
 ### 5.7 容器启动会自动检测并下载缺失模型（`docker-entrypoint.sh`）
 

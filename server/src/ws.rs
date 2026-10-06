@@ -2,7 +2,7 @@
 //! （[`crate::session::run_session`]）。
 //!
 //! ## 路由
-//! - `GET /api/health`：健康检查，返回 JSON（含构建版本戳 branch/commit/build_time）。
+//! - `GET /api/health`：健康检查，返回 JSON（status/name/version）。
 //! - `GET /api/ws`：WebSocket 会话入口（先 [`auth_ok`] 鉴权，再 [`handle_handshake`] 协商）。
 //! - `GET/PUT/POST /api/config`：管理页面读写当前配置（语义见下）。
 //! - 其余路径：静态托管 `[server].admin_dir`（h5App 构建产物，含 `index.html`）；
@@ -65,8 +65,7 @@ pub fn router(engines: Arc<Engines>) -> Router {
     app.with_state(engines)
 }
 
-/// 健康检查：返回 JSON（含构建版本戳），便于核对部署机上运行的版本
-/// （`curl /api/health` → {"status":"ok","git_branch":...}）。HEALTHCHECK 仅校验 HTTP 200。
+/// 健康检查：返回 JSON（HEALTHCHECK 仅校验 HTTP 200）。
 async fn health() -> Response {
     (
         [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
@@ -74,9 +73,6 @@ async fn health() -> Response {
             "status": "ok",
             "name": "xiaozhi-server-rust",
             "version": env!("CARGO_PKG_VERSION"),
-            "git_branch": crate::git_branch(),
-            "git_commit": crate::git_commit(),
-            "build_time": crate::build_time(),
         })
         .to_string(),
     )
