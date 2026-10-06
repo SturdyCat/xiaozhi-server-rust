@@ -97,7 +97,10 @@ impl TtsEngine for XfyunTts {
                             tracing::warn!("讯飞 TTS 中途错误 {code}: {message}（sid={sid}），以已收音频为准");
                             break;
                         }
-                        bail!("讯飞 TTS 错误 {code}: {message}（sid={sid}）");
+                        bail!(
+                            "讯飞 TTS 错误 {code}: {message}（sid={sid}）{}",
+                            xfyun_error_hint(code, effective_voice(&self.cfg))
+                        );
                     }
                     // 官方注意事项：code=0 且 data 为空的帧直接忽略
                     let Some(data) = v.get("data").filter(|d| !d.is_null()) else {
@@ -168,15 +171,38 @@ fn assemble_auth_url(cfg: &XfyunTtsConfig) -> String {
     )
 }
 
+/// 实际请求使用的发音人（配置为空时回退 xiaoyan，与 [`build_request`] 一致）。
+fn effective_voice(cfg: &XfyunTtsConfig) -> &str {
+    if cfg.voice.trim().is_empty() {
+        "xiaoyan"
+    } else {
+        cfg.voice.trim()
+    }
+}
+
+/// 讯飞错误码 → 可读的"下一步怎么做"提示（官方错误码表 + FAQ 高频原因，避免每次现场查表）。
+///
+/// 授权类错误（11200/10005）鉴权握手已通过（有 sid），卡的是**服务/发音人授权**，
+/// 与网络和密钥格式无关——排查方向是讯飞控制台而非本服务。
+fn xfyun_error_hint(code: i64, voice: &str) -> String {
+    match code {
+        // 官方 FAQ：WebAPI 在线合成报 11200 一般是使用了未授权的发音人（其次服务未开通/授权过期）。
+        // 超拟人（x4_*）属单独产品线，未在控制台为其开通授权的经典 v2/tts 调用会命中最常见原因。
+        11200 => format!(
+            "。最常见原因：发音人未授权或服务未开通——到讯飞控制台「在线语音合成」领取服务并确认发音人已授权；\
+             当前 vcn={voice}（x4_* 超拟人音色需单独开通授权）"
+        ),
+        // 10005 licc fail：appid 授权失败（appid 与密钥不匹配 / 未开通合成服务）
+        10005 => "。appid 授权失败：检查 app_id 是否正确、该应用是否已开通在线语音合成服务".to_string(),
+        _ => String::new(),
+    }
+}
+
 /// 请求体：一次发送整段文本（`data.status` 固定 2），raw/16k 输出。
 fn build_request(cfg: &XfyunTtsConfig, text: &str, speed: f32) -> String {
     // 内部语速（0.5~2.0，1.0 为常速）→ 讯飞 [0,100]（50 为常速）
     let speed_i = (speed.clamp(0.1, 3.0) * 50.0).round().clamp(0.0, 100.0) as i64;
-    let voice = if cfg.voice.trim().is_empty() {
-        "xiaoyan"
-    } else {
-        cfg.voice.trim()
-    };
+    let voice = effective_voice(cfg);
     serde_json::json!({
         "common": { "app_id": cfg.app_id },
         "business": {
@@ -297,5 +323,33 @@ mod tests {
         // 2.0 倍速 → 100（上限）
         let fast: serde_json::Value = serde_json::from_str(&build_request(&cfg, "x", 2.0)).unwrap();
         assert_eq!(fast["business"]["speed"], 100);
+    }
+
+    /// 11200（licc failed）的提示必须携带实际发音人与可行动的排查方向（实测高频报错）。
+    #[test]
+    fn error_hint_names_voice_and_action_for_auth_codes() {
+        let hint = xfyun_error_hint(11200, "x4_yezi");
+        assert!(hint.contains("x4_yezi"), "11200 提示须带 vcn：{hint}");
+        assert!(hint.contains("控制台"), "11200 提示须指明排查方向：{hint}");
+        assert!(xfyun_error_hint(10005, "xiaoyan").contains("app_id"));
+        // 未映射的错误码不给提示（原始 code/message/sid 已足够查表）
+        assert!(xfyun_error_hint(10110, "xiaoyan").is_empty());
+    }
+
+    /// 发音人回退：配置为空 → xiaoyan（与请求体一致，错误提示才不会报错 vcn）。
+    #[test]
+    fn effective_voice_falls_back_to_xiaoyan() {
+        let empty = XfyunTtsConfig {
+            app_id: "a".into(),
+            api_key: "k".into(),
+            api_secret: "s".into(),
+            voice: "  ".into(),
+        };
+        assert_eq!(effective_voice(&empty), "xiaoyan");
+        let set = XfyunTtsConfig {
+            voice: " x4_yezi ".into(),
+            ..empty
+        };
+        assert_eq!(effective_voice(&set), "x4_yezi");
     }
 }
