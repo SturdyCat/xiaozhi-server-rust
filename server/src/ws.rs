@@ -2,7 +2,7 @@
 //! （[`crate::session::run_session`]）。
 //!
 //! ## 路由
-//! - `GET /api/health`：健康检查，返回 `xiaozhi-server-rust ok`。
+//! - `GET /api/health`：健康检查，返回 JSON（含构建版本戳 branch/commit/build_time）。
 //! - `GET /api/ws`：WebSocket 会话入口（先 [`auth_ok`] 鉴权，再 [`handle_handshake`] 协商）。
 //! - `GET/PUT/POST /api/config`：管理页面读写当前配置（语义见下）。
 //! - 其余路径：静态托管 `[server].admin_dir`（h5App 构建产物，含 `index.html`）；
@@ -65,8 +65,22 @@ pub fn router(engines: Arc<Engines>) -> Router {
     app.with_state(engines)
 }
 
-async fn health() -> &'static str {
-    "xiaozhi-server-rust ok"
+/// 健康检查：返回 JSON（含构建版本戳），便于核对部署机上运行的版本
+/// （`curl /api/health` → {"status":"ok","git_branch":...}）。HEALTHCHECK 仅校验 HTTP 200。
+async fn health() -> Response {
+    (
+        [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
+        serde_json::json!({
+            "status": "ok",
+            "name": "xiaozhi-server-rust",
+            "version": env!("CARGO_PKG_VERSION"),
+            "git_branch": crate::git_branch(),
+            "git_commit": crate::git_commit(),
+            "build_time": crate::build_time(),
+        })
+        .to_string(),
+    )
+        .into_response()
 }
 
 /// 管理页面目录未配置 / 未构建时，给一个明确的提示而不是 404 空白。
@@ -106,20 +120,34 @@ async fn get_config(State(engines): State<Arc<Engines>>) -> Response {
     }
 }
 
-/// 配置持久化（PUT /api/config 与 main.rs 的监听地址自愈共用）：
-/// 序列化为 TOML 并原子写回（先写同目录临时文件再 rename，避免写一半被杀导致配置损坏）。
+/// 配置持久化（PUT /api/config 共用）：序列化为 TOML 写回。
+///
+/// 写入策略两级：
+/// 1. **原子写**（首选）：写同目录临时文件 → `rename` 覆盖，避免写一半被杀导致配置损坏；
+/// 2. **原地写回退**：⚠️ compose 把 `config.toml` 以**单文件 bind mount** 挂进容器时，
+///    `rename` 跨挂载点必然失败（`EBUSY`，os error 16，实测）——此时回退直接覆写原文件
+///    （非原子，但挂载单文件的场景下这是唯一可行路径），并清理残留 tmp。
 pub(crate) fn persist_config(path: &str, cfg: &Config) -> anyhow::Result<()> {
     let toml_str = toml::to_string_pretty(cfg).context("序列化配置失败")?;
     let tmp = format!("{}.{}.tmp", path, uuid::Uuid::new_v4());
-    if let Err(e) = std::fs::write(&tmp, &toml_str) {
+    let atomic = std::fs::write(&tmp, &toml_str).and_then(|()| std::fs::rename(&tmp, path));
+    if atomic.is_ok() {
+        return Ok(());
+    }
+    let atomic_err = atomic.unwrap_err();
+    let fallback = std::fs::write(path, &toml_str);
+    let _ = std::fs::remove_file(&tmp); // 清理 rename 失败残留的临时文件
+    if let Err(e) = fallback {
         let hint = if e.kind() == std::io::ErrorKind::PermissionDenied {
-            "（配置文件或所在目录为只读，无法写入。请检查部署挂载是否误加了 :ro，或改用可写路径后重启 server。）"
+            "（配置文件或所在目录为只读/属主不符。请检查宿主挂载是否误加 :ro，或修正属主与权限后重启 server。）"
         } else {
             ""
         };
-        anyhow::bail!("写入配置失败: {e}{hint}");
+        anyhow::bail!("写入配置失败: {e}{hint}（原子写失败原因: {atomic_err}）");
     }
-    std::fs::rename(&tmp, path).context("写入配置失败")?;
+    tracing::warn!(
+        "配置已原地写入 {path}（挂载为单文件 bind mount，rename 原子替换不可用: {atomic_err}）"
+    );
     Ok(())
 }
 
@@ -344,6 +372,31 @@ mod tests {
         assert_eq!(reparsed.tts.backend, "xfyun");
         assert_eq!(reparsed.tts.xfyun.voice, "xiaoyan");
         assert_eq!(reparsed.llm.stream, true);
+    }
+
+    /// persist_config：写入后可被 Config::load 读回（字段保真）。
+    #[test]
+    fn persist_config_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("xz_cfg_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        let cfg: Config = toml::from_str(
+            r#"
+[server]
+port = 8000
+[tts]
+backend = "xfyun"
+[tts.xfyun]
+app_id = "a"
+voice = "xiaoyan"
+"#,
+        )
+        .unwrap();
+        persist_config(path.to_str().unwrap(), &cfg).unwrap();
+        let loaded = Config::load(path.to_str().unwrap()).unwrap();
+        assert_eq!(loaded.server.port, 8000);
+        assert_eq!(loaded.tts.xfyun.voice, "xiaoyan");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// 旧 schema 配置文件（含已废弃的 listen 键）应能静默解析（未知键忽略）。

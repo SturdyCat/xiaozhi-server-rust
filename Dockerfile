@@ -106,6 +106,13 @@ RUN mkdir -p src \
 # 真实源码（bin-only crate：入口即 src/main.rs，无 lib.rs）
 COPY server/src ./src
 
+# 构建版本戳（可选覆盖）：默认自动从构建上下文的 .git 探测分支与 commit
+# （.dockerignore 已放行 .git/HEAD 与 .git/refs，无需 git 二进制）；build-arg 传入则优先。
+# ACR 等云端构建若不携带 .git，可在构建规则里配置这两个 build-arg（非必填，缺省为探测量）。
+ARG GIT_BRANCH=dev
+ARG GIT_COMMIT=unknown
+# 探测/写入在下方「强制重编译」同一个 RUN 内完成（ENV 不能跨 RUN 传递）。
+
 # ⚠️ 强制重编译本 crate + 产物断言 ——「容器零日志 exit 0」事故的根因所在，勿简化这条 RUN。
 #   ① 根因（mtime 陷阱）：COPY 保留构建上下文里文件的 mtime（ACR clone 代码的时刻），它早于
 #      上一步 dummy 在容器内的编译时刻 → cargo 指纹判定「源码比产物旧 = 没改过」，真源码被
@@ -113,12 +120,27 @@ COPY server/src ./src
 #      成功，容器却启动即退出（xiaoya 实测复现，cargo 1.90）。
 #   ② 修法：touch 把源码 mtime 刷到当前 + `cargo clean -p` 直接删掉本 crate 指纹与产物
 #      （不依赖 mtime 判定，依赖全保留 → 日常仍只重编本 crate）。
-#   ③ 断言：哨兵串取 ws.rs 健康检查的字面量（dummy 占位二进制不可能含）；注意 dummy 也链接
+#   ③ 断言：哨兵串取 ws.rs 健康检查 JSON 的键名 git_branch（dummy 占位二进制不可能含）；注意 dummy 也链接
 #      sherpa 原生库、体积与真二进制同量级，故**不能用大小阈值区分**，只能靠哨兵串。
 RUN find src -type f -exec touch {} + \
+ && if [ -f .git/HEAD ]; then \
+      ref=$(sed -n 's/^ref: //p' .git/HEAD | head -n1); \
+      if [ -n "$ref" ]; then \
+        BRANCH="${ref#refs/heads/}"; \
+        if [ -f ".git/$ref" ]; then COMMIT=$(head -n1 ".git/$ref" | cut -c1-40); \
+        elif [ -f .git/packed-refs ]; then COMMIT=$(grep " $ref\$" .git/packed-refs | head -n1 | cut -d' ' -f1); \
+        fi; \
+      else COMMIT=$(cut -c1-40 .git/HEAD); BRANCH="detached"; fi; \
+    fi \
+ && { [ "$GIT_BRANCH" != "dev" ] && BRANCH="$GIT_BRANCH" || true; } \
+ && { [ "$GIT_COMMIT" != "unknown" ] && COMMIT="$GIT_COMMIT" || true; } \
+ && printf 'GIT_BRANCH=%s\nGIT_COMMIT=%s\nBUILD_TIME=%s\n' "$BRANCH" "$COMMIT" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" > /app/.build_version \
+ && . /app/.build_version \
+ && export GIT_BRANCH GIT_COMMIT BUILD_TIME \
+ && echo "构建版本戳：branch=$GIT_BRANCH commit=$GIT_COMMIT time=$BUILD_TIME" \
  && cargo clean -p xiaozhi-server-rust --release \
  && cargo build --release --features sherpa --locked \
- && grep -q "xiaozhi-server-rust ok" target/release/xiaozhi-server-rust \
+ && grep -q "git_branch" target/release/xiaozhi-server-rust \
  && strip target/release/xiaozhi-server-rust
 
 # ---- 运行阶段 ----

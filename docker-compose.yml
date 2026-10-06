@@ -52,8 +52,9 @@ services:
       # 显式 URL 不会被二次套代理），需要时自行添加。
     volumes:
       # 配置：挂载宿主 server/config.toml（请先 `cp server/config.example.toml server/config.toml`）。
-      # ⚠️ 必须是**可写**挂载：管理页「保存配置」走 PUT /api/config 回写此文件，
-      #   若加了 :ro 会导致写入失败、接口返回 HTTP 500（GET 正常、PUT 失败，web 与 macApp 表现一致）。
+      # ⚠️ 必须是**可写**挂载（勿加 :ro）：管理页「保存配置」走 PUT /api/config 回写此文件。
+      # ℹ️ 单文件 bind mount 下 rename 原子替换不可用（EBUSY），服务端已自动回退原地写；
+      #   若追求原子写可改为挂载目录：`- ./server/config:/etc/xiaozhi`（config.toml 放目录内）。
       - ./server/config.toml:/etc/xiaozhi/config.toml
       # 模型：宿主 ./models 挂载进容器；首启缺失时由入口脚本自动下载并写入（需可写），
       #       下载后持久化，后续启动检测到文件即跳过。
