@@ -727,7 +727,7 @@ private fun ViewContainer<*, *>.benchAsrPage(
     )
 }
 
-/** TTS 合成 tab：左=合成测试卡（文字/语言/音色/语速 + 波形回放），右=TTS 配置卡。 */
+/** TTS 合成 tab：左=合成测试卡（文字 + 随「合成方式」切换的 语言/音色（本地）或 服务商/发音人（远程）+ 语速 + 波形回放），右=TTS 配置卡。 */
 private fun ViewContainer<*, *>.benchTtsPage(
     bench: TestBenchState,
     form: ConfigFormState,
@@ -740,48 +740,125 @@ private fun ViewContainer<*, *>.benchTtsPage(
             groupedCard("TTS 合成测试") {
                 // 散文输入：官方 TextArea 多行（可换行）
                 labeledTextArea("合成文字", { bench.ttsText }, { bench.ttsText = it }, "输入要合成的文字", height = 100f)
-                // 语言：下拉（auto 走服务器默认；zh/en 显式指定）
-                dropdownField(
-                    label = "语言",
-                    currentLabel = { bench.langOptions.firstOrNull { it.first == bench.ttsLang }?.second ?: bench.ttsLang },
-                    options = { bench.langOptions },
-                    selectedId = { bench.ttsLang },
-                    isOpen = { bench.openDropdown == "lang" },
-                    onToggle = { bench.openDropdown = if (bench.openDropdown == "lang") "" else "lang" },
-                    onSelect = {
-                        bench.ttsLang = it
-                        bench.openDropdown = ""
-                    },
-                )
-                // 音色性别：下拉（切换时自动落到该组第一个音色，并联动语言 zh/en）
-                dropdownField(
-                    label = "音色性别",
-                    currentLabel = { bench.genderOptions.firstOrNull { it.first == bench.voiceGender }?.second ?: bench.voiceGender },
-                    options = { bench.genderOptions },
-                    selectedId = { bench.voiceGender },
-                    isOpen = { bench.openDropdown == "gender" },
-                    onToggle = { bench.openDropdown = if (bench.openDropdown == "gender") "" else "gender" },
-                    onSelect = { g ->
-                        bench.selectVoice(g, VoiceCatalog.options(g).firstOrNull()?.id ?: bench.voiceId)
-                        // 英文音色配中文 lang 会产生错配音；测试台按性别联动语言，减少无效组合
-                        bench.ttsLang = if (g == "en") "en" else "zh"
-                        bench.openDropdown = ""
-                    },
-                )
-                // 音色：下拉（Kokoro voices.bin 索引，55/45/3 项；选项列表随性别切换增删）
-                dropdownField(
-                    label = "音色",
-                    currentLabel = { "${bench.voiceId}（sid ${bench.ttsSpeaker} · 共 ${bench.voiceOptions.size} 项）" },
-                    options = { bench.voiceOptions },
-                    selectedId = { bench.voiceId },
-                    isOpen = { bench.openDropdown == "voice" },
-                    onToggle = { bench.openDropdown = if (bench.openDropdown == "voice") "" else "voice" },
-                    onSelect = { id ->
-                        bench.selectVoice(bench.voiceGender, id)
-                        bench.openDropdown = ""
-                    },
-                )
-                labeledField("语速 (0.5~2.0)", { bench.ttsSpeed }, { bench.ttsSpeed = it })
+                // ⚠️ 测试卡随配置卡的「合成方式」切换显示对应配置（同一状态源 form）：
+                //   本地 → Kokoro 语言/性别/sid 音色；远程 → 服务商 + 讯飞发音人。
+                //   远程模式服务端音色由 [tts.xfyun].voice 决定（Kokoro sid 与 zh/en lang 均不适用，
+                //   引擎直接忽略），故必须切换显示，否则选了也不生效（实测误导）。
+                vif({ form.ttsMode == "local" }) {
+                    // 语言：下拉（auto 走服务器默认；zh/en 显式指定）
+                    dropdownField(
+                        label = "语言",
+                        currentLabel = { bench.langOptions.firstOrNull { it.first == bench.ttsLang }?.second ?: bench.ttsLang },
+                        options = { bench.langOptions },
+                        selectedId = { bench.ttsLang },
+                        isOpen = { bench.openDropdown == "lang" },
+                        onToggle = { bench.openDropdown = if (bench.openDropdown == "lang") "" else "lang" },
+                        onSelect = {
+                            bench.ttsLang = it
+                            bench.openDropdown = ""
+                        },
+                    )
+                    // 音色性别：下拉（切换时自动落到该组第一个音色，并联动语言 zh/en）
+                    dropdownField(
+                        label = "音色性别",
+                        currentLabel = { bench.genderOptions.firstOrNull { it.first == bench.voiceGender }?.second ?: bench.voiceGender },
+                        options = { bench.genderOptions },
+                        selectedId = { bench.voiceGender },
+                        isOpen = { bench.openDropdown == "gender" },
+                        onToggle = { bench.openDropdown = if (bench.openDropdown == "gender") "" else "gender" },
+                        onSelect = { g ->
+                            bench.selectVoice(g, VoiceCatalog.options(g).firstOrNull()?.id ?: bench.voiceId)
+                            // 英文音色配中文 lang 会产生错配音；测试台按性别联动语言，减少无效组合
+                            bench.ttsLang = if (g == "en") "en" else "zh"
+                            bench.openDropdown = ""
+                        },
+                    )
+                    // 音色：下拉（Kokoro voices.bin 索引，55/45/3 项；选项列表随性别切换增删）
+                    dropdownField(
+                        label = "音色",
+                        currentLabel = { "${bench.voiceId}（sid ${bench.ttsSpeaker} · 共 ${bench.voiceOptions.size} 项）" },
+                        options = { bench.voiceOptions },
+                        selectedId = { bench.voiceId },
+                        isOpen = { bench.openDropdown == "voice" },
+                        onToggle = { bench.openDropdown = if (bench.openDropdown == "voice") "" else "voice" },
+                        onSelect = { id ->
+                            bench.selectVoice(bench.voiceGender, id)
+                            bench.openDropdown = ""
+                        },
+                    )
+                }
+                velse {
+                    // 远程模式：显示远程配置（与右侧 TTS 配置卡绑定同一 form 字段，改后保存即生效）。
+                    // 下拉开合用 bench.openDropdown 独立键位——右栏配置卡同屏可见，与 form.openDropdown 互不干扰。
+                    dropdownField(
+                        label = "服务商",
+                        currentLabel = {
+                            form.ttsRemoteEngines.firstOrNull { it.first == form.ttsBackend }?.second
+                                ?: form.ttsBackend
+                        },
+                        options = { form.ttsRemoteEngines },
+                        selectedId = { form.ttsBackend },
+                        isOpen = { bench.openDropdown == "remote_provider" },
+                        onToggle = { bench.openDropdown = if (bench.openDropdown == "remote_provider") "" else "remote_provider" },
+                        onSelect = {
+                            form.ttsBackend = it
+                            form.lastRemoteEngine = it
+                            form.dirty = true
+                            bench.openDropdown = ""
+                        },
+                    )
+                    // 讯飞发音人（backend=xfyun）：分组 + vcn，与配置卡同一状态
+                    vif({ form.ttsBackend == "xfyun" }) {
+                        dropdownField(
+                            label = "音色分组",
+                            currentLabel = {
+                                when (form.xfyunVoiceGroup) {
+                                    "male" -> "男声"
+                                    "custom" -> "自定义（手填 vcn）"
+                                    else -> "女声"
+                                }
+                            },
+                            options = { form.xfyunVoiceGroupOptions },
+                            selectedId = { form.xfyunVoiceGroup },
+                            isOpen = { bench.openDropdown == "xfyun_group" },
+                            onToggle = { bench.openDropdown = if (bench.openDropdown == "xfyun_group") "" else "xfyun_group" },
+                            onSelect = {
+                                form.selectXfyunVoiceGroup(it)
+                                bench.openDropdown = ""
+                            },
+                        )
+                        vif({ form.xfyunVoiceGroup != "custom" }) {
+                            dropdownField(
+                                label = "发音人（vcn）",
+                                currentLabel = {
+                                    form.xfyunVoiceOptions.firstOrNull { it.first == form.xfyunVoice }?.second
+                                        ?: form.xfyunVoice
+                                },
+                                options = { form.xfyunVoiceOptions },
+                                selectedId = { form.xfyunVoice },
+                                isOpen = { bench.openDropdown == "xfyun_voice" },
+                                onToggle = { bench.openDropdown = if (bench.openDropdown == "xfyun_voice") "" else "xfyun_voice" },
+                                onSelect = {
+                                    form.xfyunVoice = it
+                                    form.dirty = true
+                                    bench.openDropdown = ""
+                                },
+                            )
+                        }
+                        vif({ form.xfyunVoiceGroup == "custom" }) {
+                            labeledField("voice（手填 vcn）", { form.xfyunVoice }, { form.xfyunVoice = it; form.dirty = true })
+                        }
+                    }
+                    Text {
+                        attr {
+                            fontSize(AdminType.caption)
+                            color(AdminColors.textSecondary)
+                            marginTop(AdminSpace.xs)
+                            text("密钥在右侧 TTS 配置卡维护；改配置后先点顶部「保存配置」再合成——服务端每次合成前自动读盘热切换（无需重启）")
+                        }
+                    }
+                }
+                labeledField("语速", { bench.ttsSpeed }, { bench.ttsSpeed = it })
                 actionRow {
                     primaryButton(
                         "合成并播放",
