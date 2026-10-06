@@ -81,11 +81,17 @@ async fn admin_missing() -> Response {
 /// 读取当前配置（供管理页面 UI 填充表单）。
 /// 启动时指定了配置文件则实时从磁盘读取，否则返回内存中的内置默认配置（/models 生产路径）。
 async fn get_config(State(engines): State<Arc<Engines>>) -> Response {
+    // 健壮性：磁盘配置损坏/旧 schema 解析失败时回退内存配置（200），
+    // 让管理页能正常打开——一次成功保存即用合法 TOML 覆盖修复坏文件，
+    // 避免陷入"打不开 → 永远修不好"的死局。原因记入服务端日志。
     let cfg = match &engines.config_path {
         Some(p) => match Config::load(p) {
             Ok(c) => c,
             Err(e) => {
-                return (StatusCode::INTERNAL_SERVER_ERROR, format!("读取配置失败: {e}")).into_response()
+                tracing::error!(
+                    "GET /api/config：配置文件 {p} 读取/解析失败，回退内置默认配置（可在管理页重新保存修复）: {e}"
+                );
+                (*engines.config).clone()
             }
         },
         None => (*engines.config).clone(),
@@ -120,7 +126,23 @@ pub(crate) fn persist_config(path: &str, cfg: &Config) -> anyhow::Result<()> {
 /// 保存配置（供管理页面 UI 提交）。写回启动时加载的配置文件（TOML，原注释会丢失）。
 /// 注意：server 进程内引擎（ASR/TTS/LLM）在启动时构建，改配置后需重启 server 才对引擎生效；
 /// 仅 [server] 部分（监听地址 / token / 管理页目录）可在下次启动时生效。
-async fn put_config(State(engines): State<Arc<Engines>>, Json(body): Json<Config>) -> Response {
+async fn put_config(
+    State(engines): State<Arc<Engines>>,
+    // 收原始 Value 手动解析：反序列化失败可返回**带精确原因**的 400
+    //（Json<Config> 提取器的默认拒绝只有笼统状态码，客户端难定位）。
+    Json(raw): Json<serde_json::Value>,
+) -> Response {
+    let body: Config = match serde_json::from_value(raw) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("PUT /api/config：客户端配置 JSON 解析失败: {e}");
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("配置 JSON 解析失败: {e}"),
+            )
+                .into_response();
+        }
+    };
     let path = match &engines.config_path {
         Some(p) => p.clone(),
         None => {
@@ -137,7 +159,11 @@ async fn put_config(State(engines): State<Arc<Engines>>, Json(body): Json<Config
             format!("配置已保存到 {path}；引擎相关参数需重启 server 生效。"),
         )
             .into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+        // 健壮性：失败原因同时记入服务端日志（客户端 UI 只能看到状态码）
+        Err(e) => {
+            tracing::error!("PUT /api/config：写入 {path} 失败: {e:#}");
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response()
+        }
     }
 }
 
@@ -237,5 +263,103 @@ async fn recv_hello(socket: &mut WebSocket) -> anyhow::Result<ClientHello> {
             }
         }
         _ => anyhow::bail!("首个消息不是文本 hello"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// PUT 管线回归：模拟 macApp 管理页「保存配置」发送的 JSON 形状
+    /// （ConfigFormState.save 的字段与类型），走「解析 → TOML 序列化 → 再解析」
+    /// 全链路，任何一步失败都会在服务端表现为 500。
+    #[test]
+    fn put_pipeline_client_json_roundtrip() {
+        // 与 ConfigFormState.save 的 put(...) 一致（port/xfyun 为新 schema）
+        let client_json = serde_json::json!({
+            "server": {
+                "port": 8000,
+                "expected_token": "tk",
+                "worker_threads": 2,
+                "admin_dir": "/app/web"
+            },
+            "audio": {
+                "downlink_sample_rate": 24000,
+                "downlink_frame_duration_ms": 60,
+                "channels": 1,
+                "binary_protocol_version": 1
+            },
+            "asr": {
+                "model": "/models/SenseVoiceSmall/model.int8.onnx",
+                "tokens": "/models/SenseVoiceSmall/tokens.txt",
+                "language": "auto",
+                "use_itn": true,
+                "num_threads": 2,
+                "provider": "cpu"
+            },
+            "vad": {
+                "model": "/models/silero_vad.onnx",
+                "threshold": 0.5,
+                "min_silence_duration": 0.25,
+                "min_speech_duration": 0.25
+            },
+            "tts": {
+                "backend": "xfyun",
+                "model": "/models/Kokoro/model.int8.onnx",
+                "voices": "/models/Kokoro/voices.bin",
+                "tokens": "/models/Kokoro/tokens.txt",
+                "data_dir": "/models/Kokoro/espeak-ng-data",
+                "dict_dir": "/models/Kokoro/dict",
+                "lexicon": "/models/Kokoro/lexicon-us-en.txt,/models/Kokoro/lexicon-zh.txt",
+                "lang": "zh",
+                "speaker": 0,
+                "speed": 1.0,
+                "num_threads": 1,
+                "xfyun": {
+                    "app_id": "app",
+                    "api_key": "key",
+                    "api_secret": "secret",
+                    "voice": "xiaoyan"
+                }
+            },
+            "llm": {
+                "api_base": "https://api.example.com/v1/responses",
+                "api_key": "sk",
+                "model": "gpt-4o",
+                "system_prompt": "你是一个助手。",
+                "max_history": 10,
+                "temperature": 0.7,
+                "stream": true
+            }
+        });
+
+        // 1) JSON → Config（axum Json<Config> 的反序列化语义）
+        let cfg: Config = serde_json::from_value(client_json.clone())
+            .expect("客户端 JSON 应能反序列化为 Config");
+        // 2) Config → TOML（persist_config 的序列化步骤）
+        let toml_str = toml::to_string_pretty(&cfg).expect("Config 应能序列化为 TOML");
+        // 3) TOML → Config（下次启动 Config::load 的语义）
+        let reparsed: Config = toml::from_str(&toml_str).expect("写出的 TOML 应能重新解析");
+        assert_eq!(reparsed.server.port, 8000);
+        assert_eq!(reparsed.tts.backend, "xfyun");
+        assert_eq!(reparsed.tts.xfyun.voice, "xiaoyan");
+        assert_eq!(reparsed.llm.stream, true);
+    }
+
+    /// 旧 schema 配置文件（含已废弃的 listen 键）应能静默解析（未知键忽略）。
+    #[test]
+    fn legacy_config_with_listen_key_parses() {
+        let legacy = r#"
+[server]
+listen = "192.168.99.250:8000"
+expected_token = ""
+
+[tts]
+backend = "sherpa"
+model = "/models/Kokoro/model.int8.onnx"
+"#;
+        let cfg: Config = toml::from_str(legacy).expect("旧 schema 配置应能解析");
+        assert_eq!(cfg.server.port, 8000); // 缺省回退
+        assert_eq!(cfg.tts.backend_kind().as_str(), "sherpa");
     }
 }

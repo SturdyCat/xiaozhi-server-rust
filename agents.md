@@ -115,6 +115,9 @@ LLM 只有 OpenAI 兼容 Responses API 一条路径；联调失败先检查 `[ll
 - 合成失败（构建失败/凭据错误/网络）经 `tts_test` 结果帧回报测试台（`{type:"tts_test", state, engine, text}`），
   不再静默——卡片会显示「合成失败：原因」。
 - 密钥只在服务端配置里；管理页保存后无需重启（热切换：会话/tts_test 时读盘比对 `[tts]` 签名重建）。
+- **本地/远程分层（UI 与配置约定）**：`[tts]` 本体字段 = 本地引擎参数；`[tts.<provider>]` 独立段 = 远程供应商凭据
+  （现有 xfyun；azure/openai 等未来供应商各自一段）。管理页 TTS 卡为两级下拉（合成方式 → 引擎/服务商），
+  新增供应商 = `ConfigFormState.ttsRemoteEngines` 注册表追加 + 卡片按 backend 追加 vif 字段区 + 服务端三步（见 config.rs 注释）。
 
 ### 5.3 二进制协议版本 = 设备 hello 的 `version`
 

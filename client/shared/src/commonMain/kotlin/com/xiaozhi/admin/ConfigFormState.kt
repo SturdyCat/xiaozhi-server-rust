@@ -56,8 +56,14 @@ class ConfigFormState(private val scope: PagerScope) {
     var vadMinSilence by scope.observable("0.25")
     var vadMinSpeech by scope.observable("0.25")
 
-    // ===== [tts] =====（backend 二选一：sherpa=本地 Kokoro / xfyun=科大讯飞在线）
+    // ===== [tts] =====（区分「本地模型 / 远程服务」两大类，见 TTS_LOCAL/REMOTE 注册表）
+    /// 当前合成方式："local"（本地模型，离线）| "remote"（远程服务，在线）。
+    /// 与 [ttsBackend] 联动：切方式时 backend 跟随切到对应组的引擎/服务商。
+    var ttsMode by scope.observable("local")
+    /// 当前生效的引擎/服务商 id（本地组：sherpa…；远程组：xfyun…）。
     var ttsBackend by scope.observable("sherpa")
+    /// 上次使用的远程服务商（切回「远程」时恢复，默认 xfyun）。
+    var lastRemoteEngine by scope.observable("xfyun")
     var ttsModel by scope.observable("")
     var ttsVoices by scope.observable("")
     var ttsTokens by scope.observable("")
@@ -74,6 +80,12 @@ class ConfigFormState(private val scope: PagerScope) {
     var xfyunApiKey by scope.observable("")
     var xfyunApiSecret by scope.observable("")
     var xfyunVoice by scope.observable("xiaoyan")
+
+    // 音色分组下拉（女声/男声/自定义）——音色随分组联动，自定义=手填 vcn 兜底
+    var xfyunVoiceGroup by scope.observable("female")
+    val xfyunVoiceGroupOptions: ObservableList<Pair<String, String>> by scope.observableList()
+    /** 当前分组下的音色选项（切分组时重建，官方 AlertDialog 下拉要求 ObservableList）。 */
+    val xfyunVoiceOptions: ObservableList<Pair<String, String>> by scope.observableList()
 
     // ===== [llm] =====（无 mock：LLM 恒为 OpenAI 兼容 HTTP，无 backend 字段）
     var llmApiBase by scope.observable("")
@@ -97,16 +109,66 @@ class ConfigFormState(private val scope: PagerScope) {
     /** 当前展开的下拉（TTS backend 选择等，"" = 全部收起）；放状态类避免 Pager body 重建丢失展开态。 */
     var openDropdown by scope.observable("")
 
-    /** TTS backend 下拉选项（官方 AlertDialog 基座；ObservableList 供 vfor 响应式渲染）。 */
-    val ttsBackendOptions: ObservableList<Pair<String, String>> by scope.observableList()
+    // ============================================================
+    // TTS 引擎注册表（本地 / 远程两组；未来新增引擎/供应商只改这里 + 服务端）
+    // ============================================================
+    // 本地模型引擎（离线推理，凭据字段 = 模型路径等）。
+    val ttsLocalEngines: ObservableList<Pair<String, String>> by scope.observableList()
+    // 远程合成服务商（在线 API，凭据字段 = 各服务商密钥）。
+    val ttsRemoteEngines: ObservableList<Pair<String, String>> by scope.observableList()
+    // 合成方式两选项（local/remote）。
+    val ttsModeOptions: ObservableList<Pair<String, String>> by scope.observableList()
 
     init {
-        ttsBackendOptions.addAll(
+        ttsModeOptions.addAll(
             listOf(
-                "sherpa" to "sherpa（本地 Kokoro）",
-                "xfyun" to "xfyun（科大讯飞在线）",
+                "local" to "本地模型（离线合成）",
+                "remote" to "远程服务（在线 API）",
             ),
         )
+        ttsLocalEngines.addAll(listOf("sherpa" to "本地 Kokoro INT8（离线）"))
+        xfyunVoiceGroupOptions.addAll(
+            listOf(
+                "female" to "女声",
+                "male" to "男声",
+                "custom" to "自定义（手填 vcn）",
+            ),
+        )
+        reloadXfyunVoiceOptions()
+        ttsRemoteEngines.addAll(
+            listOf(
+                "xfyun" to "科大讯飞（在线）",
+                // 未来供应商在此追加：如 "azure" to "Azure TTS（在线）"
+            ),
+        )
+    }
+
+    /** 引擎 id 是否属于远程服务商组。 */
+    fun ttsEngineIsRemote(id: String): Boolean =
+        ttsRemoteEngines.any { it.first == id }
+
+    /** 按当前分组重建讯飞音色下拉选项；切分组时保留已选音色（若不在新分组则回落第一个）。 */
+    fun reloadXfyunVoiceOptions() {
+        xfyunVoiceOptions.clear()
+        xfyunVoiceOptions.addAll(
+            when (xfyunVoiceGroup) {
+                "male" -> XF_YUV_MALE
+                else -> XF_YUV_FEMALE // female；custom 无固定列表（手填）
+            },
+        )
+    }
+
+    /** 切换音色分组：非自定义分组时若当前 vcn 不在该组，回落到该组第一个。 */
+    fun selectXfyunVoiceGroup(g: String) {
+        xfyunVoiceGroup = g
+        reloadXfyunVoiceOptions()
+        if (g != "custom") {
+            val ids = xfyunVoiceOptions.map { it.first }
+            if (xfyunVoice !in ids) {
+                xfyunVoice = ids.firstOrNull() ?: "xiaoyan"
+                dirty = true
+            }
+        }
     }
 
     // ============================================================
@@ -243,6 +305,8 @@ class ConfigFormState(private val scope: PagerScope) {
         }
         obj.optJSONObject("tts")?.let { t ->
             ttsBackend = t.optString("backend", ttsBackend)
+            ttsMode = if (ttsEngineIsRemote(ttsBackend)) "remote" else "local"
+            if (ttsMode == "remote") lastRemoteEngine = ttsBackend // 记住远程服务商，切回时恢复
             ttsModel = t.optString("model", ttsModel)
             ttsVoices = t.optString("voices", ttsVoices)
             ttsTokens = t.optString("tokens", ttsTokens)
@@ -258,6 +322,11 @@ class ConfigFormState(private val scope: PagerScope) {
                 xfyunApiKey = x.optString("api_key", xfyunApiKey)
                 xfyunApiSecret = x.optString("api_secret", xfyunApiSecret)
                 xfyunVoice = x.optString("voice", xfyunVoice)
+                // 按已存音色反推分组：不在预置目录 → 自定义（手填）
+                xfyunVoiceGroup = if (XF_YUV_FEMALE.any { it.first == xfyunVoice }) "female"
+                else if (XF_YUV_MALE.any { it.first == xfyunVoice }) "male"
+                else "custom"
+                reloadXfyunVoiceOptions()
             }
         }
         obj.optJSONObject("llm")?.let { l ->
@@ -275,6 +344,20 @@ class ConfigFormState(private val scope: PagerScope) {
     // 渲染：见文件底部 ViewContainer.renderForm(form) 扩展
     // ============================================================
 }
+
+// 讯飞音色目录（经典 v2/tts 常见音色，按性别分组；官方 demo 默认 x4_yezi）。
+// ⚠️ 音色与账号套餐相关——未列出的音色（控制台添加/购买后可用）选「自定义」手填 vcn。
+private val XF_YUV_FEMALE: List<Pair<String, String>> = listOf(
+    "xiaoyan" to "小燕（标准女声，默认）",
+    "aisxping" to "小萍",
+    "aisjinger" to "小婧",
+    "x4_yezi" to "小叶（超拟人）",
+    "x4_lingxiaoxuan_oral" to "凌晓萱（超拟人·口语）",
+)
+private val XF_YUV_MALE: List<Pair<String, String>> = listOf(
+    "aisjiuxu" to "久许",
+    "x4_lingfeiyi_oral" to "凌飞宜（超拟人·口语）",
+)
 
 /**
  * 渲染配置标签页（tabbedPanel：官方 Tabs + PageList）：Server / Audio / ASR / VAD / TTS / LLM 六个 tab，
@@ -352,50 +435,140 @@ fun ViewContainer<*, *>.vadConfigCard(form: ConfigFormState) {
 
 fun ViewContainer<*, *>.ttsConfigCard(form: ConfigFormState) {
     groupedCard("TTS") {
-        // backend 二选一（官方 AlertDialog 基座下拉）：sherpa=本地 Kokoro / xfyun=科大讯飞在线。
-        // 保存后无需重启：服务端在新会话/测试台 tts_test 时读盘热切换引擎。
+        // ===== 第一级：合成方式（本地模型=离线 / 远程服务=在线）=====
+        // 官方 AlertDialog 基座下拉；切方式即联动切换引擎/服务商组与下方字段。
         dropdownField(
-            label = "backend",
+            label = "合成方式",
             currentLabel = {
-                if (form.ttsBackend == "xfyun") "xfyun（科大讯飞在线）" else "sherpa（本地 Kokoro）"
+                if (form.ttsMode == "remote") "远程服务（在线 API）" else "本地模型（离线合成）"
             },
-            options = { form.ttsBackendOptions },
-            selectedId = { form.ttsBackend },
-            isOpen = { form.openDropdown == "tts_backend" },
-            onToggle = { form.openDropdown = if (form.openDropdown == "tts_backend") "" else "tts_backend" },
-            onSelect = {
-                form.ttsBackend = it
-                form.dirty = true
-                form.openDropdown = ""
+            options = { form.ttsModeOptions },
+            selectedId = { form.ttsMode },
+            isOpen = { form.openDropdown == "tts_mode" },
+            onToggle = { form.openDropdown = if (form.openDropdown == "tts_mode") "" else "tts_mode" },
+            onSelect = { m ->
+                if (m != form.ttsMode) {
+                    form.ttsMode = m
+                    // 切方式即切引擎组：本地→当前本地引擎；远程→上次使用的远程服务商
+                    form.ttsBackend = if (m == "remote") form.lastRemoteEngine else "sherpa"
+                    form.dirty = true
+                    form.openDropdown = ""
+                }
             },
         )
-        labeledField("model", { form.ttsModel }, { form.ttsModel = it; form.dirty = true })
-        labeledField("voices", { form.ttsVoices }, { form.ttsVoices = it; form.dirty = true })
-        labeledField("tokens", { form.ttsTokens }, { form.ttsTokens = it; form.dirty = true })
-        labeledField("data_dir", { form.ttsDataDir }, { form.ttsDataDir = it; form.dirty = true })
-        labeledField("dict_dir", { form.ttsDictDir }, { form.ttsDictDir = it; form.dirty = true })
-        labeledField("lexicon", { form.ttsLexicon }, { form.ttsLexicon = it; form.dirty = true })
-        labeledField("lang", { form.ttsLang }, { form.ttsLang = it; form.dirty = true })
-        labeledField("speaker", { form.ttsSpeaker }, { form.ttsSpeaker = it; form.dirty = true })
-        labeledField("speed", { form.ttsSpeed }, { form.ttsSpeed = it; form.dirty = true })
-        labeledField("num_threads", { form.ttsNumThreads }, { form.ttsNumThreads = it; form.dirty = true })
-        // xfyun 凭据与音色：backend=xfyun 时显示（vif 闭包内读 observable 才能响应式切换）
-        vif({ form.ttsBackend == "xfyun" }) {
-            dividerH()
+        // ===== 第二级：引擎 / 服务商（随方式联动）+ 各自字段 =====
+        vif({ form.ttsMode == "local" }) {
+            dropdownField(
+                label = "本地引擎",
+                currentLabel = {
+                    form.ttsLocalEngines.firstOrNull { it.first == form.ttsBackend }?.second
+                        ?: "本地 Kokoro INT8（离线）"
+                },
+                options = { form.ttsLocalEngines },
+                selectedId = { form.ttsBackend },
+                isOpen = { form.openDropdown == "tts_local_engine" },
+                onToggle = { form.openDropdown = if (form.openDropdown == "tts_local_engine") "" else "tts_local_engine" },
+                onSelect = {
+                    form.ttsBackend = it
+                    form.dirty = true
+                    form.openDropdown = ""
+                },
+            )
+            // 本地模型参数（sherpa/Kokoro）
+            labeledField("model", { form.ttsModel }, { form.ttsModel = it; form.dirty = true })
+            labeledField("voices", { form.ttsVoices }, { form.ttsVoices = it; form.dirty = true })
+            labeledField("tokens", { form.ttsTokens }, { form.ttsTokens = it; form.dirty = true })
+            labeledField("data_dir", { form.ttsDataDir }, { form.ttsDataDir = it; form.dirty = true })
+            labeledField("dict_dir", { form.ttsDictDir }, { form.ttsDictDir = it; form.dirty = true })
+            labeledField("lexicon", { form.ttsLexicon }, { form.ttsLexicon = it; form.dirty = true })
+            labeledField("lang", { form.ttsLang }, { form.ttsLang = it; form.dirty = true })
+            labeledField("speaker", { form.ttsSpeaker }, { form.ttsSpeaker = it; form.dirty = true })
+            labeledField("speed", { form.ttsSpeed }, { form.ttsSpeed = it; form.dirty = true })
+            labeledField("num_threads", { form.ttsNumThreads }, { form.ttsNumThreads = it; form.dirty = true })
+        }
+        vif({ form.ttsMode == "remote" }) {
+            dropdownField(
+                label = "服务商",
+                currentLabel = {
+                    form.ttsRemoteEngines.firstOrNull { it.first == form.ttsBackend }?.second
+                        ?: "科大讯飞（在线）"
+                },
+                options = { form.ttsRemoteEngines },
+                selectedId = { form.ttsBackend },
+                isOpen = { form.openDropdown == "tts_remote_engine" },
+                onToggle = { form.openDropdown = if (form.openDropdown == "tts_remote_engine") "" else "tts_remote_engine" },
+                onSelect = {
+                    form.ttsBackend = it
+                    form.lastRemoteEngine = it
+                    form.dirty = true
+                    form.openDropdown = ""
+                },
+            )
             Text {
                 attr {
                     fontSize(AdminType.caption)
                     color(AdminColors.textSecondary)
-                    text("科大讯飞在线合成（在讯飞开放平台「在线语音合成」控制台获取密钥）")
+                    text("远程合成需网络与对应服务商账号；保存后新会话/测试台立即用新引擎（无需重启）。")
                 }
             }
-            labeledField("app_id", { form.xfyunAppId }, { form.xfyunAppId = it; form.dirty = true })
-            labeledField("api_key", { form.xfyunApiKey }, { form.xfyunApiKey = it; form.dirty = true })
-            labeledField("api_secret", { form.xfyunApiSecret }, { form.xfyunApiSecret = it; form.dirty = true })
-            labeledField("voice（发音人 vcn）", { form.xfyunVoice }, { form.xfyunVoice = it; form.dirty = true }, "xiaoyan")
+            // 讯飞凭据与音色（backend=xfyun；未来其他供应商在此按 id 追加各自字段区）
+            vif({ form.ttsBackend == "xfyun" }) {
+                dividerH()
+                Text {
+                    attr {
+                        fontSize(AdminType.caption)
+                        color(AdminColors.textSecondary)
+                        text("科大讯飞在线合成（在讯飞开放平台「在线语音合成」控制台获取密钥）")
+                    }
+                }
+                labeledField("app_id", { form.xfyunAppId }, { form.xfyunAppId = it; form.dirty = true })
+                labeledField("api_key", { form.xfyunApiKey }, { form.xfyunApiKey = it; form.dirty = true })
+                labeledField("api_secret", { form.xfyunApiSecret }, { form.xfyunApiSecret = it; form.dirty = true })
+                // 音色：分组下拉（女声/男声/自定义）→ 发音人下拉；完整清单以控制台为准
+                dropdownField(
+                    label = "音色分组",
+                    currentLabel = {
+                        when (form.xfyunVoiceGroup) {
+                            "male" -> "男声"
+                            "custom" -> "自定义（手填 vcn）"
+                            else -> "女声"
+                        }
+                    },
+                    options = { form.xfyunVoiceGroupOptions },
+                    selectedId = { form.xfyunVoiceGroup },
+                    isOpen = { form.openDropdown == "xfyun_voice_group" },
+                    onToggle = { form.openDropdown = if (form.openDropdown == "xfyun_voice_group") "" else "xfyun_voice_group" },
+                    onSelect = {
+                        form.selectXfyunVoiceGroup(it)
+                        form.openDropdown = ""
+                    },
+                )
+                vif({ form.xfyunVoiceGroup != "custom" }) {
+                    dropdownField(
+                        label = "发音人（vcn）",
+                        currentLabel = {
+                            form.xfyunVoiceOptions.firstOrNull { it.first == form.xfyunVoice }?.second
+                                ?: form.xfyunVoice
+                        },
+                        options = { form.xfyunVoiceOptions },
+                        selectedId = { form.xfyunVoice },
+                        isOpen = { form.openDropdown == "xfyun_voice" },
+                        onToggle = { form.openDropdown = if (form.openDropdown == "xfyun_voice") "" else "xfyun_voice" },
+                        onSelect = {
+                            form.xfyunVoice = it
+                            form.dirty = true
+                            form.openDropdown = ""
+                        },
+                    )
+                }
+                vif({ form.xfyunVoiceGroup == "custom" }) {
+                    labeledField("voice（手填 vcn）", { form.xfyunVoice }, { form.xfyunVoice = it; form.dirty = true })
+                }
+            }
         }
     }
 }
+
 
 fun ViewContainer<*, *>.llmConfigCard(form: ConfigFormState) {
     groupedCard("LLM") {

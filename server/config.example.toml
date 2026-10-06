@@ -39,8 +39,11 @@ min_silence_duration = 0.25
 min_speech_duration = 0.25
 
 [tts]
-# 引擎二选一："sherpa"（本地 Kokoro INT8，离线，默认）或 "xfyun"（科大讯飞在线合成）。
+# 引擎分两类：本地模型（离线）/ 远程服务（在线）。
+#   本地：backend = "sherpa"（Kokoro INT8，用下方 model/voices/tokens/... 路径字段）；
+#   远程：backend = "<服务商 id>"（如 "xfyun"，用对应 [tts.xfyun] 凭据段）。
 # 改后保存即热切换：新会话/测试台 tts_test 立即用新引擎（无需重启）。
+# 未来更多远程供应商 = 新增 [tts.<id>] 凭据段 + backend 填对应 id。
 backend = "sherpa"
 model = "/models/Kokoro/model.int8.onnx"
 voices = "/models/Kokoro/voices.bin"

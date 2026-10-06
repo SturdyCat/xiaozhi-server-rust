@@ -105,9 +105,16 @@ impl VadConfig {
     }
 }
 
+/// TTS 配置分两层：
+/// - **本地模型**：`[tts]` 本体的 model/voices/tokens/... 字段（当前引擎 `sherpa` = Kokoro INT8）；
+/// - **远程服务**：`[tts.<provider>]` 独立凭据段（现有 `xfyun`；未来 azure/openai/... 各自一段）。
+///
+/// 扩展新远程供应商 = ① `[tts].backend` 加可选 id；② 新增 `[tts.<id>]` 凭据段 + serde 结构；
+/// ③ `build_tts` 加分支 + 引擎实现（参照 xfyun_tts.rs）；④ 客户端 ConfigFormState 的
+/// `ttsRemoteEngines` 注册表追加一项 + 卡片字段区按 id 追加 vif。UI 按「本地/远程」两级下拉区分。
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TtsConfig {
-    /// 引擎选择：`"sherpa"`（本地 Kokoro，默认）| `"xfyun"`（科大讯飞在线 TTS）。
+    /// 引擎 id：`"sherpa"`（本地 Kokoro，默认）| `"xfyun"`（科大讯飞在线）| 未来其他远程供应商 id。
     #[serde(default = "default_tts_backend")]
     pub backend: String,
     /// Kokoro INT8 模型路径（sherpa-onnx 离线合成器）。

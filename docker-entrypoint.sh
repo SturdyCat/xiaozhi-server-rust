@@ -160,5 +160,13 @@ case "$AUTO" in
     ;;
 esac
 
+# 配置文件可写自检（健壮性）：管理页「保存配置」走 PUT /api/config 回写此文件，
+# 只读/属主不对会在保存时报 500——启动即暴露，而不是等用户保存失败。
+CFG="${XIAOZHI_CONFIG:-}"
+if [ -n "$CFG" ] && [ -e "$CFG" ] && [ ! -w "$CFG" ]; then
+  echo "[entrypoint] ⚠️ 配置文件 $CFG 不可写：管理页「保存配置」将失败（500）。" >&2
+  echo "[entrypoint]    请检查宿主挂载（勿加 :ro）与文件属主/权限后重启容器。" >&2
+fi
+
 echo "[entrypoint] 启动 xiaozhi-server-rust ..."
 exec /app/server "$@"
