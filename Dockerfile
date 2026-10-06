@@ -106,6 +106,11 @@ RUN mkdir -p src \
 # 真实源码（bin-only crate：入口即 src/main.rs，无 lib.rs）
 COPY server/src ./src
 
+# 版本戳探测源：构建上下文的 .git 元数据（.dockerignore 已只放行 HEAD/packed-refs/refs，
+# 合计几 KB）。⚠️ 若云端构建（ACR 等）不上传 .git，此 COPY 会报 not found——
+# 此时在构建规则里配置 GIT_BRANCH/GIT_COMMIT 两个 build-arg 覆盖即可。
+COPY .git /app/.git-meta/
+
 # 构建版本戳（可选覆盖）：默认自动从构建上下文的 .git 探测分支与 commit
 # （.dockerignore 已放行 .git/HEAD 与 .git/refs，无需 git 二进制）；build-arg 传入则优先。
 # ACR 等云端构建若不携带 .git，可在构建规则里配置这两个 build-arg（非必填，缺省为探测量）。
@@ -123,18 +128,22 @@ ARG GIT_COMMIT=unknown
 #   ③ 断言：哨兵串取 ws.rs 健康检查 JSON 的键名 git_branch（dummy 占位二进制不可能含）；注意 dummy 也链接
 #      sherpa 原生库、体积与真二进制同量级，故**不能用大小阈值区分**，只能靠哨兵串。
 RUN find src -type f -exec touch {} + \
- && if [ -f .git/HEAD ]; then \
-      ref=$(sed -n 's/^ref: //p' .git/HEAD | head -n1); \
-      if [ -n "$ref" ]; then \
-        BRANCH="${ref#refs/heads/}"; \
-        if [ -f ".git/$ref" ]; then COMMIT=$(head -n1 ".git/$ref" | cut -c1-40); \
-        elif [ -f .git/packed-refs ]; then COMMIT=$(grep " $ref\$" .git/packed-refs | head -n1 | cut -d' ' -f1); \
-        fi; \
-      else COMMIT=$(cut -c1-40 .git/HEAD); BRANCH="detached"; fi; \
-    fi \
- && { [ "$GIT_BRANCH" != "dev" ] && BRANCH="$GIT_BRANCH" || true; } \
- && { [ "$GIT_COMMIT" != "unknown" ] && COMMIT="$GIT_COMMIT" || true; } \
- && printf 'GIT_BRANCH=%s\nGIT_COMMIT=%s\nBUILD_TIME=%s\n' "$BRANCH" "$COMMIT" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" > /app/.build_version \
+ && { \
+      BRANCH="unknown"; COMMIT="unknown"; \
+      if [ -f .git-meta/HEAD ]; then \
+        ref=$(sed -n 's/^ref: //p' .git-meta/HEAD | head -n1); \
+        if [ -n "$ref" ]; then \
+          BRANCH="${ref#refs/heads/}"; \
+          if [ -f ".git-meta/$ref" ]; then COMMIT=$(head -n1 ".git-meta/$ref" | cut -c1-40); \
+          elif [ -f .git-meta/packed-refs ]; then COMMIT=$(grep " $ref\$" .git-meta/packed-refs | head -n1 | cut -d' ' -f1); \
+          fi; \
+        else COMMIT=$(cut -c1-40 .git-meta/HEAD); BRANCH="detached"; fi; \
+      fi; \
+      [ "$GIT_BRANCH" != "dev" ] && BRANCH="$GIT_BRANCH"; \
+      [ "$GIT_COMMIT" != "unknown" ] && COMMIT="$GIT_COMMIT"; \
+      printf 'GIT_BRANCH=%s\nGIT_COMMIT=%s\nBUILD_TIME=%s\n' "$BRANCH" "$COMMIT" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" > /app/.build_version; \
+      true; \
+    } \
  && . /app/.build_version \
  && export GIT_BRANCH GIT_COMMIT BUILD_TIME \
  && echo "构建版本戳：branch=$GIT_BRANCH commit=$GIT_COMMIT time=$BUILD_TIME" \

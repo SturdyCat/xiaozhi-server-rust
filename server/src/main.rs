@@ -49,13 +49,22 @@ use crate::ws::router;
 // option_env! 编译期读取；本地 cargo 直编（无注入）回退 dev/unknown。
 // 暴露在启动日志与 GET /api/health，用于核对部署机上运行的版本。
 pub fn git_branch() -> &'static str {
-    option_env!("GIT_BRANCH").unwrap_or("dev")
+    match option_env!("GIT_BRANCH") {
+        Some(b) if !b.is_empty() => b,
+        _ => "unknown",
+    }
 }
 pub fn git_commit() -> &'static str {
-    option_env!("GIT_COMMIT").unwrap_or("unknown")
+    match option_env!("GIT_COMMIT") {
+        Some(c) if !c.is_empty() => c,
+        _ => "unknown",
+    }
 }
 pub fn build_time() -> &'static str {
-    option_env!("BUILD_TIME").unwrap_or("unknown")
+    match option_env!("BUILD_TIME") {
+        Some(t) if !t.is_empty() => t,
+        _ => "unknown",
+    }
 }
 
 fn main() -> Result<()> {
