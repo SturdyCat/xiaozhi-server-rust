@@ -309,6 +309,10 @@ impl<'a, T: Transport> Session<'a, T> {
                             },
                         )
                         .await?;
+                        // 协议收尾：与设备流水线同构，以 tts stop 结束本次播报。测试台原生模块
+                        // 在 ok 帧只记引擎名，**tts stop 才消费 speak 回调**——缺 stop 会卡
+                        // 「合成中」（7753f12 全链路流式改造时丢失，实测回归）。
+                        send_tts_state(self.transport, &self.session_id, "stop").await?;
                     }
                     Ok(Err(e)) => {
                         tracing::warn!("session {session_id} 测试合成失败（耗时 {}ms）: {e}", t0.elapsed().as_millis());
