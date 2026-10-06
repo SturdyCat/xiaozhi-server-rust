@@ -26,13 +26,12 @@ use std::path::Path;
 use std::sync::Arc;
 
 use axum::{
-    extract::{ws::WebSocketUpgrade, ws::WebSocket, ws::Message, Json, Query, State},
+    extract::{ws::WebSocketUpgrade, ws::WebSocket, Json, Query, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
     Router,
 };
-use futures_util::StreamExt;
 use tower_http::services::{ServeDir, ServeFile};
 use uuid::Uuid;
 
@@ -40,6 +39,7 @@ use crate::config::{Config, ServerConfig};
 use crate::engine::Engines;
 use crate::protocol::{AudioParams, BinVersion, ClientHello, ClientMessage, ServerMessage};
 use crate::session::{run_session, send_text, SessionParams};
+use crate::transport::{IncomingFrame, Transport, WsTransport};
 
 /// 构造 Axum 路由：API（健康检查 / WebSocket）之外，其余路径静态托管
 /// `config.server.admin_dir` 指向的管理页面（h5App 构建产物，含 index.html）。
@@ -227,11 +227,13 @@ fn auth_ok(headers: &HeaderMap, query: &HashMap<String, String>, server: &Server
 }
 
 async fn handle_handshake(
-    mut socket: WebSocket,
+    socket: WebSocket,
     engines: Arc<Engines>,
     _headers: &HeaderMap,
 ) -> anyhow::Result<()> {
-    let hello = recv_hello(&mut socket).await?;
+    // 握手起即收口到传输抽象：hello 收发与会话主循环走同一条 Transport 路径
+    let mut transport = WsTransport::new(socket);
+    let hello = recv_hello(&mut transport).await?;
 
     // 协商：上行跟随设备 hello（默认 16k），下行由服务器配置决定（默认 24k）。
     let uplink_bin_ver = BinVersion::from_u8(hello.version);
@@ -257,7 +259,7 @@ async fn handle_handshake(
             ..AudioParams::default()
         }),
     };
-    send_text(&mut socket, &server_hello)
+    send_text(&mut transport, &server_hello)
         .await
         .map_err(|e| anyhow::anyhow!("发送 server hello 失败: {e}"))?;
 
@@ -271,26 +273,21 @@ async fn handle_handshake(
     if hello.test {
         tracing::info!("session {session_id} 测试台连接（hello.test=true，受理 asr_test/tts_test/llm_test）");
     }
-    run_session(socket, engines, params, session_id, hello.test).await
+    run_session(&mut transport, engines, params, session_id, hello.test).await
 }
 
-async fn recv_hello(socket: &mut WebSocket) -> anyhow::Result<ClientHello> {
-    let item = socket.next().await;
-    let msg = match item {
-        Some(Ok(m)) => m,
-        _ => anyhow::bail!("连接在无 hello 时关闭或出错"),
+async fn recv_hello<T: Transport>(transport: &mut T) -> anyhow::Result<ClientHello> {
+    let frame = transport.recv().await;
+    let s = match frame {
+        IncomingFrame::Text(s) => s,
+        IncomingFrame::Binary(_) => anyhow::bail!("首个消息不是文本 hello"),
+        IncomingFrame::Closed => anyhow::bail!("连接在无 hello 时关闭或出错"),
     };
-    match msg {
-        Message::Text(t) => {
-            let s = t.to_string();
-            let cm: ClientMessage = serde_json::from_str(&s)
-                .map_err(|e| anyhow::anyhow!("解析 hello 失败: {e}"))?;
-            match cm {
-                ClientMessage::Hello(h) => Ok(h),
-                _ => anyhow::bail!("首个消息不是 hello"),
-            }
-        }
-        _ => anyhow::bail!("首个消息不是文本 hello"),
+    let cm: ClientMessage =
+        serde_json::from_str(&s).map_err(|e| anyhow::anyhow!("解析 hello 失败: {e}"))?;
+    match cm {
+        ClientMessage::Hello(h) => Ok(h),
+        _ => anyhow::bail!("首个消息不是 hello"),
     }
 }
 

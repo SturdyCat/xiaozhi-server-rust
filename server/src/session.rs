@@ -10,9 +10,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::extract::ws::{Message, Utf8Bytes, WebSocket};
-use futures_util::StreamExt;
-
 use crate::audio::opus::OpusFrameDecoder;
 use crate::asr::AsrEngine;
 use crate::config::Config;
@@ -21,6 +18,7 @@ use crate::engine::Engines;
 use crate::llm::{LlmEvent, build_llm};
 use crate::protocol::{BinVersion, ClientMessage, ServerMessage, unwrap_uplink};
 use crate::splitter::SentenceSplitter;
+use crate::transport::{IncomingFrame, Transport};
 use crate::vad::VadEngine;
 
 /// 在 `spawn_blocking` 中执行同步阻塞的 CPU 密集调用（ASR/TTS 推理），
@@ -48,13 +46,15 @@ pub struct SessionParams {
     pub downlink_frame_ms: u32,
 }
 
-/// 单连接会话：承载 WebSocket、引擎引用与全部可变会话状态。
+/// 单连接会话：承载 [`Transport`]、引擎引用与全部可变会话状态。
 ///
 /// 流水线函数（`handle_text`/`handle_binary`/`stream_response`/`send_tts_audio`/
 /// `recognize_segments`）原本要传 7~11 个离散参数（含多个可变状态），增删一个状态
 /// 就要改 N 处签名。聚合成 `Session` 后统一用 `&mut self` 访问，消除参数膨胀与漏传风险。
-pub struct Session<'a> {
-    socket: &'a mut WebSocket,
+/// 泛型 `T: Transport` 静态分发：会话/流水线不感知承载协议（当前 WS，未来
+/// MQTT+UDP / 本机通道各实现一份 [`Transport`] 即可复用整条流水线）。
+pub struct Session<'a, T: Transport> {
+    transport: &'a mut T,
     engines: Arc<Engines>,
     params: SessionParams,
     session_id: String,
@@ -72,29 +72,21 @@ pub struct Session<'a> {
     abort: Arc<AtomicBool>,
 }
 
-impl<'a> Session<'a> {
-    /// 主循环：接收消息并分发；循环结束后 flush VAD 残留段并送流水线。
+impl<'a, T: Transport> Session<'a, T> {
+    /// 主循环：接收上行帧并分发；循环结束后 flush VAD 残留段并送流水线。
     async fn run(mut self) -> anyhow::Result<()> {
-        while let Some(item) = self.socket.next().await {
-            let msg = match item {
-                Ok(m) => m,
-                Err(e) => {
-                    tracing::debug!("socket 读取结束/出错（会话结束）: {e}");
-                    break;
-                }
-            };
-            match msg {
-                Message::Text(t) => {
-                    let s = t.to_string();
+        loop {
+            match self.transport.recv().await {
+                IncomingFrame::Text(s) => {
                     if let Err(e) = self.handle_text(&s).await {
                         tracing::warn!("处理文本消息失败: {e}");
                     }
                 }
-                Message::Binary(b) => {
-                    self.handle_binary(b.as_ref()).await;
+                IncomingFrame::Binary(b) => {
+                    self.handle_binary(&b).await;
                 }
-                Message::Close(_) => break,
-                _ => {}
+                // 承载关闭/读取错误：会话结束（recv 内已记日志）
+                IncomingFrame::Closed => break,
             }
         }
 
@@ -110,7 +102,7 @@ impl<'a> Session<'a> {
 
     /// 在 `spawn_blocking` 中执行同步阻塞的 ASR 识别，统一处理任务取消/panic 与内部错误。
     /// `recognize_segments` 与 `AsrTest` 共用，避免重复 clone 引擎与计时样板。
-    /// 写成不借用 `&self` 的关联函数：避免捕获 `Session`（含 `&mut WebSocket`，非 `Sync`）
+    /// 写成不借用 `&self` 的关联函数：避免捕获 `Session`（含 `&mut T` 传输，非 `Sync`）
     /// 导致返回的 future 不满足 `Send`，破坏 `ws.rs` 的 `on_upgrade` 要求。
     async fn asr_recognize(
         asr: Arc<dyn AsrEngine>,
@@ -170,7 +162,7 @@ impl<'a> Session<'a> {
             }
             ClientMessage::Mcp { payload, .. } => {
                 send_text(
-                    &mut self.socket,
+                    self.transport,
                     &ServerMessage::Mcp {
                         session_id: Some(session_id),
                         payload,
@@ -218,7 +210,7 @@ impl<'a> Session<'a> {
                         }
                     };
                     send_text(
-                        &mut self.socket,
+                        self.transport,
                         &ServerMessage::Stt {
                             session_id,
                             text,
@@ -259,7 +251,7 @@ impl<'a> Session<'a> {
                 if let Err(msg) = refresh {
                     tracing::warn!("session {session_id} {msg}");
                     send_text(
-                        &mut self.socket,
+                        self.transport,
                         &ServerMessage::TtsTestResult {
                             session_id,
                             state: "error".to_string(),
@@ -289,7 +281,7 @@ impl<'a> Session<'a> {
                     )
                 });
                 let frames = send_sentence_audio_stream(
-                    &mut self.socket,
+                    self.transport,
                     &self.params,
                     &mut self.downlink_ts,
                     &self.abort,
@@ -308,7 +300,7 @@ impl<'a> Session<'a> {
                         );
                         // 成功回报（音频已下发；state=ok, text=耗时）
                         send_text(
-                            &mut self.socket,
+                            self.transport,
                             &ServerMessage::TtsTestResult {
                                 session_id,
                                 state: "ok".to_string(),
@@ -321,7 +313,7 @@ impl<'a> Session<'a> {
                     Ok(Err(e)) => {
                         tracing::warn!("session {session_id} 测试合成失败（耗时 {}ms）: {e}", t0.elapsed().as_millis());
                         send_text(
-                            &mut self.socket,
+                            self.transport,
                             &ServerMessage::TtsTestResult {
                                 session_id,
                                 state: "error".to_string(),
@@ -334,7 +326,7 @@ impl<'a> Session<'a> {
                     Err(e) => {
                         tracing::warn!("session {session_id} 测试合成任务异常: {e}");
                         send_text(
-                            &mut self.socket,
+                            self.transport,
                             &ServerMessage::TtsTestResult {
                                 session_id,
                                 state: "error".to_string(),
@@ -387,7 +379,7 @@ impl<'a> Session<'a> {
                     reply.chars().count()
                 );
                 send_text(
-                    &mut self.socket,
+                    self.transport,
                     &ServerMessage::LlmTestResult {
                         session_id,
                         state: state.to_string(),
@@ -436,7 +428,7 @@ impl<'a> Session<'a> {
         let session_id = self.session_id.clone();
         self.abort.store(false, Ordering::Relaxed); // 新一轮对话重置打断标志
         send_text(
-            &mut self.socket,
+            self.transport,
             &ServerMessage::Stt {
                 session_id: session_id.clone(),
                 text: user_text.to_string(),
@@ -446,7 +438,7 @@ impl<'a> Session<'a> {
         // 早发 llm 状态：刷新设备 last_incoming_time_，避免 LLM 首字等待期被 ESP IsTimeout() 断连。
         // （协议约定 llm 消息仅做表情同步，回复正文走 tts.sentence_start。）
         send_text(
-            &mut self.socket,
+            self.transport,
             &ServerMessage::Llm {
                 session_id: session_id.clone(),
                 emotion: Some("neutral".to_string()),
@@ -496,12 +488,12 @@ impl<'a> Session<'a> {
             // 200ms 粒度等待下一句：等待间隙轮询打断 + 定期 ping 保活
             match tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
                 Ok(Some(sentence)) => {
-                    if poll_abort(&mut self.socket, &self.session_id, &self.abort) {
+                    if poll_abort(self.transport, &self.session_id, &self.abort) {
                         interrupted = true;
                         break;
                     }
                     if !tts_started {
-                        send_tts_state(&mut self.socket, &self.session_id, "start").await?;
+                        send_tts_state(self.transport, &self.session_id, "start").await?;
                         tts_started = true;
                     }
                     // 流式合成：spawn_blocking 里跑引擎（同步阻塞），分片经 channel 回流；
@@ -523,7 +515,7 @@ impl<'a> Session<'a> {
                         )
                     });
                     let frames = send_sentence_audio_stream(
-                        &mut self.socket,
+                        self.transport,
                         &self.params,
                         &mut self.downlink_ts,
                         &self.abort,
@@ -548,7 +540,7 @@ impl<'a> Session<'a> {
                             t0.elapsed().as_millis()
                         );
                     }
-                    if poll_abort(&mut self.socket, &self.session_id, &self.abort) {
+                    if poll_abort(self.transport, &self.session_id, &self.abort) {
                         interrupted = true;
                         break;
                     }
@@ -556,20 +548,20 @@ impl<'a> Session<'a> {
                 Ok(None) => break, // 生产者结束（tx 已 drop）
                 Err(_elapsed) => {
                     // 等待超时：轮询打断 + 长静默期 Ping 保活（tungstenite 自动回 Pong）
-                    if poll_abort(&mut self.socket, &self.session_id, &self.abort) {
+                    if poll_abort(self.transport, &self.session_id, &self.abort) {
                         interrupted = true;
                         break;
                     }
                     if last_ping.elapsed() >= Duration::from_secs(10) {
                         last_ping = std::time::Instant::now();
-                        let _ = self.socket.send(Message::Ping("ping".into())).await;
+                        self.transport.keepalive().await;
                     }
                 }
             }
         }
         if tts_started {
             // 打断时也发 stop：设备据此立即停止播放并清理队列
-            send_tts_state(&mut self.socket, &self.session_id, "stop").await?;
+            send_tts_state(self.transport, &self.session_id, "stop").await?;
         }
 
         // 汇总 LLM 结果；仅未打断且流正常结束时压入历史，避免脏历史
@@ -610,8 +602,8 @@ impl<'a> Session<'a> {
 
 /// 会话主循环：收发消息、驱动流水线。`is_test` 来自 hello 的 `test` 参数，
 /// 只有测试台会话能发起 asr_test/tts_test/llm_test（设备正式流程不经过测试端点）。
-pub async fn run_session(
-    mut socket: WebSocket,
+pub async fn run_session<T: Transport>(
+    transport: &mut T,
     engines: Arc<Engines>,
     params: SessionParams,
     session_id: String,
@@ -621,7 +613,7 @@ pub async fn run_session(
     let uplink_decoder = OpusFrameDecoder::new(params.uplink_sr)?;
     let real_audio = engines.config.real_audio();
     let session = Session {
-        socket: &mut socket,
+        transport,
         engines,
         params,
         session_id,
@@ -638,21 +630,20 @@ pub async fn run_session(
     session.run().await
 }
 
-pub(crate) async fn send_text(socket: &mut WebSocket, msg: &ServerMessage) -> anyhow::Result<()> {
-    socket
-        .send(Message::Text(Utf8Bytes::from(msg.to_json())))
-        .await
-        .map_err(|e| anyhow::anyhow!("发送文本失败: {e}"))?;
-    Ok(())
+/// 协议层发送：`ServerMessage` 序列化后交承载下发（错误映射在承载实现内完成）。
+pub(crate) async fn send_text<T: Transport>(
+    transport: &mut T,
+    msg: &ServerMessage,
+) -> anyhow::Result<()> {
+    transport.send_text(msg.to_json()).await
 }
 
 #[cfg(test)]
 mod tests {}
 
-pub(crate) async fn send_binary(socket: &mut WebSocket, data: Vec<u8>) -> anyhow::Result<()> {
-    socket
-        .send(Message::Binary(data.into()))
-        .await
-        .map_err(|e| anyhow::anyhow!("发送二进制失败: {e}"))?;
-    Ok(())
+pub(crate) async fn send_binary<T: Transport>(
+    transport: &mut T,
+    data: Vec<u8>,
+) -> anyhow::Result<()> {
+    transport.send_binary(data).await
 }

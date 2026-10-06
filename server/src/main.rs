@@ -31,6 +31,7 @@ mod session;
 mod sse;
 mod splitter;
 mod tts;
+mod transport;
 mod vad;
 mod ws;
 mod xfyun_tts;
