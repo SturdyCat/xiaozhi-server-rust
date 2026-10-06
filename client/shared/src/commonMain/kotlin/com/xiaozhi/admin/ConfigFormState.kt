@@ -345,20 +345,17 @@ class ConfigFormState(private val scope: PagerScope) {
     // ============================================================
 }
 
-// 讯飞音色目录（经典 v2/tts 常见音色，按性别分组；官方 demo 默认 x4_yezi）。
-// ⚠️ 音色与账号套餐相关——未授权的发音人服务端报 11200（licc failed）；
-//    x4_* 超拟人属单独产品线，未单独开通授权时经典接口不可用，故标注。控制台添加/购买后
-//    可用的其他音色选「自定义」手填 vcn。
+// 讯飞音色目录（经典 v2/tts 发音人，按性别分组；官方默认 xiaoyan）。
+// ⚠️ 仅保留实测可用的**经典**发音人——x4_* 超拟人属单独授权线，未开通授权时
+//    经典接口必报 11200（licc failed，实测），已从预置列表过滤；已单独购买授权的
+//    账号请走「自定义」手填 vcn。
 private val XF_YUV_FEMALE: List<Pair<String, String>> = listOf(
     "xiaoyan" to "小燕（标准女声，默认）",
     "aisxping" to "小萍",
     "aisjinger" to "小婧",
-    "x4_yezi" to "小叶（超拟人·需单独授权）",
-    "x4_lingxiaoxuan_oral" to "凌晓萱（超拟人·口语·需单独授权）",
 )
 private val XF_YUV_MALE: List<Pair<String, String>> = listOf(
     "aisjiuxu" to "久许",
-    "x4_lingfeiyi_oral" to "凌飞宜（超拟人·口语·需单独授权）",
 )
 
 /**
