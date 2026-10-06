@@ -352,4 +352,49 @@ mod tests {
         };
         assert_eq!(effective_voice(&set), "x4_yezi");
     }
+
+    /// 真实连讯飞的链路冒烟（**排障工具，日常不跑**）：密钥经环境变量传入、不入库——
+    /// `XFYUN_APP_ID=… XFYUN_API_KEY=… XFYUN_API_SECRET=… [XFYUN_VOICE=…] \
+    ///  cargo test xfyun_live -- --ignored --nocapture`
+    ///
+    /// 用途：区分 11200/10005 是"授权层拒绝"（xiaoyan 通、指定音色不通 → 发音人未授权；
+    /// 全不通 → 服务未开通/密钥错）还是本服务实现缺陷。断言故意省略：结果人工判读。
+    #[test]
+    #[ignore = "live 讯飞调用：需 XFYUN_APP_ID/XFYUN_API_KEY/XFYUN_API_SECRET 环境变量"]
+    fn xfyun_live_smoke() {
+        let (Ok(app_id), Ok(api_key), Ok(api_secret)) = (
+            std::env::var("XFYUN_APP_ID"),
+            std::env::var("XFYUN_API_KEY"),
+            std::env::var("XFYUN_API_SECRET"),
+        ) else {
+            eprintln!("跳过：未设置 XFYUN_APP_ID/XFYUN_API_KEY/XFYUN_API_SECRET");
+            return;
+        };
+        let cfg = XfyunTtsConfig {
+            app_id,
+            api_key,
+            api_secret,
+            voice: std::env::var("XFYUN_VOICE").unwrap_or_else(|_| "xiaoyan".into()),
+        };
+        println!("== vcn={} ==", effective_voice(&cfg));
+        let tts = XfyunTts::new(&cfg).expect("构造引擎");
+        let total = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = total.clone();
+        let t0 = Instant::now();
+        let result = tts.synthesize_stream(
+            "你好，这是一次链路调试。",
+            1.0,
+            0,
+            Box::new(move |_sr, chunk| {
+                counter.fetch_add(chunk.len(), std::sync::atomic::Ordering::Relaxed);
+                true
+            }),
+        );
+        println!(
+            "== 结果：{:?}（{} 样本，{}ms）==",
+            result.map(|()| "OK".to_string()).map_err(|e| format!("{e:#}")),
+            total.load(std::sync::atomic::Ordering::Relaxed),
+            t0.elapsed().as_millis()
+        );
+    }
 }
