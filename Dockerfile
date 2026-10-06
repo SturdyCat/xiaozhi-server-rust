@@ -127,6 +127,8 @@ ARG GIT_COMMIT=unknown
 #      （不依赖 mtime 判定，依赖全保留 → 日常仍只重编本 crate）。
 #   ③ 断言：哨兵串取 ws.rs 健康检查 JSON 的键名 git_branch（dummy 占位二进制不可能含）；注意 dummy 也链接
 #      sherpa 原生库、体积与真二进制同量级，故**不能用大小阈值区分**，只能靠哨兵串。
+#      ⚠️ grep 必须带 -a（按文本搜索二进制）：不带 -a 时不同 grep 实现（GNU/ugrep 别名）
+#      对二进制文件的匹配行为不一致，实测会导致哨兵误判失败。
 RUN find src -type f -exec touch {} + \
  && { \
       BRANCH="unknown"; COMMIT="unknown"; \
@@ -149,7 +151,7 @@ RUN find src -type f -exec touch {} + \
  && echo "构建版本戳：branch=$GIT_BRANCH commit=$GIT_COMMIT time=$BUILD_TIME" \
  && cargo clean -p xiaozhi-server-rust --release \
  && cargo build --release --features sherpa --locked \
- && grep -q "git_branch" target/release/xiaozhi-server-rust \
+ && grep -a -q "git_branch" target/release/xiaozhi-server-rust \
  && strip target/release/xiaozhi-server-rust
 
 # ---- 运行阶段 ----
