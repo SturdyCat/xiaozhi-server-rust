@@ -200,6 +200,8 @@ impl<'a, T: Transport> Session<'a, T> {
                             }),
                         )
                     });
+                    // 测试台单次合成也按实时节奏下发（同一节拍器实现；保护 ESP/一致行为）
+                    self.pacer.reset();
                     let frames = send_sentence_audio_stream(
                         self.transport,
                         &self.params,
@@ -209,6 +211,8 @@ impl<'a, T: Transport> Session<'a, T> {
                         &text,
                         tts_sr,
                         chunk_rx,
+                        &mut self.pacer,
+                        &mut None,
                     )
                     .await?;
                     match producer.await {

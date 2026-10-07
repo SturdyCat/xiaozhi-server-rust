@@ -126,6 +126,46 @@ LLM 只有 OpenAI 兼容 Responses API 一条路径；联调失败先检查 `[ll
   （现有 xfyun；azure/openai 等未来供应商各自一段）。管理页 TTS 卡为两级下拉（合成方式 → 引擎/服务商），
   新增供应商 = `ConfigFormState.ttsRemoteEngines` 注册表追加 + 卡片按 backend 追加 vif 字段区 + 服务端三步（见 config.rs 注释）。
 
+### 5.2c 🚨 下行音频必须按实时节奏节流（`DownlinkPacer`，勿删）
+
+**症状**：ESP 短回复正常，长回复「先听到头几个字 → 卡住 → 断断续续」；而 macApp（无队列限制）
+反而流畅——勿因此误判"服务端没问题"。
+
+**根因链**（三方证据）：
+1. ESP 固件 `AudioService` 解码队列上限 `MAX_DECODE_PACKETS_IN_QUEUE = 1200/OPUS_FRAME_DURATION_MS`
+   = **20 包（≈1.2 秒音频）**；队满时 `PushPacketToDecodeQueue(wait=false)` **直接丢弃、零日志**
+   （`main/audio/audio_service.h` + `audio_service.cc`）。
+2. TTS 合成远快于实时（实测讯飞在线 **~7 倍速**、整段一次性回传时更快）——若尽速灌入，
+   长回复必然溢出：设备先播完 1.2s 缓冲，随后队列在阈值上下震荡 → 断续。
+3. 官方 Python 服务端有专门的 `core/utils/audioRateController.py`（`AudioRateController`，
+   注释"按照60ms帧时长精确控制音频发送"）——**节流是协议层的隐含要求，不写在 hello 协商里**。
+
+**How to apply**：
+- 实现于 `app/downlink.rs` 的 [`DownlinkPacer`]：每帧目标时刻 = 锚点 + N×帧长（**绝对时间表**，
+  无累积漂移）；生产者慢（本地 Kokoro RTF>1）时自然零等待；数据源真空 ≥1 帧后重锚定
+  （播放已追平，不突发回补）。
+- 生命周期 = **一次回复**（`stream_response` / `aiui_downlink` 入口 `reset()`）；多句共享时间表
+  → 句间无缝。**切勿**在句间 reset（每句重新锚定会把句间隙暴露成听感停顿）。
+- ⚠️ 改下行链路时**不得移除 `pacer.pace()` 调用**——它看起来像"多余延迟"，实为 ESP 队列保护；
+  删掉后 macApp 依旧流畅、ESP 长回复必现断续（自动化测试也很难在没有真机时发现）。
+- 测试台路径（`session/bench.rs`）同样节流（单次合成即一整段，更快、更容易溢出，更需要）。
+- TTFA 日志 = **首帧实际下发时刻**（`first_frame_at`，非"句子下发完成"）——pacing 后两者含义不同。
+
+### 5.2d 二进制帧 v2/v3 是**网络序（大端）** + 下行版本必须跟随设备（2026-10-07 实测修正）
+
+两个曾同时存在的对齐缺口（设备默认 v1 裸包时都无感，切 v2/v3 必坏）：
+
+1. **字节序**：固件 `websocket_protocol.cc` 收发 v2/v3 用 `htons/htonl/ntohs/ntohl`
+   （i.e. **网络序大端**），结构体 `__attribute__((packed))` 与原字节流同布局。
+   服务端曾用 `to_le_bytes()`（小端）——`payload_size` 被设备读成天量值 → 解码失败/无声。
+   现已全部改 `to_be_bytes`（`app/protocol.rs`，回归测试 `bin_v2_v3_big_endian_layout` 逐字节锁定）。
+   ⚠️ 官方 Python 服务端**只实现 v1**（仓库内无 v2/v3 打包），字节序只能以固件实现为准。
+2. **下行版本跟随设备**：设备按其 NVS `websocket.version` 同时决定收/发帧格式；
+   服务端下行若用配置里的另一个版本，设备会按自己的版本解析 → 乱码。
+   现 `ws/mod.rs` 握手时 `downlink_bin_ver = uplink_bin_ver`（hello.version）。
+   `[audio].binary_protocol_version` 的作用改为**仅经 OTA 写进设备 NVS**
+   （`ota_payload` 的 `websocket.version`），二者因此天然一致。
+
 ### 5.3 二进制协议版本 = 设备 hello 的 `version`
 
 - `version` 字段 = **二进制协议版本（1/2/3）**，不是握手协议号。

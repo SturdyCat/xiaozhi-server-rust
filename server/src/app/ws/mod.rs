@@ -140,15 +140,31 @@ pub(crate) fn auth_ok(headers: &HeaderMap, query: &HashMap<String, String>, serv
 async fn handle_handshake(
     socket: WebSocket,
     engines: Arc<Engines>,
-    _headers: &HeaderMap,
+    headers: &HeaderMap,
 ) -> anyhow::Result<()> {
+    // 设备身份（固件 WS 握手头；测试台 macApp 也带）：接入日志据此核对是哪台设备
+    let device_id = headers
+        .get("Device-Id")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("unknown");
+    let client_id = headers
+        .get("Client-Id")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("unknown");
     // 握手起即收口到传输抽象：hello 收发与会话主循环走同一条 Transport 路径
     let mut transport = WsTransport::new(socket);
     let hello = recv_hello(&mut transport).await?;
 
     // 协商：上行跟随设备 hello（默认 16k），下行由服务器配置决定（默认 24k）。
+    //
+    // ⚠️ **二进制协议版本跟随设备 `hello.version`**（上行与下行同版本）：设备按其 NVS
+    // `websocket.version` 同时决定收/发帧格式（`websocket_protocol.cc` 的 `version_`），
+    // 下行若用服务端配置的另一个版本，设备会把带头的帧当纯 Opus 解析（或反之）→ 解码乱码。
+    // 服务端 `[audio].binary_protocol_version` 的作用是**经 OTA 写进设备 NVS**
+    // （见 `ota_payload` 的 `websocket.version`），二者因此天然一致；此处以设备上报为准，
+    // 兼容"设备 NVS 被手工改成其他版本"的场景。
     let uplink_bin_ver = BinVersion::from_u8(hello.version);
-    let downlink_bin_ver = BinVersion::from_u8(engines.config.audio.binary_protocol_version);
+    let downlink_bin_ver = uplink_bin_ver;
     let uplink_sr = hello
         .audio_params
         .as_ref()
@@ -183,6 +199,14 @@ async fn handle_handshake(
     };
     if hello.test {
         tracing::info!("session {session_id} 测试台连接（hello.test=true，受理 asr_test/tts_test/llm_test）");
+    } else {
+        // 设备正式会话（ASR/TTS 走这条 WS；按需建立——唤醒/按键触发对话时才连接，开机只走 OTA）
+        tracing::info!(
+            "session {session_id} 设备接入：device={device_id} client={client_id} \
+             上行={uplink_sr}Hz 下行={downlink_sr}Hz/{downlink_frame_ms}ms 上行二进制协议=v{} 下行协议=v{}",
+            hello.version,
+            engines.config.audio.binary_protocol_version,
+        );
     }
     run_session(&mut transport, engines, params, session_id, hello.test).await
 }

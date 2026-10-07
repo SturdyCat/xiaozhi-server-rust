@@ -280,17 +280,22 @@ impl BinVersion {
 /// - v1：裸 Opus 字节。
 /// - v2：u16 version | u16 type(0=OPUS) | u32 reserved | u32 ts_ms | u32 size | payload
 /// - v3：u8 type(0=OPUS) | u8 reserved | u16 size | payload
+///
+/// ⚠️ **整数一律网络序（大端）**：固件 `websocket_protocol.cc` 收发用 `htons/htonl/ntohs/ntohl`
+/// （i.e. `BinaryProtocol2/3` 走网络序），且结构体 `__attribute__((packed))` 与原字节流同布局。
+/// 曾用小端（`to_le_bytes`）——设备用 v1 时无感，切 v2/v3 后 payload_size 被读成天量值，
+/// 表现为解码失败/无声音。字节序测试见 `tests::bin_v2_big_endian_layout`。
 pub fn wrap_downlink(v: BinVersion, opus: &[u8], ts_ms: u32) -> Vec<u8> {
     match v {
         BinVersion::V1 => opus.to_vec(),
         BinVersion::V2 => {
             let mut b = Vec::with_capacity(16 + opus.len());
             // version 字段必须等于与设备协商的版本（固件上行 v2 也写 2），不可硬编码。
-            b.extend_from_slice(&v.version_code().to_le_bytes());
-            b.extend_from_slice(&0u16.to_le_bytes()); // type = OPUS
-            b.extend_from_slice(&0u32.to_le_bytes()); // reserved
-            b.extend_from_slice(&ts_ms.to_le_bytes());
-            b.extend_from_slice(&(opus.len() as u32).to_le_bytes());
+            b.extend_from_slice(&v.version_code().to_be_bytes());
+            b.extend_from_slice(&0u16.to_be_bytes()); // type = OPUS
+            b.extend_from_slice(&0u32.to_be_bytes()); // reserved
+            b.extend_from_slice(&ts_ms.to_be_bytes());
+            b.extend_from_slice(&(opus.len() as u32).to_be_bytes());
             b.extend_from_slice(opus);
             b
         }
@@ -298,14 +303,14 @@ pub fn wrap_downlink(v: BinVersion, opus: &[u8], ts_ms: u32) -> Vec<u8> {
             let mut b = Vec::with_capacity(4 + opus.len());
             b.push(0); // type = OPUS
             b.push(0); // reserved
-            b.extend_from_slice(&(opus.len() as u16).to_le_bytes());
+            b.extend_from_slice(&(opus.len() as u16).to_be_bytes());
             b.extend_from_slice(opus);
             b
         }
     }
 }
 
-/// 上行剥离：从设备发来的二进制帧中取出 Opus 载荷。
+/// 上行剥离：从设备发来的二进制帧中取出 Opus 载荷（整数字段为网络序，见 [`wrap_downlink`]）。
 pub fn unwrap_uplink(v: BinVersion, data: &[u8]) -> &[u8] {
     match v {
         BinVersion::V1 => data,
@@ -313,7 +318,7 @@ pub fn unwrap_uplink(v: BinVersion, data: &[u8]) -> &[u8] {
             if data.len() < 16 {
                 return &[];
             }
-            let size = u32::from_le_bytes([data[12], data[13], data[14], data[15]]) as usize;
+            let size = u32::from_be_bytes([data[12], data[13], data[14], data[15]]) as usize;
             if data.len() < 16 + size {
                 return &[];
             }
@@ -323,7 +328,7 @@ pub fn unwrap_uplink(v: BinVersion, data: &[u8]) -> &[u8] {
             if data.len() < 4 {
                 return &[];
             }
-            let size = u16::from_le_bytes([data[2], data[3]]) as usize;
+            let size = u16::from_be_bytes([data[2], data[3]]) as usize;
             if data.len() < 4 + size {
                 return &[];
             }
@@ -364,13 +369,35 @@ mod tests {
         assert_eq!(unwrap_uplink(BinVersion::V1, &wrapped), &opus);
     }
 
+    /// ⚠️ 字节序回归（对齐固件 `htons/htonl`，勿改回小端）：逐字节核对 v2/v3 布局。
+    #[test]
+    fn bin_v2_v3_big_endian_layout() {
+        let opus = [0xAAu8, 0xBB, 0xCC];
+        // v2: version=2(大端 00 02，等于协商版本号) | type=0 | reserved=0 | ts(大端) | size(大端)
+        let v2 = wrap_downlink(BinVersion::V2, &opus, 0x0102_0304);
+        assert_eq!(&v2[0..2], &[0x00, 0x02], "version 必须大端且等于协商版本");
+        assert_eq!(&v2[2..4], &[0x00, 0x00], "type=OPUS（大端）");
+        assert_eq!(&v2[4..8], &[0x00, 0x00, 0x00, 0x00], "reserved（大端）");
+        assert_eq!(&v2[8..12], &[0x01, 0x02, 0x03, 0x04], "timestamp 必须大端");
+        assert_eq!(&v2[12..16], &[0x00, 0x00, 0x00, 0x03], "payload_size 必须大端");
+        assert_eq!(&v2[16..], &opus);
+        // 上行剥离同字节序
+        assert_eq!(unwrap_uplink(BinVersion::V2, &v2), &opus);
+        // v3: type | reserved | size(大端)
+        let v3 = wrap_downlink(BinVersion::V3, &opus, 0);
+        assert_eq!(&v3[0..2], &[0x00, 0x00], "v3 type/reserved");
+        assert_eq!(&v3[2..4], &[0x00, 0x03], "v3 payload_size 必须大端");
+        assert_eq!(&v3[4..], &opus);
+        assert_eq!(unwrap_uplink(BinVersion::V3, &v3), &opus);
+    }
+
     #[test]
     fn bin_v2_roundtrip() {
         let opus = [9u8, 8, 7, 6];
         let wrapped = wrap_downlink(BinVersion::V2, &opus, 1234);
         assert_eq!(wrapped.len(), 16 + opus.len());
-        // v2 帧首 2 字节是 version 字段，必须等于 2（对齐固件上行 v2 写 htons(2)）。
-        assert_eq!(u16::from_le_bytes([wrapped[0], wrapped[1]]), 2);
+        // v2 帧首 2 字节是 version 字段 = 2，**网络序**（对齐固件 htons(2)；旧断言误用小端）。
+        assert_eq!(u16::from_be_bytes([wrapped[0], wrapped[1]]), 2);
         assert_eq!(unwrap_uplink(BinVersion::V2, &wrapped), &opus);
     }
 

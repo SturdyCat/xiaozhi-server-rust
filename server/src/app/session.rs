@@ -13,7 +13,7 @@ use std::time::Duration;
 use crate::plugins::aiui::{AiuiSession, FullChainEngine, FullChainTurn};
 use crate::app::audio::opus::OpusFrameDecoder;
 use crate::plugins::asr::AsrEngine;
-use crate::app::downlink::{poll_abort, send_sentence_audio_stream, send_tts_state};
+use crate::app::downlink::{poll_abort, send_sentence_audio_stream, send_tts_state, DownlinkPacer};
 use crate::engine::Engines;
 use crate::plugins::llm::LlmEvent;
 use crate::app::protocol::{BinVersion, ClientMessage, ServerMessage, unwrap_uplink};
@@ -74,6 +74,9 @@ pub struct Session<'a, T: Transport> {
     abort: Arc<AtomicBool>,
     /// 全链路引擎（[aiui].enabled 时启用；跨轮次长连接，Mutex 供 spawn_blocking 互斥）。
     aiui: Option<Arc<Mutex<dyn FullChainEngine>>>,
+    /// 下行节拍器：按帧长匀速下发（保护 ESP 解码队列，见 `downlink` 模块文档）。
+    /// 一次回复内跨句共享时间表（句间无缝）；每轮回复开始时 reset。
+    pacer: DownlinkPacer,
 }
 
 impl<'a, T: Transport> Session<'a, T> {
@@ -187,6 +190,7 @@ impl<'a, T: Transport> Session<'a, T> {
 
     /// AIUI 轮次结果下发：stt 文本 + tts start → 音频流 → tts stop → 会话历史。
     async fn aiui_downlink(&mut self, turn: &FullChainTurn) -> anyhow::Result<()> {
+        self.pacer.reset(); // 新一轮回复：节拍器时间表重置
         send_text(
             self.transport,
             &ServerMessage::Stt {
@@ -215,6 +219,8 @@ impl<'a, T: Transport> Session<'a, T> {
             &turn.stt,
             16000,
             chunk_rx,
+            &mut self.pacer,
+            &mut None,
         )
         .await?;
         send_tts_state(self.transport, &self.session_id, "stop").await?;
@@ -390,6 +396,10 @@ impl<'a, T: Transport> Session<'a, T> {
         };
 
         // 消费者：tts start → 逐句（sentence_start + spawn_blocking TTS + 逐帧下行）→ tts stop
+        // 新一轮回复：节拍器时间表重置（本回复内各句共享同一时间表 → 句间无缝）
+        self.pacer.reset();
+        // 首帧实际下发时刻（TTFA 观测用；pacing 后"句子下发完成"≠首帧出声时刻）
+        let mut first_frame_at: Option<std::time::Instant> = None;
         let mut tts_started = false;
         let mut interrupted = false;
         let mut sentences_done = 0usize;
@@ -433,6 +443,8 @@ impl<'a, T: Transport> Session<'a, T> {
                         &sentence,
                         tts_sr,
                         chunk_rx,
+                        &mut self.pacer,
+                        &mut first_frame_at,
                     )
                     .await?;
                     match producer.await {
@@ -445,9 +457,12 @@ impl<'a, T: Transport> Session<'a, T> {
                     }
                     sentences_done += 1;
                     if sentences_done == 1 {
+                        // TTFA = 用户文本就绪 → **首帧音频实际下发**（非句子播完）
+                        let ttfa_ms = first_frame_at
+                            .map(|t| t.duration_since(t0).as_millis())
+                            .unwrap_or_else(|| t0.elapsed().as_millis());
                         tracing::info!(
-                            "session {session_id} 首句下发（TTFA≈{}ms，{frames} 帧）",
-                            t0.elapsed().as_millis()
+                            "session {session_id} 首帧音频已下发（TTFA≈{ttfa_ms}ms，本句 {frames} 帧）"
                         );
                     }
                     if poll_abort(self.transport, &self.session_id, &self.abort) {
@@ -552,6 +567,7 @@ pub async fn run_session<T: Transport>(
         is_test,
         abort: Arc::new(AtomicBool::new(false)),
         aiui,
+        pacer: DownlinkPacer::default(),
     };
     session.run().await
 }
