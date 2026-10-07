@@ -62,9 +62,24 @@ async fn run(config: Config, config_path: Option<String>) -> Result<()> {
     );
 
     let engines = Engines::new(&config, config_path)?;
+    // 配置来源可见性：把实际加载的文件路径打到启动日志（"改配置不生效"类问题第一现场）
+    match &engines.config_path {
+        Some(p) => {
+            if crate::app::ws::config_is_persistent(p) {
+                tracing::info!("配置文件：{p}（挂载卷上，持久化 ✓）");
+            } else {
+                tracing::warn!(
+                    "配置文件：{p} ⚠️ 不在挂载卷上——容器重建会丢失！请按 docker-compose.yml 挂载 ./server-data:/data 并设 XIAOZHI_CONFIG=/data/config.toml"
+                );
+            }
+        }
+        None => tracing::warn!(
+            "未加载任何配置文件（XIAOZHI_CONFIG/--config 均未提供或读取失败）：使用内置默认配置，保存不会持久化（PUT /api/config 返回 400）"
+        ),
+    }
     // 发音人目录：读盘缓存/离线兜底 + 配置了控制台会话时后台刷新一次（失败非致命）
     crate::app::voices::init();
-    crate::app::voices::spawn_startup_refresh(engines.clone());
+    crate::app::voices::spawn_startup_probe(engines.clone());
     let app = router(engines);
 
     // 监听：永远 0.0.0.0，唯一可配的是端口（[server].port，默认 8000）——

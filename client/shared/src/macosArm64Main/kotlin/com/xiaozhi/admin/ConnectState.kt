@@ -118,6 +118,7 @@ class ConnectState(private val scope: PagerScope) {
                 // 填充配置表单（dirty 不受影响：程序填充不算用户改动）+ 拉取发音人目录
                 shell.form.fill(data)
                 shell.form.loadVoices(shell, base)
+                shell.form.loadConfigMeta(shell, base)
                 // 从配置提取 WS 鉴权 token，派生 WS 地址并自动连接
                 val token = data.optJSONObject("server")?.optString("expected_token", "") ?: ""
                 shell.bench.serverUrl = ws

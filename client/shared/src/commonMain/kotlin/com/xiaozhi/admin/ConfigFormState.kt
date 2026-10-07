@@ -9,6 +9,7 @@ import com.tencent.kuikly.core.pager.Pager
 import com.tencent.kuikly.core.reactive.collection.ObservableList
 import com.tencent.kuikly.core.reactive.handler.observable
 import com.tencent.kuikly.core.reactive.handler.observableList
+import com.tencent.kuikly.core.timer.setTimeout
 import com.tencent.kuikly.core.views.Text
 import com.tencent.kuikly.core.views.View
 
@@ -82,10 +83,6 @@ class ConfigFormState(private val scope: PagerScope) {
     var xfyunApiSecret by scope.observable("")
     var xfyunVoice by scope.observable("xiaoyan")
 
-    // AIUI 控制台会话（可选）：用于从平台接口拉取**已授权发音人目录**（浏览器登录抓包复制）。
-    // 至少含 ssoSessionId / x-secure-token / JSESSIONID；会话过期后重新粘贴。
-    var xfyunConsoleCookie by scope.observable("")
-    var xfyunConsoleCsrf by scope.observable("")
     /** 拉取目录/刷新用的服务器地址（连接流程写入；空=当前页同源）。 */
     var serverBase by scope.observable("")
     /** 上次“刷新音色目录”的结果提示（动作按钮反馈）。 */
@@ -93,6 +90,9 @@ class ConfigFormState(private val scope: PagerScope) {
     /** 上次“测试凭据”的结果提示（动作按钮反馈）。 */
     var credsTestMsg by scope.observable("")
     var credsTestOk by scope.observable(false)
+
+    /** 配置来源提示（配置文件路径 + 持久化状态；Server 配置卡展示）。 */
+    var configMetaMsg by scope.observable("")
 
     /** 讯飞三要素是否填齐——决定依赖凭据的音色选择区是否显示。 */
     fun xfyunCredsReady(): Boolean =
@@ -279,19 +279,49 @@ class ConfigFormState(private val scope: PagerScope) {
     }
 
     /**
-     * 触发服务端从 AIUI 平台**刷新**已授权发音人目录（POST /api/tts/voices/refresh），
-     * 成功后重拉 `GET /api/tts/voices` 更新下拉。需先在下方填写控制台会话并保存配置。
+     * 触发服务端**真实探测**发音人目录（POST /api/tts/voices/refresh，异步后台任务：
+     * 对候选池逐项调用合成 API 探测可用性），随后轮询 `GET /api/tts/voices` 直到
+     * `probing=false` 再刷新下拉。需先保存三要素（音色列表由真实 API 探测生成）。
      */
     fun refreshVoices(ctx: Pager) {
-        voicesRefreshMsg = "刷新中…"
+        voicesRefreshMsg = "探测中…（对候选音色逐个真实合成验证，约需 1 分钟）"
         val headers = JSONObject().apply { put("Content-Type", "application/json") }
         network(ctx).httpRequest("${serverBase}/api/tts/voices/refresh", true, JSONObject(), headers) { _, success, errorMsg, resp ->
             val code = resp.statusCode
             if (success && (code == null || code in 200..299)) {
-                voicesRefreshMsg = "已刷新"
+                pollVoices(ctx, attempts = 0)
+            } else {
+                voicesRefreshMsg = "探测启动失败: ${if (errorMsg.isNotEmpty()) errorMsg else "HTTP $code"}"
+            }
+        }
+    }
+
+    /** 轮询探测进度（后台任务完成后自动刷新下拉；最多约 3 分钟）。 */
+    private fun pollVoices(ctx: Pager, attempts: Int) {
+        if (attempts > 90) {
+            voicesRefreshMsg = "探测超时（请查看服务端日志）"
+            return
+        }
+        network(ctx).requestGet("${serverBase}/api/tts/voices", JSONObject()) { data, success, _, _ ->
+            if (success && data?.optBoolean("probing", false) == false) {
                 loadVoices(ctx, serverBase)
             } else {
-                voicesRefreshMsg = "刷新失败: ${if (errorMsg.isNotEmpty()) errorMsg else "HTTP $code"}（检查控制台会话是否过期）"
+                ctx.setTimeout(2000) { pollVoices(ctx, attempts + 1) }
+            }
+        }
+    }
+
+    /** 拉取配置来源元信息（GET /api/config/meta）→ 展示"配置文件路径 + 是否持久化"。 */
+    fun loadConfigMeta(ctx: Pager, baseUrl: String = "") {
+        network(ctx).requestGet("${baseUrl}/api/config/meta", JSONObject()) { data, success, _, _ ->
+            if (!success) return@requestGet
+            val path = data?.optString("config_path", "") ?: ""
+            val persistent = data?.optBoolean("persistent", true) ?: true
+            val hint = data?.optString("hint", "") ?: ""
+            configMetaMsg = when {
+                path.isEmpty() -> "配置来源：内置默认（未指定配置文件，保存不会持久化）"
+                !persistent -> "配置来源：$path ⚠️ 不在挂载卷上，重建容器会丢失！$hint"
+                else -> "配置来源：$path（持久化 ✓）"
             }
         }
     }
@@ -325,9 +355,9 @@ class ConfigFormState(private val scope: PagerScope) {
             // 目录到位后反推当前配置音色的分组与类型（fill 时目录可能尚未拉取）
             deriveVoiceGroupAndType()
             reloadXfyunVoiceOptions()
-            // 空目录（尚未从平台拉取过）：给出可行动指引（非错误，避免误以为服务端坏了）
+            // 空目录（尚未探测过）：给出可行动指引（非错误，避免误以为服务端坏了）
             if (arr.length() == 0) {
-                voicesRefreshMsg = "音色列表为空：填写控制台会话并保存后点「刷新音色目录」（或先在测试台「测试凭据」验证密钥可用）"
+                voicesRefreshMsg = "音色列表为空：保存三要素后点「探测音色目录」（服务端会对候选音色逐个真实合成验证）"
             }
         }
     }
@@ -344,6 +374,7 @@ class ConfigFormState(private val scope: PagerScope) {
             if (success) {
                 fill(data)
                 loadVoices(ctx, baseUrl)
+                loadConfigMeta(ctx, baseUrl)
                 statusMsg = "已加载配置"
                 statusLevel = "ok"
             } else {
@@ -399,8 +430,6 @@ class ConfigFormState(private val scope: PagerScope) {
                     put("api_key", xfyunApiKey)
                     put("api_secret", xfyunApiSecret)
                     put("voice", xfyunVoice)
-                    put("console_cookie", xfyunConsoleCookie)
-                    put("console_csrf", xfyunConsoleCsrf)
                 })
             })
             put("llm", JSONObject().apply {
@@ -422,16 +451,23 @@ class ConfigFormState(private val scope: PagerScope) {
         // macApp 表现为「保存配置」失败）。同时按 HTTP 状态码判定成功：
         // 传输层 success 且 statusCode 非 2xx（如 415/400）时给出明确错误。
         val headers = JSONObject().apply { put("Content-Type", "application/json") }
-        network(ctx).httpRequest("${baseUrl}/api/config", true, body, headers) { _, success, errorMsg, resp ->
+        network(ctx).httpRequest("${baseUrl}/api/config", true, body, headers) { data, success, errorMsg, resp ->
             saving = false
             val code = resp.statusCode
+            // 服务端返回 JSON {ok, message, config_path}：优先透传 message（含**实际写入路径**
+            // 与持久化告警）——"配置怎么没生效/丢哪了"直接可见。
+            val serverMsg = data?.optString("message", "") ?: ""
             if (success && (code == null || code in 200..299)) {
                 dirty = false
                 lastSavedAt = "已保存"
-                statusMsg = "保存成功（引擎参数需重启生效）"
+                statusMsg = serverMsg.ifEmpty { "保存成功（引擎参数需重启生效）" }
                 statusLevel = "ok"
+                // 三要素已填齐时：保存即自动触发音色探测（目录为空或想更新时最省事；失败不影响保存）
+                if (xfyunCredsReady()) {
+                    refreshVoices(ctx)
+                }
             } else {
-                statusMsg = "保存失败: ${if (errorMsg.isNotEmpty()) errorMsg else "HTTP $code"}"
+                statusMsg = "保存失败: ${serverMsg.ifEmpty { if (errorMsg.isNotEmpty()) errorMsg else "HTTP $code" }}"
                 statusLevel = "error"
             }
         }
@@ -487,8 +523,6 @@ class ConfigFormState(private val scope: PagerScope) {
                 xfyunApiKey = x.optString("api_key", xfyunApiKey)
                 xfyunApiSecret = x.optString("api_secret", xfyunApiSecret)
                 xfyunVoice = x.optString("voice", xfyunVoice)
-                xfyunConsoleCookie = x.optString("console_cookie", xfyunConsoleCookie)
-                xfyunConsoleCsrf = x.optString("console_csrf", xfyunConsoleCsrf)
                 // 按已存音色反推分组：不在预置目录 → 自定义（手填）
                 deriveVoiceGroupAndType()
                 reloadXfyunVoiceOptions()
@@ -546,6 +580,17 @@ fun ViewContainer<*, *>.renderForm(
 
 fun ViewContainer<*, *>.serverConfigCard(form: ConfigFormState) {
     groupedCard("Server") {
+        // 配置来源（路径 + 持久化）：一眼定位"改配置不生效/重启即丢"类问题
+        vif({ form.configMetaMsg.isNotEmpty() }) {
+            Text {
+                attr {
+                    fontSize(AdminType.micro)
+                    color(AdminColors.textTertiary)
+                    marginBottom(AdminSpace.xs)
+                    text(form.configMetaMsg)
+                }
+            }
+        }
         labeledField("port", { form.port }, { form.port = it; form.dirty = true }, "8000")
         labeledField("expected_token", { form.expectedToken }, { form.expectedToken = it; form.dirty = true })
         labeledField("worker_threads", { form.workerThreads }, { form.workerThreads = it; form.dirty = true })
@@ -690,14 +735,10 @@ fun ViewContainer<*, *>.ttsConfigCard(form: ConfigFormState, ctx: Pager) {
                         }
                     }
                 }
-                // AIUI 控制台会话（可选）：发音人目录动态拉取用；浏览器登录 aiui.xfyun.cn →
-                // F12 Network → 任意请求 → 复制 Cookie 整串 / X-Csrf-Token 请求头
-                labeledField("console_cookie（可选）", { form.xfyunConsoleCookie }, { form.xfyunConsoleCookie = it; form.dirty = true })
-                labeledField("console_csrf（可选）", { form.xfyunConsoleCsrf }, { form.xfyunConsoleCsrf = it; form.dirty = true })
                 // ⚠️ 音色列表依赖凭据：三要素未填齐时隐藏选择区（避免选出必然失败的音色）
                 vif({ form.xfyunCredsReady() }) {
                 actionRow {
-                    secondaryButton("刷新音色目录") { form.refreshVoices(ctx) }
+                    secondaryButton("探测音色目录") { form.refreshVoices(ctx) }
                     vif({ form.voicesRefreshMsg.isNotEmpty() }) {
                         View { attr { width(AdminSpace.sm) } }
                         Text {
@@ -773,7 +814,7 @@ fun ViewContainer<*, *>.ttsConfigCard(form: ConfigFormState, ctx: Pager) {
                         attr {
                             fontSize(AdminType.caption)
                             color(AdminColors.textTertiary)
-                            text("填写 app_id / api_key / api_secret 并点「测试凭据」通过后，此处显示可用音色列表。")
+                            text("填写 app_id / api_key / api_secret 并保存后，点「探测音色目录」生成可用音色列表（真实合成验证）。")
                         }
                     }
                 }

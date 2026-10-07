@@ -1,5 +1,5 @@
 //! 语音合成（TTS）引擎：本地 `sherpa-onnx` Kokoro INT8（`backend = "sherpa"`）
-//! 或科大讯飞在线合成（`backend = "xfyun"`，见 [`super::xfyun`]）。无 mock。
+//! 或讯飞 **AIUI 主动合成**（`backend = "xfyun"`，见 [`aiui`]；shared 签名助手见 [`xfyun`]）。无 mock。
 //!
 //! 合成结果为单声道 f32 PCM；下行前由音频层做（按需）重采样与 Opus 编码。
 //!
@@ -137,6 +137,8 @@ fn default_tts_threads() -> u32 {
     4
 }
 
+// 讯飞 AIUI 主动合成（在线 TTS 实现；音色探测同源，见 [`aiui::probe_voice`]）
+pub(crate) mod aiui;
 #[cfg(feature = "sherpa")]
 mod kokoro;
 // pub(crate)：AIUI 全链路插件复用同厂商的 HMAC 签名算法
@@ -144,7 +146,7 @@ pub(crate) mod xfyun;
 
 // bin crate 内部暂无直接引用者：作为插件对外 API 面保留
 #[allow(unused_imports)]
-pub use xfyun::{XfyunTts, XfyunTtsConfig};
+pub use xfyun::XfyunTtsConfig;
 
 use anyhow::Result;
 #[cfg(feature = "sherpa")]
@@ -212,9 +214,10 @@ fn build_sherpa_tts(cfg: &TtsConfig) -> Result<Arc<dyn TtsEngine>> {
 }
 
 /// 根据配置构造 TTS 引擎：`backend` 选择 `sherpa`（本地 Kokoro）或 `xfyun`（讯飞在线）。
+/// 根据配置构造 TTS 引擎：`backend` 选择 `sherpa`（本地 Kokoro）或 `xfyun`（讯飞 AIUI 在线合成）。
 pub fn build_tts(cfg: &TtsConfig) -> Result<Arc<dyn TtsEngine>> {
     match cfg.backend_kind() {
-        TtsBackendKind::Xfyun => Ok(Arc::new(xfyun::XfyunTts::new(&cfg.xfyun)?)),
+        TtsBackendKind::Xfyun => Ok(Arc::new(aiui::AiuiTts::new(&cfg.xfyun)?)),
         TtsBackendKind::Sherpa => build_sherpa(cfg),
     }
 }

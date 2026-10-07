@@ -875,7 +875,7 @@ private fun ViewContainer<*, *>.benchTtsPage(
                             attr {
                                 fontSize(AdminType.caption)
                                 color(AdminColors.textTertiary)
-                                text("先在右侧 TTS 配置卡填写 app_id / api_key / api_secret 并点「测试凭据」，通过后此处显示可用音色列表。")
+                                text("先在右侧 TTS 配置卡填写 app_id / api_key / api_secret 并保存，再点「探测音色目录」生成可用音色列表。")
                             }
                         }
                     }

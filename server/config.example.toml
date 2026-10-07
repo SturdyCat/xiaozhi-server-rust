@@ -69,11 +69,9 @@ app_id = ""
 api_key = ""
 api_secret = ""
 voice = "xiaoyan"
-# AIUI 控制台会话（可选）：用于从平台接口拉取「已授权发音人目录」（GET /api/tts/voices）。
-# 获取：浏览器登录 aiui.xfyun.cn → F12 Network → 任意请求 → 复制 Cookie 整串 / X-Csrf-Token 请求头。
-# 配置后服务端启动自动刷新一次，也可在 TTS 配置卡点「刷新音色目录」；会话过期后重新粘贴。
-console_cookie = ""
-console_csrf = ""
+# 发音人：AIUI 主动合成 API（wss://aiui.xf-yun.com/v3/aiint/sos，scene=IFLYTEK.tts）支持
+# 普通 x2_* / 超拟人 x4_* / 极速超拟人 x5_/x6_ 全系。音色列表由服务端**真实探测**生成
+# （GET /api/tts/voices；macApp 配置卡「探测音色目录」触发），只列出实际可用的音色。
 
 [llm]
 # LLM 恒为 OpenAI 兼容 Responses API（HTTP），无 mock。

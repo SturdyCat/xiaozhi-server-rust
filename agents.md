@@ -108,12 +108,19 @@ LLM 只有 OpenAI 兼容 Responses API 一条路径；联调失败先检查 `[ll
 
 ### 5.2b 讯飞在线 TTS（[tts].backend="xfyun"）要点
 
-- 协议 = `wss://tts-api.xfyun.cn/v2/tts`（**经典 v2**，非 AIUI 交互链路）：URL 签名鉴权
-  （`authorization`/`date`/`host` 三参数，HMAC-SHA256；`date` 必须 RFC1123/GMT，服务端容忍 ±300s）。
+- 协议 = **AIUI 主动合成 API** `wss://aiui.xf-yun.com/v3/aiint/sos`
+  （`scene="IFLYTEK.tts"`、`interact_mode="oneshot"`、`header.status=payload.text.status=3` 文本一帧发完；
+  鉴权同官方 doc-404：HMAC-SHA256 URL 签名；响应 `payload.tts.audio` base64 PCM 分帧，`header.status==2` 收尾）。
+  相比旧 `tts-api.xfyun.cn/v2/tts`：**支持的音色更广**（x4 超拟人在 v2/tts 报 11200、AIUI 链路可用）。
+  实现见 `plugins/tts/aiui.rs`；`plugins/tts/xfyun.rs` 现仅存凭据结构 + 签名/错误提示助手。
+- **音色目录 = 真实 API 探测**（`app/voices.rs`）：讯飞无"列举发音人"的官方 API，服务端对候选池
+  （`CANDIDATES`，148 个命名空间条目）逐项调用合成 API 验证，**通过的才进目录**（缓存 /data/voices.json）。
+  ⚠️ 平台有**并发限流**（实测 6 并发大量假阴性 11200/10163，串行/低并发恢复）→ 探测并发固定 2 + 失败重试一次；
+  全量探测约 1 分钟（macApp「探测音色目录」触发 → 轮询 `probing` 字段 → 完成后重拉）。
 - **测试台/流水线共用流式**：服务端合成过程中边收 base64 PCM 边下发（首片即出声）；
   重采样器与 Opus 编码器**跨分片复用**（各自独立会在边界产生相位跳变/爆音）。
 - 合成失败（构建失败/凭据错误/网络）经 `tts_test` 结果帧回报测试台（`{type:"tts_test", state, engine, text}`），
-  不再静默——卡片会显示「合成失败：原因」。
+  不再静默——卡片会显示「合成失败：原因」；测试台所选 vcn 随 `tts_test.vcn` 下发（本次合成即用，无需先保存）。
 - 密钥只在服务端配置里；管理页保存后无需重启（热切换：会话/tts_test 时读盘比对 `[tts]` 签名重建）。
 - **本地/远程分层（UI 与配置约定）**：`[tts]` 本体字段 = 本地引擎参数；`[tts.<provider>]` 独立段 = 远程供应商凭据
   （现有 xfyun；azure/openai 等未来供应商各自一段）。管理页 TTS 卡为两级下拉（合成方式 → 引擎/服务商），

@@ -53,6 +53,8 @@ pub fn router(engines: Arc<Engines>) -> Router {
         .route("/api/health", get(health))
         .route("/api/ws", get(ws_handler))
         .route("/api/config", get(get_config).put(put_config).post(put_config))
+        // 配置来源元信息（macApp 显示"配置文件路径 + 是否持久化"，排查配置丢失去向）
+        .route("/api/config/meta", get(config_meta))
         // 小智固件的 OTA 引导端点（带/不带尾斜杠都注册：固件配置的 URL 以 / 结尾）。
         // ⚠️ 所有接口必须在 /api 之下（接口规范），固件 OTA_URL 指到 /api/ota/ 即可——
         // 该地址完全可配置，无需对齐官方服务器的 /xiaozhi/ota/ 路径。
@@ -269,23 +271,94 @@ async fn put_config(
         None => {
             return (
                 StatusCode::BAD_REQUEST,
-                "server 以内置默认配置启动，未指定配置文件，无法持久化。请用 --config 指定 config.toml 后重启。",
+                json_msg(false, "server 以内置默认配置启动，未指定配置文件，无法持久化。请用 --config 指定 config.toml 后重启。", None),
             )
-            .into_response()
+                .into_response()
         }
     };
     match persist_config(&path, &body) {
-        Ok(()) => (
-            StatusCode::OK,
-            format!("配置已保存到 {path}；引擎相关参数需重启 server 生效。"),
-        )
-            .into_response(),
+        Ok(()) => {
+            // 保存成功即回报**实际写入路径**——配置"看不到/丢失"类问题可由此一眼定位
+            //（例如容器内路径与宿主机挂载不一致时，Toast 会显示真实路径）。
+            let mut msg = format!("配置已保存到 {path}；引擎相关参数需重启 server 生效。");
+            if !config_is_persistent(&path) {
+                msg.push_str(
+                    " ⚠️ 该路径不在挂载卷上：重建容器会丢失配置。请按 docker-compose.yml 挂载 ./server-data:/data（XIAOZHI_CONFIG=/data/config.toml）。",
+                );
+            }
+            (
+                StatusCode::OK,
+                json_msg(true, &msg, Some(&path)),
+            )
+                .into_response()
+        }
         // 健壮性：失败原因同时记入服务端日志（客户端 UI 只能看到状态码）
         Err(e) => {
             tracing::error!("PUT /api/config：写入 {path} 失败: {e:#}");
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response()
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json_msg(false, &format!("{e:#}"), Some(&path)),
+            )
+                .into_response()
         }
     }
+}
+
+/// 统一 JSON 响应体（macApp 读取 `message` 显示到 Toast）。
+fn json_msg(ok: bool, message: &str, config_path: Option<&str>) -> String {
+    serde_json::json!({ "ok": ok, "message": message, "config_path": config_path }).to_string()
+}
+
+/// 配置持久化判定：配置文件本身是挂载点（单文件 bind mount），或位于挂载目录之下
+///（如 /data/config.toml 落在 ./server-data:/data 卷内）→ 容器重建不丢。
+/// 非 Linux（macOS 本地开发）或 /proc 不可读时按"持久"处理（不误报）。
+pub(crate) fn config_is_persistent(path: &str) -> bool {
+    match std::fs::read_to_string("/proc/self/mountinfo") {
+        Ok(mi) => is_persistent_in(&mi, path),
+        Err(_) => true,
+    }
+}
+
+/// mountinfo 解析（独立函数便于单测）：挂载点为目标文件本身，或目标路径位于某挂载目录之下。
+fn is_persistent_in(mountinfo: &str, path: &str) -> bool {
+    for line in mountinfo.lines() {
+        let mut fields = line.split(' ');
+        // 格式：id parent major:minor root mount_point options ...
+        let _ = fields.next();
+        let _ = fields.next();
+        let _ = fields.next();
+        let _ = fields.next();
+        let Some(target) = fields.next() else { continue };
+        if target == path || path.starts_with(&format!("{target}/")) {
+            return true;
+        }
+    }
+    false
+}
+
+/// GET /api/config/meta：配置来源元信息（macApp 配置页展示，排查"配置去哪了"）。
+async fn config_meta(State(engines): State<Arc<Engines>>) -> Response {
+    let (path, loaded_from) = match &engines.config_path {
+        Some(p) => (Some(p.clone()), "file"),
+        None => (None, "default"),
+    };
+    let persistent = path.as_deref().map(config_is_persistent);
+    let hint = match (&path, persistent) {
+        (None, _) => "以内置默认配置运行，保存不会持久化（用 --config/XIAOZHI_CONFIG 指定文件后重启）",
+        (Some(_), Some(false)) => "⚠️ 配置文件不在挂载卷上：重建容器会丢失（请挂载 ./server-data:/data 并设 XIAOZHI_CONFIG=/data/config.toml）",
+        _ => "",
+    };
+    (
+        [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
+        serde_json::json!({
+            "config_path": path,
+            "loaded_from": loaded_from,
+            "persistent": persistent,
+            "hint": hint,
+        })
+        .to_string(),
+    )
+        .into_response()
 }
 
 async fn ws_handler(
@@ -387,6 +460,18 @@ async fn recv_hello<T: Transport>(transport: &mut T) -> anyhow::Result<ClientHel
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 持久化判定：目录挂载下的文件、文件级 bind mount 均算持久；容器层文件不算。
+    #[test]
+    fn persistence_detection() {
+        let mi = "25 30 0:23 / /data rw,relatime - ext4 /dev/sda1 rw\n\
+                  31 30 0:24 / /etc/hosts rw,relatime - ext4 /dev/sda1 rw\n\
+                  40 30 0:26 / /etc/xiaozhi/config.toml rw,relatime - ext4 /dev/sda1 rw\n";
+        assert!(is_persistent_in(mi, "/data/config.toml"), "目录挂载下的文件应持久");
+        assert!(is_persistent_in(mi, "/etc/xiaozhi/config.toml"), "文件级 bind mount 应持久");
+        assert!(!is_persistent_in(mi, "/etc/xiaozhi/other.toml"), "容器层文件不应判持久");
+        assert!(!is_persistent_in(mi, "/datax/config.toml"), "前缀相似但非子路径不应误判");
+    }
 
     /// OTA 响应契约（锁定固件 main/ota.cc 解析所需的字段形状）：
     /// websocket 为扁平对象 url/token/version；firmware.url 恒空（自建端不托管固件升级）。
