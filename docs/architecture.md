@@ -117,7 +117,7 @@ sequenceDiagram
 - **下行**：LLM 回复 → TTS 逐句合成 → 按协商的下行采样率（默认 24k）编码 Opus → 按 `binary_protocol_version` 封装下发。
 - **abort**：设备可随时发 `abort` 中断播报，会话立即停止剩余合成。
 
-> 会话状态机与流水线实现细节（上行/下行处理、`spawn_blocking` 隔离重推理、abort 中断、下行帧补齐逻辑）见 `../server/src/session.rs` 模块注释（权威说明）。
+> 会话状态机与流水线实现细节（上行/下行处理、`spawn_blocking` 隔离重推理、abort 中断、下行帧补齐逻辑）见 `../server/src/app/session.rs` 模块注释（权威说明）。
 
 ---
 
@@ -132,21 +132,21 @@ sequenceDiagram
   - `asr_test`（`action: start/stop`）：录音开始/结束后对整段缓冲一次性 ASR（跳过 VAD），结果以 `stt` 回包；
   - `tts_test`（`text` + 可选 `lang/speaker/speed`）：文本直接合成下发（跳过 ASR/LLM），复用 `tts start → sentence_start → 二进制帧 → stop` 序列。
 
-> serde 小写 `type` 标签是 AI 易踩的运行时陷阱（`cargo check` 无法发现），排查见 `../agents.md` §5.1；枚举定义与字段见 `../server/src/protocol.rs`。
+> serde 小写 `type` 标签是 AI 易踩的运行时陷阱（`cargo check` 无法发现），排查见 `../agents.md` §5.1；枚举定义与字段见 `../server/src/app/protocol.rs`。
 
 ### 4.2 二进制帧（Opus 包封装）
 
-二进制帧的字节布局（v1/v2/v3）、`wrap_downlink` / `unwrap_uplink` 的出口约束，已作为**权威说明**写入 `../server/src/protocol.rs` 模块注释（含完整字节序表格）。`protocol.rs` 是唯一的封装/解封装出口；浏览器测试台按同样规则嗅探（首字节特征判定 v2/v3，否则视为 v1）。
+二进制帧的字节布局（v1/v2/v3）、`wrap_downlink` / `unwrap_uplink` 的出口约束，已作为**权威说明**写入 `../server/src/app/protocol.rs` 模块注释（含完整字节序表格）。`protocol.rs` 是唯一的封装/解封装出口；浏览器测试台按同样规则嗅探（首字节特征判定 v2/v3，否则视为 v1）。
 
 ### 4.3 HTTP 端点
 
 | 路径 | 说明 |
 |---|---|
-| `GET /` | 静态托管管理页面（h5App 构建产物，`[server].admin_dir` 指向；目录缺失时返回友好提示，见 `../server/src/ws.rs`） |
+| `GET /` | 静态托管管理页面（h5App 构建产物，`[server].admin_dir` 指向；目录缺失时返回友好提示，见 `../server/src/app/ws.rs`） |
 | `GET /api/health` | 健康检查，返回 `xiaozhi-server-rust ok` |
 | `GET /api/ws` | WebSocket 会话入口 |
 
-> 全部 HTTP 端点、鉴权（`?token=` 兜底）与 `/api/config` 读写语义，见 `../server/src/ws.rs` 模块注释（权威说明）。
+> 全部 HTTP 端点、鉴权（`?token=` 兜底）与 `/api/config` 读写语义，见 `../server/src/app/ws.rs` 模块注释（权威说明）。
 
 鉴权：`[server].expected_token` 非空时，设备走 `Authorization: Bearer <token>` 请求头；浏览器 WebSocket 无法自定义请求头，额外支持 `?token=` 查询参数兜底。
 

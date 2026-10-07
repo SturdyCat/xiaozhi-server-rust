@@ -10,17 +10,18 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::aiui::{AiuiSession, AiuiTurn};
-use crate::audio::opus::OpusFrameDecoder;
-use crate::asr::AsrEngine;
+use crate::plugins::aiui::{AiuiSession, FullChainEngine, FullChainTurn};
+use crate::app::audio::opus::OpusFrameDecoder;
+use crate::plugins::asr::AsrEngine;
 use crate::config::Config;
-use crate::downlink::{poll_abort, send_sentence_audio_stream, send_tts_state};
+use crate::app::downlink::{poll_abort, send_sentence_audio_stream, send_tts_state};
 use crate::engine::Engines;
-use crate::llm::{LlmEvent, build_llm};
-use crate::protocol::{BinVersion, ClientMessage, ServerMessage, unwrap_uplink};
-use crate::splitter::SentenceSplitter;
-use crate::transport::{IncomingFrame, Transport};
-use crate::vad::VadEngine;
+use crate::plugins::llm::{LlmEvent, build_llm};
+use crate::plugins::tts::{build_tts, TtsBackendKind};
+use crate::app::protocol::{BinVersion, ClientMessage, ServerMessage, unwrap_uplink};
+use crate::app::splitter::SentenceSplitter;
+use crate::app::transport::{IncomingFrame, Transport};
+use crate::plugins::vad::VadEngine;
 
 /// 在 `spawn_blocking` 中执行同步阻塞的 CPU 密集调用（ASR/TTS 推理），
 /// 统一处理任务取消/panic 与内部错误，返回 `Err(String)`（含可读错误信息）。
@@ -71,8 +72,8 @@ pub struct Session<'a, T: Transport> {
     /// 打断标志（barge-in）：`handle_text` 收 abort、或流水线轮询到 socket 中 abort/断开时置位。
     /// 生产者（LLM 读流）与消费者（TTS 合成/下行）各阶段轮询，一轮对话结束重置。
     abort: Arc<AtomicBool>,
-    /// AIUI 全链路会话（[aiui].enabled 时启用；跨轮次长连接，Mutex 供 spawn_blocking 互斥）。
-    aiui: Option<Arc<Mutex<AiuiSession>>>,
+    /// 全链路引擎（[aiui].enabled 时启用；跨轮次长连接，Mutex 供 spawn_blocking 互斥）。
+    aiui: Option<Arc<Mutex<dyn FullChainEngine>>>,
 }
 
 impl<'a, T: Transport> Session<'a, T> {
@@ -185,7 +186,7 @@ impl<'a, T: Transport> Session<'a, T> {
     }
 
     /// AIUI 轮次结果下发：stt 文本 + tts start → 音频流 → tts stop → 会话历史。
-    async fn aiui_downlink(&mut self, turn: &AiuiTurn) -> anyhow::Result<()> {
+    async fn aiui_downlink(&mut self, turn: &FullChainTurn) -> anyhow::Result<()> {
         send_text(
             self.transport,
             &ServerMessage::Stt {
@@ -318,6 +319,7 @@ impl<'a, T: Transport> Session<'a, T> {
                 speaker,
                 lang,
                 speed,
+                vcn,
                 ..
             } => {
                 // 测试台专用端点：仅 hello.test=true 的会话受理。
@@ -333,7 +335,15 @@ impl<'a, T: Transport> Session<'a, T> {
                     .unwrap_or_else(|| self.engines.config.tts.lang.clone());
                 let speaker = speaker.unwrap_or(self.engines.config.tts.speaker);
                 let speed = speed.unwrap_or(self.engines.config.tts.speed);
-                tracing::info!("session {session_id} 测试合成：lang={lang} speaker={speaker} speed={speed}");
+                // 测试台音色覆盖：macApp 把当前选中的 vcn 随请求带上（无需先保存配置）。
+                let vcn_override = vcn.map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+                tracing::info!(
+                    "session {session_id} 测试合成：lang={lang} speaker={speaker} speed={speed}{}",
+                    vcn_override
+                        .as_deref()
+                        .map(|v| format!(" vcn={v}（测试台指定）"))
+                        .unwrap_or_default()
+                );
                 // 热切换：先按磁盘最新配置刷新 TTS 引擎（管理页保存后无需重启即可测新配置）。
                 // 刷新失败（读盘/构建失败）以 tts_test 结果回报，测试台对话框直接可见。
                 let engines = self.engines.clone();
@@ -354,7 +364,68 @@ impl<'a, T: Transport> Session<'a, T> {
                     .await?;
                     return Ok(());
                 }
-                let tts = self.engines.tts_for(&lang);
+                // 引擎选择：带 vcn 覆盖时按**磁盘最新配置**（凭据以保存值为准）即时构建
+                // 讯飞合成器（短连接、无模型加载，成本可忽略），本次合成用所选音色；
+                // 未带 vcn 时用热切换后的默认引擎。
+                let disk_tts = match &self.engines.config_path {
+                    Some(p) => Config::load(p).map(|c| c.tts).unwrap_or_else(|e| {
+                        tracing::warn!("session {session_id} 测试合成读盘配置失败（用启动配置）: {e}");
+                        self.engines.config.tts.clone()
+                    }),
+                    None => self.engines.config.tts.clone(),
+                };
+                let (tts, vcn_note) = match &vcn_override {
+                    Some(v) => {
+                        if disk_tts.backend_kind() != TtsBackendKind::Xfyun {
+                            // 音色覆盖只对讯飞远程引擎有意义；服务端仍是本地引擎时给出可行动提示
+                            let msg = format!(
+                                "音色「{v}」为远程音色，但服务端当前 TTS 引擎是本地（{}）：                                 请先在 TTS 配置卡把「合成方式」切到远程服务并保存配置",
+                                self.engines.tts_name()
+                            );
+                            tracing::warn!("session {session_id} {msg}");
+                            send_text(
+                                self.transport,
+                                &ServerMessage::TtsTestResult {
+                                    session_id,
+                                    state: "error".to_string(),
+                                    engine: Some(self.engines.tts_name().to_string()),
+                                    text: Some(msg),
+                                },
+                            )
+                            .await?;
+                            return Ok(());
+                        }
+                        let mut cfg = disk_tts.clone();
+                        cfg.xfyun.voice = v.clone();
+                        match build_tts(&cfg) {
+                            Ok(e) => (e, format!("，vcn={v}（测试台指定）")),
+                            Err(e) => {
+                                let msg = format!("按所选音色构建讯飞合成器失败: {e:#}");
+                                tracing::warn!("session {session_id} {msg}");
+                                send_text(
+                                    self.transport,
+                                    &ServerMessage::TtsTestResult {
+                                        session_id,
+                                        state: "error".to_string(),
+                                        engine: Some("xfyun".to_string()),
+                                        text: Some(msg),
+                                    },
+                                )
+                                .await?;
+                                return Ok(());
+                            }
+                        }
+                    }
+                    None => {
+                        let e = self.engines.tts_for(&lang);
+                        let note = if e.name() == "xfyun" {
+                            format!("，vcn={}（服务端配置）", disk_tts.xfyun.voice)
+                        } else {
+                            String::new()
+                        };
+                        (e, note)
+                    }
+                };
                 let tts_sr = tts.output_sample_rate();
                 let engine_name = tts.name().to_string();
                 let t0 = std::time::Instant::now();
@@ -386,7 +457,7 @@ impl<'a, T: Transport> Session<'a, T> {
                 match producer.await {
                     Ok(Ok(())) => {
                         tracing::info!(
-                            "session {session_id} 测试合成完成（{engine_name}）：耗时 {}ms，{} 帧 / {tts_sr}Hz",
+                            "session {session_id} 测试合成完成（{engine_name}）：耗时 {}ms，{} 帧 / {tts_sr}Hz{vcn_note}",
                             t0.elapsed().as_millis(),
                             frames
                         );
@@ -461,7 +532,7 @@ impl<'a, T: Transport> Session<'a, T> {
                 );
                 let llm = build_llm(&llm_cfg);
                 let t0 = std::time::Instant::now();
-                let result = llm.chat_stream(&[], &text, None, |_| true).await;
+                let result = llm.chat_stream(&[], &text, None, Box::new(|_| true)).await;
                 let elapsed = t0.elapsed().as_millis() as u64;
                 let (state, reply) = match result {
                     Ok(r) => ("ok", r.text),
@@ -556,17 +627,22 @@ impl<'a, T: Transport> Session<'a, T> {
                 let mut splitter = SentenceSplitter::new();
                 let result = engines
                     .llm
-                    .chat_stream(&history, &user, None, |event| {
-                        if abort.load(Ordering::Relaxed) {
-                            return false; // 设备打断：停止读流
-                        }
-                        if let LlmEvent::Text(delta) = event {
-                            for s in splitter.feed(&delta) {
-                                let _ = tx.send(s);
+                    .chat_stream(
+                        &history,
+                        &user,
+                        None,
+                        Box::new(|event| {
+                            if abort.load(Ordering::Relaxed) {
+                                return false; // 设备打断：停止读流
                             }
-                        }
-                        true
-                    })
+                            if let LlmEvent::Text(delta) = event {
+                                for s in splitter.feed(&delta) {
+                                    let _ = tx.send(s);
+                                }
+                            }
+                            true
+                        }),
+                    )
                     .await;
                 for s in splitter.flush() {
                     let _ = tx.send(s);
@@ -715,10 +791,11 @@ pub async fn run_session<T: Transport>(
             engines.config.aiui.sn_prefix,
             session_id.get(..8).unwrap_or(&session_id)
         );
-        Some(Arc::new(Mutex::new(AiuiSession::new(
+        let engine: Arc<Mutex<dyn FullChainEngine>> = Arc::new(Mutex::new(AiuiSession::new(
             engines.config.aiui.clone(),
             sn,
-        ))))
+        )));
+        Some(engine)
     } else {
         None
     };

@@ -9,7 +9,7 @@
 //! （实测单次 TTS 8~20s）。峰值 CPU 占用预算（N5105 等 4 核小主机）：
 //! tokio worker（默认 2）+ ASR 识别 2 线程 + TTS 合成（[tts].num_threads，默认 4）+ VAD 1 线程，
 //! 各段错峰执行，控制在 4 核以内为其他服务留余量；容器侧由 `docker-compose.yml` 的
-//! `cpus:"3.5"` 进一步限核。详见 [`crate::session`] 与各引擎模块注释。
+//! `cpus:"3.5"` 进一步限核。详见 [`crate::app::session`] 与各引擎模块注释。
 //!
 //! ## TTS 语言池与热切换
 //! Kokoro 的 `lang` 在建模时固定，故 [`Engines::tts_for`] 按语言按需构建并缓存
@@ -18,16 +18,16 @@
 //! 时读取磁盘配置：`[tts]` 引擎签名（backend / 关键参数）变化即重建并热替换——
 //! 管理页改配置保存后，无需重启即对**新会话**与测试台生效。
 
-use crate::asr::{build_asr, AsrEngine};
+use crate::plugins::asr::{build_asr, AsrEngine};
 use crate::config::Config;
-use crate::llm::{build_llm, Llm};
-use crate::tts::{build_tts, build_tts_with_lang, TtsEngine};
+use crate::plugins::llm::{build_llm, Llm};
+use crate::plugins::tts::{build_tts, build_tts_with_lang, TtsEngine};
 #[cfg(not(feature = "sherpa"))]
-use crate::vad::MockVad;
-use crate::vad::VadEngine;
+use crate::plugins::vad::MockVad;
+use crate::plugins::vad::VadEngine;
 #[cfg(feature = "sherpa")]
 use {
-    crate::vad::SherpaVad,
+    crate::plugins::vad::SherpaVad,
     anyhow::Context,
 };
 use anyhow::Result;

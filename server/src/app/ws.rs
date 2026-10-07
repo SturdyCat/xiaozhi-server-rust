@@ -1,5 +1,5 @@
 //! WebSocket 网关：HTTP 路由、握手与协商、鉴权，然后转入会话状态机
-//! （[`crate::session::run_session`]）。
+//! （[`crate::app::session::run_session`]）。
 //!
 //! ## 路由
 //! - `GET /api/health`：健康检查，返回 JSON（status/name/version）。
@@ -39,9 +39,9 @@ use uuid::Uuid;
 
 use crate::config::{Config, ServerConfig};
 use crate::engine::Engines;
-use crate::protocol::{AudioParams, BinVersion, ClientHello, ClientMessage, ServerMessage};
-use crate::session::{run_session, send_text, SessionParams};
-use crate::transport::{IncomingFrame, Transport, WsTransport};
+use crate::app::protocol::{AudioParams, BinVersion, ClientHello, ClientMessage, ServerMessage};
+use crate::app::session::{run_session, send_text, SessionParams};
+use crate::app::transport::{IncomingFrame, Transport, WsTransport};
 
 /// 构造 Axum 路由：API（健康检查 / WebSocket）之外，其余路径静态托管
 /// `config.server.admin_dir` 指向的管理页面（h5App 构建产物，含 index.html）。
@@ -59,8 +59,8 @@ pub fn router(engines: Arc<Engines>) -> Router {
         .route("/api/ota", get(ota).post(ota))
         .route("/api/ota/", get(ota).post(ota))
         // 固件托管（上传/下载/当前版本查询）+ 发音人目录，并入同一 /api 前缀
-        .merge(crate::firmware::router())
-        .merge(crate::voices::router());
+        .merge(crate::app::firmware::router())
+        .merge(crate::app::voices::router());
 
     let app = if Path::new(&admin_dir).is_dir() {
         // SPA：未知路径回退到 index.html，交给前端路由处理。
@@ -141,7 +141,7 @@ async fn ota(State(engines): State<Arc<Engines>>, headers: HeaderMap, body: Stri
             format!("localhost:{}", engines.config.server.port)
         });
 
-    let hosted = crate::firmware::latest().map(|m| m.version);
+    let hosted = crate::app::firmware::latest().map(|m| m.version);
     let payload = ota_payload(
         &host,
         &engines.config.server.expected_token,

@@ -1,20 +1,20 @@
-//! 下行音频发送：把合成后的 PCM 重采样、Opus 分帧，逐帧经承载（[`crate::transport::Transport`]）
+//! 下行音频发送：把合成后的 PCM 重采样、Opus 分帧，逐帧经承载（[`crate::app::transport::Transport`]）
 //! 下发设备，并在下行间隙轮询打断（barge-in）。
 //!
-//! 与 [`crate::session::Session`] 解耦为自由函数，仅依赖传入的传输实现 / 协商参数 /
+//! 与 [`crate::app::session::Session`] 解耦为自由函数，仅依赖传入的传输实现 / 协商参数 /
 //! 下行时间戳 / 打断标志——不持有会话可变状态，便于独立阅读与测试
-//! （打断轮询可用内存 [`crate::transport::IncomingFrame`] 序列单测，无需真实连接）。
+//! （打断轮询可用内存 [`crate::app::transport::IncomingFrame`] 序列单测，无需真实连接）。
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use anyhow::Result;
 
-use crate::audio::opus::OpusFrameEncoder;
-use crate::audio::resample::StreamingResampler;
-use crate::protocol::{ClientMessage, ServerMessage, wrap_downlink};
-use crate::session::{send_binary, send_text, SessionParams};
-use crate::transport::{IncomingFrame, Transport};
+use crate::app::audio::opus::OpusFrameEncoder;
+use crate::app::audio::resample::StreamingResampler;
+use crate::app::protocol::{ClientMessage, ServerMessage, wrap_downlink};
+use crate::app::session::{send_binary, send_text, SessionParams};
+use crate::app::transport::{IncomingFrame, Transport};
 use tokio::sync::mpsc;
 
 /// 非阻塞抽取承载中已到达的打断/关闭事件（流水线各等待点轮询）。
@@ -158,7 +158,7 @@ pub(crate) async fn send_sentence_audio_stream<T: Transport>(
 mod tests {
     use super::pad_tail;
     use super::poll_abort;
-    use crate::transport::{IncomingFrame, Transport};
+    use crate::app::transport::{IncomingFrame, Transport};
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
 
@@ -227,7 +227,6 @@ mod tests {
         let flag = abort_flag();
         assert!(!poll_abort(&mut t, "s1", &flag));
     }
-
 
     #[test]
     fn pad_tail_pads_partial_frame() {

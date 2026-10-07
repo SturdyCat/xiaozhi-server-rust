@@ -10,6 +10,7 @@ import com.tencent.kuikly.core.reactive.collection.ObservableList
 import com.tencent.kuikly.core.reactive.handler.observable
 import com.tencent.kuikly.core.reactive.handler.observableList
 import com.tencent.kuikly.core.views.Text
+import com.tencent.kuikly.core.views.View
 
 /**
  * 配置表单状态（跨端，commonMain，无平台依赖）。
@@ -80,6 +81,15 @@ class ConfigFormState(private val scope: PagerScope) {
     var xfyunApiKey by scope.observable("")
     var xfyunApiSecret by scope.observable("")
     var xfyunVoice by scope.observable("xiaoyan")
+
+    // AIUI 控制台会话（可选）：用于从平台接口拉取**已授权发音人目录**（浏览器登录抓包复制）。
+    // 至少含 ssoSessionId / x-secure-token / JSESSIONID；会话过期后重新粘贴。
+    var xfyunConsoleCookie by scope.observable("")
+    var xfyunConsoleCsrf by scope.observable("")
+    /** 拉取目录/刷新用的服务器地址（连接流程写入；空=当前页同源）。 */
+    var serverBase by scope.observable("")
+    /** 上次“刷新音色目录”的结果提示（动作按钮反馈）。 */
+    var voicesRefreshMsg by scope.observable("")
 
     // 音色两级选择：性别分组（女/男/自定义）× 音色类型（全部/普通/极速拟人）。
     // 音色列表经 /api/tts/voices 从服务端动态获取（服务端为唯一数据源：实测目录+控制台元数据）。
@@ -224,8 +234,27 @@ class ConfigFormState(private val scope: PagerScope) {
         }
     }
 
+    /**
+     * 触发服务端从 AIUI 平台**刷新**已授权发音人目录（POST /api/tts/voices/refresh），
+     * 成功后重拉 `GET /api/tts/voices` 更新下拉。需先在下方填写控制台会话并保存配置。
+     */
+    fun refreshVoices(ctx: Pager) {
+        voicesRefreshMsg = "刷新中…"
+        val headers = JSONObject().apply { put("Content-Type", "application/json") }
+        network(ctx).httpRequest("${serverBase}/api/tts/voices/refresh", true, JSONObject(), headers) { _, success, errorMsg, resp ->
+            val code = resp.statusCode
+            if (success && (code == null || code in 200..299)) {
+                voicesRefreshMsg = "已刷新"
+                loadVoices(ctx, serverBase)
+            } else {
+                voicesRefreshMsg = "刷新失败: ${if (errorMsg.isNotEmpty()) errorMsg else "HTTP $code"}（检查控制台会话是否过期）"
+            }
+        }
+    }
+
     /** 拉取服务端音色目录（GET /api/tts/voices）并按性别×类型重建下拉。 */
     fun loadVoices(ctx: Pager, baseUrl: String = "") {
+        serverBase = baseUrl // 供「刷新音色目录」按钮复用（macApp 连接流程不经 load()）
         network(ctx).requestGet("${baseUrl}/api/tts/voices", JSONObject()) { data, success, _, _ ->
             if (!success) return@requestGet
             val arr = data?.optJSONArray("voices") ?: return@requestGet
@@ -262,6 +291,7 @@ class ConfigFormState(private val scope: PagerScope) {
     private fun network(ctx: Pager): NetworkModule = ctx.acquireModule(NetworkModule.MODULE_NAME)
 
     fun load(ctx: Pager, baseUrl: String = "") {
+        serverBase = baseUrl
         network(ctx).requestGet("${baseUrl}/api/config", JSONObject()) { data, success, errorMsg, _ ->
             if (success) {
                 fill(data)
@@ -321,6 +351,8 @@ class ConfigFormState(private val scope: PagerScope) {
                     put("api_key", xfyunApiKey)
                     put("api_secret", xfyunApiSecret)
                     put("voice", xfyunVoice)
+                    put("console_cookie", xfyunConsoleCookie)
+                    put("console_csrf", xfyunConsoleCsrf)
                 })
             })
             put("llm", JSONObject().apply {
@@ -407,6 +439,8 @@ class ConfigFormState(private val scope: PagerScope) {
                 xfyunApiKey = x.optString("api_key", xfyunApiKey)
                 xfyunApiSecret = x.optString("api_secret", xfyunApiSecret)
                 xfyunVoice = x.optString("voice", xfyunVoice)
+                xfyunConsoleCookie = x.optString("console_cookie", xfyunConsoleCookie)
+                xfyunConsoleCsrf = x.optString("console_csrf", xfyunConsoleCsrf)
                 // 按已存音色反推分组：不在预置目录 → 自定义（手填）
                 deriveVoiceGroupAndType()
                 reloadXfyunVoiceOptions()
@@ -439,6 +473,7 @@ class ConfigFormState(private val scope: PagerScope) {
  */
 fun ViewContainer<*, *>.renderForm(
     form: ConfigFormState,
+    ctx: Pager,
     pageWidth: () -> Float,
     pageHeight: () -> Float,
 ) {
@@ -451,7 +486,7 @@ fun ViewContainer<*, *>.renderForm(
             TabPage("Audio") { audioConfigCard(form) },
             TabPage("ASR") { asrConfigCard(form) },
             TabPage("VAD") { vadConfigCard(form) },
-            TabPage("TTS") { ttsConfigCard(form) },
+            TabPage("TTS") { ttsConfigCard(form, ctx) },
             TabPage("LLM") { llmConfigCard(form) },
         ),
     )
@@ -502,7 +537,7 @@ fun ViewContainer<*, *>.vadConfigCard(form: ConfigFormState) {
     }
 }
 
-fun ViewContainer<*, *>.ttsConfigCard(form: ConfigFormState) {
+fun ViewContainer<*, *>.ttsConfigCard(form: ConfigFormState, ctx: Pager) {
     groupedCard("TTS") {
         // ===== 第一级：合成方式（本地模型=离线 / 远程服务=在线）=====
         // 官方 AlertDialog 基座下拉；切方式即联动切换引擎/服务商组与下方字段。
@@ -593,6 +628,23 @@ fun ViewContainer<*, *>.ttsConfigCard(form: ConfigFormState) {
                 labeledField("app_id", { form.xfyunAppId }, { form.xfyunAppId = it; form.dirty = true })
                 labeledField("api_key", { form.xfyunApiKey }, { form.xfyunApiKey = it; form.dirty = true })
                 labeledField("api_secret", { form.xfyunApiSecret }, { form.xfyunApiSecret = it; form.dirty = true })
+                // AIUI 控制台会话（可选）：发音人目录动态拉取用；浏览器登录 aiui.xfyun.cn →
+                // F12 Network → 任意请求 → 复制 Cookie 整串 / X-Csrf-Token 请求头
+                labeledField("console_cookie（可选）", { form.xfyunConsoleCookie }, { form.xfyunConsoleCookie = it; form.dirty = true })
+                labeledField("console_csrf（可选）", { form.xfyunConsoleCsrf }, { form.xfyunConsoleCsrf = it; form.dirty = true })
+                actionRow {
+                    secondaryButton("刷新音色目录") { form.refreshVoices(ctx) }
+                    vif({ form.voicesRefreshMsg.isNotEmpty() }) {
+                        View { attr { width(AdminSpace.sm) } }
+                        Text {
+                            attr {
+                                fontSize(AdminType.micro)
+                                color(AdminColors.textTertiary)
+                                text(form.voicesRefreshMsg)
+                            }
+                        }
+                    }
+                }
                 // 音色：分组下拉（女声/男声/自定义）→ 发音人下拉；完整清单以控制台为准
                 dropdownField(
                     label = "音色分组",

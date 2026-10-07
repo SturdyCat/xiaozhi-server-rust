@@ -1,4 +1,4 @@
-//! 科大讯飞**在线语音合成**（WebSocket `wss://tts-api.xfyun.cn/v2/tts`）客户端。
+//! 讯飞在线 TTS 插件实现：**在线语音合成**（WebSocket `wss://tts-api.xfyun.cn/v2/tts`）。
 //!
 //! 与本地 Kokoro（sherpa）并列的第二种 TTS 引擎，配置 `[tts].backend = "xfyun"` 启用。
 //! 协议与鉴权按官方文档实现（https://www.xfyun.cn/doc/tts/online_tts/API.html）：
@@ -18,17 +18,48 @@
 //! 单次调用全新连接（官方"短连接"语义），不持有跨请求状态。读写均设超时，避免讯飞侧
 //! 无响应时把阻塞线程挂死。
 
-use crate::config::XfyunTtsConfig;
-use crate::tts::{TtsChunkCallback, TtsEngine};
 use anyhow::{bail, Context, Result};
 use base64::Engine as _;
 use hmac::digest::KeyInit;
 use hmac::{Hmac, Mac};
+use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use std::net::TcpStream;
 use std::time::{Duration, Instant, SystemTime};
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::Message;
+
+use super::{TtsChunkCallback, TtsEngine};
+
+/// 科大讯飞在线语音合成（WebSocket v2/tts）凭据与音色。
+/// 在讯飞开放平台创建「在线语音合成」应用后取得 APPID/APPKEY/APPSECRET。
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct XfyunTtsConfig {
+    /// 应用 APPID（请求 common.app_id）。
+    #[serde(default)]
+    pub app_id: String,
+    /// APPKEY（签名 api_key=）。
+    #[serde(default)]
+    pub api_key: String,
+    /// APPSECRET（HMAC-SHA256 签名密钥）。
+    #[serde(default)]
+    pub api_secret: String,
+    /// 发音人（vcn），如 xiaoyan / x4_lingxiaoxuan_oral 等；默认 xiaoyan（讯飞默认女声）。
+    #[serde(default = "default_xfyun_voice")]
+    pub voice: String,
+    /// AIUI 控制台会话 Cookie（可选）：用于从平台接口**动态拉取已授权发音人目录**。
+    /// 获取：浏览器登录 aiui.xfyun.cn → F12 Network → 任意请求 → 复制 Cookie 整串
+    ///（至少含 ssoSessionId / x-secure-token / JSESSIONID）。会话过期后重新粘贴。
+    #[serde(default)]
+    pub console_cookie: String,
+    /// AIUI 控制台 X-Csrf-Token 请求头（与 Cookie 配套，同上方式复制）。
+    #[serde(default)]
+    pub console_csrf: String,
+}
+
+fn default_xfyun_voice() -> String {
+    "xiaoyan".into()
+}
 
 const HOST: &str = "tts-api.xfyun.cn";
 const PATH: &str = "/v2/tts";
@@ -319,6 +350,7 @@ mod tests {
             api_key: "k".into(),
             api_secret: "s".into(),
             voice: "xiaoyan".into(),
+            ..Default::default()
         };
         let req: serde_json::Value = serde_json::from_str(&build_request(&cfg, "你好", 1.0)).unwrap();
         assert_eq!(req["common"]["app_id"], "app1");
@@ -351,6 +383,7 @@ mod tests {
             api_key: "k".into(),
             api_secret: "s".into(),
             voice: "  ".into(),
+            ..Default::default()
         };
         assert_eq!(effective_voice(&empty), "xiaoyan");
         let set = XfyunTtsConfig {
@@ -382,6 +415,7 @@ mod tests {
             api_key,
             api_secret,
             voice: std::env::var("XFYUN_VOICE").unwrap_or_else(|_| "xiaoyan".into()),
+            ..Default::default()
         };
         println!("== vcn={} ==", effective_voice(&cfg));
         let tts = XfyunTts::new(&cfg).expect("构造引擎");

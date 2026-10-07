@@ -150,6 +150,10 @@ pub enum ClientMessage {
         /// 语速，None 时用服务器配置默认值。
         #[serde(default)]
         speed: Option<f32>,
+        /// 远程音色覆盖（讯飞 vcn）：测试台当前选中的发音人，仅本次合成生效；
+        /// None/空 时用服务端已保存配置（`[tts.xfyun].voice`）。
+        #[serde(default)]
+        vcn: Option<String>,
     },
     /// 测试台专用：直接调用 LLM 验证连通性（跳过 ASR/TTS，单轮无历史）。
     /// 服务端按磁盘上最新 `[llm]` 配置临时构建客户端，改完配置无需重启即可验证。
@@ -330,6 +334,26 @@ pub fn unwrap_uplink(v: BinVersion, data: &[u8]) -> &[u8] {
 
 #[cfg(test)]
 mod tests {
+
+    /// tts_test 的 vcn 字段（测试台音色覆盖）：序列化可用、解析缺省为 None。
+    #[test]
+    fn tts_test_vcn_roundtrip() {
+        let with: ClientMessage = serde_json::from_str(
+            r#"{"type":"tts_test","text":"你好","speaker":3,"lang":"zh","speed":1.0,"vcn":"x6_lingxiaoyue_pro"}"#,
+        )
+        .unwrap();
+        match with {
+            ClientMessage::TtsTest { vcn: Some(v), .. } => assert_eq!(v, "x6_lingxiaoyue_pro"),
+            other => panic!("解析失败: {other:?}"),
+        }
+        // 老客户端不带 vcn：缺省 None（服务端回退已保存配置）
+        let without: ClientMessage =
+            serde_json::from_str(r#"{"type":"tts_test","text":"你好"}"#).unwrap();
+        match without {
+            ClientMessage::TtsTest { vcn: None, .. } => {}
+            other => panic!("缺省应 None: {other:?}"),
+        }
+    }
     use super::*;
 
     #[test]

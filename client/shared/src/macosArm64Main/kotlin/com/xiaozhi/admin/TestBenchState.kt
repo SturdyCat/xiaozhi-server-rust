@@ -265,7 +265,7 @@ class TestBenchState(private val scope: PagerScope) {
     // TTS：合成（实时播放）→ 完成后波形回放
     // ============================================================
 
-    fun speak(ctx: Pager) {
+    fun speak(ctx: Pager, vcn: String) {
         if (ttsBusy) return
         if (ttsText.isBlank()) {
             statusMsg = "请输入要合成的文字"
@@ -280,7 +280,9 @@ class TestBenchState(private val scope: PagerScope) {
         statusMsg = "合成中…"
         val speed = ttsSpeed.toDoubleOrNull() ?: 1.0
         val lang = resolveLang(ttsLang)
-        xz(ctx).speak(ttsText, ttsSpeaker, lang, speed) { result ->
+        // vcn（远程音色）由调用点从配置取（TTS 卡/测试卡同一 form）：
+        // 服务端本次合成即用它，无需先保存配置；本地（Kokoro）模式传空串。
+        xz(ctx).speak(ttsText, ttsSpeaker, lang, speed, vcn) { result ->
             ttsEngine = result?.optString("engine", "") ?: ""
             if (result?.optString("state", "stop") == "error") {
                 // 服务端合成失败（引擎切换失败/凭据错误/网络等）：错误原因显示在卡片
@@ -884,7 +886,8 @@ private fun ViewContainer<*, *>.benchTtsPage(
                         loadingText = "合成中…",
                         enabled = { bench.asrPhase != "recording" && bench.asrPhase != "starting" && bench.asrPhase != "recognizing" },
                     ) {
-                        bench.speak(ctx)
+                        // 远程模式把测试卡当前选中音色随请求下发（无需先保存配置）
+                        bench.speak(ctx, if (form.ttsMode == "remote") form.xfyunVoice else "")
                     }
                     // 服务端回报的引擎名（sherpa/xfyun）；成功合成后可见
                     vif({ bench.ttsEngine.isNotEmpty() }) {
@@ -919,7 +922,7 @@ private fun ViewContainer<*, *>.benchTtsPage(
             }
         },
         right = {
-            ttsConfigCard(form)
+            ttsConfigCard(form, ctx)
         },
     )
 }

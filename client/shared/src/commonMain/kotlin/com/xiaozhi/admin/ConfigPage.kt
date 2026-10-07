@@ -67,6 +67,7 @@ class ConfigPage : Pager() {
             // 配置标签页（tabbedPanel：官方 Tabs+PageList，六个 tab 全量配置汇总）
             renderForm(
                 ctx.form,
+                ctx,
                 pageWidth = pageWidth,
                 pageHeight = pageHeight,
             )

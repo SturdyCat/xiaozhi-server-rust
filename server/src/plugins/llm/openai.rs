@@ -1,77 +1,26 @@
-//! 远程 LLM 调用（OpenAI 兼容 **Responses API**：`POST {api_base}`，默认 `/v1/responses`）。
+//! OpenAI 兼容 **Responses API** 实现——LLM 插件的第一个 provider。
 //!
-//! [`LlmClient`] 为唯一实现：真实 HTTP 调用（OpenAI Responses 协议），支持 **SSE 流式**与
-//! **原生工具调用**（扁平 `tools[].{type,name,description,parameters}` / `function_call` 项）。
-//! 无 mock——LLM 只有这一条真实路径。
+//! 请求：`model` + `instructions`（system prompt）+ `input[]`（多轮历史，`input_text`/
+//! `output_text` 结构化内容）+ `tools[]`（扁平结构）+ `stream`。
+//! SSE 事件：`response.output_text.delta`（文本增量）、`response.output_item.added`
+//! （注册 `function_call` 项：`call_id`/`name`）、`response.function_call_arguments.delta`
+//! （入参增量）；`response.completed` 结束。
+//! 非 SSE 回退：响应非 `text/event-stream`（或 `[llm].stream=false`）时整段解析 `output[]`。
 //!
-//! 多轮历史由 [`crate::session`] 维护；本模块只负责单次请求。
-//!
-//! 与 ASR/TTS/VAD 不同，`LlmClient` 是 **异步 HTTP 调用**（`reqwest` + `rustls`），
-//! 不占用 tokio worker 计算线程，无需 `spawn_blocking` 隔离。它是唯一的非 CPU 密集引擎。
-//!
-//! ## 流式与工具调用（Responses 协议）
-//! - 请求体：`model` + `instructions`（system prompt）+ `input[]`（多轮历史，
-//!   `input_text`/`output_text` 结构化内容）+ `tools[]`（扁平结构）+ `stream`。
-//! - SSE 事件：`response.output_text.delta`（文本增量）、`response.output_item.added`
-//!   （注册 `function_call` 项：`call_id`/`name`）、`response.function_call_arguments.delta`
-//!   （入参增量）；`response.completed` 结束。
-//! - 非 SSE 回退：响应非 `text/event-stream`（或 `[llm].stream=false`）时整段解析
-//!   `output[]`（`message` 项拼 `output_text`、`function_call` 项收集工具调用）。
-//! - [`Llm::chat_stream`] 以回调逐块回传 [`LlmEvent`]；`ToolCall` 累加完整后才回传。
+//! 多轮历史由调用方（[`crate::app::session`]）维护；本模块只负责单次请求。
+//! 异步 HTTP（`reqwest` + `rustls`），不占用 tokio worker 计算线程，无需 `spawn_blocking`。
 
-use crate::config::LlmConfig;
-use crate::sse::SseParser;
+use crate::app::sse::SseParser;
 use anyhow::{Context, Result};
 use futures_util::StreamExt;
 use serde_json::{json, Value};
+use std::future::Future;
+use std::pin::Pin;
 use uuid::Uuid;
 
-/// 设备/服务端可向 LLM 声明的工具规格（Responses 扁平结构 `tools[]` 项）。
-#[derive(Debug, Clone)]
-pub struct ToolSpec {
-    pub name: String,
-    pub description: String,
-    /// JSON Schema 对象（`parameters`），描述工具入参。
-    pub parameters: Value,
-}
+use crate::config::LlmConfig;
+use super::{LlmEvent, LlmProvider, LlmTurnResult, ToolCall, ToolSpec};
 
-/// 一次收集完整的工具调用（来自 LLM 的 `function_call` 项）。
-///
-/// `id` 对应 Responses 的 `call_id`（回填 `function_call_output.call_id` 用）。
-/// 字段由阶段三（MCP 工具闭环）消费，当前仅 session 聚合路径不读。
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
-pub struct ToolCall {
-    pub id: String,
-    pub name: String,
-    /// 工具入参的原始 JSON 字符串（如 `{"location":"Beijing"}`）。
-    pub arguments: String,
-}
-
-/// 流式过程中回传给调用方的事件。
-/// `Text`/`ToolCall` 载荷由阶段二（按句下发）/阶段三（MCP 闭环）消费。
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
-pub enum LlmEvent {
-    /// 文本增量片段（`response.output_text.delta` 的 `delta`）。
-    Text(String),
-    /// 一个完整收集的工具调用（流结束后才回传）。
-    ToolCall(ToolCall),
-    /// 本轮流转结束。
-    Done,
-}
-
-/// 一轮对话的汇总结果（已收齐全部文本与工具调用）。
-#[derive(Debug, Clone, Default)]
-pub struct LlmTurnResult {
-    pub text: String,
-    /// 阶段三（MCP 工具闭环）消费；当前聚合路径仅用 `text`。
-    #[allow(dead_code)]
-    pub tool_calls: Vec<ToolCall>,
-}
-
-/// 解析非流式（整段）Responses 响应：遍历 `output[]`，
-/// `message` 项拼接 `content[].output_text`，`function_call` 项收集工具调用。
 fn parse_whole_response(v: &Value) -> (String, Vec<ToolCall>) {
     let mut text = String::new();
     let mut calls = Vec::new();
@@ -169,12 +118,12 @@ impl LlmClient {
     /// - `tools`：可选工具规格（来自设备 `features.mcp` 等）。非空时写入扁平 `tools[]`。
     /// - 按 `[llm].stream` 发 `stream:true` 并解析 SSE；若响应非 `text/event-stream` 或配置关闭，
     ///   自动回退为整段解析（非 SSE 路径）。
-    pub async fn chat_stream(
-        &self,
-        history: &[(String, String)],
-        user_text: &str,
-        tools: Option<&[ToolSpec]>,
-        mut on_event: impl FnMut(LlmEvent) -> bool,
+    async fn chat_stream_inner<'a>(
+        &'a self,
+        history: &'a [(String, String)],
+        user_text: &'a str,
+        tools: Option<&'a [ToolSpec]>,
+        mut on_event: Box<dyn FnMut(LlmEvent) -> bool + Send + 'a>,
     ) -> Result<LlmTurnResult> {
         let mut body = json!({
             "model": self.cfg.model,
@@ -274,12 +223,16 @@ impl LlmClient {
     }
 }
 
-/// LLM 引擎：OpenAI 兼容 Responses API 的 HTTP 客户端（唯一实现，无 mock）。
-pub type Llm = LlmClient;
-
-/// 依据配置构造 LLM 引擎（真实 HTTP 客户端；api_key 为空时调用会在服务端报 401/403）。
-pub fn build_llm(cfg: &LlmConfig) -> Llm {
-    LlmClient::new(cfg)
+impl LlmProvider for LlmClient {
+    fn chat_stream<'a>(
+        &'a self,
+        history: &'a [(String, String)],
+        user_text: &'a str,
+        tools: Option<&'a [ToolSpec]>,
+        on_event: Box<dyn FnMut(LlmEvent) -> bool + Send + 'a>,
+    ) -> Pin<Box<dyn Future<Output = Result<LlmTurnResult>> + Send + 'a>> {
+        Box::pin(self.chat_stream_inner(history, user_text, tools, on_event))
+    }
 }
 
 #[cfg(test)]

@@ -1,4 +1,4 @@
-//! 会话传输抽象：承载无关的收发原语。会话状态机与流水线（[`crate::session`] /
+//! 会话传输抽象：承载无关的收发原语。会话状态机与流水线（[`crate::app::session`] /
 //! [`crate::downlink`]）只依赖 [`Transport`]，不感知 WebSocket / 未来 MQTT+UDP /
 //! 本机测试通道等具体承载——接新设备形态时实现一份 trait 即可复用整条流水线。
 //!

@@ -119,7 +119,7 @@ ESP 类设备是受限端（MCU、opus 固定 60ms 帧、带宽有限），serve
 ### 3.1 LLM 流式（SSE）+ 原生工具调用 —— `llm.rs` ✅ 已落地（OpenAI Responses 协议）
 
 > **协议决策（用户 2026-10-02 指定）**：LLM 使用 **OpenAI Responses API**（`POST /v1/responses`），
-> 不用老的 `chat/completions`。已实现于 `server/src/llm.rs`。
+> 不用老的 `chat/completions`。已实现于 `server/src/plugins/llm/mod.rs`。
 
 **已实现形态**
 - 请求体：`model` + `instructions`（system prompt）+ `input[]`（多轮历史，`input_text`/`output_text` 结构化）+ 扁平 `tools[].{type,name,description,parameters}` + `stream`（`[llm].stream` 默认 `true`）。

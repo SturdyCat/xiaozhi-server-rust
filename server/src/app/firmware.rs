@@ -36,7 +36,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::engine::Engines;
-use crate::ws::auth_ok;
+use crate::app::ws::auth_ok;
 
 /// 单个固件上传上限（ESP32 app 一般 1.5~4MB，留足余量）。
 const MAX_FIRMWARE_BYTES: usize = 64 * 1024 * 1024;

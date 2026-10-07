@@ -141,7 +141,7 @@ docker run -d --name xiaozhi \
 - **上行音频**：设备以二进制帧（按协商版本封装）发送 Opus；服务器解码 → VAD → ASR → LLM → TTS（正式流水线，无 mock 捷径）。`listen start` 仅状态同步，不触发对话。
 - **abort**：任何阶段客户端可发 `{"type":"abort"}` 中断当前 TTS 下行。
 
-二进制帧封装（v1/v2/v3 字节布局）见 `server/src/protocol.rs` 的模块注释（权威说明）；`wrap_downlink` / `unwrap_uplink` 是唯一的封装/解封装出口。
+二进制帧封装（v1/v2/v3 字节布局）见 `server/src/app/protocol.rs` 的模块注释（权威说明）；`wrap_downlink` / `unwrap_uplink` 是唯一的封装/解封装出口。
 
 ---
 
@@ -198,7 +198,7 @@ cd server && ~/.cargo/bin/cargo run -- --config config.toml
 
 - **测试页 `@Page("test")` 仅放在 `client/shared/src/macosArm64Main`**：只编译进 macOS 框架，**web/Android/iOS/OHOS 的包都不含测试代码**，web 自然无测试功能。
 - 管理后台 `@Page("config")` 仍在 `commonMain`，**跨端复用**；测试页提供「管理后台」入口跳过去。
-- 测试逻辑复用 server 的专用测试协议（见 `server/src/protocol.rs` / `server/src/session.rs`）：
+- 测试逻辑复用 server 的专用测试协议（见 `server/src/app/protocol.rs` / `server/src/app/session.rs`）：
   - `asr_test {action: start|stop}`：整段录音缓冲后一次性识别，回 `stt`；
   - `tts_test {text, speaker, lang, speed}`：合成并流式下发 Opus 音频。
 - 原生桥接在 `apps/macosApp/XiaoZhiModule.m`（Kuikly 自定义 Module `XiaoZhiModule`）：负责 WS 建连、麦克风采集、音频播放。**Opus 编解码目前为占位 TODO**（需接入 `libopus` / OpusKit），是联调前唯一待补的原生环节。
@@ -233,8 +233,9 @@ open macosApp.xcworkspace
 ```
 .
 ├── Dockerfile / docker-compose.yml / docker-entrypoint.sh   # 部署编排（仓库根）
-├── server/                      # Rust 服务端（模块职责与复杂逻辑见 server/src/*.rs 的 //! 注释；整体架构见 docs/architecture.md）
-│   ├── src/                    # main/ws/session/protocol/engine/asr/tts/vad/llm/config/audio —— 各文件顶部 //! 即权威说明
+├── server/                      # Rust 服务端（模块职责与复杂逻辑见 server/src/**/*.rs 的 //! 注释；整体架构见 docs/architecture.md）
+│   ├── src/                    # 根：main/config/engine；app/ 应用层（session/ws/protocol/…）；
+│   │                           # plugins/ 引擎插件（asr/tts/llm/vad/aiui 按能力分目录）—— 各文件顶部 //! 即权威说明
 │   ├── config.toml / config.example.toml
 │   ├── scripts/download_models.sh
 │   └── tests/mock_client.py

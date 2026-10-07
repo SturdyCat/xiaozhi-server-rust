@@ -198,7 +198,8 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
     [self sendJSON:@{@"type": @"asr_test", @"action": @"stop"}];
 }
 
-// speak(text, speaker, lang, speed) → 发送 tts_test；服务端合成并流式下发 Opus 音频。
+// speak(text, speaker, lang, speed, vcn) → 发送 tts_test；服务端合成并流式下发 Opus 音频。
+// vcn（可选）：远程音色覆盖，服务端本次合成即用它（不改变已保存配置）。
 // 下行 PCM 同时累积到 ttsPcm，tts stop 后可供试听/波形（playTts）。
 - (void)speak:(NSDictionary *)args {
     NSDictionary *params = [self parseParams:args[KR_PARAM_KEY]];
@@ -219,13 +220,19 @@ static void XZPlayerPlay(AVAudioPlayerNode *player) {
     [self.playerNode stop];
     [self.playerNode reset];
     XZPlayerPlay(self.playerNode);
-    [self sendJSON:@{
+    // vcn：远程（讯飞）音色覆盖——服务端本次合成即用它（无需先保存配置）；空串 = 用服务端配置
+    NSMutableDictionary *msg = [@{
         @"type": @"tts_test",
         @"text": params[@"text"] ?: @"",
         @"speaker": params[@"speaker"] ?: @(0),
         @"lang": params[@"lang"] ?: @"zh",
         @"speed": params[@"speed"] ?: @(1.0)
-    }];
+    } mutableCopy];
+    NSString *vcn = params[@"vcn"];
+    if ([vcn isKindOfClass:[NSString class]] && vcn.length > 0) {
+        msg[@"vcn"] = vcn;
+    }
+    [self sendJSON:msg];
 }
 
 // 备注：speak(...) 发送的即 tts_test；服务端先回一帧 tts_test 结果（含 engine 与错误原因），

@@ -127,8 +127,10 @@ class XiaoZhiModule : Module() {
         )
     }
 
-    /** TTS 合成测试：text 必填，speaker/lang/speed 可空（留默认）。 */
-    fun speak(text: String, speaker: Int, lang: String, speed: Double, callback: CallbackFn? = null) {
+    /** TTS 合成测试：text 必填，speaker/lang/speed 可空（留默认）。
+     *  vcn：当前选中的远程音色（讯飞），随请求下发让服务端本次合成即用它（无需先保存配置）；
+     *  为空/不传则用服务端已保存配置。 */
+    fun speak(text: String, speaker: Int, lang: String, speed: Double, vcn: String, callback: CallbackFn? = null) {
         toNative(
             keepCallbackAlive = false,
             methodName = "speak",
@@ -137,6 +139,7 @@ class XiaoZhiModule : Module() {
                 put("speaker", speaker)
                 put("lang", lang)
                 put("speed", speed)
+                put("vcn", vcn)
             },
             callback = callback,
             syncCall = false,

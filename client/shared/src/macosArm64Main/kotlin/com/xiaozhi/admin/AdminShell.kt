@@ -172,6 +172,7 @@ class AdminShell : Pager() {
                         vif({ ctx.selectedSection == "config" }) {
                             renderForm(
                                 ctx.form,
+                                ctx,
                                 pageWidth = contentPageWidth,
                                 pageHeight = contentPageHeight,
                             )

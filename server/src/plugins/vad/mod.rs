@@ -6,16 +6,10 @@
 //! VAD 在服务器端运行：把连续上行音频切分为有效语音段，再送 ASR。
 //!
 //! ⚠️ [`VadEngine::accept`] 每帧调用，Silero 推理为**同步 CPU 调用**；虽单次轻量，
-//! 但每帧都跑，调用方（[`crate::session`]）在解码后的音频循环里直接同步调用即可
+//! 但每帧都跑，调用方（[`crate::app::session`]）在解码后的音频循环里直接同步调用即可
 //! （不似 ASR/TTS 那样单次耗时数秒，无需 `spawn_blocking`）。
 
-#[cfg(feature = "sherpa")]
-use anyhow::Result;
-#[cfg(feature = "sherpa")]
-use crate::config::VadConfig;
-#[cfg(feature = "sherpa")]
-use anyhow::Context;
-
+use serde::{Deserialize, Serialize};
 /// VAD 引擎接口。每会话持有一个独立实例（内部有状态）。
 pub trait VadEngine: Send {
     /// 喂入一帧单声道 f32 音频；检测到的完整语音段通过 `cb` 回调传出。
@@ -23,6 +17,48 @@ pub trait VadEngine: Send {
     /// 输入结束时 flush 残留语音段。
     fn flush(&mut self, cb: &mut dyn FnMut(Vec<f32>));
 }
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct VadConfig {
+    /// Silero VAD 模型路径；为空视为未配置（sherpa 构建下引擎初始化会报错）。
+    #[serde(default = "default_vad_model")]
+    pub model: String,
+    #[serde(default = "default_threshold")]
+    pub threshold: f32,
+    #[serde(default = "default_min_silence")]
+    pub min_silence_duration: f32,
+    #[serde(default = "default_min_speech")]
+    pub min_speech_duration: f32,
+}
+
+impl VadConfig {
+    /// 模型路径非空即视为配置了真实 VAD。
+    #[allow(dead_code)]
+    pub fn is_real(&self) -> bool {
+        !self.model.is_empty()
+    }
+}
+fn default_vad_model() -> String {
+    "/data/models/silero_vad.onnx".into()
+}
+
+fn default_threshold() -> f32 {
+    0.5
+}
+
+fn default_min_silence() -> f32 {
+    0.25
+}
+
+fn default_min_speech() -> f32 {
+    0.25
+}
+
+#[cfg(feature = "sherpa")]
+mod silero;
+
+#[cfg(feature = "sherpa")]
+pub use silero::SherpaVad;
 
 /// 能量阈值占位实现——**仅未启用 `sherpa` feature 的编译**（测试/检查用），生产不含。
 #[cfg(not(feature = "sherpa"))]
@@ -53,48 +89,13 @@ impl VadEngine for MockVad {
     }
 }
 
-#[cfg(feature = "sherpa")]
-pub struct SherpaVad {
-    detector: sherpa_onnx::VoiceActivityDetector,
-}
-
-#[cfg(feature = "sherpa")]
-impl SherpaVad {
-    pub fn new(cfg: &VadConfig) -> Result<Self> {
-        use sherpa_onnx::{SileroVadModelConfig, VadModelConfig};
-        let mut silero = SileroVadModelConfig::default();
-        silero.model = Some(cfg.model.clone());
-        silero.threshold = cfg.threshold;
-        silero.min_silence_duration = cfg.min_silence_duration;
-        silero.min_speech_duration = cfg.min_speech_duration;
-
-        let mut vad_cfg = VadModelConfig::default();
-        vad_cfg.silero_vad = silero;
-        vad_cfg.sample_rate = 16000;
-        vad_cfg.num_threads = 1;
-        vad_cfg.provider = Some("cpu".to_string());
-
-        let detector = sherpa_onnx::VoiceActivityDetector::create(&vad_cfg, 30.0)
-            .context("创建 Silero VAD 失败（检查模型路径或原生库）")?;
-        Ok(Self { detector })
-    }
-}
-
-#[cfg(feature = "sherpa")]
-impl VadEngine for SherpaVad {
-    fn accept(&mut self, samples: &[f32], cb: &mut dyn FnMut(Vec<f32>)) {
-        self.detector.accept_waveform(samples);
-        while let Some(seg) = self.detector.front() {
-            cb(seg.samples().to_vec());
-            self.detector.pop();
-        }
-    }
-
-    fn flush(&mut self, cb: &mut dyn FnMut(Vec<f32>)) {
-        self.detector.flush();
-        while let Some(seg) = self.detector.front() {
-            cb(seg.samples().to_vec());
-            self.detector.pop();
+impl Default for VadConfig {
+    fn default() -> Self {
+        VadConfig {
+            model: default_vad_model(),
+            threshold: default_threshold(),
+            min_silence_duration: default_min_silence(),
+            min_speech_duration: default_min_speech(),
         }
     }
 }

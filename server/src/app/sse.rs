@@ -12,7 +12,7 @@
 
 use serde_json::Value;
 
-use crate::llm::ToolCall;
+use crate::plugins::llm::ToolCall;
 
 struct RawToolCall {
     id: Option<String>,

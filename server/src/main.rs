@@ -20,24 +20,10 @@
 //! - `XIAOZHI_ADMIN_DIR`：覆盖 `[server].admin_dir`（Docker 镜像内置 `/app/web` 即此机制）。
 //! `GET /api/config` 展示的仍是文件原值，不会体现 env 覆盖。
 
-mod aiui;
-mod asr;
-mod audio;
+mod app;
 mod config;
-mod downlink;
 mod engine;
-mod firmware;
-mod llm;
-mod protocol;
-mod session;
-mod sse;
-mod splitter;
-mod tts;
-mod transport;
-mod vad;
-mod voices;
-mod ws;
-mod xfyun_tts;
+mod plugins;
 
 use anyhow::Result;
 use axum::serve;
@@ -46,7 +32,7 @@ use tracing_subscriber::EnvFilter;
 
 use crate::config::Config;
 use crate::engine::Engines;
-use crate::ws::router;
+use crate::app::ws::router;
 
 fn main() -> Result<()> {
     // 配置在 runtime 构建前加载（worker_threads 需要它）。
@@ -76,6 +62,9 @@ async fn run(config: Config, config_path: Option<String>) -> Result<()> {
     );
 
     let engines = Engines::new(&config, config_path)?;
+    // 发音人目录：读盘缓存/离线兜底 + 配置了控制台会话时后台刷新一次（失败非致命）
+    crate::app::voices::init();
+    crate::app::voices::spawn_startup_refresh(engines.clone());
     let app = router(engines);
 
     // 监听：永远 0.0.0.0，唯一可配的是端口（[server].port，默认 8000）——

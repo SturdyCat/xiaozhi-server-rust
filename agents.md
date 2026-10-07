@@ -100,7 +100,7 @@ pub enum ServerMessage { Hello { .. }, Stt { .. }, Llm { .. }, Tts { .. }, Syste
 
 > 这一 bug **`cargo check` 完全无法发现**，只有真实 WebSocket 客户端（`tests/mock_client.py`）才能暴露。任何修改协议枚举的 PR 都必须重跑协议联调。
 
-> 协议枚举定义与 serde 约束的权威说明见 `server/src/protocol.rs` 模块注释。
+> 协议枚举定义与 serde 约束的权威说明见 `server/src/app/protocol.rs` 模块注释。
 
 ### 5.2 LLM 恒为真实 HTTP（无 mock）
 
@@ -126,13 +126,13 @@ LLM 只有 OpenAI 兼容 Responses API 一条路径；联调失败先检查 `[ll
 - 上行按版本剥离头部（`unwrap_uplink`）。v1 裸 Opus；v2 16 字节头；v3 4 字节头。
 - 建议先用 v1 真机验证，再切 v2/v3。
 
-> 二进制帧字节布局（v1/v2/v3）的权威表见 `server/src/protocol.rs` 模块注释。
+> 二进制帧字节布局（v1/v2/v3）的权威表见 `server/src/app/protocol.rs` 模块注释。
 
 ### 5.4 服务器 hello 的 `audio_params` = 下行解码参数
 
 设备读取服务器 hello 的 `audio_params.sample_rate` / `frame_duration` 来解码下行 TTS 音频。上行仍按设备自己的 16k。下行采样率由 `audio.downlink_sample_rate`（默认 24000）决定。
 
-> 上行/下行协商逻辑见 `server/src/ws.rs` 的 `handle_handshake`。
+> 上行/下行协商逻辑见 `server/src/app/ws.rs` 的 `handle_handshake`。
 
 ### 5.5 构建镜像的 Rust 版本必须与生成 `Cargo.lock` 的 cargo 对齐（当前 1.90）
 
@@ -196,11 +196,20 @@ COPY 真实源码后**必须** `touch src` + `cargo clean -p xiaozhi-server-rust
 server/                        # Rust 服务端
   src/
     main.rs       入口：加载配置 → 初始化引擎 → 启动 Axum
-    config.rs     TOML 配置（默认值=生产路径；含 GET/POST /api/config 读写）
-    protocol.rs   消息枚举 + 二进制版本封装（v1/v2/v3）—— 改这里必看 §5.1
-    ws.rs         WebSocket 网关：握手 / 协商 / 鉴权 + 静态托管管理页（/）
-    session.rs    每连接会话状态机 + 语音流水线（支持 abort）
-    asr.rs / vad.rs / tts.rs / llm.rs / engine.rs / audio/
+    config.rs     TOML 配置聚合（Server/Audio 段 + 插件段 re-export；加载/默认值）
+    engine.rs     Engines 装配器：共享引擎池（ASR/TTS/LLM）+ 每会话 VAD 工厂 + TTS 热切换
+    app/          应用层（与具体引擎无关）：
+      ws.rs         WebSocket 网关：握手 / 协商 / 鉴权 + 静态托管管理页（/）+ OTA 端点
+      session.rs    每连接会话状态机 + 语音流水线（支持 abort；AIUI 全链路分支）
+      protocol.rs   消息枚举 + 二进制版本封装（v1/v2/v3）—— 改这里必看 §5.1
+      transport.rs  承载抽象（WS/未来 MQTT+UDP）；downlink.rs 下行音频；splitter/sse
+      audio/        Opus 编解码 + 重采样；firmware.rs 固件托管；voices.rs 发音人目录
+    plugins/      引擎插件层（按能力分目录；新增厂商 = 加文件 + 工厂注册一行）：
+      asr/{mod,sensevoice}.rs   trait + SenseVoice 实现（sherpa）
+      tts/{mod,kokoro,xfyun}.rs trait + Kokoro 本地 / 讯飞在线实现
+      llm/{mod,openai}.rs       LlmProvider trait + OpenAI Responses 实现
+      vad/{mod,silero}.rs       trait + Silero 实现（sherpa）
+      aiui/mod.rs               FullChainEngine trait + AIUI 全链路（识别+大模型+合成云闭环）
   config.toml / config.example.toml
   scripts/download_models.sh
   tests/mock_client.py         零依赖 WebSocket 联调客户端

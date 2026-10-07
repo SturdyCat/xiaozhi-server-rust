@@ -1,23 +1,13 @@
-//! 语音识别（ASR）引擎：`sherpa-onnx` 的 `OfflineRecognizer` +
-//! `OfflineSenseVoiceModelConfig`（SenseVoice INT8）。无 mock——ASR 只有这一条真实路径。
-//!
-//! 注意：SenseVoice 在 sherpa-onnx 中是**离线**识别器，方案为
-//! VAD 切出语音段后逐段送入识别（非 `OnlineRecognizer` 流式）。
-//!
-//! ⚠️ [`AsrEngine::recognize`] 是**同步阻塞的 CPU 密集调用**（SenseVoice 推理）。
-//! 调用方（[`crate::session`]）必须用 `tokio::task::spawn_blocking` 隔离，
-//! 否则独占 tokio worker，期间同 runtime 的其他会话/HTTP 全部卡死。
+//! SenseVoice INT8 离线识别器（sherpa-onnx）——ASR 插件的本地实现。
+//! `#[cfg(feature = "sherpa")]`：仅在启用 sherpa feature 的构建中存在。
 
-use crate::config::AsrConfig;
+use super::AsrConfig;
 use anyhow::Result;
 #[cfg(feature = "sherpa")]
 use anyhow::Context;
 use std::sync::Arc;
 
-/// 识别引擎接口：把一段（已切分好的）单声道 f32 音频转为文本。
-pub trait AsrEngine: Send + Sync {
-    fn recognize(&self, samples: &[f32], sample_rate: u32) -> Result<String>;
-}
+use super::AsrEngine;
 
 /// SenseVoice INT8 离线识别器（sherpa-onnx）。
 #[cfg(feature = "sherpa")]
@@ -65,17 +55,3 @@ impl AsrEngine for SherpaAsr {
     }
 }
 
-/// 根据配置构造 ASR 引擎（仅 `sherpa` 一条路径；未启用 feature 直接报错）。
-pub fn build_asr(cfg: &AsrConfig) -> Result<Arc<dyn AsrEngine>> {
-    #[cfg(feature = "sherpa")]
-    {
-        Ok(Arc::new(
-            SherpaAsr::new(cfg).context("创建 SenseVoice 识别器失败")?,
-        ))
-    }
-    #[cfg(not(feature = "sherpa"))]
-    {
-        let _ = cfg;
-        anyhow::bail!("本二进制未启用 `sherpa` feature，无法构建 ASR 引擎（请用 --features sherpa 编译）");
-    }
-}

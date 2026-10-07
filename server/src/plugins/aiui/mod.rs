@@ -19,6 +19,87 @@
 //! - 收到任何非 0 错误码必须重建连接，否则后续持续报错。
 //! - 上行音频：raw PCM 16000Hz / 单声道 / 16bit，base64；分帧建议 40ms/1280 字节。
 
+use serde::{Deserialize, Serialize};
+/// AIUI 全链路接入配置（协议见 https://aiui-doc.xf-yun.com/project-1/doc-584/）。
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AiuiConfig {
+    /// 是否启用 AIUI 全链路模式（默认关闭，走本地级联流水线）。
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub appid: String,
+    #[serde(default)]
+    pub api_key: String,
+    #[serde(default)]
+    pub api_secret: String,
+    /// 平台上 appid 下创建的情景模式（main / main_box，main_box 为测试环境）。
+    #[serde(default = "default_aiui_scene")]
+    pub scene: String,
+    /// 设备唯一标识前缀（与设备 MAC 关联，用于云端个性化/上下文绑定）。
+    #[serde(default = "default_aiui_sn_prefix")]
+    pub sn_prefix: String,
+    /// 合成发音人（极速超拟人目录见 AIUI 文档 3.9）。
+    #[serde(default = "default_aiui_voice")]
+    pub voice: String,
+    /// TTS 语速/音量/音调（讯飞原生 0~100，50 为常速）。
+    #[serde(default = "default_aiui_speed")]
+    pub speed: i32,
+    #[serde(default = "default_aiui_volume")]
+    pub volume: i32,
+    #[serde(default = "default_aiui_pitch")]
+    pub pitch: i32,
+    /// 自定义人设 prompt（可空；对应 nlp.prompt）。
+    #[serde(default)]
+    pub prompt: String,
+    /// 音频分帧推送间隔（毫秒）。云端流式 VAD 按实时节奏处理，瞬时灌入整段
+    /// 会被判 Silence（实测）；10ms/1280B ≈ 4 倍速实测可用，0 = 不等待（不推荐）。
+    #[serde(default = "default_aiui_pace_ms")]
+    pub pace_ms: u64,
+}
+
+fn default_aiui_pace_ms() -> u64 {
+    10
+}
+
+fn default_aiui_scene() -> String {
+    // 平台新建 AIUI 应用默认自带 main_box（测试环境）情景模式；生产情景按平台实际配置。
+    "main_box".into()
+}
+fn default_aiui_sn_prefix() -> String {
+    "xiaozhi".into()
+}
+fn default_aiui_voice() -> String {
+    "x6_dongmanshaonv_pro".into()
+}
+fn default_aiui_speed() -> i32 {
+    50
+}
+fn default_aiui_volume() -> i32 {
+    50
+}
+fn default_aiui_pitch() -> i32 {
+    50
+}
+
+impl Default for AiuiConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            appid: String::new(),
+            api_key: String::new(),
+            api_secret: String::new(),
+            scene: default_aiui_scene(),
+            sn_prefix: default_aiui_sn_prefix(),
+            voice: default_aiui_voice(),
+            speed: default_aiui_speed(),
+            volume: default_aiui_volume(),
+            pitch: default_aiui_pitch(),
+            prompt: String::new(),
+            pace_ms: default_aiui_pace_ms(),
+        }
+    }
+}
+
 use std::net::TcpStream;
 use std::time::{Duration, Instant};
 
@@ -28,8 +109,7 @@ use serde_json::json;
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
 
-use crate::config::AiuiConfig;
-use crate::xfyun_tts::signed_ws_url;
+use crate::plugins::tts::xfyun::signed_ws_url;
 
 const HOST: &str = "aiui.xf-yun.com";
 const PATH: &str = "/v3/aiint/sos";
@@ -39,6 +119,24 @@ const TURN_TIMEOUT: Duration = Duration::from_secs(60);
 const READ_TIMEOUT: Duration = Duration::from_secs(15);
 /// 上行分帧：40ms @16k/16bit = 1280 字节（官方建议值）。
 const FRAME_BYTES: usize = 1280;
+
+/// 全链路轮次结果（与具体厂商解耦：识别文本 + 回复文本 + 合成音频）。
+#[derive(Debug, Default, Clone)]
+pub struct FullChainTurn {
+    /// 识别文本（用户说的话）。
+    pub stt: String,
+    /// 大模型回复文本。
+    pub reply: String,
+    /// 合成音频：raw PCM 16000Hz 单声道 16bit LE 字节流。
+    pub audio: Vec<u8>,
+}
+
+/// 全链路引擎接口：一段（VAD 切好的）语音 → 识别 + 对话 + 合成闭环。
+/// 实现为**有状态**对象（内部维护连接与上下文），调用方须 `spawn_blocking` + 互斥。
+/// 未来其他厂商的"整体对话引擎"实现此 trait 即可插入 session 流水线。
+pub trait FullChainEngine: Send {
+    fn turn(&mut self, pcm_i16: &[i16]) -> Result<FullChainTurn>;
+}
 
 /// 一轮对话的结果。
 #[derive(Debug, Default, Clone)]
@@ -417,6 +515,17 @@ fn pcm_i16_as_bytes(pcm: &[i16]) -> Vec<u8> {
         out.extend_from_slice(&s.to_le_bytes());
     }
     out
+}
+
+impl FullChainEngine for AiuiSession {
+    fn turn(&mut self, pcm_i16: &[i16]) -> Result<FullChainTurn> {
+        let t = AiuiSession::turn(self, pcm_i16)?;
+        Ok(FullChainTurn {
+            stt: t.stt,
+            reply: t.reply,
+            audio: t.audio,
+        })
+    }
 }
 
 /// 握手后对底层 TCP 设置读写超时（tungstenite connect 不暴露超时参数）。
