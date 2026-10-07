@@ -325,6 +325,10 @@ class ConfigFormState(private val scope: PagerScope) {
             // 目录到位后反推当前配置音色的分组与类型（fill 时目录可能尚未拉取）
             deriveVoiceGroupAndType()
             reloadXfyunVoiceOptions()
+            // 空目录（尚未从平台拉取过）：给出可行动指引（非错误，避免误以为服务端坏了）
+            if (arr.length() == 0) {
+                voicesRefreshMsg = "音色列表为空：填写控制台会话并保存后点「刷新音色目录」（或先在测试台「测试凭据」验证密钥可用）"
+            }
         }
     }
 

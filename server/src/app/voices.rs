@@ -1,13 +1,12 @@
 //! 发音人目录（服务端唯一数据源）：`GET /api/tts/voices` 供客户端按 gender/type 分组建下拉。
 //!
-//! ## 数据来源（优先级）
-//! 1. **AIUI 平台接口动态拉取**（首选）：`aiui.xfyun.cn` 控制台 informants 接口，
-//!    按 `auth=true` 过滤出**当前账号已授权**的发音人（ttsType=2 普通 / 4 极速拟人
-//!    ——这两类可在经典 v2/tts 合成接口使用；x4 oral 系仅 AIUI 链路，不收）。
-//!    凭据取 `[tts.xfyun].console_cookie` + `console_csrf`（浏览器会话，会过期）。
-//!    结果落盘缓存（`XIAOZHI_VOICES_CACHE`，默认 /data/voices.json），重启即用。
-//! 2. **内置离线目录**（兜底）：无缓存且接口不可达时使用（首次部署/内网环境）。
-//!    目录为 2026-10-07 逐个真实合成**实测可调用**的音色。
+//! ## 数据来源（仅接口，无硬编码）
+//! **AIUI 平台接口动态拉取**：`aiui.xfyun.cn` 控制台 informants 接口，
+//! 按 `auth=true` 过滤出**当前账号已授权**的发音人（ttsType=2 普通 / 4 极速拟人
+//! ——这两类可在经典 v2/tts 合成接口使用；x4 oral 系仅 AIUI 链路，不收）。
+//! 凭据取 `[tts.xfyun].console_cookie` + `console_csrf`（浏览器会话，会过期）。
+//! 结果落盘缓存（`XIAOZHI_VOICES_CACHE`，默认 /data/voices.json），重启即用——
+//! 缓存是**拉取结果的持久化**，不是回退硬编码；未配置凭据且无缓存时目录为空。
 //!
 //! ## 接口（全部在 /api 之下）
 //! - `GET /api/tts/voices`：当前目录（含 source/fetched_at 元信息）。
@@ -46,9 +45,9 @@ pub struct Voice {
 /// 目录缓存快照（落盘格式）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Snapshot {
-    /// 来源标识："console"（平台接口）/ "seed"（内置离线目录）。
+    /// 来源标识："console"（平台接口拉取）/ "empty"（尚未拉取，空目录）。
     source: String,
-    /// 拉取时刻（Unix 秒；seed 为 0）。
+    /// 拉取时刻（Unix 秒；0 = 尚未拉取）。
     fetched_at: u64,
     voices: Vec<Voice>,
 }
@@ -56,7 +55,8 @@ struct Snapshot {
 static STATE: OnceLock<RwLock<Snapshot>> = OnceLock::new();
 
 fn state() -> &'static RwLock<Snapshot> {
-    STATE.get_or_init(|| RwLock::new(Snapshot { source: "seed".into(), fetched_at: 0, voices: seed() }))
+    // 空目录起步：音色列表**只来自接口拉取**（无硬编码；缓存/内存任一有值即可用）
+    STATE.get_or_init(|| RwLock::new(Snapshot { source: "empty".into(), fetched_at: 0, voices: Vec::new() }))
 }
 
 /// 缓存文件路径（`XIAOZHI_VOICES_CACHE`，默认 /data/voices.json——随唯一数据卷持久化）。
@@ -64,7 +64,7 @@ fn cache_path() -> String {
     std::env::var("XIAOZHI_VOICES_CACHE").unwrap_or_else(|_| "/data/voices.json".to_string())
 }
 
-/// 启动初始化：优先读盘缓存，无缓存用内置离线目录（不阻塞、不联网）。
+/// 启动初始化：优先读盘缓存；无缓存保持空目录（等待接口拉取，不阻塞、不联网）。
 pub fn init() {
     let path = cache_path();
     let loaded = std::fs::read_to_string(&path)
@@ -82,7 +82,9 @@ pub fn init() {
             *state().write().unwrap_or_else(|e| e.into_inner()) = snap;
         }
         None => {
-            tracing::info!("发音人目录：无缓存，使用内置离线目录（{} 条）", seed().len());
+            tracing::info!(
+                "发音人目录：无缓存——等待配置控制台会话后自动/手动拉取（未配置时列表为空，前端提示先填凭据）"
+            );
         }
     }
 }
@@ -341,117 +343,33 @@ pub fn router() -> Router<Arc<Engines>> {
         .route("/api/tts/voices/test-credentials", post(test_credentials))
 }
 
-/// 内置离线目录（**兜底**，非首选来源）：2026-10-07 逐个真实合成实测可调用。
-/// 接口可达时以平台数据为准（含账号实际授权集）；离线/未配置会话时才用此表。
-fn seed() -> Vec<Voice> {
-    let rows: &[(&str, &str, &str, &str, &str)] = &[
-        // (vcn, name, gender, type, tag)
-        ("xiaoyan", "小燕", "female", "classic", "标准女声，默认"),
-        ("xiaoqi", "小琪", "female", "classic", "经典女声"),
-        ("aisxping", "小萍", "female", "classic", "女声"),
-        ("aisjinger", "小婧", "female", "classic", "女声"),
-        ("vixy", "vixy", "female", "classic", "女声·中英"),
-        ("vimeiyu", "vimeiyu", "female", "classic", "女声"),
-        ("vixying", "vixying", "female", "classic", "女声"),
-        ("vixx", "vixx", "female", "classic", "女声"),
-        ("catherine", "catherine", "female", "classic", "英文女声，中文不出声"),
-        ("mary", "mary", "female", "classic", "英文女声，中文不出声"),
-        ("xiaoyu", "小宇", "male", "classic", "男声"),
-        ("xiaofeng", "小峰", "male", "classic", "男声"),
-        ("aisjiuxu", "久许", "male", "classic", "男声"),
-        ("vinn", "vinn", "male", "classic", "男声"),
-        ("x6_dongmanshaonv_pro", "动漫少女", "female", "x6", "交互 · 情感女声"),
-        ("x6_lingxiaoyue_pro", "聆小玥", "female", "x6", "交互 · 情感女声"),
-        ("x6_lingyuyan_pro", "聆玉言", "female", "x6", "交互 · 情感女声"),
-        ("x5_lingxiaotang_flow", "聆小糖", "female", "x6", "交互 · 情感女声"),
-        ("x6_lingxiaoxuan_pro", "聆小璇", "female", "x6", "交互 · 情感女声"),
-        ("x5_lingyuzhao_flow", "聆玉昭", "female", "x6", "交互 · 情感女声"),
-        ("x6_lingxiaoying_pro", "聆小颖", "female", "x6", "交互 · 情感女声"),
-        ("x6_lingxiaozhen_pro", "聆小瑱", "female", "x6", "交互 · 情感女声"),
-        ("x6_ganliannvxing_pro", "干练女性", "female", "x6", "交互 · 情感女声"),
-        ("x6_lingyufei_pro", "聆玉菲", "female", "x6", "交互 · 情感女声"),
-        ("x6_pangbainv1_pro", "旁白女声", "female", "x6", "旁白"),
-        ("x6_lingxiaoyun_pro", "聆小芸", "female", "x6", "交互 · 情感女声"),
-        ("x6_lingyuaner_pro", "聆园儿", "female", "x6", "交互 · 情感女声"),
-        ("x6_lingxiaoshan_pro", "聆小珊", "female", "x6", "交互 · 情感女声"),
-        ("x6_lingxiaoli_pro", "聆小璃", "female", "x6", "交互 · 情感女声"),
-        ("x6_xiaoqiChat_pro", "聆小琪", "female", "x6", "交互 · 情感女声"),
-        ("x6_cuishounvsheng_pro", "催收女声", "female", "x6", "交互 · 成年女声"),
-        ("x6_yingxiaonv_pro", "营销女声", "female", "x6", "交互 · 成年女声"),
-        ("x6_shibingnvsheng_mini", "士兵女声", "female", "x6", "交互 · 成年女声"),
-        ("x6_kongbunvsheng_mini", "恐怖女声", "female", "x6", "交互 · 成年女声"),
-        ("x6_yulexinwennvsheng_mini", "娱乐新闻女声", "female", "x6", "交互 · 成年女声"),
-        ("x6_jingqudaolannvsheng_mini", "景区导览女声", "female", "x6", "交互 · 成年女声"),
-        ("x6_wumeinv_pro", "妩媚姐姐", "female", "x6", "交互 · 成年女声"),
-        ("x6_huajidama_pro", "滑稽大妈", "female", "x6", "交互 · 成年女声"),
-        ("x6_lingxiaoxue_pro", "聆小雪", "female", "x6", "交互 · 成年女声"),
-        ("x6_gufengxianv_mini", "古风侠女", "female", "x6", "交互 · 成年女声"),
-        ("x6_wuyediantai_mini", "午夜电台", "female", "x6", "交互 · 成年女声"),
-        ("x6_zhuanyenvzhuchi_pro", "大会主持女声", "female", "x6", "交互 · 成年女声"),
-        ("x6_ranzhinvdazi_pro", "运动陪练女声", "female", "x6", "交互 · 成年女声"),
-        ("x6_zhantingnvjiedai_pro", "展厅接待女声", "female", "x6", "交互 · 成年女声"),
-        ("x6_huifangnv_pro", "回访女声", "female", "x6", "交互 · 成年女声"),
-        ("x6_dudulibao_pro", "少女可莉", "female", "x6", "女声"),
-        ("x6_lingyouyou_pro", "聆佑佑", "female", "x6", "女童"),
-        ("x6_lingfeiyi_pro", "聆飞逸", "male", "x6", "交互 · 成熟男声"),
-        ("x6_lingfeibo_pro", "聆飞博", "male", "x6", "交互 · 成熟男声"),
-        ("x6_gaolengnanshen_pro", "高冷男神", "male", "x6", "交互 · 成熟男声"),
-        ("x6_waiguodashu_pro", "外国人大叔", "male", "x6", "交互 · 成熟男声"),
-        ("x6_gufengpangbai_pro", "古风旁白", "male", "x6", "旁白 · 成熟男声"),
-        ("x6_pangbainan1_pro", "旁白男声", "male", "x6", "旁白 · 成熟男声"),
-        ("x6_lingfeihan_pro", "聆飞瀚", "male", "x6", "旁白 · 成熟男声"),
-        ("x6_lingfeihao_pro", "聆飞皓", "male", "x6", "旁白 · 成熟男声"),
-        ("x6_ruyadashu_pro", "儒雅大叔", "male", "x6", "旁白 · 成熟男声"),
-        ("x6_feizheChat_pro", "聆飞哲", "male", "x6", "交互 · 成熟男声"),
-        ("x6_wennuancixingnansheng_mini", "温暖磁性男声", "male", "x6", "交互 · 成年男声"),
-        ("x6_xiaonaigoudidi_mini", "小奶狗弟弟", "male", "x6", "交互 · 成年男声"),
-        ("x6_wenrounansheng_mini", "温柔男声", "male", "x6", "交互 · 成年男声"),
-        ("x6_daqixuanchuanpiannansheng_mini", "大气宣传片男声", "male", "x6", "交互 · 成年男声"),
-        ("x6_xiangruiyingyu_pro", "商务殷语", "male", "x6", "交互 · 成年男声"),
-        ("x6_taiqiangnuannan_pro", "台湾腔温柔男声", "male", "x6", "交互 · 成年男声"),
-        ("x6_lingbosong_pro", "聆伯松", "male", "x6", "交互 · 成年男声"),
-        ("x6_huoposhaonian_pro", "活泼少年", "male", "x6", "交互 · 成年男声"),
-        ("x6_tiexinnanyou_mini", "贴心男友", "male", "x6", "交互 · 成年男声"),
-        ("x6_youxinanshibing_pro", "士兵男声", "male", "x6", "交互 · 成年男声"),
-        ("x6_zuixianlibai_pro", "醉仙李白", "male", "x6", "交互 · 成年男声"),
-        ("x6_bokenansheng_pro", "播客男声", "male", "x6", "交互 · 成年男声"),
-        ("x6_zhuanyenanzhuchi_pro", "大会主持男声", "male", "x6", "交互 · 成年男声"),
-        ("x6_zhantingnanjiedai_pro", "展厅接待男声", "male", "x6", "交互 · 成年男声"),
-        ("x6_huanlemianbao_pro", "海绵宝宝", "male", "x6", "男声"),
-        ("x6_shiwangxiaoxin_pro", "奶凶辛巴", "male", "x6", "男童"),
-    ];
-    rows.iter()
-        .map(|(vcn, name, gender, ty, tag)| Voice {
-            vcn: vcn.to_string(),
-            name: name.to_string(),
-            gender: gender.to_string(),
-            type_: ty.to_string(),
-            tag: tag.to_string(),
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// 离线目录契约：vcn 唯一、gender/type 合法、总数与实测数一致。
+    /// 无硬编码契约：内存态初始为空目录（仅接口/缓存填充）。
     #[test]
-    fn seed_is_unique_and_grouped() {
-        let s = seed();
-        let mut vcns = std::collections::HashSet::new();
-        for v in &s {
-            assert!(vcns.insert(v.vcn.clone()), "重复 vcn: {}", v.vcn);
-            assert!(matches!(v.gender.as_str(), "female" | "male"), "非法性别: {}", v.vcn);
-            assert!(matches!(v.type_.as_str(), "classic" | "x6"), "非法类型: {}", v.vcn);
-        }
-        assert_eq!(s.len(), 73);
+    fn state_starts_empty_without_cache() {
+        // 不设 XIAOZHI_VOICES_CACHE 指向不存在的文件时，init 后目录应保持空
+        std::env::set_var("XIAOZHI_VOICES_CACHE", "/nonexistent/voices-test.json");
+        init();
+        let snap = state().read().unwrap_or_else(|e| e.into_inner()).clone();
+        assert!(snap.voices.is_empty(), "无缓存时应为空目录（不得回退硬编码）");
+        assert_eq!(snap.source, "empty");
+        std::env::remove_var("XIAOZHI_VOICES_CACHE");
     }
 
-    /// 目录序列化：`type` 字段名（客户端按此解析）。
+    /// Voice 序列化：`type` 字段名（客户端按此解析）。
     #[test]
     fn voice_serializes_type_field() {
-        let j = serde_json::to_value(&seed()[0]).unwrap();
+        let v = Voice {
+            vcn: "xiaoyan".into(),
+            name: "小燕".into(),
+            gender: "female".into(),
+            type_: "classic".into(),
+            tag: "标准女声".into(),
+        };
+        let j = serde_json::to_value(&v).unwrap();
         assert_eq!(j["vcn"], "xiaoyan");
         assert_eq!(j["gender"], "female");
         assert_eq!(j["type"], "classic");
