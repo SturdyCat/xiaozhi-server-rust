@@ -57,7 +57,15 @@ impl Engines {
         // 启动期快速失败：sherpa 构建下 VAD 模型路径必填（切句依赖它）。
         #[cfg(feature = "sherpa")]
         if config.vad.model.is_empty() {
-            anyhow::bail!("[vad].model 未配置（Silero VAD 模型路径，如 /models/silero_vad.onnx）");
+            anyhow::bail!("[vad].model 未配置（Silero VAD 模型路径，如 /data/models/silero_vad.onnx）");
+        }
+        // AIUI 全链路模式启用时三要素必填（缺一即快速失败，不静默回退级联）。
+        if config.aiui.enabled
+            && (config.aiui.appid.trim().is_empty()
+                || config.aiui.api_key.trim().is_empty()
+                || config.aiui.api_secret.trim().is_empty())
+        {
+            anyhow::bail!("[aiui].enabled 需要 appid/api_key/api_secret（AIUI 平台应用三要素）");
         }
         let asr = build_asr(&config.asr)?;
         let tts = build_tts(&config.tts)?;

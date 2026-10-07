@@ -74,7 +74,7 @@ cd server && ~/.cargo/bin/cargo run --features sherpa -- --config config.toml
 - `default = []`：无真实引擎，仅供 `cargo check/test` 编译（运行会报错）。
 - `sherpa = ["dep:sherpa-onnx", "dep:audiopus", "dep:rubato"]`：真实引擎（**无 mock**：ASR=SenseVoice、TTS=Kokoro、LLM=HTTP、VAD=Silero）。
 
-> TTS 有 `[tts].backend`（`sherpa`=本地 Kokoro / `xfyun`=科大讯飞在线，见 `[tts.xfyun]`），改后保存即热切换（新会话/测试台 tts_test 读盘重建引擎）；ASR/LLM 无 `backend` 配置项（已随 mock 移除，未知键被 serde 静默忽略）。默认（无配置文件）模型路径即 `/models/...` 生产值；`[llm]` 需填 `api_base`/`api_key`。ESP 接入走完整正式流水线；macApp 测试台 hello 带 `test:true`，走 `asr_test/tts_test/llm_test` 三个独立服务端点（非测试会话发送这三类消息会被忽略）。
+> TTS 有 `[tts].backend`（`sherpa`=本地 Kokoro / `xfyun`=科大讯飞在线，见 `[tts.xfyun]`），改后保存即热切换（新会话/测试台 tts_test 读盘重建引擎）；ASR/LLM 无 `backend` 配置项（已随 mock 移除，未知键被 serde 静默忽略）。默认（无配置文件）模型路径即 `/data/models/...` 生产值；`[llm]` 需填 `api_base`/`api_key`。ESP 接入走完整正式流水线；macApp 测试台 hello 带 `test:true`，走 `asr_test/tts_test/llm_test` 三个独立服务端点（非测试会话发送这三类消息会被忽略）。
 
 ## 5. 🚨 关键约束与陷阱（AI 最容易踩）
 
@@ -177,14 +177,14 @@ COPY 真实源码后**必须** `touch src` + `cargo clean -p xiaozhi-server-rust
 
 ### 5.7 容器启动会自动检测并下载缺失模型（`docker-entrypoint.sh`）
 
-报错 `tokens.txt does not exist` / `创建 SenseVoice 识别器失败` 的根因是 `/models` 里没有模型文件。Docker 入口脚本在 `exec` 服务器**之前**会自检关键文件（`silero_vad.onnx`、`SenseVoiceSmall/model.int8.onnx`、`Kokoro/model.int8.onnx` 等，**官方包内文件名是 `model.int8.onnx`，不是 `model.onnx`**）：
+报错 `tokens.txt does not exist` / `创建 SenseVoice 识别器失败` 的根因是 `/data/models` 里没有模型文件。Docker 入口脚本在 `exec` 服务器**之前**会自检关键文件（`silero_vad.onnx`、`SenseVoiceSmall/model.int8.onnx`、`Kokoro/model.int8.onnx` 等，**官方包内文件名是 `model.int8.onnx`，不是 `model.onnx`**）：
 
-- **缺失 → 自动从 k2-fsa/sherpa-onnx 官方 GitHub Release 下载整包 tar.bz2 并解压**到挂载的 `/models`（默认行为），下载后持久化，后续启动检测到即跳过（按模型粒度幂等 + .part 断点续传）。
+- **缺失 → 自动从 k2-fsa/sherpa-onnx 官方 GitHub Release 下载整包 tar.bz2 并解压**到挂载的 `/data/models`（默认行为），下载后持久化，后续启动检测到即跳过（按模型粒度幂等 + .part 断点续传）。
 - 默认**直连原始地址**；docker compose 配置了 `GITHUB_PROXY` 才走代理（如 `https://tvv.tw/`）。`SENSEVOICE_URL` / `KOKORO_URL` / `SILERO_VAD_URL` 可覆盖为完整直链（内网镜像，不会被二次套代理）。
 - curl 带 `--connect-timeout 15 --retry 3`（避免连接假死 134s）；下载/解压失败会让入口**中止启动**（未设 `XIAOZHI_ALLOW_MISSING_MODELS` 时），避免带着缺模型崩溃重启循环。
 - 行为开关 `XIAOZHI_AUTO_DOWNLOAD_MODELS`：`missing`（默认）/`force`（每次重下）/`off`（不下载）。
-- 运行期镜像需装 `curl` + `bzip2`（`tar` 自带）用于下载与解包；`docker-compose.yml` 的 `./models` 挂载**必须可写**（不要 `:ro`）。
-- 离线/内网：先 `./server/scripts/download_models.sh /host/models` 预置再挂载，或设 `XIAOZHI_AUTO_DOWNLOAD_MODELS=off`。
+- 运行期镜像需装 `curl` + `bzip2`（`tar` 自带）用于下载与解包；`docker-compose.yml` 的 `./server-data` 挂载**必须可写**（不要 `:ro`）。
+- 离线/内网：先 `./server/scripts/download_models.sh /host/data/models` 预置再挂载，或设 `XIAOZHI_AUTO_DOWNLOAD_MODELS=off`。
 
 默认模型包（已完整下载验证，与 config.example.toml 路径一一对应）：`sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09`（SenseVoice INT8，`model.int8.onnx`）、`kokoro-int8-multi-lang-v1_1`（Kokoro INT8 **中英双语**，含 model.int8.onnx/voices.bin/tokens.txt/espeak-ng-data/lexicon-zh.txt/lexicon-us-en.txt/dict（jieba）/date-zh.fst）、`silero_vad.onnx`（Silero VAD）。⚠️ 此前误判 `kokoro-int8-multi-lang-v1_1` 不是完整包（流式列清单被管道截断所致），实际 144MB/417 文件完整；`kokoro-int8-en-v0_19` 仅英文、无 lexicon，中文场景勿用。
 
@@ -264,7 +264,7 @@ python3 server/tests/mock_client.py
 
 ## 8. 配置加载优先级
 
-`XIAOZHI_CONFIG` 环境变量 → `--config <path>` 参数 → 内置默认（/models 生产路径）。
+`XIAOZHI_CONFIG` 环境变量 → `--config <path>` 参数 → 内置默认（/data/models 生产路径）。
 
 ## 9. 已知限制 / 未实现
 

@@ -81,11 +81,22 @@ class ConfigFormState(private val scope: PagerScope) {
     var xfyunApiSecret by scope.observable("")
     var xfyunVoice by scope.observable("xiaoyan")
 
-    // 音色分组下拉（女声/男声/自定义）——音色随分组联动，自定义=手填 vcn 兜底
+    // 音色两级选择：性别分组（女/男/自定义）× 音色类型（全部/普通/极速拟人）。
+    // 音色列表经 /api/tts/voices 从服务端动态获取（服务端为唯一数据源：实测目录+控制台元数据）。
     var xfyunVoiceGroup by scope.observable("female")
     val xfyunVoiceGroupOptions: ObservableList<Pair<String, String>> by scope.observableList()
-    /** 当前分组下的音色选项（切分组时重建，官方 AlertDialog 下拉要求 ObservableList）。 */
+    /// 音色类型筛选：all（全部）/ classic（普通发音人）/ x6（极速拟人）。
+    var xfyunVoiceType by scope.observable("all")
+    val xfyunVoiceTypeOptions: ObservableList<Pair<String, String>> by scope.observableList()
+    /** 当前分组+类型下的音色选项（切分组/切类型/拉取目录时重建，官方 AlertDialog 要求 ObservableList）。 */
     val xfyunVoiceOptions: ObservableList<Pair<String, String>> by scope.observableList()
+    // 四个源列表（loadVoices 填充）：性别 × 类型
+    val voicesFemaleClassic: ObservableList<Pair<String, String>> by scope.observableList()
+    val voicesFemaleX6: ObservableList<Pair<String, String>> by scope.observableList()
+    val voicesMaleClassic: ObservableList<Pair<String, String>> by scope.observableList()
+    val voicesMaleX6: ObservableList<Pair<String, String>> by scope.observableList()
+    /** 目录是否已拉取（拉取前按 vcn 前缀启发式分组）。 */
+    var voicesLoaded by scope.observable(false)
 
     // ===== [llm] =====（无 mock：LLM 恒为 OpenAI 兼容 HTTP，无 backend 字段）
     var llmApiBase by scope.observable("")
@@ -134,6 +145,13 @@ class ConfigFormState(private val scope: PagerScope) {
                 "custom" to "自定义（手填 vcn）",
             ),
         )
+        xfyunVoiceTypeOptions.addAll(
+            listOf(
+                "all" to "全部发音人",
+                "classic" to "普通发音人",
+                "x6" to "极速拟人",
+            ),
+        )
         reloadXfyunVoiceOptions()
         ttsRemoteEngines.addAll(
             listOf(
@@ -147,15 +165,31 @@ class ConfigFormState(private val scope: PagerScope) {
     fun ttsEngineIsRemote(id: String): Boolean =
         ttsRemoteEngines.any { it.first == id }
 
-    /** 按当前分组重建讯飞音色下拉选项；切分组时保留已选音色（若不在新分组则回落第一个）。 */
+    /** 按性别分组 + 音色类型筛选重建下拉选项（列表来自 /api/tts/voices 拉取结果）。 */
     fun reloadXfyunVoiceOptions() {
         xfyunVoiceOptions.clear()
-        xfyunVoiceOptions.addAll(
-            when (xfyunVoiceGroup) {
-                "male" -> XF_YUV_MALE
-                else -> XF_YUV_FEMALE // female；custom 无固定列表（手填）
-            },
-        )
+        if (xfyunVoiceGroup == "custom") return
+        val classic = if (xfyunVoiceGroup == "male") voicesMaleClassic else voicesFemaleClassic
+        val x6 = if (xfyunVoiceGroup == "male") voicesMaleX6 else voicesFemaleX6
+        when (xfyunVoiceType) {
+            "classic" -> xfyunVoiceOptions.addAll(classic)
+            "x6" -> xfyunVoiceOptions.addAll(x6)
+            else -> {
+                xfyunVoiceOptions.addAll(classic)
+                xfyunVoiceOptions.addAll(x6)
+            }
+        }
+    }
+
+    /** 切换音色类型筛选：若当前 vcn 不在筛选结果里则回落第一个。 */
+    fun selectXfyunVoiceType(t: String) {
+        xfyunVoiceType = t
+        reloadXfyunVoiceOptions()
+        val ids = xfyunVoiceOptions.map { it.first }
+        if (xfyunVoice !in ids) {
+            xfyunVoice = ids.firstOrNull() ?: xfyunVoice
+            dirty = true
+        }
     }
 
     /** 切换音色分组：非自定义分组时若当前 vcn 不在该组，回落到该组第一个。 */
@@ -165,9 +199,59 @@ class ConfigFormState(private val scope: PagerScope) {
         if (g != "custom") {
             val ids = xfyunVoiceOptions.map { it.first }
             if (xfyunVoice !in ids) {
-                xfyunVoice = ids.firstOrNull() ?: "xiaoyan"
+                xfyunVoice = ids.firstOrNull() ?: xfyunVoice
                 dirty = true
             }
+        }
+    }
+
+    /** 依已拉取目录反推当前 vcn 的性别分组与音色类型；目录未拉取时按前缀启发。 */
+    private fun deriveVoiceGroupAndType() {
+        val v = xfyunVoice
+        val inList: (ObservableList<Pair<String, String>>) -> Boolean = { l -> l.any { it.first == v } }
+        when {
+            inList(voicesFemaleClassic) -> { xfyunVoiceGroup = "female"; xfyunVoiceType = "classic" }
+            inList(voicesFemaleX6) -> { xfyunVoiceGroup = "female"; xfyunVoiceType = "x6" }
+            inList(voicesMaleClassic) -> { xfyunVoiceGroup = "male"; xfyunVoiceType = "classic" }
+            inList(voicesMaleX6) -> { xfyunVoiceGroup = "male"; xfyunVoiceType = "x6" }
+            !voicesLoaded -> {
+                // 目录未就绪：前缀启发，避免把极速拟人音色误落「自定义」
+                if (v.startsWith("x5_") || v.startsWith("x6_")) {
+                    xfyunVoiceGroup = "female"; xfyunVoiceType = "x6"
+                }
+            }
+            else -> xfyunVoiceGroup = "custom"
+        }
+    }
+
+    /** 拉取服务端音色目录（GET /api/tts/voices）并按性别×类型重建下拉。 */
+    fun loadVoices(ctx: Pager, baseUrl: String = "") {
+        network(ctx).requestGet("${baseUrl}/api/tts/voices", JSONObject()) { data, success, _, _ ->
+            if (!success) return@requestGet
+            val arr = data?.optJSONArray("voices") ?: return@requestGet
+            voicesFemaleClassic.clear()
+            voicesFemaleX6.clear()
+            voicesMaleClassic.clear()
+            voicesMaleX6.clear()
+            for (i in 0 until arr.length()) {
+                val v = arr.optJSONObject(i) ?: continue
+                val vcn = v.optString("vcn")
+                val name = v.optString("name")
+                val tag = v.optString("tag")
+                val label = if (tag.isEmpty()) name else "$name（$tag）"
+                val type = v.optString("type")
+                val pair = vcn to label
+                when (v.optString("gender") to type) {
+                    "female" to "classic" -> voicesFemaleClassic.add(pair)
+                    "female" to "x6" -> voicesFemaleX6.add(pair)
+                    "male" to "classic" -> voicesMaleClassic.add(pair)
+                    else -> voicesMaleX6.add(pair)
+                }
+            }
+            voicesLoaded = true
+            // 目录到位后反推当前配置音色的分组与类型（fill 时目录可能尚未拉取）
+            deriveVoiceGroupAndType()
+            reloadXfyunVoiceOptions()
         }
     }
 
@@ -181,6 +265,7 @@ class ConfigFormState(private val scope: PagerScope) {
         network(ctx).requestGet("${baseUrl}/api/config", JSONObject()) { data, success, errorMsg, _ ->
             if (success) {
                 fill(data)
+                loadVoices(ctx, baseUrl)
                 statusMsg = "已加载配置"
                 statusLevel = "ok"
             } else {
@@ -323,9 +408,7 @@ class ConfigFormState(private val scope: PagerScope) {
                 xfyunApiSecret = x.optString("api_secret", xfyunApiSecret)
                 xfyunVoice = x.optString("voice", xfyunVoice)
                 // 按已存音色反推分组：不在预置目录 → 自定义（手填）
-                xfyunVoiceGroup = if (XF_YUV_FEMALE.any { it.first == xfyunVoice }) "female"
-                else if (XF_YUV_MALE.any { it.first == xfyunVoice }) "male"
-                else "custom"
+                deriveVoiceGroupAndType()
                 reloadXfyunVoiceOptions()
             }
         }
@@ -344,19 +427,6 @@ class ConfigFormState(private val scope: PagerScope) {
     // 渲染：见文件底部 ViewContainer.renderForm(form) 扩展
     // ============================================================
 }
-
-// 讯飞音色目录（经典 v2/tts 发音人，按性别分组；官方默认 xiaoyan）。
-// ⚠️ 仅保留实测可用的**经典**发音人——x4_* 超拟人属单独授权线，未开通授权时
-//    经典接口必报 11200（licc failed，实测），已从预置列表过滤；已单独购买授权的
-//    账号请走「自定义」手填 vcn。
-private val XF_YUV_FEMALE: List<Pair<String, String>> = listOf(
-    "xiaoyan" to "小燕（标准女声，默认）",
-    "aisxping" to "小萍",
-    "aisjinger" to "小婧",
-)
-private val XF_YUV_MALE: List<Pair<String, String>> = listOf(
-    "aisjiuxu" to "久许",
-)
 
 /**
  * 渲染配置标签页（tabbedPanel：官方 Tabs + PageList）：Server / Audio / ASR / VAD / TTS / LLM 六个 tab，
@@ -543,6 +613,24 @@ fun ViewContainer<*, *>.ttsConfigCard(form: ConfigFormState) {
                     },
                 )
                 vif({ form.xfyunVoiceGroup != "custom" }) {
+                    dropdownField(
+                        label = "音色类型",
+                        currentLabel = {
+                            when (form.xfyunVoiceType) {
+                                "classic" -> "普通发音人"
+                                "x6" -> "极速拟人"
+                                else -> "全部发音人"
+                            }
+                        },
+                        options = { form.xfyunVoiceTypeOptions },
+                        selectedId = { form.xfyunVoiceType },
+                        isOpen = { form.openDropdown == "xfyun_voice_type" },
+                        onToggle = { form.openDropdown = if (form.openDropdown == "xfyun_voice_type") "" else "xfyun_voice_type" },
+                        onSelect = {
+                            form.selectXfyunVoiceType(it)
+                            form.openDropdown = ""
+                        },
+                    )
                     dropdownField(
                         label = "发音人（vcn）",
                         currentLabel = {

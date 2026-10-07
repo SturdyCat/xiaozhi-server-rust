@@ -135,18 +135,20 @@ COPY --from=build /app/target/release/xiaozhi-server-rust /app/server
 # 同源托管的管理页静态产物（server [server].admin_dir 由下方 ENV 指到 /app/web）
 COPY --from=web /src/client/apps/h5App/web /app/web
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+# 内置配置示例：首启 /data/config.toml 缺失时由入口脚本生成为默认配置
+COPY server/config.example.toml /app/config.example.toml
 RUN chmod +x /app/docker-entrypoint.sh
 
 # 数据卷：模型持久化挂载点（entrypoint 缺失时自动下载到此；必须可写，勿 :ro 挂载）
-RUN mkdir -p /models
-VOLUME ["/models"]
+RUN mkdir -p /data
+VOLUME ["/data"]
 
 # 运行镜像内置默认值——只放「容器路径」与「生产日志策略」两类必须项，避免与代码默认值漂移：
-#   XIAOZHI_CONFIG：容器内配置文件（compose 挂载 server/config.example.toml 即可开箱即用）
+#   XIAOZHI_CONFIG：容器内配置文件（唯一数据卷 /data/models 内；首启由入口脚本用内置示例生成）
 #   XIAOZHI_ADMIN_DIR：管理页静态目录覆盖（见 main.rs load_config），指向上方 /app/web
 #   XIAOZHI_AUTO_DOWNLOAD_MODELS：missing(默认,缺失才下) | force | off
 #   （模型统一从 HuggingFace 直连下载，无需代理；SENSEVOICE_URL/KOKORO_URL/SILERO_VAD_URL 可覆盖为内网镜像仓库 ID）
-ENV XIAOZHI_CONFIG=/etc/xiaozhi/config.toml \
+ENV XIAOZHI_CONFIG=/data/config.toml \
     XIAOZHI_ADMIN_DIR=/app/web \
     XIAOZHI_AUTO_DOWNLOAD_MODELS=missing \
     RUST_LOG=info

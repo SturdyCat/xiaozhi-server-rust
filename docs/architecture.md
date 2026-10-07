@@ -158,7 +158,7 @@ sequenceDiagram
 2. **构建目标指令集**：Docker 构建 `RUSTFLAGS="-C target-cpu=x86-64-v2"`——部署机 N5105（Tremont）无 AVX，禁止 `native`（CI 机构建会把 AVX 嵌进二进制，部署时 SIGILL）。
 3. **API 版本锁定**：sherpa-onnx Rust crate 锁定 1.13.8（`create(&config)` 返回 `Option`、`get_result()` 在 stream 上、`generate_with_config` 需显式回调类型等，见 agents.md §5）。
 4. **模型文件名**：官方包内为 `model.int8.onnx`（非 `model.onnx`）；Kokoro 使用 `kokoro-int8-multi-lang-v1_1`（中英双语完整包，含 lexicon-zh / dict / espeak-ng-data）。
-5. **容器首启自动下载**：`docker-entrypoint.sh` 自检关键模型文件，缺失则从 k2-fsa/sherpa-onnx 官方 GitHub Release 下载整包 tar.bz2 并解压到挂载的 `/models`（默认走 `GITHUB_PROXY` 代理）；开关 `XIAOZHI_AUTO_DOWNLOAD_MODELS = missing | force | off`，下载失败中止启动。
+5. **容器首启自动下载**：`docker-entrypoint.sh` 自检关键模型文件，缺失则从 k2-fsa/sherpa-onnx 官方 GitHub Release 下载整包 tar.bz2 并解压到挂载的 `/data/models`（默认走 `GITHUB_PROXY` 代理）；开关 `XIAOZHI_AUTO_DOWNLOAD_MODELS = missing | force | off`，下载失败中止启动。
 6. **配置回退链**：`XIAOZHI_CONFIG` 环境变量 → `--config` 参数 → 内置 mock 默认配置，任何一级失败告警后回退，保证进程总能起来（便于零配置联调）。加载优先级与 env 覆盖语义见 `../server/src/main.rs` 模块注释。
 7. **并发模型**：每个 WS 连接一个 tokio task（session），引擎跨会话共享；音频编解码均为纯函数，无共享可变状态。并发与 CPU 预算细节见 `../server/src/engine.rs` 模块注释。
 8. **CPU 占用上限**：tokio worker（默认 2，`[server].worker_threads`）+ ASR 识别（`[asr].num_threads`=2）+ TTS 合成（`[tts].num_threads`，默认 4）+ VAD（1），各段错峰执行，峰值控制在 4 核内为小主机留余量；容器侧由 `docker-compose.yml` 的 `cpus:"3.5"` 限核。线程预算设计见 `../server/src/engine.rs`。
@@ -186,7 +186,7 @@ sequenceDiagram
 flowchart TB
     subgraph 宿主机 NAS
         CFG[config.toml]
-        MODELS[./models 挂载]
+        MODELS[./server-data 挂载]
         subgraph 容器 xiaozhi-server-rust
             EP[docker-entrypoint.sh<br/>自检/下载模型]
             BIN[/app/server]
@@ -194,7 +194,7 @@ flowchart TB
     end
     GH[GitHub: k2-fsa/sherpa-onnx Releases]
 
-    EP -- "1. 检查 /models 关键文件" --> MODELS
+    EP -- "1. 检查 /data/models 关键文件" --> MODELS
     EP -- "2. 缺失则从 GitHub Release 下载整包并解压" --> GH
     EP -- "3. exec" --> BIN
     CFG -. 挂载 :ro .-> BIN

@@ -3,12 +3,12 @@
 #
 # 职责：
 #   1. 若启用自动下载且检测到关键模型文件缺失，则从 k2-fsa/sherpa-onnx 官方
-#      GitHub Release 拉取**整包 tar.bz2** 并解压到 $XIAOZHI_MODELS_DIR（默认 /models）
+#      GitHub Release 拉取**整包 tar.bz2** 并解压到 $XIAOZHI_MODELS_DIR（默认 /data/models）
 #      ——单请求拿全（Kokoro 含 espeak-ng-data/dict 共 365 个文件），不做逐文件下载。
 #   2. exec 真正的服务器进程，把参数透传下去（保证能收到 SIGTERM 等信号）。
 #
 # 环境变量：
-#   XIAOZHI_MODELS_DIR            模型根目录（默认 /models）
+#   XIAOZHI_MODELS_DIR            模型根目录（默认 /data/models）
 #   XIAOZHI_AUTO_DOWNLOAD_MODELS  missing(默认) | force | off
 #                                 missing : 仅在关键文件缺失时下载（按模型粒度幂等跳过）
 #                                 force   : 忽略已就绪检查，强制重新下载
@@ -30,7 +30,7 @@
 
 set -eu
 
-MODELS_DIR="${XIAOZHI_MODELS_DIR:-/models}"
+MODELS_DIR="${XIAOZHI_MODELS_DIR:-/data/models}"
 AUTO="${XIAOZHI_AUTO_DOWNLOAD_MODELS:-missing}"
 
 SENSEVOICE_URL="${SENSEVOICE_URL:-https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09.tar.bz2}"
@@ -159,6 +159,15 @@ case "$AUTO" in
     fi
     ;;
 esac
+
+# 配置文件首次引导：容器内无配置时用内置示例生成（全新部署开箱即用）——
+# 不生成的话 server 以内置默认启动（config_path=None），PUT /api/config 无法持久化。
+CFG="${XIAOZHI_CONFIG:-}"
+if [ -n "$CFG" ] && [ ! -e "$CFG" ] && [ -f /app/config.example.toml ]; then
+  mkdir -p "$(dirname "$CFG")"
+  cp /app/config.example.toml "$CFG"
+  echo "[entrypoint] 已生成默认配置 $CFG（可经管理页修改保存）"
+fi
 
 # 配置文件可写自检（健壮性）：管理页「保存配置」走 PUT /api/config 回写此文件，
 # 只读/属主不对会在保存时报 500——启动即暴露，而不是等用户保存失败。

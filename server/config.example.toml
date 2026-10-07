@@ -24,8 +24,8 @@ binary_protocol_version = 1
 
 [asr]
 # ASR 恒为 SenseVoice INT8（sherpa-onnx 离线识别），无 mock。
-model = "/models/SenseVoiceSmall/model.int8.onnx"
-tokens = "/models/SenseVoiceSmall/tokens.txt"
+model = "/data/models/SenseVoiceSmall/model.int8.onnx"
+tokens = "/data/models/SenseVoiceSmall/tokens.txt"
 language = "auto"
 use_itn = true
 # 识别线程数（默认 2）：与 TTS/VAD 错峰，避免占满 4 核小主机
@@ -33,7 +33,7 @@ num_threads = 2
 provider = "cpu"
 
 [vad]
-model = "/models/silero_vad.onnx"
+model = "/data/models/silero_vad.onnx"
 threshold = 0.5
 min_silence_duration = 0.25
 min_speech_duration = 0.25
@@ -45,12 +45,12 @@ min_speech_duration = 0.25
 # 改后保存即热切换：新会话/测试台 tts_test 立即用新引擎（无需重启）。
 # 未来更多远程供应商 = 新增 [tts.<id>] 凭据段 + backend 填对应 id。
 backend = "sherpa"
-model = "/models/Kokoro/model.int8.onnx"
-voices = "/models/Kokoro/voices.bin"
-tokens = "/models/Kokoro/tokens.txt"
-data_dir = "/models/Kokoro/espeak-ng-data"
-dict_dir = "/models/Kokoro/dict"
-lexicon = "/models/Kokoro/lexicon-us-en.txt,/models/Kokoro/lexicon-zh.txt"
+model = "/data/models/Kokoro/model.int8.onnx"
+voices = "/data/models/Kokoro/voices.bin"
+tokens = "/data/models/Kokoro/tokens.txt"
+data_dir = "/data/models/Kokoro/espeak-ng-data"
+dict_dir = "/data/models/Kokoro/dict"
+lexicon = "/data/models/Kokoro/lexicon-us-en.txt,/data/models/Kokoro/lexicon-zh.txt"
 # 合成语言（建模时固定；"zh"/"en"）。管理页面切换其他语言时按需自动构建对应引擎。
 lang = "zh"
 speaker = 0
@@ -82,3 +82,19 @@ max_history = 10
 temperature = 0.7
 # SSE 流式（逐 token 返回，配合按句下发降低首字延迟）；false 退回整段解析
 stream = true
+
+# ===== AIUI 全链路（极速超拟人链路）：启用后设备流水线切换为 VAD 切段 → AIUI 云端闭环
+#       （识别 + 大模型 + 合成一体，发音人目录见 AIUI 文档 3.9），本地 ASR/LLM/TTS 引擎闲置。
+#       ⚠️ 需在 AIUI 平台（aiui.xfyun.cn）开通极速超拟人服务；对话上下文按连接保留。
+# [aiui]
+# enabled = true
+# appid = "your_appid"
+# api_key = "your_api_key"
+# api_secret = "your_api_secret"
+# scene = "main"                       # 平台上 appid 下的情景模式（main_box 为测试环境）
+# sn_prefix = "xiaozhi"                # 设备标识前缀（云端个性化绑定）
+# voice = "x6_dongmanshaonv_pro"       # 发音人（极速超拟人目录）
+# speed = 50                           # 语速/音量/音调（0~100，50 常速）
+# volume = 50
+# pitch = 50
+# prompt = ""                          # 自定义人设（可空）

@@ -155,19 +155,26 @@ impl TtsEngine for XfyunTts {
 
 /// 组装带鉴权参数的连接 URL（签名算法见模块注释；参数值须 URL 编码）。
 fn assemble_auth_url(cfg: &XfyunTtsConfig) -> String {
+    signed_ws_url(HOST, PATH, &cfg.api_key, &cfg.api_secret)
+}
+
+/// 讯飞 WebSocket HMAC 签名 URL（服务鉴权 doc-405 同款算法，AIUI 交互 API 复用）：
+/// `host: {host}\ndate: {date}\nGET {path} HTTP/1.1` → hmac-sha256(api_secret) → base64
+/// → `api_key="…",algorithm="hmac-sha256",headers="host date request-line",signature="…"` 再 base64。
+pub(crate) fn signed_ws_url(host: &str, path: &str, api_key: &str, api_secret: &str) -> String {
     let date = httpdate::fmt_http_date(SystemTime::now());
-    let signature_origin = format!("host: {HOST}\ndate: {date}\nGET {PATH} HTTP/1.1");
-    let signature = hmac_sha256_base64(cfg.api_secret.as_bytes(), signature_origin.as_bytes());
+    let signature_origin = format!("host: {host}\ndate: {date}\nGET {path} HTTP/1.1");
+    let signature = hmac_sha256_base64(api_secret.as_bytes(), signature_origin.as_bytes());
     let authorization_origin = format!(
         "api_key=\"{}\", algorithm=\"hmac-sha256\", headers=\"host date request-line\", signature=\"{}\"",
-        cfg.api_key, signature
+        api_key, signature
     );
     let authorization = base64::engine::general_purpose::STANDARD.encode(authorization_origin);
     format!(
-        "wss://{HOST}{PATH}?authorization={}&date={}&host={}",
+        "wss://{host}{path}?authorization={}&date={}&host={}",
         percent_encode(&authorization),
         percent_encode(&date),
-        percent_encode(HOST),
+        percent_encode(host),
     )
 }
 
@@ -380,13 +387,26 @@ mod tests {
         let tts = XfyunTts::new(&cfg).expect("构造引擎");
         let total = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let counter = total.clone();
+        // XFYUN_OUT=<path>：落盘 16k i16 LE PCM（供 AIUI 冒烟做端到端语音输入）
+        let out_file = std::env::var("XFYUN_OUT").ok().and_then(|p| std::fs::File::create(p).ok());
+        let sink = std::sync::Mutex::new(out_file);
         let t0 = Instant::now();
         let result = tts.synthesize_stream(
-            "你好，这是一次链路调试。",
+            "你好，今天天气怎么样",
             1.0,
             0,
             Box::new(move |_sr, chunk| {
                 counter.fetch_add(chunk.len(), std::sync::atomic::Ordering::Relaxed);
+                if let Ok(mut guard) = sink.lock() {
+                    if let Some(f) = guard.as_mut() {
+                        use std::io::Write;
+                        let bytes: Vec<u8> = chunk
+                            .iter()
+                            .flat_map(|s| ((s.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes())
+                            .collect();
+                        let _ = f.write_all(&bytes);
+                    }
+                }
                 true
             }),
         );

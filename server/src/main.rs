@@ -9,7 +9,7 @@
 //! 见 [`load_config_inner`]：
 //! 1. 环境变量 `XIAOZHI_CONFIG` 指向的 TOML 文件（成功则记录 `config_path`）；
 //! 2. 否则命令行 `--config <path>`；
-//! 3. 两者都缺失或读取失败 → 回退 [`crate::config::Config::default()`]（/models 生产路径）。
+//! 3. 两者都缺失或读取失败 → 回退 [`crate::config::Config::default()`]（/data/models 生产路径）。
 //!
 //! 任一级失败都告警后回退，保证进程总能起来；引擎在启动时构建，模型缺失会给出明确报错。
 //! 返回的 `(Config, Option<config_path>)` 中，`config_path` 为 `None` 表示用的是内置默认，
@@ -20,11 +20,13 @@
 //! - `XIAOZHI_ADMIN_DIR`：覆盖 `[server].admin_dir`（Docker 镜像内置 `/app/web` 即此机制）。
 //! `GET /api/config` 展示的仍是文件原值，不会体现 env 覆盖。
 
+mod aiui;
 mod asr;
 mod audio;
 mod config;
 mod downlink;
 mod engine;
+mod firmware;
 mod llm;
 mod protocol;
 mod session;
@@ -33,6 +35,7 @@ mod splitter;
 mod tts;
 mod transport;
 mod vad;
+mod voices;
 mod ws;
 mod xfyun_tts;
 
@@ -92,7 +95,7 @@ async fn run(config: Config, config_path: Option<String>) -> Result<()> {
     Ok(())
 }
 
-/// 配置加载优先级：`XIAOZHI_CONFIG` 环境变量 → `--config` 参数 → 内置默认（/models 生产路径）。
+/// 配置加载优先级：`XIAOZHI_CONFIG` 环境变量 → `--config` 参数 → 内置默认（/data/models 生产路径）。
 /// 返回加载到的配置与（若有）配置文件路径，供 `PUT /api/config` 写回使用。
 fn load_config() -> (Config, Option<String>) {
     let (mut config, path) = load_config_inner();

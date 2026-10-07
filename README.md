@@ -36,8 +36,8 @@ API 已对照 1.13.8 rustdoc 校验：`OfflineSenseVoiceModelConfig`、`OfflineT
 ## 快速开始（Docker，正式流程）
 
 ```bash
-cp server/config.example.toml server/config.toml   # 填 expected_token / llm.api_key
-docker compose up -d --build                       # 首启自动从 GitHub Release 下载模型包到 ./models
+cp server/config.example.toml server-data/config.toml   # 填 expected_token / llm.api_key
+docker compose up -d --build                       # 首启自动从 GitHub Release 下载模型包到 ./server-data
 curl http://127.0.0.1:8000/api/health              # => {"status":"ok",...}
 ```
 
@@ -51,7 +51,7 @@ curl http://127.0.0.1:8000/api/health              # => {"status":"ok",...}
 
 ## 配置
 
-配置加载优先级：**`XIAOZHI_CONFIG` 环境变量** → **`--config <path>` 参数** → **内置默认（/models 生产路径）**。
+配置加载优先级：**`XIAOZHI_CONFIG` 环境变量** → **`--config <path>` 参数** → **内置默认（/data/models 生产路径）**。
 
 ```bash
 # 方式一：环境变量
@@ -85,7 +85,7 @@ cd server && ~/.cargo/bin/cargo run -- --config config.toml
 ### 1. 下载模型
 
 ```bash
-./server/scripts/download_models.sh /host/models
+./server/scripts/download_models.sh /host/data/models
 ```
 
 脚本会从 k2-fsa/sherpa-onnx 官方 GitHub Release 下载整包 tar.bz2 并本地解压（代理由 compose 的 `GITHUB_PROXY` 决定，不配置则直连原始地址），并提示核对文件路径。下载后按 `config.example.toml` 的 `[asr]` / `[vad]` / `[tts]` 路径对齐 `model` / `tokens` / `voices` 等。
@@ -110,7 +110,7 @@ cd server && ~/.cargo/bin/cargo run --features sherpa -- --config config.toml
 docker build -t xiaozhi-server-rust:latest .
 docker run -d --name xiaozhi \
   -p 8000:8000 \
-  -v /host/models:/models \
+  -v /host/data/models:/data/models \
   -v $PWD/config.toml:/app/config.toml \
   -e XIAOZHI_CONFIG=/app/config.toml \
   xiaozhi-server-rust:latest
@@ -120,12 +120,12 @@ docker run -d --name xiaozhi \
 
 容器入口（`docker-entrypoint.sh`）会在启动时检测关键模型文件（`silero_vad.onnx`、`SenseVoiceSmall/tokens.txt`、`Kokoro/model.int8.onnx`）：
 
-- **缺失则自动下载**到挂载的 `/models`（默认行为，从官方 GitHub Release 拉整包 tar.bz2 本地解压，按模型幂等 + 断点续传）。
+- **缺失则自动下载**到挂载的 `/data/models`（默认行为，从官方 GitHub Release 拉整包 tar.bz2 本地解压，按模型幂等 + 断点续传）。
 - 默认**直连原始地址**；docker compose 配置了 `GITHUB_PROXY` 才走代理（如 `https://tvv.tw/`）。下载地址可用 `SENSEVOICE_URL` / `KOKORO_URL` / `SILERO_VAD_URL` 覆盖为完整直链（内网镜像，不会被二次套代理）。
 - 行为开关 `XIAOZHI_AUTO_DOWNLOAD_MODELS`：`missing`（默认，缺失才下）/ `force`（每次重下）/ `off`（不下载，依赖挂载或预置）。
 
 > 因此**不手动预置模型也能直接 `docker compose up` 跑起来**（模型从 GitHub Release 自动拉取，代理可配）。
-> 离线/内网环境：先 `SENSEVOICE_URL=<内网镜像仓库> ./scripts/download_models.sh /host/models` 预置，再挂载，或设 `XIAOZHI_AUTO_DOWNLOAD_MODELS=off`。
+> 离线/内网环境：先 `SENSEVOICE_URL=<内网镜像仓库> ./scripts/download_models.sh /host/data/models` 预置，再挂载，或设 `XIAOZHI_AUTO_DOWNLOAD_MODELS=off`。
 
 ### 部署机指令集
 

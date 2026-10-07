@@ -5,6 +5,8 @@
 //! - `GET /api/health`：健康检查，返回 JSON（status/name/version）。
 //! - `GET /api/ws`：WebSocket 会话入口（先 [`auth_ok`] 鉴权，再 [`handle_handshake`] 协商）。
 //! - `GET/PUT/POST /api/config`：管理页面读写当前配置（语义见下）。
+//! - `GET/POST /api/ota(/)`：小智固件 OTA 引导（返回 websocket 接入信息 + 校时 + 版本，
+//!   契约见 [`ota`]；固件侧把 OTA_URL 指到本服务即自动接入，无需硬编码 WS 地址）。
 //! - 其余路径：静态托管 `[server].admin_dir`（h5App 构建产物，含 `index.html`）；
 //!   目录不存在时 [`admin_missing`] 返回友好提示而非崩溃；SPA 未知路径回退 `index.html`。
 //!
@@ -14,7 +16,7 @@
 //! （管理页面通过 URL 带 token 联调；设备侧仍走 Authorization 头）。见 [`auth_ok`]。
 //!
 //! ## `/api/config` 读写语义
-//! - `GET`：若启动指定了配置文件则实时读盘，否则返回内存中的内置默认配置（/models 生产路径）。
+//! - `GET`：若启动指定了配置文件则实时读盘，否则返回内存中的内置默认配置（/data/models 生产路径）。
 //! - `PUT`/`POST`：写回启动加载的配置文件（TOML，**原注释会被覆盖丢失**）。
 //!   内置默认启动、`config_path` 为 `None` 时返回 400（无法持久化）。
 //! - ⚠️ 引擎相关参数（ASR/TTS/LLM）在启动时构建，改配置后**需重启 server** 才生效；
@@ -50,7 +52,15 @@ pub fn router(engines: Arc<Engines>) -> Router {
     let api = Router::new()
         .route("/api/health", get(health))
         .route("/api/ws", get(ws_handler))
-        .route("/api/config", get(get_config).put(put_config).post(put_config));
+        .route("/api/config", get(get_config).put(put_config).post(put_config))
+        // 小智固件的 OTA 引导端点（带/不带尾斜杠都注册：固件配置的 URL 以 / 结尾）。
+        // ⚠️ 所有接口必须在 /api 之下（接口规范），固件 OTA_URL 指到 /api/ota/ 即可——
+        // 该地址完全可配置，无需对齐官方服务器的 /xiaozhi/ota/ 路径。
+        .route("/api/ota", get(ota).post(ota))
+        .route("/api/ota/", get(ota).post(ota))
+        // 固件托管（上传/下载/当前版本查询）+ 发音人目录，并入同一 /api 前缀
+        .merge(crate::firmware::router())
+        .merge(crate::voices::router());
 
     let app = if Path::new(&admin_dir).is_dir() {
         // SPA：未知路径回退到 index.html，交给前端路由处理。
@@ -88,8 +98,95 @@ async fn admin_missing() -> Response {
         .into_response()
 }
 
+/// OTA/版本检查端点（xiaozhi-esp32 固件开机约定，解析见固件 `main/ota.cc CheckVersion`）：
+/// 设备携系统信息 POST 固件配置的 OTA_URL，响应引导其接入本服务的 WebSocket 并校时。
+///
+/// 响应契约（固件逐段解析，缺段仅告警不阻塞）：
+/// - `websocket`：**扁平对象** `{url, token, version}`，固件原样写入 NVS，
+///   `OpenAudioChannel` 读取——token 非空时固件自动加 `Bearer ` 前缀（对齐 /api/ws 鉴权）；
+///   `version` = 二进制协议版本，**显式下发对齐固件**（不传则固件用内置默认，可能与
+///   `[audio].binary_protocol_version` 错位，下行 Opus 会被解析成乱码）。
+/// - `server_time`：`{timestamp: ms, timezone_offset: 分钟}`，固件 settimeofday 校时；
+///   offset 固定 +480（UTC+8，部署面为中国局域网，不校时仅日志/显示时间漂移）。
+/// - `firmware`：`{version, url}`——url 恒空 + 版本取服务端包版本 → 永不触发固件升级，
+///   仅让固件日志打出 "Current is the latest version"。
+/// - `activation`：不返回 → 设备跳过激活流程（那是 xiaozhi.me 官方服务器的机制）。
+async fn ota(State(engines): State<Arc<Engines>>, headers: HeaderMap, body: String) -> Response {
+    // 设备身份记录（Device-Id = MAC）：接入日志可核对是哪台设备
+    let device_id = headers
+        .get("Device-Id")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("unknown");
+    let firmware = serde_json::from_str::<serde_json::Value>(&body)
+        .ok()
+        .and_then(|v| {
+            let app = v.get("application")?;
+            Some(format!(
+                "{}/{}",
+                app.get("name").and_then(|n| n.as_str()).unwrap_or("?"),
+                app.get("version").and_then(|n| n.as_str()).unwrap_or("?")
+            ))
+        })
+        .unwrap_or_else(|| "(无/解析失败)".to_string());
+    tracing::info!("OTA 检查：device={device_id} firmware={firmware}");
+
+    // WebSocket 地址跟随请求 Host：设备用哪个地址访问 OTA，就用哪个地址连 WS
+    //（部署 IP/端口变化零维护）。HTTP/1.1 必带 Host；缺失兜底 localhost 并告警。
+    let host = headers
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned)
+        .unwrap_or_else(|| {
+            tracing::warn!("OTA 请求缺 Host 头，websocket url 兜底 localhost（设备可能连不上）");
+            format!("localhost:{}", engines.config.server.port)
+        });
+
+    let hosted = crate::firmware::latest().map(|m| m.version);
+    let payload = ota_payload(
+        &host,
+        &engines.config.server.expected_token,
+        engines.config.audio.binary_protocol_version,
+        hosted.as_deref(),
+    );
+    (
+        [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
+        payload.to_string(),
+    )
+        .into_response()
+}
+
+/// OTA 响应体（独立纯函数：契约对齐固件解析，单测锁定字段形状）。
+fn ota_payload(host: &str, expected_token: &str, bin_ver: u8, hosted: Option<&str>) -> serde_json::Value {
+    serde_json::json!({
+        "websocket": {
+            "url": format!("ws://{host}/api/ws"),
+            "token": expected_token,
+            "version": bin_ver,
+        },
+        "server_time": {
+            "timestamp": std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0),
+            "timezone_offset": 480,
+        },
+        "firmware": match hosted {
+            // 已托管固件：下发版本 + 下载地址，设备 IsNewVersionAvailable 判定后自动升级
+            Some(v) => serde_json::json!({
+                "version": v,
+                "url": format!("http://{host}/api/ota/firmware/latest"),
+            }),
+            // 未托管：url 空 → 固件只打 "Current is the latest version"，永不升级
+            None => serde_json::json!({
+                "version": env!("CARGO_PKG_VERSION"),
+                "url": "",
+            }),
+        },
+    })
+}
+
 /// 读取当前配置（供管理页面 UI 填充表单）。
-/// 启动时指定了配置文件则实时从磁盘读取，否则返回内存中的内置默认配置（/models 生产路径）。
+/// 启动时指定了配置文件则实时从磁盘读取，否则返回内存中的内置默认配置（/data/models 生产路径）。
 async fn get_config(State(engines): State<Arc<Engines>>) -> Response {
     // 健壮性：磁盘配置损坏/旧 schema 解析失败时回退内存配置（200），
     // 让管理页能正常打开——一次成功保存即用合法 TOML 覆盖修复坏文件，
@@ -207,7 +304,7 @@ async fn ws_handler(
     })
 }
 
-fn auth_ok(headers: &HeaderMap, query: &HashMap<String, String>, server: &ServerConfig) -> bool {
+pub(crate) fn auth_ok(headers: &HeaderMap, query: &HashMap<String, String>, server: &ServerConfig) -> bool {
     if server.expected_token.is_empty() {
         return true;
     }
@@ -291,6 +388,25 @@ async fn recv_hello<T: Transport>(transport: &mut T) -> anyhow::Result<ClientHel
 mod tests {
     use super::*;
 
+    /// OTA 响应契约（锁定固件 main/ota.cc 解析所需的字段形状）：
+    /// websocket 为扁平对象 url/token/version；firmware.url 恒空（自建端不托管固件升级）。
+    #[test]
+    fn ota_payload_contract() {
+        let v = ota_payload("192.168.99.250:8000", "tk123", 1, Some("2.0.4"));
+        assert_eq!(v["websocket"]["url"], "ws://192.168.99.250:8000/api/ws");
+        assert_eq!(v["websocket"]["token"], "tk123");
+        assert_eq!(v["websocket"]["version"], 1);
+        // 已托管固件：firmware 指向下载地址（设备版本比较通过即自动升级）
+        assert_eq!(v["firmware"]["version"], "2.0.4");
+        assert_eq!(v["firmware"]["url"], "http://192.168.99.250:8000/api/ota/firmware/latest");
+        assert!(v["server_time"]["timestamp"].as_u64().unwrap() > 0);
+        // 未托管：url 空 → 设备永不触发升级
+        let none = ota_payload("h:1", "", 1, None);
+        assert_eq!(none["firmware"]["url"], "");
+        // 未配置鉴权（expected_token 空）：字段仍在，空 token 固件自动跳过 Authorization 头
+        assert_eq!(none["websocket"]["token"], "");
+    }
+
     /// PUT 管线回归：模拟 macApp 管理页「保存配置」发送的 JSON 形状
     /// （ConfigFormState.save 的字段与类型），走「解析 → TOML 序列化 → 再解析」
     /// 全链路，任何一步失败都会在服务端表现为 500。
@@ -311,27 +427,27 @@ mod tests {
                 "binary_protocol_version": 1
             },
             "asr": {
-                "model": "/models/SenseVoiceSmall/model.int8.onnx",
-                "tokens": "/models/SenseVoiceSmall/tokens.txt",
+                "model": "/data/models/SenseVoiceSmall/model.int8.onnx",
+                "tokens": "/data/models/SenseVoiceSmall/tokens.txt",
                 "language": "auto",
                 "use_itn": true,
                 "num_threads": 2,
                 "provider": "cpu"
             },
             "vad": {
-                "model": "/models/silero_vad.onnx",
+                "model": "/data/models/silero_vad.onnx",
                 "threshold": 0.5,
                 "min_silence_duration": 0.25,
                 "min_speech_duration": 0.25
             },
             "tts": {
                 "backend": "xfyun",
-                "model": "/models/Kokoro/model.int8.onnx",
-                "voices": "/models/Kokoro/voices.bin",
-                "tokens": "/models/Kokoro/tokens.txt",
-                "data_dir": "/models/Kokoro/espeak-ng-data",
-                "dict_dir": "/models/Kokoro/dict",
-                "lexicon": "/models/Kokoro/lexicon-us-en.txt,/models/Kokoro/lexicon-zh.txt",
+                "model": "/data/models/Kokoro/model.int8.onnx",
+                "voices": "/data/models/Kokoro/voices.bin",
+                "tokens": "/data/models/Kokoro/tokens.txt",
+                "data_dir": "/data/models/Kokoro/espeak-ng-data",
+                "dict_dir": "/data/models/Kokoro/dict",
+                "lexicon": "/data/models/Kokoro/lexicon-us-en.txt,/data/models/Kokoro/lexicon-zh.txt",
                 "lang": "zh",
                 "speaker": 0,
                 "speed": 1.0,
@@ -402,7 +518,7 @@ expected_token = ""
 
 [tts]
 backend = "sherpa"
-model = "/models/Kokoro/model.int8.onnx"
+model = "/data/models/Kokoro/model.int8.onnx"
 "#;
         let cfg: Config = toml::from_str(legacy).expect("旧 schema 配置应能解析");
         assert_eq!(cfg.server.port, 8000); // 缺省回退

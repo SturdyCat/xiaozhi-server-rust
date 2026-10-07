@@ -5,7 +5,7 @@
 //! - **无 mock**：ASR 恒为 SenseVoice（sherpa-onnx）、TTS 恒为 Kokoro（sherpa-onnx）、
 //!   LLM 恒为 OpenAI 兼容 HTTP（Responses API）。`--features sherpa` 是运行真实引擎的
 //!   前提，未启用时引擎构建直接报错（不再有 mock 回退）。
-//! - 默认（无 `--config`）即 [`Config::default()`]：模型路径指向 `/models/...`
+//! - 默认（无 `--config`）即 [`Config::default()`]：模型路径指向 `/data/models/...`
 //!   （与 `config.example.toml`、容器挂载一致），LLM 需填 `api_base`/`api_key`。
 //! - 旧配置文件里残留的 `backend = "..."` 键会被 serde 静默忽略（无 `deny_unknown_fields`），
 //!   无需手工清理；管理页保存一次即写成新 schema。
@@ -33,6 +33,91 @@ pub struct Config {
     pub tts: TtsConfig,
     #[serde(default)]
     pub llm: LlmConfig,
+    /// AIUI 全链路（极速超拟人）模式：启用后设备流水线变为
+    /// VAD 切段 → AIUI 交互 API（ASR+大模型+TTS 云端闭环）→ 下行音频，
+    /// 本地 ASR / LLM / TTS 引擎闲置（可随时切回）。
+    #[serde(default)]
+    pub aiui: AiuiConfig,
+}
+
+/// AIUI 全链路接入配置（协议见 https://aiui-doc.xf-yun.com/project-1/doc-584/）。
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AiuiConfig {
+    /// 是否启用 AIUI 全链路模式（默认关闭，走本地级联流水线）。
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub appid: String,
+    #[serde(default)]
+    pub api_key: String,
+    #[serde(default)]
+    pub api_secret: String,
+    /// 平台上 appid 下创建的情景模式（main / main_box，main_box 为测试环境）。
+    #[serde(default = "default_aiui_scene")]
+    pub scene: String,
+    /// 设备唯一标识前缀（与设备 MAC 关联，用于云端个性化/上下文绑定）。
+    #[serde(default = "default_aiui_sn_prefix")]
+    pub sn_prefix: String,
+    /// 合成发音人（极速超拟人目录见 AIUI 文档 3.9）。
+    #[serde(default = "default_aiui_voice")]
+    pub voice: String,
+    /// TTS 语速/音量/音调（讯飞原生 0~100，50 为常速）。
+    #[serde(default = "default_aiui_speed")]
+    pub speed: i32,
+    #[serde(default = "default_aiui_volume")]
+    pub volume: i32,
+    #[serde(default = "default_aiui_pitch")]
+    pub pitch: i32,
+    /// 自定义人设 prompt（可空；对应 nlp.prompt）。
+    #[serde(default)]
+    pub prompt: String,
+    /// 音频分帧推送间隔（毫秒）。云端流式 VAD 按实时节奏处理，瞬时灌入整段
+    /// 会被判 Silence（实测）；10ms/1280B ≈ 4 倍速实测可用，0 = 不等待（不推荐）。
+    #[serde(default = "default_aiui_pace_ms")]
+    pub pace_ms: u64,
+}
+
+fn default_aiui_pace_ms() -> u64 {
+    10
+}
+
+fn default_aiui_scene() -> String {
+    // 平台新建 AIUI 应用默认自带 main_box（测试环境）情景模式；生产情景按平台实际配置。
+    "main_box".into()
+}
+fn default_aiui_sn_prefix() -> String {
+    "xiaozhi".into()
+}
+fn default_aiui_voice() -> String {
+    "x6_dongmanshaonv_pro".into()
+}
+fn default_aiui_speed() -> i32 {
+    50
+}
+fn default_aiui_volume() -> i32 {
+    50
+}
+fn default_aiui_pitch() -> i32 {
+    50
+}
+
+impl Default for AiuiConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            appid: String::new(),
+            api_key: String::new(),
+            api_secret: String::new(),
+            scene: default_aiui_scene(),
+            sn_prefix: default_aiui_sn_prefix(),
+            voice: default_aiui_voice(),
+            speed: default_aiui_speed(),
+            volume: default_aiui_volume(),
+            pitch: default_aiui_pitch(),
+            prompt: String::new(),
+            pace_ms: default_aiui_pace_ms(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -332,10 +417,10 @@ fn default_bin_ver() -> u8 {
     1
 }
 fn default_asr_model() -> String {
-    "/models/SenseVoiceSmall/model.int8.onnx".into()
+    "/data/models/SenseVoiceSmall/model.int8.onnx".into()
 }
 fn default_asr_tokens() -> String {
-    "/models/SenseVoiceSmall/tokens.txt".into()
+    "/data/models/SenseVoiceSmall/tokens.txt".into()
 }
 fn default_language() -> String {
     "auto".into()
@@ -347,7 +432,7 @@ fn default_num_threads() -> u32 {
     2
 }
 fn default_vad_model() -> String {
-    "/models/silero_vad.onnx".into()
+    "/data/models/silero_vad.onnx".into()
 }
 /// TTS 合成线程数默认 4。
 /// 旧默认 1 的理由是「与 ASR 错峰」——实机实测该顾虑不成立：语音流水线本身
@@ -391,22 +476,22 @@ fn default_xfyun_voice() -> String {
     "xiaoyan".into()
 }
 fn default_tts_model() -> String {
-    "/models/Kokoro/model.int8.onnx".into()
+    "/data/models/Kokoro/model.int8.onnx".into()
 }
 fn default_tts_voices() -> String {
-    "/models/Kokoro/voices.bin".into()
+    "/data/models/Kokoro/voices.bin".into()
 }
 fn default_tts_tokens() -> String {
-    "/models/Kokoro/tokens.txt".into()
+    "/data/models/Kokoro/tokens.txt".into()
 }
 fn default_tts_data_dir() -> String {
-    "/models/Kokoro/espeak-ng-data".into()
+    "/data/models/Kokoro/espeak-ng-data".into()
 }
 fn default_tts_dict_dir() -> String {
-    "/models/Kokoro/dict".into()
+    "/data/models/Kokoro/dict".into()
 }
 fn default_tts_lexicon() -> String {
-    "/models/Kokoro/lexicon-us-en.txt,/models/Kokoro/lexicon-zh.txt".into()
+    "/data/models/Kokoro/lexicon-us-en.txt,/data/models/Kokoro/lexicon-zh.txt".into()
 }
 fn default_speed() -> f32 {
     1.0

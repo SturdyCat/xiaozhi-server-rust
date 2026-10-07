@@ -829,6 +829,24 @@ private fun ViewContainer<*, *>.benchTtsPage(
                         )
                         vif({ form.xfyunVoiceGroup != "custom" }) {
                             dropdownField(
+                                label = "音色类型",
+                                currentLabel = {
+                                    when (form.xfyunVoiceType) {
+                                        "classic" -> "普通发音人"
+                                        "x6" -> "极速拟人"
+                                        else -> "全部发音人"
+                                    }
+                                },
+                                options = { form.xfyunVoiceTypeOptions },
+                                selectedId = { form.xfyunVoiceType },
+                                isOpen = { bench.openDropdown == "xfyun_voice_type" },
+                                onToggle = { bench.openDropdown = if (bench.openDropdown == "xfyun_voice_type") "" else "xfyun_voice_type" },
+                                onSelect = {
+                                    form.selectXfyunVoiceType(it)
+                                    bench.openDropdown = ""
+                                },
+                            )
+                            dropdownField(
                                 label = "发音人（vcn）",
                                 currentLabel = {
                                     form.xfyunVoiceOptions.firstOrNull { it.first == form.xfyunVoice }?.second
