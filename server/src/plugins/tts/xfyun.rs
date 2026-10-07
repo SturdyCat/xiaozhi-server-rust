@@ -209,6 +209,18 @@ pub(crate) fn signed_ws_url(host: &str, path: &str, api_key: &str, api_secret: &
     )
 }
 
+/// 凭据连通性测试（管理页「测试凭据」按钮）：用给定三要素真实发起一次短合成。
+/// 成功 = 三要素有效且该发音人可用；返回合成耗时（毫秒）。
+/// 失败原样带出错误（11200/10005 等已含可行动提示，见 [`xfyun_error_hint`]）。
+/// **只测不存**：不读写服务端配置，凭据由调用方传入。
+pub fn test_credentials(cfg: &XfyunTtsConfig) -> Result<u64> {
+    let tts = XfyunTts::new(cfg)?;
+    let t0 = Instant::now();
+    // "你好" 足够短（~300ms），能同时验证鉴权与发音人授权；空音频会由 synthesize_stream 报错
+    tts.synthesize_stream("你好", 1.0, 0, Box::new(|_sr, _chunk| true))?;
+    Ok(t0.elapsed().as_millis() as u64)
+}
+
 /// 实际请求使用的发音人（配置为空时回退 xiaoyan，与 [`build_request`] 一致）。
 fn effective_voice(cfg: &XfyunTtsConfig) -> &str {
     if cfg.voice.trim().is_empty() {
@@ -373,6 +385,27 @@ mod tests {
         assert!(xfyun_error_hint(10005, "xiaoyan").contains("app_id"));
         // 未映射的错误码不给提示（原始 code/message/sid 已足够查表）
         assert!(xfyun_error_hint(10110, "xiaoyan").is_empty());
+    }
+
+    /// 凭据测试函数冒烟（真连讯飞；env 密钥）——
+    /// `XFYUN_APP_ID=… XFYUN_API_KEY=… XFYUN_API_SECRET=… cargo test xfyun_test_credentials -- --ignored --nocapture`
+    #[test]
+    #[ignore = "live 讯飞调用：需 XFYUN_APP_ID/XFYUN_API_KEY/XFYUN_API_SECRET 环境变量"]
+    fn xfyun_test_credentials_live() {
+        let (Ok(app_id), Ok(api_key), Ok(api_secret)) = (
+            std::env::var("XFYUN_APP_ID"),
+            std::env::var("XFYUN_API_KEY"),
+            std::env::var("XFYUN_API_SECRET"),
+        ) else {
+            eprintln!("跳过：未设置 XFYUN_APP_ID/XFYUN_API_KEY/XFYUN_API_SECRET");
+            return;
+        };
+        // 正确凭据应通过
+        let cfg = XfyunTtsConfig { app_id, api_key, api_secret, voice: "xiaoyan".into(), ..Default::default() };
+        println!("== 正确凭据: {:?}", test_credentials(&cfg).map(|ms| format!("OK {ms}ms")).map_err(|e| format!("{e:#}")));
+        // 错误密钥应失败（验证测试确实在做真实校验）
+        let bad = XfyunTtsConfig { api_secret: "wrong-secret".into(), ..cfg };
+        println!("== 错误密钥: {:?}", test_credentials(&bad).map(|ms| format!("OK {ms}ms")).map_err(|e| format!("{e:#}")));
     }
 
     /// 发音人回退：配置为空 → xiaoyan（与请求体一致，错误提示才不会报错 vcn）。

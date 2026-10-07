@@ -809,8 +809,9 @@ private fun ViewContainer<*, *>.benchTtsPage(
                             bench.openDropdown = ""
                         },
                     )
-                    // 讯飞发音人（backend=xfyun）：分组 + vcn，与配置卡同一状态
-                    vif({ form.ttsBackend == "xfyun" }) {
+                    // 讯飞发音人（backend=xfyun）：分组 + vcn，与配置卡同一状态。
+                    // ⚠️ 音色列表依赖凭据：三要素未填齐时隐藏（避免选出必然失败的音色）
+                    vif({ form.ttsBackend == "xfyun" && form.xfyunCredsReady() }) {
                         dropdownField(
                             label = "音色分组",
                             currentLabel = {
@@ -869,12 +870,21 @@ private fun ViewContainer<*, *>.benchTtsPage(
                             labeledField("voice（手填 vcn）", { form.xfyunVoice }, { form.xfyunVoice = it; form.dirty = true })
                         }
                     }
+                    vif({ form.ttsBackend == "xfyun" && !form.xfyunCredsReady() }) {
+                        Text {
+                            attr {
+                                fontSize(AdminType.caption)
+                                color(AdminColors.textTertiary)
+                                text("先在右侧 TTS 配置卡填写 app_id / api_key / api_secret 并点「测试凭据」，通过后此处显示可用音色列表。")
+                            }
+                        }
+                    }
                     Text {
                         attr {
                             fontSize(AdminType.caption)
                             color(AdminColors.textSecondary)
                             marginTop(AdminSpace.xs)
-                            text("密钥在右侧 TTS 配置卡维护；改配置后先点顶部「保存配置」再合成——服务端每次合成前自动读盘热切换（无需重启）")
+                            text("密钥在右侧 TTS 配置卡维护；测试台合成会直接使用上方选中的音色（无需先保存配置）")
                         }
                     }
                 }

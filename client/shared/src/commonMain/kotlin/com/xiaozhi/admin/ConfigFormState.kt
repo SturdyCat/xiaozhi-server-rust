@@ -90,6 +90,13 @@ class ConfigFormState(private val scope: PagerScope) {
     var serverBase by scope.observable("")
     /** 上次“刷新音色目录”的结果提示（动作按钮反馈）。 */
     var voicesRefreshMsg by scope.observable("")
+    /** 上次“测试凭据”的结果提示（动作按钮反馈）。 */
+    var credsTestMsg by scope.observable("")
+    var credsTestOk by scope.observable(false)
+
+    /** 讯飞三要素是否填齐——决定依赖凭据的音色选择区是否显示。 */
+    fun xfyunCredsReady(): Boolean =
+        xfyunAppId.isNotBlank() && xfyunApiKey.isNotBlank() && xfyunApiSecret.isNotBlank()
 
     // 音色两级选择：性别分组（女/男/自定义）× 音色类型（全部/普通/极速拟人）。
     // 音色列表经 /api/tts/voices 从服务端动态获取（服务端为唯一数据源：实测目录+控制台元数据）。
@@ -231,6 +238,43 @@ class ConfigFormState(private val scope: PagerScope) {
                 }
             }
             else -> xfyunVoiceGroup = "custom"
+        }
+    }
+
+    /**
+     * 测试当前表单里的讯飞三要素（POST /api/tts/voices/test-credentials，**只测不存**）：
+     * 服务端用传入凭据真实发起一次短合成，验证密钥/服务/发音人是否可用。
+     * 结果以提示显示在按钮旁（成功含耗时；失败含可行动原因，如 11200 发音人未授权）。
+     */
+    fun testXfyunCreds(ctx: Pager) {
+        if (!xfyunCredsReady()) {
+            credsTestOk = false
+            credsTestMsg = "请先填写 app_id / api_key / api_secret"
+            return
+        }
+        credsTestMsg = "测试中…"
+        credsTestOk = false
+        val body = JSONObject().apply {
+            put("app_id", xfyunAppId.trim())
+            put("api_key", xfyunApiKey.trim())
+            put("api_secret", xfyunApiSecret.trim())
+            put("voice", xfyunVoice.trim())
+        }
+        val headers = JSONObject().apply { put("Content-Type", "application/json") }
+        network(ctx).httpRequest("${serverBase}/api/tts/voices/test-credentials", true, body, headers) { data, success, errorMsg, resp ->
+            val code = resp.statusCode
+            if (success && (code == null || code in 200..299)) {
+                val ok = data?.optBoolean("ok", false) ?: false
+                credsTestOk = ok
+                credsTestMsg = if (ok) {
+                    "凭据可用（合成耗时 ${data?.optLong("elapsed_ms") ?: 0}ms）"
+                } else {
+                    "凭据不可用: ${data?.optString("error", "未知错误")}"
+                }
+            } else {
+                credsTestOk = false
+                credsTestMsg = "测试失败: ${if (errorMsg.isNotEmpty()) errorMsg else "HTTP $code"}"
+            }
         }
     }
 
@@ -628,10 +672,26 @@ fun ViewContainer<*, *>.ttsConfigCard(form: ConfigFormState, ctx: Pager) {
                 labeledField("app_id", { form.xfyunAppId }, { form.xfyunAppId = it; form.dirty = true })
                 labeledField("api_key", { form.xfyunApiKey }, { form.xfyunApiKey = it; form.dirty = true })
                 labeledField("api_secret", { form.xfyunApiSecret }, { form.xfyunApiSecret = it; form.dirty = true })
+                // 测试凭据：用**当前表单值**（未保存也可测）真实发起一次短合成，验证密钥/服务/音色
+                actionRow {
+                    secondaryButton("测试凭据") { form.testXfyunCreds(ctx) }
+                    vif({ form.credsTestMsg.isNotEmpty() }) {
+                        View { attr { width(AdminSpace.sm) } }
+                        Text {
+                            attr {
+                                fontSize(AdminType.micro)
+                                color(if (form.credsTestOk) AdminColors.textTertiary else AdminColors.dangerTintText)
+                                text(form.credsTestMsg)
+                            }
+                        }
+                    }
+                }
                 // AIUI 控制台会话（可选）：发音人目录动态拉取用；浏览器登录 aiui.xfyun.cn →
                 // F12 Network → 任意请求 → 复制 Cookie 整串 / X-Csrf-Token 请求头
                 labeledField("console_cookie（可选）", { form.xfyunConsoleCookie }, { form.xfyunConsoleCookie = it; form.dirty = true })
                 labeledField("console_csrf（可选）", { form.xfyunConsoleCsrf }, { form.xfyunConsoleCsrf = it; form.dirty = true })
+                // ⚠️ 音色列表依赖凭据：三要素未填齐时隐藏选择区（避免选出必然失败的音色）
+                vif({ form.xfyunCredsReady() }) {
                 actionRow {
                     secondaryButton("刷新音色目录") { form.refreshVoices(ctx) }
                     vif({ form.voicesRefreshMsg.isNotEmpty() }) {
@@ -702,6 +762,16 @@ fun ViewContainer<*, *>.ttsConfigCard(form: ConfigFormState, ctx: Pager) {
                 }
                 vif({ form.xfyunVoiceGroup == "custom" }) {
                     labeledField("voice（手填 vcn）", { form.xfyunVoice }, { form.xfyunVoice = it; form.dirty = true })
+                }
+                } // vif(xfyunCredsReady)：音色列表依赖凭据，未填齐时隐藏
+                vif({ !form.xfyunCredsReady() }) {
+                    Text {
+                        attr {
+                            fontSize(AdminType.caption)
+                            color(AdminColors.textTertiary)
+                            text("填写 app_id / api_key / api_secret 并点「测试凭据」通过后，此处显示可用音色列表。")
+                        }
+                    }
                 }
             }
         }

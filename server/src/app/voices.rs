@@ -285,11 +285,60 @@ async fn refresh(
     }
 }
 
+/// POST /api/tts/voices/test-credentials：用传入的三要素真实测试一次讯飞合成
+/// （管理页「测试凭据」按钮；**只测不存**，不读写服务端配置）。
+///
+/// 请求体：`{"app_id":"…","api_key":"…","api_secret":"…","voice":"…"}`（voice 可选，默认 xiaoyan）。
+/// 响应：`{"ok":true,"elapsed_ms":123}` 或 `{"ok":false,"error":"…（含 11200 等可行动提示）"}`。
+async fn test_credentials(
+    State(engines): State<Arc<Engines>>,
+    headers: HeaderMap,
+    Query(query): Query<std::collections::HashMap<String, String>>,
+    axum::Json(body): axum::Json<serde_json::Value>,
+) -> Response {
+    if !auth_ok(&headers, &query, &engines.config.server) {
+        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+    }
+    let cfg = crate::plugins::tts::XfyunTtsConfig {
+        app_id: body.get("app_id").and_then(|v| v.as_str()).unwrap_or("").trim().to_string(),
+        api_key: body.get("api_key").and_then(|v| v.as_str()).unwrap_or("").trim().to_string(),
+        api_secret: body.get("api_secret").and_then(|v| v.as_str()).unwrap_or("").trim().to_string(),
+        voice: body
+            .get("voice")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .unwrap_or("xiaoyan")
+            .to_string(),
+        ..Default::default()
+    };
+    // 真连讯飞是阻塞调用（HTTPS 握手 + 合成 ~200ms+），放 spawn_blocking 隔离
+    let result = tokio::task::spawn_blocking(move || crate::plugins::tts::xfyun::test_credentials(&cfg))
+        .await
+        .unwrap_or_else(|e| Err(anyhow::anyhow!("测试任务异常: {e}")));
+    match result {
+        Ok(ms) => (
+            [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
+            serde_json::json!({ "ok": true, "elapsed_ms": ms }).to_string(),
+        )
+            .into_response(),
+        Err(e) => {
+            tracing::warn!("凭据测试失败: {e:#}");
+            (
+                [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
+                serde_json::json!({ "ok": false, "error": format!("{e:#}") }).to_string(),
+            )
+                .into_response()
+        }
+    }
+}
+
 /// 发音人目录子路由（并入主 router）。
 pub fn router() -> Router<Arc<Engines>> {
     Router::new()
         .route("/api/tts/voices", get(voices))
         .route("/api/tts/voices/refresh", post(refresh))
+        .route("/api/tts/voices/test-credentials", post(test_credentials))
 }
 
 /// 内置离线目录（**兜底**，非首选来源）：2026-10-07 逐个真实合成实测可调用。
