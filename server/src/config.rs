@@ -80,6 +80,12 @@ pub struct AudioConfig {
     /// 默认下行二进制协议版本（1/2/3），也可改为跟随设备 hello 的 version。
     #[serde(default = "default_bin_ver")]
     pub binary_protocol_version: u8,
+    /// 下行抖动缓冲（提前量，毫秒）：下发时间表整体比实时**提前** lead_ms，
+    /// 使设备解码队列常备约 lead_ms 的音频存货，吸收网络/调度抖动。
+    /// ESP 固件解码队列上限 20 包（60ms 帧 ≈ 1200ms），默认 240ms（4 帧）远低于上限；
+    /// 上限建议 ≤400ms（约 6~7 包），超过会明显增加打断（barge-in）的响应延迟。
+    #[serde(default = "default_downlink_lead_ms")]
+    pub downlink_lead_ms: u32,
 }
 
 impl Default for ServerConfig {
@@ -99,6 +105,7 @@ impl Default for AudioConfig {
             downlink_frame_duration_ms: default_frame_ms(),
             channels: default_channels(),
             binary_protocol_version: default_bin_ver(),
+            downlink_lead_ms: default_downlink_lead_ms(),
         }
     }
 }
@@ -129,6 +136,9 @@ fn default_downlink_sr() -> u32 {
 }
 fn default_frame_ms() -> u32 {
     60
+}
+fn default_downlink_lead_ms() -> u32 {
+    240
 }
 fn default_channels() -> u16 {
     1

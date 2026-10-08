@@ -12,9 +12,11 @@
 //! 长回复必然溢出：设备先播完 1.2s 缓冲、随后队列在阈值上下震荡 → 「先听到头几个字、
 //! 然后卡住、接着断断续续」（短回复能装下故正常；macApp 无队列上限故正常——勿以此判
 //! 断服务端无问题）。官方 Python 服务端同样有 `AudioRateController` 按 60ms/帧精确节流，
-//! [`DownlinkPacer`] 即其 Rust 对齐实现：每帧目标时刻 = 锚点 + N×帧长（绝对时间表，
-//! 不累积漂移）；生产者更慢（本地 Kokoro RTF>1）时自然立即发送、零额外等待；
-//! 数据源真空 ≥1 帧后重锚定（播放已追平，不回补突发）。
+//! [`DownlinkPacer`] 即其 Rust 对齐实现：每帧目标时刻 = 锚点 + N×帧长 − lead_ms
+//! （绝对时间表 + 可配置提前量，见 `[audio].downlink_lead_ms`，不累积漂移）；
+//! 提前量让设备解码队列常备少量存货以吸收发送抖动，同时远低于 20 包的队满丢包线；
+//! 生产者更慢（本地 Kokoro RTF>1）时自然立即发送、零额外等待；
+//! 数据源真空 ≥ max(lead, 1帧) 后重锚定（播放已追平，不回补突发）。
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -29,37 +31,66 @@ use crate::app::session::{send_binary, send_text, SessionParams};
 use crate::app::transport::{IncomingFrame, Transport};
 use tokio::sync::mpsc;
 
-/// 下行节拍器：按帧长匀速下发（ESP 解码队列保护，语义见模块文档）。
+/// 下行节拍器：按帧长匀速下发，并**整体提前** `lead_ms`（抖动缓冲，ESP 解码队列保护）。
+///
+/// 语义：第 N 帧目标时刻 = `锚点 + N×帧长 − lead_ms`。开局先突发下发约
+/// `lead_ms/帧长` 帧（设备解码队列预充），此后维持恒定提前量匀速——设备侧
+/// 常备约 `lead_ms` 的音频存货，网络/调度抖动（几十 ms 的发送毛刺）不再直接
+/// 打穿设备播放缓冲。提前量受固件解码队列上限约束：60ms 帧上限 20 包（1.2s），
+/// 默认 240ms（4 包）安全；调大需注意 barge-in 响应延迟。
 ///
 /// 生命周期 = **一次回复**（多句连续播放共享同一时间表，句间无缝；新回复 [`Self::reset`]）。
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct DownlinkPacer {
     /// 时间表锚点（首个 pace 调用时惰性设置）。
     anchor: Option<Instant>,
-    /// 虚拟播放位置（毫秒）：第 N 帧目标时刻 = anchor + N×帧长。
+    /// 虚拟播放位置（毫秒）：第 N 帧目标时刻 = anchor + N×帧长 − lead_ms。
     pos_ms: u64,
+    /// 抖动缓冲提前量（毫秒）：下发时间表比实时提前的固定量。
+    lead_ms: u64,
+}
+
+/// 默认提前量（4×60ms 帧）：设备队列预充 4 包，远低于 20 包上限。
+pub(crate) const DEFAULT_LEAD_MS: u64 = 240;
+
+impl Default for DownlinkPacer {
+    fn default() -> Self {
+        Self::new(DEFAULT_LEAD_MS)
+    }
 }
 
 impl DownlinkPacer {
+    /// 指定提前量（毫秒）构造；0 退化为"贴实时"严格节流（无预充）。
+    pub(crate) fn new(lead_ms: u64) -> Self {
+        Self { anchor: None, pos_ms: 0, lead_ms }
+    }
+
     /// 新一轮回复开始：重置时间表。
     pub(crate) fn reset(&mut self) {
         self.anchor = None;
         self.pos_ms = 0;
     }
 
-    /// 数据源真空观测（recv 等待 ≥1 帧长）：播放已追平、时间表重锚定到"当前=播放位置"，
-    /// 避免真空结束后把积压帧突发回补（对齐官方 `AudioRateController` 的空队列重锚定）。
+    /// 数据源真空观测（recv 等待 ≥ max(lead, 帧长)）：设备缓冲确已打穿、时间表重锚定到
+    /// "当前=播放位置"，避免真空结束后把积压帧突发回补（对齐官方 `AudioRateController`
+    /// 的空队列重锚定）。小于该阈值的短抖动**不**重锚定——提前量就是为吸收它而设，
+    /// 重锚定反而会把预充的缓冲抖掉。
     pub(crate) fn note_producer_gap(&mut self, waited: Duration, frame_ms: u64) {
-        if frame_ms == 0 || (waited.as_millis() as u64) < frame_ms {
+        let threshold = self.lead_ms.max(frame_ms);
+        if threshold == 0 || (waited.as_millis() as u64) < threshold {
             return;
         }
         self.anchor = Some(Instant::now() - Duration::from_millis(self.pos_ms));
     }
 
     /// 帧调度计算（纯函数，可测）：返回需等待时长并推进虚拟播放位置一帧。
+    /// 目标 = 锚点 + 虚拟播放位置 − lead_ms；未到则等待，迟到/生产者慢则零等待。
     fn plan(&mut self, now: Instant, frame_ms: u64) -> Duration {
         let anchor = *self.anchor.get_or_insert(now);
-        let wait = match anchor.checked_add(Duration::from_millis(self.pos_ms)) {
+        let wait = match anchor
+            .checked_add(Duration::from_millis(self.pos_ms))
+            .and_then(|t| t.checked_sub(Duration::from_millis(self.lead_ms)))
+        {
             Some(target) if target > now => target - now,
             _ => Duration::ZERO,
         };
@@ -144,8 +175,13 @@ pub(crate) fn pad_tail(pcm: &[f32], frame: usize) -> Vec<f32> {
 /// **边收边**重采样（跨分片连续相位）+ 流式 Opus 编码 + 逐帧二进制下发；
 /// `rx` 关闭后冲刷残帧并返回（调用方随后发 `tts stop`）。
 ///
+/// `cache_sink` 传 `Some(&mut Vec)` 时同步收集已编码 Opus 帧负载（不含协议头），
+/// 供调用方写入 [`crate::app::tts_cache::TtsCache`]；打断/发送失败时 sink 被清空
+/// （残缺句不得入缓存）。
+///
 /// 关键：重采样器与 Opus 编码器都是**跨分片复用**的流式实例——每个分片单独处理
 /// 会在边界产生相位跳变（重采样）与流重启（Opus），实听即"爆音/断续"。
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn send_sentence_audio_stream<T: Transport>(
     transport: &mut T,
     params: &SessionParams,
@@ -156,6 +192,7 @@ pub(crate) async fn send_sentence_audio_stream<T: Transport>(
     tts_sr: u32,
     mut rx: mpsc::UnboundedReceiver<Vec<f32>>,
     pacer: &mut DownlinkPacer,
+    mut cache_sink: Option<&mut Vec<Vec<u8>>>,
     // 首帧实际下发时刻（跨句共享：只记录本轮回复的第一帧；调用方据此打 TTFA）
     first_frame_at: &mut Option<Instant>,
 ) -> Result<usize> {
@@ -175,6 +212,10 @@ pub(crate) async fn send_sentence_audio_stream<T: Transport>(
     let mut encoder = OpusFrameEncoder::new(params.downlink_sr)?;
     let mut carry: Vec<f32> = Vec::new(); // 不足整帧的尾部（跨分片积攒）
     let mut frames_sent: usize = 0;
+    // 缓存收集（可选）：sink 与 abort 标志都要在借用结束后使用 → 先取裸指针级联不可行，
+    // 用局部 Option 代理，循环后统一回写/清空
+    let mut collected: Option<Vec<Vec<u8>>> =
+        cache_sink.is_some().then(Vec::new);
 
     // 收分片 → 重采样 → 攒满整帧即编码下发（下发节奏由 pacer 钉在实时，保护 ESP 解码队列）
     loop {
@@ -193,6 +234,9 @@ pub(crate) async fn send_sentence_audio_stream<T: Transport>(
                 }
             };
             carry.drain(..frame);
+            if let Some(c) = collected.as_mut() {
+                c.push(opus.clone());
+            }
             let framed = wrap_downlink(params.downlink_bin_ver, &opus, *downlink_ts);
             *downlink_ts += params.downlink_frame_ms;
             pacer.pace(frame_ms).await;
@@ -203,6 +247,10 @@ pub(crate) async fn send_sentence_audio_stream<T: Transport>(
             send_binary(transport, framed).await?;
             if poll_abort(transport, session_id, abort) {
                 tracing::info!("session {} 中断流式 TTS 下发（{text}）", session_id);
+                // 残缺句不得入缓存
+                if let Some(dst) = &mut cache_sink {
+                    dst.clear();
+                }
                 return Ok(frames_sent);
             }
         }
@@ -212,6 +260,9 @@ pub(crate) async fn send_sentence_audio_stream<T: Transport>(
         let tail = pad_tail(&carry, frame);
         match encoder.encode_frame(&tail) {
             Ok(opus) => {
+                if let Some(c) = collected.as_mut() {
+                    c.push(opus.clone());
+                }
                 let framed = wrap_downlink(params.downlink_bin_ver, &opus, *downlink_ts);
                 *downlink_ts += params.downlink_frame_ms;
                 pacer.pace(frame_ms).await;
@@ -224,6 +275,55 @@ pub(crate) async fn send_sentence_audio_stream<T: Transport>(
             Err(e) => tracing::warn!("Opus 编码失败（流式尾帧）: {e}"),
         }
     }
+    // 回写缓存收集（完整句才写；已在中途打断的上面已清空并 return）
+    if let Some(out) = collected.take() {
+        if let Some(dst) = cache_sink {
+            *dst = out;
+        }
+    }    Ok(frames_sent)
+}
+
+/// 缓存命中路径：`sentence_start(text)` → 逐帧把**已编码**的 Opus 帧负载加协议头
+/// 下发（零合成/重采样/编码计算），节奏同样由 [`DownlinkPacer`] 钉住（ESP 队列保护
+/// 与流式路径完全一致）。打断时提前返回已发送帧数。
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn send_cached_sentence_audio<T: Transport>(
+    transport: &mut T,
+    params: &SessionParams,
+    downlink_ts: &mut u32,
+    abort: &Arc<AtomicBool>,
+    session_id: &str,
+    text: &str,
+    frames: &Arc<Vec<Vec<u8>>>,
+    pacer: &mut DownlinkPacer,
+    first_frame_at: &mut Option<Instant>,
+) -> Result<usize> {
+    send_text(
+        transport,
+        &ServerMessage::Tts {
+            session_id: session_id.to_string(),
+            state: "sentence_start".to_string(),
+            text: Some(text.to_string()),
+        },
+    )
+    .await?;
+
+    let frame_ms = params.downlink_frame_ms as u64;
+    let mut frames_sent: usize = 0;
+    for opus in frames.iter() {
+        let framed = wrap_downlink(params.downlink_bin_ver, opus, *downlink_ts);
+        *downlink_ts += params.downlink_frame_ms;
+        pacer.pace(frame_ms).await;
+        if first_frame_at.is_none() {
+            *first_frame_at = Some(Instant::now());
+        }
+        frames_sent += 1;
+        send_binary(transport, framed).await?;
+        if poll_abort(transport, session_id, abort) {
+            tracing::info!("session {} 中断缓存 TTS 下发（{text}）", session_id);
+            break;
+        }
+    }
     Ok(frames_sent)
 }
 
@@ -231,17 +331,18 @@ pub(crate) async fn send_sentence_audio_stream<T: Transport>(
 mod tests {
     use super::pad_tail;
     use super::poll_abort;
+    use super::send_cached_sentence_audio;
     use super::DownlinkPacer;
     use crate::app::transport::{IncomingFrame, Transport};
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
     use std::time::{Duration, Instant};
 
-    /// 节拍器核心语义（纯 plan 计算，无 sleep）：
+    /// 节拍器核心语义（纯 plan 计算，无 sleep，零提前量）：
     /// 首帧零等待 → 按绝对时间表匀速（不累积漂移）→ 迟到零等待且时间表不倒退。
     #[test]
     fn pacer_keeps_real_time_cadence() {
-        let mut p = DownlinkPacer::default();
+        let mut p = DownlinkPacer::new(0);
         let base = Instant::now();
         // 首帧：锚点=now，目标=now → 零等待
         assert_eq!(p.plan(base, 60), Duration::ZERO);
@@ -259,7 +360,7 @@ mod tests {
     /// 3 帧 × 40ms：首帧零等待，总耗时 ≥ 2×40ms（守护 ESP 解码队列的核心行为）。
     #[tokio::test]
     async fn pacer_actually_sleeps_real_time() {
-        let mut p = DownlinkPacer::default();
+        let mut p = DownlinkPacer::new(0);
         let t0 = Instant::now();
         for _ in 0..3 {
             p.pace(40).await;
@@ -271,10 +372,11 @@ mod tests {
         );
     }
 
-    /// 数据源真空 ≥1 帧后重锚定：新帧立即下发（播放已追平），后续恢复 60ms 节奏。
+    /// 数据源真空 ≥ max(lead, 帧长) 后重锚定：新帧立即下发（播放已追平），后续恢复 60ms 节奏。
+    /// 小于阈值的短真空不得重锚定（预充的抖动缓冲就是为吸收它而设）。
     #[test]
     fn pacer_reanchors_after_producer_gap() {
-        let mut p = DownlinkPacer::default();
+        let mut p = DownlinkPacer::new(0);
         let base = Instant::now();
         assert_eq!(p.plan(base, 60), Duration::ZERO); // 第 1 帧
         // 真空 5 秒（recv 等待）→ 重锚定
@@ -284,8 +386,8 @@ mod tests {
         // 下一帧恢复匀速（目标 ≈ 60ms 后）
         let wait = p.plan(Instant::now(), 60);
         assert!(wait >= Duration::from_millis(58) && wait <= Duration::from_millis(60), "恢复节奏: {wait:?}");
-        // 小于 1 帧的短真空：不重锚定（时间表保持原样——第 3 帧目标仍是 base+120）
-        let mut q = DownlinkPacer::default();
+        // 小于阈值的短真空：不重锚定（时间表保持原样——第 3 帧目标仍是 base+120）
+        let mut q = DownlinkPacer::new(0);
         assert_eq!(q.plan(base, 60), Duration::ZERO); // 第 1 帧（目标 base+0）
         assert_eq!(q.plan(base + Duration::from_millis(60), 60), Duration::ZERO); // 第 2 帧（目标 base+60）
         q.note_producer_gap(Duration::from_millis(10), 60); // 10ms < 60ms：不锚定
@@ -297,6 +399,92 @@ mod tests {
         // reset 后回到首帧语义
         q.reset();
         assert_eq!(q.plan(base, 60), Duration::ZERO);
+    }
+
+    /// 提前量（抖动缓冲）语义：开局连续零等待预充 lead/帧长 帧，随后回到匀速但
+    /// 时间表整体比实时早 lead_ms；短真空（< lead）不重锚定。
+    #[test]
+    fn pacer_lead_pre_fills_and_absorbs_jitter() {
+        let mut p = DownlinkPacer::new(240); // 4 帧 @60ms
+        let base = Instant::now();
+        // 开局预充：前 4 帧目标 ≤ base+0 → 全部零等待（突发下发，填设备解码队列）
+        for _ in 0..4 {
+            assert_eq!(p.plan(base, 60), Duration::ZERO, "预充帧应零等待");
+        }
+        // 第 5 帧目标 = base + 4*60 - 240 = base → 仍零等待；第 6 帧起恢复 60ms 匀速
+        assert_eq!(p.plan(base + Duration::from_millis(5), 60), Duration::ZERO);
+        let wait = p.plan(base + Duration::from_millis(10), 60);
+        assert_eq!(wait, Duration::from_millis(50), "预充完成后恢复匀速（目标 base+300-240=base+60）");
+        // 100ms 短真空（< lead 240）：设备仍有存货 → 不重锚定，时间表不动
+        // （预充使时间表整体领先 wall clock，第 6 帧目标 = base+360-240 = base+120）
+        p.note_producer_gap(Duration::from_millis(100), 60);
+        let wait = p.plan(base + Duration::from_millis(110), 60);
+        assert_eq!(wait, Duration::from_millis(10), "短真空不重锚定：目标仍 base+360-240=base+120");
+        // ≥ lead 的真空：确已打穿 → 重锚定，下一帧立即下发
+        p.note_producer_gap(Duration::from_millis(500), 60);
+        assert_eq!(p.plan(Instant::now(), 60), Duration::ZERO);
+    }
+
+    /// 默认构造 = 内置默认提前量（240ms），与 `[audio].downlink_lead_ms` 默认一致。
+    #[test]
+    fn pacer_default_uses_default_lead() {
+        let p = DownlinkPacer::default();
+        assert_eq!(p.lead_ms, super::DEFAULT_LEAD_MS);
+    }
+
+    /// 缓存命中路径：逐帧加协议头按节拍下发，返回帧数；打断（承载关闭）提前返回。
+    #[tokio::test]
+    async fn cached_send_sends_all_frames_then_aborts_on_closed() {
+        use crate::app::protocol::BinVersion;
+        use crate::app::session::SessionParams;
+        let params = SessionParams {
+            uplink_bin_ver: BinVersion::V1,
+            downlink_bin_ver: BinVersion::V1,
+            uplink_sr: 16000,
+            downlink_sr: 24000,
+            downlink_frame_ms: 60,
+            downlink_lead_ms: 0,
+        };
+        let frames = Arc::new(vec![vec![1u8, 2], vec![3], vec![4, 5, 6]]);
+        let mut t = transport_with(vec![]);
+        let mut ts = 100u32;
+        let mut pacer = DownlinkPacer::new(0);
+        let mut first = None;
+        let n = send_cached_sentence_audio(
+            &mut t,
+            &params,
+            &mut ts,
+            &abort_flag(),
+            "s1",
+            "你好",
+            &frames,
+            &mut pacer,
+            &mut first,
+        )
+        .await
+        .expect("缓存下发应成功");
+        assert_eq!(n, 3, "应下发全部缓存帧");
+        assert_eq!(ts, 100 + 3 * 60, "时间戳按帧长推进");
+        assert!(first.is_some(), "首帧时刻应记录");
+        // 承载已关闭 → 打断：一帧都不发（sentence_start 仍先发）
+        let mut t2 = transport_with(vec![IncomingFrame::Closed]);
+        let mut ts2 = 0u32;
+        let mut first2 = None;
+        let n2 = send_cached_sentence_audio(
+            &mut t2,
+            &params,
+            &mut ts2,
+            &abort_flag(),
+            "s1",
+            "你好",
+            &frames,
+            &mut pacer,
+            &mut first2,
+        )
+        .await
+        .expect("缓存下发应成功");
+        assert_eq!(n2, 1, "首帧发出后即检测到关闭并中止");
+        assert_eq!(ts2, 60);
     }
 
     /// 内存传输：预置上行帧序列，供 poll_abort 无网络单测。

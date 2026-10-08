@@ -45,6 +45,8 @@ pub struct Engines {
     /// 测试台切换语言时按需构建对应引擎；配置默认语言直接返回默认引擎）。
     tts_pool: Mutex<HashMap<String, Arc<dyn TtsEngine>>>,
     pub llm: Llm,
+    /// TTS 结果缓存（跨会话共享；`[tts].cache_entries`，0=关闭）。
+    pub tts_cache: crate::app::tts_cache::TtsCache,
     pub config: Arc<Config>,
     /// server 启动时实际加载的配置文件路径；为 `None` 表示用的是内置默认配置，
     /// 此时 `PUT /api/config` 无法持久化（需以 `--config` 指定文件后重启）。
@@ -71,12 +73,14 @@ impl Engines {
         let tts = build_tts(&config.tts)?;
         let tts_sig = config.tts.engine_signature();
         let llm = build_llm(&config.llm);
+        let tts_cache = crate::app::tts_cache::TtsCache::new(config.tts.cache_entries);
         Ok(Arc::new(Self {
             asr,
             tts: RwLock::new(tts),
             tts_sig: RwLock::new(tts_sig),
             tts_pool: Mutex::new(HashMap::new()),
             llm,
+            tts_cache,
             config: Arc::new(config.clone()),
             config_path,
         }))

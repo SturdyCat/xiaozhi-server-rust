@@ -13,7 +13,11 @@ use std::time::Duration;
 use crate::plugins::aiui::{AiuiSession, FullChainEngine, FullChainTurn};
 use crate::app::audio::opus::OpusFrameDecoder;
 use crate::plugins::asr::AsrEngine;
-use crate::app::downlink::{poll_abort, send_sentence_audio_stream, send_tts_state, DownlinkPacer};
+use crate::app::downlink::{
+    poll_abort, send_cached_sentence_audio, send_sentence_audio_stream, send_tts_state,
+    DownlinkPacer,
+};
+use crate::app::tts_cache::TtsCache;
 use crate::engine::Engines;
 use crate::plugins::llm::LlmEvent;
 use crate::app::protocol::{BinVersion, ClientMessage, ServerMessage, unwrap_uplink};
@@ -46,6 +50,8 @@ pub struct SessionParams {
     pub uplink_sr: u32,
     pub downlink_sr: u32,
     pub downlink_frame_ms: u32,
+    /// 下行抖动缓冲提前量（毫秒），见 `[audio].downlink_lead_ms`。
+    pub downlink_lead_ms: u32,
 }
 
 /// 单连接会话：承载 [`Transport`]、引擎引用与全部可变会话状态。
@@ -220,6 +226,7 @@ impl<'a, T: Transport> Session<'a, T> {
             16000,
             chunk_rx,
             &mut self.pacer,
+            None, // AIUI 全链路回传音频不入缓存（音频由云端给定，同句不保证可复现）
             &mut None,
         )
         .await?;
@@ -419,42 +426,84 @@ impl<'a, T: Transport> Session<'a, T> {
                     // 流式合成：spawn_blocking 里跑引擎（同步阻塞），分片经 channel 回流；
                     // 本 task 边收边重采样/编码/下发——首片即发声（TTFA 从「整句合成完」
                     // 提前到「首片合成完」）。abort 时回调返回 false，引擎尽早停止合成。
-                    let tts = self.engines.tts();
-                    let tts_sr = tts.output_sample_rate();
+                    // 缓存命中（同一句已合成过：引擎签名+音色+语速+下行参数+文本同键）
+                    // 跳过合成，已编码帧直接按节拍下发——高频短句 TTFA 降到一次预充突发。
                     let speed = self.engines.config.tts.speed;
                     let speaker = self.engines.config.tts.speaker;
-                    let t_tts = std::time::Instant::now();
-                    let s = sentence.clone();
-                    let (tx, chunk_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<f32>>();
-                    let producer = tokio::task::spawn_blocking(move || {
-                        tts.synthesize_stream(
-                            &s,
-                            speed,
-                            speaker,
-                            Box::new(move |_sr, chunk| tx.send(chunk.to_vec()).is_ok()),
-                        )
-                    });
-                    let frames = send_sentence_audio_stream(
-                        self.transport,
-                        &self.params,
-                        &mut self.downlink_ts,
-                        &self.abort,
-                        &self.session_id,
+                    let cache_key = TtsCache::make_key(
+                        &self.engines.config.tts.engine_signature(),
+                        speaker,
+                        speed,
+                        self.params.downlink_sr,
+                        self.params.downlink_frame_ms,
                         &sentence,
-                        tts_sr,
-                        chunk_rx,
-                        &mut self.pacer,
-                        &mut first_frame_at,
-                    )
-                    .await?;
-                    match producer.await {
-                        Ok(Ok(())) => {}
-                        Ok(Err(e)) => tracing::warn!(
-                            "session {session_id} 句子合成失败（耗时 {}ms）: {e}",
-                            t_tts.elapsed().as_millis()
-                        ),
-                        Err(e) => tracing::warn!("session {session_id} 合成任务异常: {e}"),
-                    }
+                    );
+                    let frames = if let Some(cached) = self.engines.tts_cache.get(cache_key) {
+                        tracing::debug!(
+                            "session {session_id} TTS 缓存命中（{} 帧直接下发）",
+                            cached.opus_frames.len()
+                        );
+                        send_cached_sentence_audio(
+                            self.transport,
+                            &self.params,
+                            &mut self.downlink_ts,
+                            &self.abort,
+                            &self.session_id,
+                            &sentence,
+                            &cached.opus_frames,
+                            &mut self.pacer,
+                            &mut first_frame_at,
+                        )
+                        .await?
+                    } else {
+                        let tts = self.engines.tts();
+                        let tts_sr = tts.output_sample_rate();
+                        let t_tts = std::time::Instant::now();
+                        let s = sentence.clone();
+                        let (tx, chunk_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<f32>>();
+                        let producer = tokio::task::spawn_blocking(move || {
+                            tts.synthesize_stream(
+                                &s,
+                                speed,
+                                speaker,
+                                Box::new(move |_sr, chunk| tx.send(chunk.to_vec()).is_ok()),
+                            )
+                        });
+                        let mut cache_buf: Vec<Vec<u8>> = Vec::new();
+                        let frames = send_sentence_audio_stream(
+                            self.transport,
+                            &self.params,
+                            &mut self.downlink_ts,
+                            &self.abort,
+                            &self.session_id,
+                            &sentence,
+                            tts_sr,
+                            chunk_rx,
+                            &mut self.pacer,
+                            Some(&mut cache_buf),
+                            &mut first_frame_at,
+                        )
+                        .await?;
+                        let synth_result = producer.await;
+                        match synth_result {
+                            Ok(Ok(())) => {
+                                tracing::debug!(
+                                    "session {session_id} 句子合成完成（耗时 {}ms）",
+                                    t_tts.elapsed().as_millis()
+                                );
+                                // 完整合成成功才入缓存（打断/合成失败的残缺句不缓存）
+                                if !cache_buf.is_empty() {
+                                    self.engines.tts_cache.insert(cache_key, cache_buf);
+                                }
+                            }
+                            Ok(Err(e)) => tracing::warn!(
+                                "session {session_id} 句子合成失败（耗时 {}ms）: {e}",
+                                t_tts.elapsed().as_millis()
+                            ),
+                            Err(e) => tracing::warn!("session {session_id} 合成任务异常: {e}"),
+                        }
+                        frames
+                    };
                     sentences_done += 1;
                     if sentences_done == 1 {
                         // TTFA = 用户文本就绪 → **首帧音频实际下发**（非句子播完）
@@ -567,7 +616,7 @@ pub async fn run_session<T: Transport>(
         is_test,
         abort: Arc::new(AtomicBool::new(false)),
         aiui,
-        pacer: DownlinkPacer::default(),
+        pacer: DownlinkPacer::new(params.downlink_lead_ms as u64),
     };
     session.run().await
 }

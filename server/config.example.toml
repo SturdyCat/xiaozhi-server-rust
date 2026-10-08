@@ -21,6 +21,10 @@ downlink_frame_duration_ms = 60
 channels = 1
 # 下行二进制协议版本（1/2/3）；建议先用 1，真机验证后再切 2/3。
 binary_protocol_version = 1
+# 下行抖动缓冲提前量（毫秒）：下发时间表整体比实时提前此量，设备解码队列
+# 常备约此长度的音频存货，吸收网络/调度抖动，消除偶发小卡顿。
+# 上限 20 包（60ms 帧 ≈ 1200ms），默认 240（4 帧）；调大会增加打断响应延迟。
+downlink_lead_ms = 240
 
 [asr]
 # ASR 恒为 SenseVoice INT8（sherpa-onnx 离线识别），无 mock。
@@ -60,6 +64,11 @@ speed = 1.0
 # 不存在抢占。容器部署（docker-compose.yml）已设 cpus: "3.5" 配额（留 0.5 核给宿主机），
 # 4 个合成线程在 3.5 核配额内调度；如需更保守可下调到 3。
 num_threads = 4
+# TTS 结果缓存条目数（默认 256，0 = 关闭）：按句缓存**已编码**的下行 Opus 帧
+# （键 = 引擎签名+音色+语速+下行采样率/帧长+文本，跨会话共享）。命中的句子
+# 零合成/零编码延迟，直接按实时节奏下发——高频短句（"好的""我在"）TTFA 从
+# 合成耗时降到一次预充突发（≈[audio].downlink_lead_ms）。
+cache_entries = 256
 
 # 科大讯飞在线合成（backend = "xfyun" 时生效）：
 # 在讯飞开放平台（xfyun.cn）创建应用 → 开通「在线语音合成（流式版）」→ 复制 APPID/APIKey/APISecret 三件密钥。

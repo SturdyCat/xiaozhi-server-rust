@@ -196,6 +196,7 @@ async fn handle_handshake(
         uplink_sr,
         downlink_sr,
         downlink_frame_ms,
+        downlink_lead_ms: engines.config.audio.downlink_lead_ms,
     };
     if hello.test {
         tracing::info!("session {session_id} 测试台连接（hello.test=true，受理 asr_test/tts_test/llm_test）");

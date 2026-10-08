@@ -9,5 +9,6 @@ pub mod session;
 pub mod sse;
 pub mod splitter;
 pub mod transport;
+pub mod tts_cache;
 pub mod voices;
 pub mod ws;

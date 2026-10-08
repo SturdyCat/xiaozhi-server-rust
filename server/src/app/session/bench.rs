@@ -212,6 +212,7 @@ impl<'a, T: Transport> Session<'a, T> {
                         tts_sr,
                         chunk_rx,
                         &mut self.pacer,
+                        None, // 测试台测的是真实合成，不走缓存
                         &mut None,
                     )
                     .await?;

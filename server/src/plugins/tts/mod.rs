@@ -47,6 +47,10 @@ pub struct TtsConfig {
     pub speed: f32,
     #[serde(default = "default_tts_threads")]
     pub num_threads: u32,
+    /// TTS 结果缓存条目数（按句缓存已编码下行 Opus 帧，跨会话共享；
+    /// 命中时零合成延迟、直接按实时节奏下发）。0 = 关闭缓存。
+    #[serde(default = "default_cache_entries")]
+    pub cache_entries: u32,
     /// 科大讯飞在线 TTS（backend = "xfyun" 时使用）。
     #[serde(default)]
     pub xfyun: XfyunTtsConfig,
@@ -135,6 +139,11 @@ fn default_speed() -> f32 {
 /// （留 0.5 核给宿主机），4 线程在配额内调度；如需更保守可下调到 3。
 fn default_tts_threads() -> u32 {
     4
+}
+
+/// TTS 缓存默认 256 条（每条一句已编码 Opus 帧，几十 KB 量级，总量几十 MB 内）。
+fn default_cache_entries() -> u32 {
+    256
 }
 
 // 讯飞 AIUI 主动合成（在线 TTS 实现；音色探测同源，见 [`aiui::probe_voice`]）
@@ -273,6 +282,7 @@ impl Default for TtsConfig {
             speaker: 0,
             speed: default_speed(),
             num_threads: default_tts_threads(),
+            cache_entries: default_cache_entries(),
             xfyun: XfyunTtsConfig::default(),
         }
     }
