@@ -19,8 +19,15 @@ import com.tencent.kuikly.core.views.View
  *
  * `enabled = false` 时完全退回 `[llm].system_prompt` 的原文（逐字节一致），
  * 因此关闭态的提示必须写清这一点，用户才敢打开 / 敢关掉。
+ *
+ * 「内置默认灵魂」（`preset`）的交互三件套：
+ * 1. **载入预设内容到表单** —— 把服务端合并出的完整档案写回表单，于是默认人格变成
+ *    可逐条修改的显式值（此前只存在于运行时合并结果里）；
+ * 2. **清空人格字段** —— 回到"只用预设"的状态（留空 = 运行时由预设补）；
+ * 3. **预览最终提示词** —— 把实际发出去的 instructions 与"哪些字段来自预设/被你覆盖"
+ *    摊开；顺带当保存前校验器（preset 拼错会当场报错）。
  */
-fun ViewContainer<*, *>.soulConfigCard(form: ConfigFormState) {
+fun ViewContainer<*, *>.soulConfigCard(form: ConfigFormState, ctx: Pager) {
     val sm = form.sm
     groupedCard("灵魂（人格档案）") {
         switchRow("enabled（启用人格档案）", sm.soulEnabled == "true") {
@@ -37,7 +44,93 @@ fun ViewContainer<*, *>.soulConfigCard(form: ConfigFormState) {
                 )
             }
         }
+        // ===== 未启用：一键用内置默认人格开启（开箱可用）=====
+        vif({ sm.soulEnabled != "true" }) {
+            Text {
+                attr {
+                    fontSize(AdminType.caption)
+                    color(AdminColors.textSecondary)
+                    text("内置了一份默认人格「小智」：打开就能用，之后每个字段都可以改，也能整份换成自己的。")
+                }
+            }
+            actionRow {
+                secondaryButton("用内置默认人格启用") {
+                    sm.soulPreset = "xiaozhi"
+                    sm.soulEnabled = "true"
+                    form.dirty = true
+                    sm.soulPresetMsg =
+                        "已启用内置默认人格：你没填的字段由预设补，填了的字段覆盖它。" +
+                            "点「预览最终提示词」看实际发出去的内容。"
+                }
+            }
+            vif({ sm.soulPresetMsg.isNotEmpty() }) {
+                Text {
+                    attr {
+                        fontSize(AdminType.micro)
+                        color(AdminColors.textSecondary)
+                        text(sm.soulPresetMsg)
+                    }
+                }
+            }
+        }
         vif({ sm.soulEnabled == "true" }) {
+            dividerH()
+            // ===== 内置预设（默认灵魂）=====
+            Text {
+                attr {
+                    fontSize(AdminType.caption)
+                    color(AdminColors.textSecondary)
+                    text("内置默认灵魂：**留空**的字段由预设补，**填了**的字段逐字段覆盖它——" +
+                        "所以「改默认」就是直接改下面的字段，改完留空又能回到默认。")
+                }
+            }
+            dropdownField(
+                label = "preset（内置人格预设）",
+                currentLabel = {
+                    sm.soulPresetOptions.firstOrNull { it.first == sm.soulPreset }?.second ?: sm.soulPreset
+                },
+                options = { sm.soulPresetOptions },
+                selectedId = { sm.soulPreset },
+                isOpen = { form.openDropdown == "soul_preset" },
+                onToggle = {
+                    form.openDropdown = if (form.openDropdown == "soul_preset") "" else "soul_preset"
+                },
+                onSelect = {
+                    sm.soulPreset = it
+                    form.dirty = true
+                    form.openDropdown = ""
+                },
+            )
+            actionRow {
+                secondaryButton("载入预设内容到表单") {
+                    // 先同步预设清单（服务端新增预设时下拉自动补上），再让服务端合并出完整档案
+                    sm.syncSoulPresets(ctx, form.serverBase)
+                    sm.loadDefaultSoul(ctx, form.serverBase) { form.dirty = true }
+                }
+                secondaryButton("清空人格字段") { sm.clearSoulProfile { form.dirty = true } }
+            }
+            actionRow {
+                secondaryButton("预览最终提示词") { sm.previewSoul(ctx, form.serverBase) }
+            }
+            vif({ sm.soulPresetMsg.isNotEmpty() }) {
+                Text {
+                    attr {
+                        fontSize(AdminType.micro)
+                        color(AdminColors.textSecondary)
+                        text(sm.soulPresetMsg)
+                    }
+                }
+            }
+            // 只读预览：官方 TextArea 无 read-only 属性，这里用 no-op 回调（输入不改状态，
+            // 下次重组即恢复），标题明确写"预览"。要改人格请改下面的字段。
+            vif({ sm.soulPreviewText.isNotEmpty() }) {
+                labeledTextArea(
+                    "最终提示词（预览，只读）",
+                    { sm.soulPreviewText },
+                    { },
+                    height = 220f,
+                )
+            }
             dividerH()
             Text {
                 attr {

@@ -126,6 +126,12 @@ fn example_config_parses_and_normalizes() {
     assert_eq!(cfg.tts.kokoro.lang, "zh");
     assert_eq!(cfg.llm.engine, "openai");
     assert_eq!(cfg.memory.engine_id(), "graph");
+    // 内置默认灵魂：样例里写了 preset，且它必须是真实存在的预设（写错样例 = 每个新用户踩一次）
+    assert_eq!(cfg.soul.preset, crate::plugins::soul::presets::DEFAULT_ID);
+    assert!(
+        crate::plugins::soul::presets::get(&cfg.soul.preset).is_some(),
+        "config.example.toml 的 preset 必须是已知预设"
+    );
 }
 
 /// 回传/落盘形状：`[tts]` 只有 `engine` + 跨实现项 + `[tts.kokoro]`/`[tts.xfyun]` 子段，

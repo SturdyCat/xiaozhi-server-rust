@@ -45,7 +45,7 @@ fun ViewContainer<*, *>.renderForm(
                     "tts" -> ttsConfigCard(form, ctx)
                     "llm" -> llmConfigCard(form)
                     "aiui" -> aiuiConfigCard(form)
-                    "soul" -> soulConfigCard(form)
+                    "soul" -> soulConfigCard(form, ctx)
                     "memory" -> memoryConfigCard(form, ctx)
                     // 未注册内容不要静默留白（"新加了 section 却忘了写内容"会表现成点进去什么都没有）
                     else -> groupedCard("未知配置页") {

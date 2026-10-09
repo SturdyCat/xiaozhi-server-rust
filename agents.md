@@ -13,7 +13,7 @@
 - 本地 TTS：Kokoro INT8（离线，`sherpa-onnx`）
 - VAD：Silero VAD
 - 远程 LLM：OpenAI 兼容的 **Responses** HTTP 接口
-- 灵魂（`[soul]`）：结构化人格档案 → 有序 prompt 段（关闭时逐字节退回 `[llm].system_prompt`）
+- 灵魂（`[soul]`）：结构化人格档案 → 有序 prompt 段（内置**默认灵魂**预设「小智」，留空即用、填了就覆盖；关闭时逐字节退回 `[llm].system_prompt`）
 - 记忆（`[memory]`）：本地图记忆（SQLite：原文事实源 + 摘要 + 倒排索引；关键路径召回 + 后台抽取）
 - 传输：WebSocket，协议**严格对齐本地 `xiaozhi-esp32` 固件**（文本消息 + 二进制 Opus 音频帧，支持 v1/v2/v3 二进制协议版本）
 
@@ -194,6 +194,25 @@ LLM 只有 OpenAI 兼容 Responses API 一条路径；联调失败先检查 `[ll
 - **默认全关**：`[soul].enabled=false` 时 `instructions` = `[llm].system_prompt` **原文**
   （逐字节一致，有回归单测）；`[memory].enabled=false` 时装配为 `NoopMemory`（不建库、不读盘、不调模型）。
   改动这两条路径时**必须**保持该语义，否则"关掉就回到今天"这个回滚承诺失效。
+- **内置默认灵魂（`[soul].preset`）**：人格不必先填 20 个字段——`preset` 默认 `"xiaozhi"`
+  （内置「小智」人格，见 `plugins/soul/presets.rs`）。合并规则见 `SoulConfig::effective`：
+  **留空的字段**（空串/空数组）由预设补，**填了的字段**逐字段覆盖它；`preset = "none"` = 不用预设。
+  要点：
+  - `preset` **不是** P4 的 `engine`：`engine` 选实现（闭集），`preset` 是可覆盖的**内容基线**；
+  - 未知 preset 值**绝不静默回退**（报错 + 列出可选值），但 `enabled=false` 时完全豁免（可回滚）；
+  - 预设只提供**文本/列表**字段（`presets::provided_fields`）：布尔与数值恒有具体值、不存在"留空"，
+    一律以用户配置为准——**别给预设加 `colloquial`/`emoji`/`max_*` 的期望**；
+  - `enabled_soul` 校验跑在 **effective 档案**上：空 `name`/`address_user` 只有在 `preset="none"`
+    或预设未提供该字段时才是错误；
+  - 客户端「载入预设内容到表单」靠 `POST /api/soul/preview` 回传的 `effective`（**完整档案**）
+    整段喂 `fill()`——因此 `effective` 少一个数组键就会把用户原文冲成空（有回归测试钉住）；
+    客户端**不复制**合并规则，合并语义只有服务端一份；
+  - 新增预设：`presets.rs` 加 `fn <id>() -> SoulConfig` + `PRESETS` 加一条，并同步客户端
+    `ContextSectionState.soulPresetOptions`（否则只能在 TOML 里手写、UI 选不到）。
+- **人格必须可观测**：`GET /api/soul/presets`（清单 + 可直接喂表单的 `profile`）与
+  `POST /api/soul/preview`（最终 `instructions` + 分段 + `from_preset`/`overridden` 字段来源，
+  并作为**保存前校验器**）。没有这两个端点，用户改完人格无法确认"到底发出去了什么"，
+  只会得到"配了没用/不敢改"的结论（与记忆的「测试召回」同一个道理）。
 - **热生效**：两者都是 `next_session`（会话开始时 `Engines::refresh_from_disk` 按注册表签名重建记忆引擎；
   人格每轮按 `live_config()` 组装）。改完保存 → **新会话生效**（与 TTS/LLM 一致）。
 - **`LlmProvider::chat_stream` 签名含 `&TurnPrompt`**：`TurnPrompt.instructions` 是稳定前缀
@@ -305,7 +324,7 @@ COPY 真实源码后**必须** `touch src` + `cargo clean -p xiaozhi-server-rust
   ```
 - Rust 拆分布局：`foo.rs` + `foo/` 子目录（`foo.rs` 内 `mod bar;` → `foo/bar.rs`）。**子模块可访问父模块私有项**（字段、私有 fn 都行），所以大多数拆分**不需要**放宽可见性。**唯一例外**：被**父模块调用**的子模块方法必须标 `pub(super)`（父模块看不到子模块的私有项）——用 `pub(super)` 而不是 `pub`，若被迫写成 `pub` 说明拆错了边界。
 - 拆分只允许**行为不变的搬移**：搬完必须 `cargo test`（默认 + `--features sherpa`）或 `./gradlew :apps:h5App:publishWeb` 通过。
-- 现状（2026-10）：`server/src` 有 **31 个 `tests.rs`**、**0 个内联测试块**；client 侧暂无测试，新增请放 KMP `commonTest/`。
+- 现状（2026-10）：`server/src` 有 **33 个 `tests.rs`**、**0 个内联测试块**；client 侧暂无测试，新增请放 KMP `commonTest/`。
   子目录拆分的既有先例：`plugins/registry/{fields,fields_context,impls}.rs`、`plugins/memory/store/{maintenance,tests}.rs`、
   `app/ws/config/tests/{secrets}.rs`、`config/tests.rs`、`plugins/tts/tests.rs`（父模块只留 `mod`）。
   整改记录见 `docs/plugin-architecture-unification.md` §0.7~§0.10。
@@ -322,7 +341,7 @@ server/                        # Rust 服务端
     config/tests.rs  规范化与 engine 约定护栏（engine id ↔ 注册表一致、样例可解析）
     engine.rs     Engines 装配器：共享引擎池（ASR/TTS/LLM）+ 每会话 VAD 工厂 + TTS/LLM 热切换
     app/          应用层（与具体引擎无关）：
-      ws/           网关与 HTTP 端点组：mod.rs（路由）/ config.rs（+ tests/secrets.rs）/ memory.rs（记忆端点）/ plugins.rs / usage.rs / ota.rs
+      ws/           网关与 HTTP 端点组：mod.rs（路由）/ config.rs（+ tests/secrets.rs）/ memory.rs（记忆端点）/ soul.rs（灵魂预设与预览端点，+ soul/tests.rs）/ plugins.rs / usage.rs / ota.rs
       ws.rs         WebSocket 网关：握手 / 协商 / 鉴权 + 静态托管管理页（/）+ OTA 端点
       session.rs    每连接会话状态机 + 语音流水线（支持 abort；AIUI 全链路分支）
       protocol.rs   消息枚举 + 二进制版本封装（v1/v2/v3）—— 改这里必看 §5.1
@@ -345,6 +364,8 @@ server/                        # Rust 服务端
       aiui/mod.rs               FullChainEngine trait + AIUI 全链路（识别+大模型+合成云闭环）
       prompt/{mod,tests}.rs     有序 prompt 段注册表（稀疏 order + 启动期变量校验）
       soul/{mod,tests}.rs       [soul] 人格档案 → prompt 段（关闭时逐字节退回 system_prompt）
+                                 + presets.rs（内置默认灵魂预设 + 基线字段投影，+ presets/tests.rs）
+                                 + preview.rs（最终提示词预览：分段构成 + 字段来源 + 生效路径）
       memory/                   图记忆：mod.rs（配置/trait/NoopMemory）+ graph.rs（召回/抽取）
                                  + store.rs + store/maintenance.rs（SQLite 读写/保留策略）
                                  + schema.rs（DDL/迁移/稳定 ID）+ terms.rs（汉字二元组倒排索引）
@@ -407,6 +428,8 @@ client/                        # Kuikly 多端工程（管理后台 web + macOS 
 | `POST /api/memory/recall` | **当场试召回**（`{text, scope?}`；scope 省略 = 跨设备）：命中数/匹配词项/耗时/**将注入的正文预览**——"记忆开了没用"的唯一反馈手段 |
 | `POST /api/memory/maintain` | 立即维护（`{force, dry_run}`）：隔离释放 + 保留策略；`dry_run` 只报数量不删除 |
 | `POST /api/memory/clear` | 清空（**必须**显式给 `scope` 或 `all:true`，防误删长期记忆）|
+| `GET /api/soul/presets` | 内置人格预设清单（`preset` 可选值 + 可直接喂给 `[soul]` 表单的 `profile`）——管理页「灵魂」卡的下拉与「载入预设内容到表单」的数据源 |
+| `POST /api/soul/preview` | **最终提示词预览**（`{device_id?, soul?}`，`soul` = 表单草稿）：`instructions` + 分段 + 字符/token 估算 + `from_preset`/`overridden` 字段来源 + `effective` 完整档案；未知 preset/非法变量在这里当场报错（= **保存前校验器**，不必先写盘）|
 
 约定（改插件前必读）：
 

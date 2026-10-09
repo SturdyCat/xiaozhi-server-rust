@@ -11,11 +11,23 @@
 //! 默认 `max_sentences = 2` / `max_chars = 40`，并把它们作为**硬约束写进平台段**
 //! （而不是只放在配置里当摆设）。TTS 会把 emoji 念出来，因此 `emoji` 默认关闭。
 //!
+//! ## 内置默认灵魂（`preset`）：开箱可用 + 可改可覆盖
+//!
+//! 21 个字段全留空时人格是空壳，因此 `[soul].preset` 默认指向内置预设
+//! [`presets::DEFAULT_ID`]，它提供一份**默认人格**（小智，见 `presets.rs`）。
+//! 合并规则（[`SoulConfig::effective`]）：**留空**的字段用预设补，**填了**的字段逐字段覆盖；
+//! `preset = "none"` 完全不用预设。因此"用默认"和"改默认"是同一个机制，没有额外开关。
+//!
+//! 配套的可观测性（人格是"看不见的"，不给反馈就没人敢改）：
+//! `GET /api/soul/presets` 给出预设清单与内容，`POST /api/soul/preview` 给出**最终提示词**
+//! 以及"哪些字段来自预设、哪些被你覆盖"。
+//!
 //! ## 设计取舍（与 `docs/soul-and-graph-memory-plan.md` §4.2 的偏差）
 //!
 //! - **不做 `profile_path`（Markdown 档案文件）**：它要求每轮（或每会话）读盘并处理
 //!   "文件改了但服务没刷新"的一致性问题，收益（版本化/diff）在语音端很低。留作后续阶段。
 //! - 字段按"框架哲学"分组（身份/世界观/性格/价值/表达/范例），而不是按 UI 布局分组。
+//! - `preset` **不是** P4 的 `engine`：`engine` 选实现（闭集），`preset` 是可覆盖的**内容基线**。
 //!
 //! 详见 `docs/soul-and-graph-memory-plan.md` §4。
 
@@ -24,6 +36,19 @@ use serde::{Deserialize, Serialize};
 use crate::plugins::prompt::{
     self, PromptSection, ORDER_EXTRA, ORDER_PLATFORM, ORDER_SOUL_PREFIX, ORDER_SOUL_SUFFIX,
 };
+
+pub mod presets;
+
+/// 预览（最终提示词 + 字段来源）：`preview::build`。
+///
+/// ⚠️ 不要在这里 `pub use` 重导出：本 crate 是二进制，**没有任何外部消费方**，
+/// 未被使用的重导出会触发 `unused_imports`（实测）。模块公开即可。
+pub mod preview;
+
+/// 默认灵魂预设（`[soul]` 不写 `preset` 时用它）。
+fn default_soul_preset() -> String {
+    presets::DEFAULT_ID.into()
+}
 
 fn default_soul_name() -> String {
     "小智".into()
@@ -48,6 +73,12 @@ pub struct SoulConfig {
     /// `[llm].system_prompt`（可无痛回滚）。
     #[serde(default)]
     pub enabled: bool,
+    /// 内置人格预设：提供**默认灵魂**的基线内容（`"none"` = 不用预设，完全自定义）。
+    ///
+    /// 留空的字段由预设补、填了的字段覆盖它（[`Self::effective`]）；
+    /// 未知取值在启用时**报错**（不静默回退，与 `engine` 同一纪律）。
+    #[serde(default = "default_soul_preset")]
+    pub preset: String,
     /// 自称。
     #[serde(default = "default_soul_name")]
     pub name: String,
@@ -115,6 +146,7 @@ impl Default for SoulConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            preset: default_soul_preset(),
             name: default_soul_name(),
             self_intro: String::new(),
             form: String::new(),
@@ -145,31 +177,100 @@ impl SoulConfig {
         serde_json::to_string(self).unwrap_or_default()
     }
 
+    /// 规范化后的预设 id（空串 = 用默认预设，避免"手写空串"变成静默不用预设）。
+    pub fn preset_id(&self) -> &str {
+        let id = self.preset.trim();
+        if id.is_empty() {
+            presets::DEFAULT_ID
+        } else {
+            id
+        }
+    }
+
+    /// 规范化（P4 约定的配置入口调用）：`preset` 写入规范值。
+    pub fn normalize(&mut self) {
+        self.preset = self.preset_id().to_string();
+    }
+
+    /// **有效档案** = 内置预设基线 ⊕ 用户填写的字段（留空字段由预设补）。
+    ///
+    /// - `enabled == false`：直接返回自身（人格不参与，不解析 preset——老配置里写错的
+    ///   preset 不该让服务起不来，保持"关掉就回到今天"）；
+    /// - `preset = "none"`：不合并（完全自定义）；
+    /// - 未知 preset：报错（**绝不静默回退**，否则用户以为换个预设生效了）；
+    /// - 只合并文本/列表字段（[`presets::provided_fields`]）：布尔与数值恒有具体值，
+    ///   不存在"留空"，一律以用户配置为准。
+    pub fn effective(&self) -> anyhow::Result<SoulConfig> {
+        if !self.enabled || presets::is_none(self.preset_id()) {
+            return Ok(self.clone());
+        }
+        let id = self.preset_id();
+        let Some(p) = presets::get(id) else {
+            anyhow::bail!(
+                "[soul].preset = \"{id}\" 不是内置灵魂预设：可选 {}。请改成可选值，\
+                 或删掉该键使用默认（\"{}\"）。",
+                presets::ids_hint(),
+                presets::DEFAULT_ID
+            );
+        };
+        let base = (p.profile)();
+        let mut json = serde_json::to_value(self)?;
+        let obj = json
+            .as_object_mut()
+            .ok_or_else(|| anyhow::anyhow!("[soul] 序列化结果不是对象"))?;
+        for (k, base_v) in presets::provided_fields(&base) {
+            let empty = match obj.get(&k) {
+                Some(serde_json::Value::String(s)) => s.trim().is_empty(),
+                Some(serde_json::Value::Array(a)) => a.is_empty(),
+                None => true,
+                Some(_) => false,
+            };
+            if empty {
+                obj.insert(k, base_v);
+            }
+        }
+        Ok(serde_json::from_value(json)?)
+    }
+
     /// 硬校验：数值越界、启用时关键字段为空。文案必须含「怎么修」。
+    ///
+    /// 校验的是[`Self::effective`]后的档案：留空字段由预设补，因此**只在
+    /// `preset = "none"`（或预设没提供该字段）时**才会因空值报错。
     pub fn validate(&self) -> anyhow::Result<()> {
         if !self.enabled {
             return Ok(());
         }
-        if self.name.trim().is_empty() {
-            anyhow::bail!("[soul].name 为空：人格需要一个自称（例如 name = \"小智\"），否则 {{name}} 无法取值。");
-        }
-        if self.address_user.trim().is_empty() {
-            anyhow::bail!("[soul].address_user 为空：请填对用户的称呼（例如 \"你\"），否则 {{address_user}} 无法取值。");
-        }
-        if !(1..=8).contains(&self.max_sentences) {
+        let eff = self.effective()?;
+        if eff.name.trim().is_empty() {
             anyhow::bail!(
-                "[soul].max_sentences = {} 超出范围：语音回复请取 1~8（默认 2）。",
-                self.max_sentences
+                "[soul].name 为空，且当前 preset（\"{}\"）没有提供名字：请填自称（例如 name = \"小智\"），\
+                 否则 {{name}} 无法取值；也可以把 preset 改回 \"{}\" 用内置默认灵魂。",
+                self.preset_id(),
+                presets::DEFAULT_ID
             );
         }
-        if !(10..=500).contains(&self.max_chars) {
+        if eff.address_user.trim().is_empty() {
+            anyhow::bail!(
+                "[soul].address_user 为空，且当前 preset（\"{}\"）没有提供称呼：请填对用户的称呼\
+                 （例如 \"你\"），否则 {{address_user}} 无法取值。",
+                self.preset_id()
+            );
+        }
+        if !(1..=8).contains(&eff.max_sentences) {
+            anyhow::bail!(
+                "[soul].max_sentences = {} 超出范围：语音回复请取 1~8（默认 2）。",
+                eff.max_sentences
+            );
+        }
+        if !(10..=500).contains(&eff.max_chars) {
             anyhow::bail!(
                 "[soul].max_chars = {} 超出范围：语音回复请取 10~500（默认 40）。",
-                self.max_chars
+                eff.max_chars
             );
         }
         // 变量纪律：未知/畸形引用在**保存/启动期**就报出来，不留给运行期
-        prompt::validate_sections(&self.sections(""))?;
+        //（预设文本也在这里一起校验，拼错的变量在测试期就会被 presets/tests.rs 拦住）
+        prompt::validate_sections(&eff.sections(""))?;
         Ok(())
     }
 
@@ -177,6 +278,9 @@ impl SoulConfig {
     ///
     /// ⚠️ `enabled == false` 时**只返回 `[llm].system_prompt` 一段**（原文、不插值），
     /// 保证与启用前的输出逐字节一致。
+    ///
+    /// ⚠️ 调用方应传 [`Self::effective`] 的结果（`instructions`/`preview` 已如此）：
+    /// 直接传 `cfg.soul` 会丢掉内置预设的基线内容。
     pub fn sections(&self, system_prompt: &str) -> Vec<PromptSection> {
         if !self.enabled {
             return vec![PromptSection::literal(
@@ -312,13 +416,21 @@ fn platform_constraints(max_sentences: u32, max_chars: u32) -> String {
 ///
 /// 关闭人格时输出 = `[llm].system_prompt` **原文**（逐字节一致，见单测）；
 /// 启用时 = 平台约束 + 人格主体 + 表达风格 + 附加约束，按 order 拼接。
+/// 人格内容取 [`SoulConfig::effective`]（预设基线 ⊕ 用户字段）。
 pub fn instructions(cfg: &crate::config::Config, device_id: &str) -> anyhow::Result<String> {
-    let mut vars = prompt::Vars::new();
-    vars.set("name", cfg.soul.name.clone());
-    vars.set("address_user", cfg.soul.address_user.clone());
-    vars.set("device_id", device_id.to_string());
-    prompt::assemble(&cfg.soul.sections(&cfg.llm.system_prompt), &vars)
+    let soul = cfg.soul.effective()?;
+    prompt::assemble(&soul.sections(&cfg.llm.system_prompt), &vars_for(&soul, device_id))
 }
+
+/// 插值变量（人格渲染与预览共用同一口径，避免"预览的和实际发的不一样"）。
+fn vars_for(soul: &SoulConfig, device_id: &str) -> prompt::Vars {
+    let mut vars = prompt::Vars::new();
+    vars.set("name", soul.name.clone());
+    vars.set("address_user", soul.address_user.clone());
+    vars.set("device_id", device_id.to_string());
+    vars
+}
+
 
 /// 追加一行（空串跳过）。
 fn push_line(s: &mut String, line: &str) {

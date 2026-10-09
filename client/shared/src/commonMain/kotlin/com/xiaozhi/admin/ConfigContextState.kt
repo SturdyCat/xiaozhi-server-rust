@@ -24,6 +24,12 @@ class ContextSectionState(private val scope: PagerScope) {
 
     // ===== [soul] 人格档案 =====
     var soulEnabled by scope.observable("false")
+    /// 内置人格预设（默认灵魂）：留空的字段由它补，填了的字段逐字段覆盖它；`none` = 完全自定义。
+    var soulPreset by scope.observable("xiaozhi")
+    /// 预设/预览动作的反馈（载入结果、预览摘要、错误）。
+    var soulPresetMsg by scope.observable("")
+    /// 「预览最终提示词」的正文（`POST /api/soul/preview` 的 `instructions`）。
+    var soulPreviewText by scope.observable("")
     var soulName by scope.observable("小智")
     var soulSelfIntro by scope.observable("")
     var soulForm by scope.observable("")
@@ -91,11 +97,20 @@ class ContextSectionState(private val scope: PagerScope) {
     var memoryClearMsg by scope.observable("")
 
     // 下拉选项（官方 AlertDialog 要求 ObservableList）
+    val soulPresetOptions: ObservableList<Pair<String, String>> by scope.observableList()
     val memoryBackendOptions: ObservableList<Pair<String, String>> by scope.observableList()
     val memoryInjectPositionOptions: ObservableList<Pair<String, String>> by scope.observableList()
     val retentionKeepOptions: ObservableList<Pair<String, String>> by scope.observableList()
 
     init {
+        // 与服务端 `presets::PRESETS` 对应；`loadDefaultSoul` 会按服务端回答补上未知项
+        // （新增服务端预设时客户端不必同步发版，但下拉文案仍以本表为准）
+        soulPresetOptions.addAll(
+            listOf(
+                "xiaozhi" to "小智（内置默认人格）",
+                "none" to "不使用预设（完全自定义）",
+            ),
+        )
         memoryBackendOptions.addAll(
             listOf(
                 "graph" to "内置图记忆（本地 SQLite）",
@@ -138,37 +153,58 @@ class ContextSectionState(private val scope: PagerScope) {
 
     private fun boolStr(b: Boolean): String = if (b) "true" else "false"
 
+    /**
+     * `[soul]` 段的 JSON（保存、预览、载入预设三处共用，避免字段漂移）。
+     *
+     * ⚠️ `preset` 必须回传：它是"默认灵魂"的基线选择；不回传就会被服务端的部分更新语义
+     * 保留成旧值（用户在下拉里换了预设却等于没换）。
+     */
+    private fun soulJson(): JSONObject = JSONObject().apply {
+        put("enabled", soulEnabled.toBooleanStrictOrNull() ?: false)
+        put("preset", soulPreset)
+        put("name", soulName)
+        put("self_intro", soulSelfIntro)
+        put("form", soulForm)
+        put("age_feel", soulAgeFeel)
+        put("worldview", soulWorldview)
+        put("backstory", soulBackstory)
+        put("relationship_origin", soulRelationshipOrigin)
+        put("traits", lines(soulTraits))
+        put("values", lines(soulValues))
+        put("boundaries", lines(soulBoundaries))
+        put("tone", soulTone)
+        put("colloquial", soulColloquial.toBooleanStrictOrNull() ?: true)
+        put("address_user", soulAddressUser)
+        put("catchphrases", lines(soulCatchphrases))
+        put("emoji", soulEmoji.toBooleanStrictOrNull() ?: false)
+        put("max_sentences", soulMaxSentences.toIntOrNull() ?: 2)
+        put("max_chars", soulMaxChars.toIntOrNull() ?: 40)
+        put("scenario", soulScenario)
+        put("device_hint", soulDeviceHint)
+        put("examples", lines(soulExamples))
+    }
+
+    /** 服务端错误正文（`{ok:false,message}`）→ 可展示文案；缺正文时退回传输错误/HTTP 码。 */
+    private fun serverMessage(data: JSONObject?, errorMsg: String, code: Int?): String {
+        val msg = data?.optString("message", "") ?: ""
+        if (msg.isNotEmpty()) return msg
+        return if (errorMsg.isNotEmpty()) errorMsg else "HTTP $code"
+    }
+
+    /** JSON 字符串数组 → "a、b、c"（预览里列出字段名）。 */
+    private fun joinNames(arr: JSONArray?): String {
+        if (arr == null) return ""
+        val out = mutableListOf<String>()
+        for (i in 0 until arr.length()) out.add(arr.optString(i) ?: "")
+        return out.filter { it.isNotEmpty() }.joinToString("、")
+    }
+
     // ============================================================
     // 写入：表单 → JSON（供 ConfigFormState.save 合并进请求体）
     // ============================================================
 
     fun putJson(body: JSONObject) {
-        body.put(
-            "soul",
-            JSONObject().apply {
-                put("enabled", soulEnabled.toBooleanStrictOrNull() ?: false)
-                put("name", soulName)
-                put("self_intro", soulSelfIntro)
-                put("form", soulForm)
-                put("age_feel", soulAgeFeel)
-                put("worldview", soulWorldview)
-                put("backstory", soulBackstory)
-                put("relationship_origin", soulRelationshipOrigin)
-                put("traits", lines(soulTraits))
-                put("values", lines(soulValues))
-                put("boundaries", lines(soulBoundaries))
-                put("tone", soulTone)
-                put("colloquial", soulColloquial.toBooleanStrictOrNull() ?: true)
-                put("address_user", soulAddressUser)
-                put("catchphrases", lines(soulCatchphrases))
-                put("emoji", soulEmoji.toBooleanStrictOrNull() ?: false)
-                put("max_sentences", soulMaxSentences.toIntOrNull() ?: 2)
-                put("max_chars", soulMaxChars.toIntOrNull() ?: 40)
-                put("scenario", soulScenario)
-                put("device_hint", soulDeviceHint)
-                put("examples", lines(soulExamples))
-            },
-        )
+        body.put("soul", soulJson())
         body.put(
             "memory",
             JSONObject().apply {
@@ -216,6 +252,8 @@ class ContextSectionState(private val scope: PagerScope) {
     fun fill(obj: JSONObject) {
         obj.optJSONObject("soul")?.let { s ->
             soulEnabled = boolStr(s.optBoolean("enabled", soulEnabled.toBooleanStrictOrNull() ?: false))
+            // P6.x：内置预设键（旧服务端/旧文件没有它 → 保留当前值）
+            soulPreset = s.optString("preset", soulPreset)
             soulName = s.optString("name", soulName)
             soulSelfIntro = s.optString("self_intro", soulSelfIntro)
             soulForm = s.optString("form", soulForm)
@@ -277,6 +315,130 @@ class ContextSectionState(private val scope: PagerScope) {
                 memoryExtractorModel = e.optString("model", memoryExtractorModel)
                 memoryExtractorTemperature =
                     e.optDouble("temperature", memoryExtractorTemperature.toDoubleOrNull() ?: 0.1).toString()
+            }
+        }
+    }
+
+    // ============================================================
+    // 灵魂动作（内置默认灵魂的载入 / 清空 / 预览）
+    // ============================================================
+    // 设计依据：人格是"看不见的"——不把最终提示词和字段来源摊开，用户就只会得到
+    // "配了没用 / 不敢改"的结论（与记忆的「测试召回」同一个道理）。
+    // 合并语义（留空=用预设、填写=覆盖）**只实现在服务端**（`soul::effective`），
+    // 客户端只做两件事：把当前草稿发过去、把回答显示出来——不在这里复制一份合并规则。
+
+    /**
+     * `POST /api/soul/preview`（草稿 = 当前表单），把**最终提示词**展开到界面。
+     *
+     * 顺带承担"保存前校验器"的角色：preset 拼错、变量写错都会在这里直接报出来。
+     */
+    fun previewSoul(ctx: Pager, baseUrl: String) {
+        soulPresetMsg = "生成预览…"
+        soulPreviewText = ""
+        val body = JSONObject().apply { put("soul", soulJson()) }
+        network(ctx).httpRequest("${baseUrl}/api/soul/preview", true, body, jsonHeaders()) { data, success, errorMsg, resp ->
+            val code = resp.statusCode
+            if (!success || (code != null && code !in 200..299)) {
+                soulPresetMsg = "预览失败: ${serverMessage(data, errorMsg, code)}"
+                return@httpRequest
+            }
+            val text = data?.optString("instructions", "") ?: ""
+            val sb = StringBuilder()
+            val source = data?.optString("source", "") ?: ""
+            sb.append(if (source == "soul") "来源：人格档案" else "来源：[llm].system_prompt（人格未启用）")
+            val presetName = data?.optString("preset_name", "") ?: ""
+            if (presetName.isNotEmpty()) sb.append(" · 预设：").append(presetName)
+            sb.append("\n").append(data?.optInt("chars", 0) ?: 0).append(" 字符 · 约 ")
+            sb.append(data?.optLong("approx_tokens", 0L) ?: 0L).append(" tokens")
+            val from = joinNames(data?.optJSONArray("from_preset"))
+            if (from.isNotEmpty()) sb.append("\n来自预设（你留空的字段）：").append(from)
+            val over = joinNames(data?.optJSONArray("overridden"))
+            if (over.isNotEmpty()) sb.append("\n你已覆盖的字段：").append(over)
+            soulPresetMsg = sb.toString()
+            soulPreviewText = if (text.length > 2000) text.substring(0, 2000) + "\n…（已截断）" else text
+        }
+    }
+
+    /**
+     * 「载入预设内容到表单」：把服务端合并出的**完整档案**写回表单，于是"默认人格"变成
+     * 可逐条修改的显式值（此前它只存在于运行时合并结果里）。
+     *
+     * 草稿 = 当前表单（含开关/数值），因此不会冲掉你已经调过的项：
+     * 非空字段本来就会覆盖预设，空字段才被预设填上。
+     */
+    fun loadDefaultSoul(ctx: Pager, baseUrl: String, onChanged: () -> Unit) {
+        if (soulPreset == "none") {
+            soulPresetMsg = "当前预设为「不使用预设（完全自定义）」，没有可载入的内容；" +
+                "想用内置默认人格请先把预设改成「小智」。"
+            return
+        }
+        soulPresetMsg = "载入中…"
+        val body = JSONObject().apply { put("soul", soulJson()) }
+        network(ctx).httpRequest("${baseUrl}/api/soul/preview", true, body, jsonHeaders()) { data, success, errorMsg, resp ->
+            val code = resp.statusCode
+            if (!success || (code != null && code !in 200..299)) {
+                soulPresetMsg = "载入失败: ${serverMessage(data, errorMsg, code)}"
+                return@httpRequest
+            }
+            val eff = data?.optJSONObject("effective")
+            if (eff == null) {
+                soulPresetMsg = "载入失败：服务端未返回 effective 档案（版本不匹配？）"
+                return@httpRequest
+            }
+            // ⚠️ 必须整段喂 `fill`：它按"服务端回包"语义映射（数组键按数组处理），
+            // 手写部分字段会在缺失的数组键上把用户原文冲成空。
+            fill(JSONObject().apply { put("soul", eff) })
+            onChanged()
+            val name = data.optString("preset_name", soulPreset)
+            soulPresetMsg = "已把「$name」的人格内容展开到表单（可直接改，改完点保存）。" +
+                "留空的字段运行时会自动用预设补。"
+        }
+    }
+
+    /**
+     * 清空人格填写字段 → 回到"只用预设"的状态（留空 = 运行时由预设补）。
+     *
+     * 连同 `name`/`address_user` 一起清空是有意的：预设提供它们；
+     * 若 preset 为 `none`，提示里会说明必须自己填回去（服务端校验也会报出怎么修）。
+     */
+    fun clearSoulProfile(onChanged: () -> Unit) {
+        soulName = ""
+        soulAddressUser = ""
+        soulSelfIntro = ""
+        soulForm = ""
+        soulAgeFeel = ""
+        soulWorldview = ""
+        soulBackstory = ""
+        soulRelationshipOrigin = ""
+        soulTraits = ""
+        soulValues = ""
+        soulBoundaries = ""
+        soulTone = ""
+        soulCatchphrases = ""
+        soulScenario = ""
+        soulDeviceHint = ""
+        soulExamples = ""
+        soulPreviewText = ""
+        onChanged()
+        soulPresetMsg = if (soulPreset == "none") {
+            "已清空人格字段。当前预设是「不使用预设」，因此 name / address_user 必须自己填，否则保存后人格不生效。"
+        } else {
+            "已清空人格字段：留空的字段运行时会自动用预设「$soulPreset」补。"
+        }
+    }
+
+    /** `GET /api/soul/presets`：把服务端预设补进下拉（新增服务端预设时客户端无需发版）。 */
+    fun syncSoulPresets(ctx: Pager, baseUrl: String) {
+        network(ctx).requestGet("${baseUrl}/api/soul/presets", JSONObject()) { data, success, _, _ ->
+            if (!success) return@requestGet
+            val arr = data.optJSONArray("presets") ?: return@requestGet
+            for (i in 0 until arr.length()) {
+                val p = arr.optJSONObject(i) ?: continue
+                val id = p.optString("id", "")
+                if (id.isEmpty()) continue
+                if (soulPresetOptions.none { it.first == id }) {
+                    soulPresetOptions.add(id to p.optString("name", id))
+                }
             }
         }
     }

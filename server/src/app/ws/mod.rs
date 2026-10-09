@@ -53,6 +53,7 @@ mod config;
 mod memory;
 mod ota;
 mod plugins;
+mod soul;
 mod usage;
 use config::{config_meta, get_config, put_config};
 use memory::{memory_clear, memory_maintain, memory_recall, memory_status};
@@ -60,6 +61,7 @@ use memory::{memory_clear, memory_maintain, memory_recall, memory_status};
 pub(crate) use config::config_is_persistent;
 use ota::ota;
 use plugins::{config_schema, list_plugins};
+use soul::{soul_presets, soul_preview};
 use usage::{session_usage, usage};
 
 /// 构造 Axum 路由：API（健康检查 / WebSocket）之外，其余路径静态托管
@@ -82,6 +84,9 @@ pub fn router(engines: Arc<Engines>) -> Router {
         .route("/api/memory/recall", axum::routing::post(memory_recall))
         .route("/api/memory/maintain", axum::routing::post(memory_maintain))
         .route("/api/memory/clear", axum::routing::post(memory_clear))
+        // 灵魂：内置预设清单 / 最终提示词预览（"人格配了之后到底发了什么"的当场验证入口）
+        .route("/api/soul/presets", get(soul_presets))
+        .route("/api/soul/preview", axum::routing::post(soul_preview))
         // 令牌用量：全局 + 单会话（回答"成本"与"上下文膨胀"）
         .route("/api/usage", get(usage))
         .route("/api/session/{id}/usage", get(session_usage))

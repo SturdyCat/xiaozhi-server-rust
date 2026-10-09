@@ -211,6 +211,7 @@ impl Config {
         self.tts.normalize();
         self.llm.normalize();
         self.memory.normalize();
+        self.soul.normalize();
     }
 
     /// 是否处于「真实音频模式」：`sherpa` feature（唯一路径，无 mock）。

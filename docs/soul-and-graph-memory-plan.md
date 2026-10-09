@@ -30,6 +30,7 @@
 | 设计章节 | 落地 | 文件 |
 |---|---|---|
 | §4 灵魂 | `[soul]` 21 个字段 → 有序 prompt 段；**关闭时逐字节退回 `[llm].system_prompt`**（回归单测） | `plugins/soul/`、`plugins/prompt/` |
+| §4.2 字段模型 | 21 个字段；**`preset` 内置默认灵魂**（留空即用、填了就覆盖、`none` 完全自定义） | `plugins/soul/presets.rs`、`mod.rs::effective` |
 | §4.3 组装顺序 | 平台约束(-1000) → 人格主体(0) → 表达风格(100) → `[llm].system_prompt`(200)；记忆块按 `inject_position` 进 `input[]` | `plugins/soul/mod.rs`、`plugins/llm/openai.rs` |
 | §5.1 插件抽象 | `MemoryProvider` trait（`recall`/`record`/`extract_pending`/`maintain`/`stats`/`clear`）+ `NoopMemory`（默认零成本） | `plugins/memory/mod.rs` |
 | §5.2 数据流 | 关键路径 `recall`（硬预算、失败静默降级）+ 后台 `record`→`extract_pending`→周期 `maintain` | `plugins/memory/graph.rs`、`app/session/reply.rs` |
@@ -265,6 +266,43 @@
 
 - 签名热切换：`[soul]` 的 `signature()`（enabled + 关键字段 hash）变化 → 重建 assembler（照抄 `engine.rs:139-166` 的 `tts_sig` 模式），**新会话/测试台生效**，与 TTS 的既有语义一致。
 - 多人格（可选）：`[soul].profiles_dir` 下多个 `.md` 档案 + `[soul].active` 选择；设备绑定用 `hello` 的 `Device-Id` 映射到人格（后续阶段）。首版建议只做单人格，降低复杂度。
+
+### 4.5 内置默认灵魂（`preset`）：开箱可用 + 可改可覆盖（2026-10 实施）
+
+**缘起**：21 个字段全留空时，"打开人格"等于得到一份只有名字的空壳（此前还必须先填
+`name`/`address_user` 才不报错）。默认灵魂要解决的是**开箱可用**，同时不能把用户锁死在预设上——
+所以选"基线 + 覆盖"，而不是"内置一份固定人格"。
+
+**语义**（`plugins/soul/presets.rs` 提供数据，`SoulConfig::effective` 负责合并）：
+
+| 情形 | 结果 |
+|---|---|
+| `preset = "xiaozhi"`（默认）+ 字段留空 | 用内置「小智」人格补上 |
+| 同上 + 某个字段填了值 | 该字段用你的，其余仍来自预设（**逐字段覆盖**） |
+| `preset = "none"` | 不用预设（此时 `name`/`address_user` 必须自己填） |
+| 未知 preset 值 | 启用时报错 + 列出可选值（**绝不静默回退**；`enabled=false` 时豁免，保住回滚承诺） |
+
+**与 `engine`（P4 约定）的区别**：`engine` 是**实现选择**（闭集、互斥、选不中就不可用）；
+`preset` 是**可覆盖的内容基线**（可叠加）。两者共用同一条纪律：**未知取值不静默回退默认**。
+
+**只覆盖文本/列表字段**：布尔与数值（`colloquial`/`emoji`/`max_sentences`/`max_chars`）恒有具体值，
+不存在"留空"，一律以用户配置为准。这条规则由 `presets::provided_fields` 按**类型**判定，
+以后往 `SoulConfig` 加字段会自动纳入（不需要维护第二张字段表）。
+
+**可观测性（为什么值得多两个端点）**：人格是看不见的——预设与手填字段**合并之后**到底发了什么，
+表单上看不出来。于是：
+- `GET /api/soul/presets`：预设清单 + 可直接喂给 `[soul]` 表单的 `profile`；
+- `POST /api/soul/preview`：接受**表单草稿**（未保存也能预览），返回最终 `instructions`、分段构成、
+  字符/token 估算、`from_preset`/`overridden`（字段来源，按**效果**判定而非"你有没有敲过字"）、
+  `effective`（合并后的完整档案）；未知 preset / 非法变量当场报错 → 兼作**保存前校验器**。
+- 客户端「载入预设内容到表单」= 把 `effective` **整段**喂回表单（`fill`）——合并规则只有服务端一份，
+  客户端不复制；代价是 `effective` 必须是完整档案（少一个数组键就会把用户原文冲成空，有回归测试钉住）。
+
+**UI**（管理页「灵魂」卡）：未启用时给「用内置默认人格启用」（一键开箱）；启用后给 `preset` 下拉 +
+「载入预设内容到表单」/「清空人格字段」（回到只用预设）/「预览最终提示词」。
+
+**验收**：`cargo test` **226 passed**（默认与 `--features sherpa` 同数，其中灵魂相关 25 条）；
+客户端两个 Kotlin 目标 **0 warning**、`publishWeb` 成功且产物含全部新文案。
 
 ---
 

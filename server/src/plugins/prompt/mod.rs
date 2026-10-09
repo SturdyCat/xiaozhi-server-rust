@@ -184,10 +184,22 @@ pub fn validate_sections(sections: &[PromptSection]) -> Result<()> {
     Ok(())
 }
 
-/// 组装：升序（同 order 按 name）→ 丢空段 → `\n\n` 连接。
+/// 组装结果里的**一段**（`assemble` 的分段视图）。
 ///
-/// 空段丢弃是"配置项留空 = 不产生噪音"的关键：人格字段全空时不会拼出一串空行。
-pub fn assemble(sections: &[PromptSection], vars: &Vars) -> Result<String> {
+/// 用途：`POST /api/soul/preview` 要回答"最终提示词由哪些段组成"，而且各段长度必须与
+/// 真正发出去的那份**逐段同源**——所以这里不做第二次拼装，直接复用 [`assemble`] 的规则。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Part {
+    /// 段顺序（越小越靠前）。
+    pub order: i32,
+    /// 段名（`PromptSection::name`，用于日志/定位）。
+    pub name: &'static str,
+    /// 插值并 `trim` 后的最终文本。
+    pub text: String,
+}
+
+/// 组装的分段视图：**与 [`assemble`] 同一套规则**（升序 → 丢空段 → 插值）。
+pub fn assemble_parts(sections: &[PromptSection], vars: &Vars) -> Result<Vec<Part>> {
     let mut ordered: Vec<&PromptSection> = sections
         .iter()
         .filter(|s| !s.text.trim().is_empty())
@@ -200,12 +212,28 @@ pub fn assemble(sections: &[PromptSection], vars: &Vars) -> Result<String> {
         } else {
             s.text.clone()
         };
-        if text.trim().is_empty() {
+        let text = text.trim().to_string();
+        if text.is_empty() {
             continue; // 插值后变空（如 `{{name}}` 值为空）也丢弃
         }
-        parts.push(text.trim().to_string());
+        parts.push(Part {
+            order: s.order,
+            name: s.name,
+            text,
+        });
     }
-    Ok(parts.join("\n\n"))
+    Ok(parts)
+}
+
+/// 组装：升序（同 order 按 name）→ 丢空段 → `\n\n` 连接。
+///
+/// 空段丢弃是"配置项留空 = 不产生噪音"的关键：人格字段全空时不会拼出一串空行。
+pub fn assemble(sections: &[PromptSection], vars: &Vars) -> Result<String> {
+    Ok(assemble_parts(sections, vars)?
+        .into_iter()
+        .map(|p| p.text)
+        .collect::<Vec<_>>()
+        .join("\n\n"))
 }
 
 /// 记忆段相对历史的位置。

@@ -231,11 +231,21 @@ pub(super) const SOUL_FIELDS: &[FieldSchema] = &[
         required: true,
     },
     FieldSchema {
+        key: "preset",
+        label: "内置人格预设",
+        kind: FieldKind::Str,
+        default_hint: "xiaozhi",
+        help: "内置默认灵魂（小智）作为基线：留空的字段由它补，填了的字段覆盖它；\
+               \"none\" = 不用预设（完全自定义）。未知值会报错。",
+        hot: HotReload::NextSession,
+        required: false,
+    },
+    FieldSchema {
         key: "name",
         label: "名字",
         kind: FieldKind::Str,
         default_hint: "小智",
-        help: "自称；可在其他字段里用 {{name}} 引用。",
+        help: "自称；可在其他字段里用 {{name}} 引用（留空 = 用预设提供的名字）。",
         hot: HotReload::NextSession,
         required: true,
     },
