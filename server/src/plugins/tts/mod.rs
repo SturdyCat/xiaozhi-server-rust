@@ -1,7 +1,33 @@
-//! 语音合成（TTS）引擎：本地 `sherpa-onnx` Kokoro INT8（`backend = "sherpa"`）
-//! 或讯飞 **AIUI 主动合成**（`backend = "xfyun"`，见 [`aiui`]；shared 签名助手见 [`xfyun`]）。无 mock。
+//! 语音合成（TTS）引擎：本地 `sherpa-onnx` Kokoro INT8（`[tts].engine = "kokoro"`）
+//! 或讯飞 **AIUI 主动合成**（`engine = "xfyun"`，见 [`aiui`]；shared 签名助手见 [`xfyun`]）。无 mock。
 //!
 //! 合成结果为单声道 f32 PCM；下行前由音频层做（按需）重采样与 Opus 编码。
+//!
+//! ## 配置约定（P4，见 `docs/plugin-architecture-unification.md` §3.3）
+//!
+//! ```toml
+//! [tts]
+//! engine = "kokoro"        # 实现 id（注册表 tts.kokoro）；旧键 backend 仍可读（"sherpa" 亦映射）
+//! cache_entries = 256      # **跨实现通用项**才留本体
+//!
+//! [tts.kokoro]             # 实现私有段（本地实现也进子段——统一规则）
+//! model = "/data/models/Kokoro/model.int8.onnx"
+//! lang  = "zh"
+//!
+//! [tts.xfyun]              # 远程实现私有段（凭据）
+//! app_id = "..."
+//! ```
+//!
+//! **旧写法仍可读**：`[tts].model` 等直接放本体的字段、以及 `backend = "sherpa"`，
+//! 由 [`TtsConfig::normalize`] 在加载时搬到规范位置（见模块内 `LEGACY_BODY_FIELDS`），
+//! 保存时只写新结构（旧字段一律 `skip_serializing`）。因此 P4 对本文件是**只增不删**。
+//!
+//! ## 扩展新供应商（目标 = 加 1 条描述符）
+//!
+//! ① `plugins/tts/<id>.rs` 实现 `TtsEngine`；② 本文件加 `[tts.<id>]` 凭据/参数结构 + 一个
+//! `build_<id>()`；③ `plugins/registry/impls.rs` 加 1 个描述符（`fields` 放 `registry/fields.rs`）。
+//! 不再需要：枚举变体 / `backend_kind()` / `engine_signature()` / 中心化 `match` 分发
+//! —— 这些在 P4 已全部删除（分发改由描述符的 `build`/`signature` 承担）。
 //!
 //! ## 流式接口
 //! [`TtsEngine::synthesize_stream`] 是**首选入口**：合成过程中按片回调 PCM（增量），
@@ -13,18 +39,95 @@
 //! 期间同 runtime 的其他会话/HTTP 全部卡死。
 
 use serde::{Deserialize, Serialize};
-/// TTS 配置分两层：
-/// - **本地模型**：`[tts]` 本体的 model/voices/tokens/... 字段（当前引擎 `sherpa` = Kokoro INT8）；
-/// - **远程服务**：`[tts.<provider>]` 独立凭据段（现有 `xfyun`；未来 azure/openai/... 各自一段）。
+
+use crate::config::{canonical_engine, EngineSpec};
+
+/// TTS 可选实现（`[tts].engine` 的权威表）。
 ///
-/// 扩展新远程供应商 = ① `[tts].backend` 加可选 id；② 新增 `[tts.<id>]` 凭据段 + serde 结构；
-/// ③ `build_tts` 加分支 + 引擎实现（参照 xfyun_tts.rs）；④ 客户端 ConfigFormState 的
-/// `ttsRemoteEngines` 注册表追加一项 + 卡片字段区按 id 追加 vif。UI 按「本地/远程」两级下拉区分。
+/// 别名只用于**读**：`sherpa` 是 P4 前 `[tts].backend` 的历史值（当时指"本地 Kokoro"），
+/// 规范化后统一为 `kokoro`（= 描述符 id `tts.kokoro` 的后半段）。
+pub const TTS_ENGINES: &[EngineSpec] = &[
+    EngineSpec {
+        id: "kokoro",
+        aliases: &["sherpa"],
+    },
+    EngineSpec {
+        id: "xfyun",
+        aliases: &[],
+    },
+];
+
+const DEFAULT_TTS_ENGINE: &str = "kokoro";
+
+/// TTS 配置（`[tts]`）：本体只留**跨实现通用项** + 各实现的私有段。
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TtsConfig {
-    /// 引擎 id：`"sherpa"`（本地 Kokoro，默认）| `"xfyun"`（科大讯飞在线）| 未来其他远程供应商 id。
-    #[serde(default = "default_tts_backend")]
+    /// 实现 id：`"kokoro"`（本地 Kokoro INT8，默认）| `"xfyun"`（科大讯飞在线）。
+    /// 空 = 未指定 → 取 [`DEFAULT_TTS_ENGINE`]（旧配置无此键时照常工作）。
+    #[serde(default)]
+    pub engine: String,
+    /// TTS 结果缓存条目数（按句缓存已编码下行 Opus 帧，跨会话共享；
+    /// 命中时零合成延迟、直接按实时节奏下发）。0 = 关闭缓存。
+    /// **跨实现通用**（缓存的是已编码帧，与谁合成的无关），故留本体。
+    #[serde(default = "default_cache_entries")]
+    pub cache_entries: u32,
+    /// 语速倍率：**跨实现通用**（`TtsEngine::synthesize_stream` 的入参，Kokoro 与讯飞都用）。
+    #[serde(default = "default_speed")]
+    pub speed: f32,
+    /// 发音人 id：跨实现的**参数槽**（Kokoro 用 sid，讯飞忽略并改由 `[tts.xfyun].voice` 决定）。
+    #[serde(default)]
+    pub speaker: i32,
+    /// 本地 Kokoro INT8（`[tts.kokoro]`）。
+    #[serde(default)]
+    pub kokoro: KokoroTtsConfig,
+    /// 科大讯飞在线 TTS（`[tts.xfyun]`）。
+    #[serde(default)]
+    pub xfyun: XfyunTtsConfig,
+
+    // ------------------------------------------------------------------
+    // 以下为 **P4 之前的旧位置**：只读（`skip_serializing`）。
+    // 加载时由 `normalize()` 搬进 `[tts.kokoro]`，保存时不再写回。
+    // ------------------------------------------------------------------
+    /// 旧键 `[tts].backend`（= `engine` 的前身）。
+    #[serde(default, skip_serializing)]
     pub backend: String,
+    #[serde(default, skip_serializing)]
+    pub model: String,
+    #[serde(default, skip_serializing)]
+    pub voices: String,
+    #[serde(default, skip_serializing)]
+    pub tokens: String,
+    #[serde(default, skip_serializing)]
+    pub data_dir: String,
+    #[serde(default, skip_serializing)]
+    pub dict_dir: String,
+    #[serde(default, skip_serializing)]
+    pub lexicon: String,
+    #[serde(default, skip_serializing)]
+    pub lang: String,
+    #[serde(default, skip_serializing)]
+    pub num_threads: u32,
+}
+
+/// 旧位置字段名（`[tts]` 本体）→ 规范位置（`[tts.kokoro]`）。
+///
+/// `app/ws/config.rs` 用它把**旧客户端的补丁**重写到规范路径——否则「客户端改 model」
+/// 会被"新位置优先"规则静默丢弃（旧客户端仍在用的 macApp 构建会踩到）。
+/// `speed` / `speaker` **不在**表里：它们是跨实现参数，本来就留在 `[tts]` 本体（位置没变）。
+pub const LEGACY_BODY_FIELDS: &[&str] = &[
+    "model",
+    "voices",
+    "tokens",
+    "data_dir",
+    "dict_dir",
+    "lexicon",
+    "lang",
+    "num_threads",
+];
+
+/// 本地 Kokoro INT8 合成参数（`[tts.kokoro]`；字段语义同 P4 前的 `[tts]` 本体）。
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct KokoroTtsConfig {
     /// Kokoro INT8 模型路径（sherpa-onnx 离线合成器）。
     #[serde(default = "default_tts_model")]
     pub model: String,
@@ -41,62 +144,91 @@ pub struct TtsConfig {
     /// Kokoro 语言（模型创建时固定；"zh"/"en"，中文场景用 "zh"）。
     #[serde(default = "default_tts_lang")]
     pub lang: String,
-    #[serde(default)]
-    pub speaker: i32,
-    #[serde(default = "default_speed")]
-    pub speed: f32,
     #[serde(default = "default_tts_threads")]
     pub num_threads: u32,
-    /// TTS 结果缓存条目数（按句缓存已编码下行 Opus 帧，跨会话共享；
-    /// 命中时零合成延迟、直接按实时节奏下发）。0 = 关闭缓存。
-    #[serde(default = "default_cache_entries")]
-    pub cache_entries: u32,
-    /// 科大讯飞在线 TTS（backend = "xfyun" 时使用）。
-    #[serde(default)]
-    pub xfyun: XfyunTtsConfig,
-}
-/// TTS 引擎种类（由 `[tts].backend` 派生；未知值按 sherpa 处理）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TtsBackendKind {
-    /// 本地 Kokoro INT8（sherpa-onnx）。
-    Sherpa,
-    /// 科大讯飞在线语音合成（WebSocket v2/tts）。
-    Xfyun,
 }
 
-impl TtsBackendKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            TtsBackendKind::Sherpa => "sherpa",
-            TtsBackendKind::Xfyun => "xfyun",
+impl Default for KokoroTtsConfig {
+    fn default() -> Self {
+        KokoroTtsConfig {
+            model: default_tts_model(),
+            voices: default_tts_voices(),
+            tokens: default_tts_tokens(),
+            data_dir: default_tts_data_dir(),
+            dict_dir: default_tts_dict_dir(),
+            lexicon: default_tts_lexicon(),
+            lang: default_tts_lang(),
+            num_threads: default_tts_threads(),
         }
     }
 }
 
 impl TtsConfig {
-    /// `backend` 字段 → 引擎种类（`"xfyun"` 忽略大小写匹配；其余一律 sherpa）。
-    pub fn backend_kind(&self) -> TtsBackendKind {
-        if self.backend.eq_ignore_ascii_case("xfyun") {
-            TtsBackendKind::Xfyun
+    /// 规范化后的实现 id（空 → 默认；旧 `backend` 兜底；`sherpa` → `kokoro`）。
+    /// 未知值**原样返回**：由 `PluginHost` 诊断并报错（见 `registry::unknown_engine_hint`），
+    /// 不静默回退默认值。
+    pub fn engine_id(&self) -> String {
+        let raw = if !self.engine.trim().is_empty() {
+            self.engine.as_str()
         } else {
-            TtsBackendKind::Sherpa
-        }
+            self.backend.as_str()
+        };
+        canonical_engine(raw, TTS_ENGINES, DEFAULT_TTS_ENGINE)
     }
 
-    /// 引擎签名（热切换判定用）：backend 或关键参数变化时才重建引擎。
-    /// ⚠️ 仅内存内部使用，**不要打日志**（含密钥字段）。
-    pub fn engine_signature(&self) -> String {
-        match self.backend_kind() {
-            TtsBackendKind::Xfyun => format!(
-                "xfyun|{}|{}|{}|{}",
-                self.xfyun.app_id, self.xfyun.api_key, self.xfyun.api_secret, self.xfyun.voice
-            ),
-            TtsBackendKind::Sherpa => format!("sherpa|{}|{}|{}", self.model, self.lang, self.num_threads),
+
+    /// 配置规范化（幂等）：补 `engine` 键 + 把旧位置字段搬进 `[tts.kokoro]`。
+    ///
+    /// 「新位置优先」：只有当 `[tts.kokoro]` 对应字段**仍是默认值**、而旧位置的值
+    /// **有实质设置**时才搬（旧位置的值恰好等于默认值 → 搬不搬等价，跳过以免噪音日志）。
+    pub fn normalize(&mut self) {
+        // (1) engine 键：旧 backend 兜底 + 别名规范化（`sherpa` → `kokoro`）
+        let legacy_raw = self.backend.trim().to_string();
+        let canonical = self.engine_id();
+        if !legacy_raw.is_empty() && self.engine.trim().is_empty() {
+            tracing::info!(
+                "[tts] 旧键 backend=\"{legacy_raw}\" 已迁移为 engine=\"{canonical}\"（保存后只写 engine）"
+            );
+        } else if !self.engine.trim().is_empty() && self.engine.trim() != canonical {
+            tracing::info!(
+                "[tts].engine=\"{}\" 已规范化为 \"{canonical}\"",
+                self.engine.trim()
+            );
+        }
+        self.engine = canonical;
+
+        // (2) 旧扁平字段 → [tts.kokoro]
+        let def = KokoroTtsConfig::default();
+        let mut moved: Vec<&'static str> = Vec::new();
+        macro_rules! absorb_str {
+            ($legacy:ident, $field:ident, $name:literal) => {
+                if !self.$legacy.trim().is_empty() && self.kokoro.$field == def.$field {
+                    self.kokoro.$field = self.$legacy.clone();
+                    moved.push($name);
+                }
+            };
+        }
+        absorb_str!(model, model, "model");
+        absorb_str!(voices, voices, "voices");
+        absorb_str!(tokens, tokens, "tokens");
+        absorb_str!(data_dir, data_dir, "data_dir");
+        absorb_str!(dict_dir, dict_dir, "dict_dir");
+        absorb_str!(lexicon, lexicon, "lexicon");
+        absorb_str!(lang, lang, "lang");
+        if self.num_threads != 0 && self.kokoro.num_threads == def.num_threads {
+            self.kokoro.num_threads = self.num_threads;
+            moved.push("num_threads");
+        }
+        if !moved.is_empty() {
+            tracing::info!(
+                "[tts] 旧位置字段已迁移到 [tts.kokoro]（本次保存即写入新结构）: {moved:?}"
+            );
         }
     }
 }
-fn default_tts_backend() -> String {
-    "sherpa".into()
+
+fn default_cache_entries() -> u32 {
+    256
 }
 
 fn default_tts_model() -> String {
@@ -139,11 +271,6 @@ fn default_speed() -> f32 {
 /// （留 0.5 核给宿主机），4 线程在配额内调度；如需更保守可下调到 3。
 fn default_tts_threads() -> u32 {
     4
-}
-
-/// TTS 缓存默认 256 条（每条一句已编码 Opus 帧，几十 KB 量级，总量几十 MB 内）。
-fn default_cache_entries() -> u32 {
-    256
 }
 
 // 讯飞 AIUI 主动合成（在线 TTS 实现；音色探测同源，见 [`aiui::probe_voice`]）
@@ -209,7 +336,7 @@ pub trait TtsEngine: Send + Sync {
         24_000
     }
 
-    /// 引擎标识（测试台 tts_test 结果回报用）：`sherpa` / `xfyun`。
+    /// 引擎标识（测试台 tts_test 结果回报用）：`kokoro` / `xfyun`。
     fn name(&self) -> &'static str {
         "unknown"
     }
@@ -217,46 +344,13 @@ pub trait TtsEngine: Send + Sync {
 
 /// sherpa 真引擎构造（两入口共用）：集中 `SherpaTts::new` 与报错文案，避免重复。
 #[cfg(feature = "sherpa")]
-fn build_sherpa_tts(cfg: &TtsConfig) -> Result<Arc<dyn TtsEngine>> {
+fn build_sherpa_tts(cfg: &KokoroTtsConfig) -> Result<Arc<dyn TtsEngine>> {
     let engine = SherpaTts::new(cfg).context("创建 Kokoro TTS 失败")?;
     Ok(Arc::new(engine))
 }
 
-/// 根据配置构造 TTS 引擎：`backend` 选择 `sherpa`（本地 Kokoro）或 `xfyun`（讯飞在线）。
-/// 根据配置构造 TTS 引擎：`backend` 选择 `sherpa`（本地 Kokoro）或 `xfyun`（讯飞 AIUI 在线合成）。
-pub fn build_tts(cfg: &TtsConfig) -> Result<Arc<dyn TtsEngine>> {
-    match cfg.backend_kind() {
-        TtsBackendKind::Xfyun => Ok(Arc::new(aiui::AiuiTts::new(&cfg.xfyun)?)),
-        TtsBackendKind::Sherpa => build_sherpa(cfg),
-    }
-}
-
-/// 按指定语言构造 TTS 引擎（测试台的多语言切换用；仅对 Kokoro 有意义）。
-/// Kokoro 的 `lang` 在建模时固定，切语言 = 重建引擎（engine.rs 按语言缓存）；
-/// 讯飞在线引擎由 `[tts.xfyun].voice` 决定音色，忽略 `lang`。
-pub fn build_tts_with_lang(cfg: &TtsConfig, lang: &str) -> Result<Arc<dyn TtsEngine>> {
-    match cfg.backend_kind() {
-        TtsBackendKind::Xfyun => build_tts(cfg),
-        TtsBackendKind::Sherpa => {
-            #[cfg(feature = "sherpa")]
-            {
-                let mut c = cfg.clone();
-                c.lang = lang.to_string();
-                // build_sherpa_tts 已返回 Arc<dyn TtsEngine>——不要再 Arc::new 包一层
-                //（曾因双层 Arc 致 Docker sherpa 构建失败，见 18b6e8d）。
-                build_sherpa_tts(&c).with_context(|| format!("创建 lang={lang} 的 Kokoro TTS 失败"))
-            }
-            #[cfg(not(feature = "sherpa"))]
-            {
-                let _ = lang;
-                anyhow::bail!("本二进制未启用 `sherpa` feature，无法构建 TTS 引擎（请用 --features sherpa 编译）");
-            }
-        }
-    }
-}
-
-/// sherpa（本地 Kokoro）分支：未启用 feature 直接报错。
-fn build_sherpa(cfg: &TtsConfig) -> Result<Arc<dyn TtsEngine>> {
+/// 构造本地 Kokoro 引擎（描述符 `tts.kokoro` 的 `build`）。
+pub fn build_kokoro(cfg: &KokoroTtsConfig) -> Result<Arc<dyn TtsEngine>> {
     #[cfg(feature = "sherpa")]
     {
         build_sherpa_tts(cfg)
@@ -268,22 +362,52 @@ fn build_sherpa(cfg: &TtsConfig) -> Result<Arc<dyn TtsEngine>> {
     }
 }
 
+/// 按指定语言构造 Kokoro 引擎（测试台的多语言切换用）。
+/// Kokoro 的 `lang` 在建模时固定，切语言 = 重建引擎（engine.rs 按语言缓存）。
+pub fn build_kokoro_with_lang(cfg: &KokoroTtsConfig, lang: &str) -> Result<Arc<dyn TtsEngine>> {
+    #[cfg(feature = "sherpa")]
+    {
+        let mut c = cfg.clone();
+        c.lang = lang.to_string();
+        // build_sherpa_tts 已返回 Arc<dyn TtsEngine>——不要再 Arc::new 包一层
+        //（曾因双层 Arc 致 Docker sherpa 构建失败，见 18b6e8d）。
+        build_sherpa_tts(&c).with_context(|| format!("创建 lang={lang} 的 Kokoro TTS 失败"))
+    }
+    #[cfg(not(feature = "sherpa"))]
+    {
+        let _ = (cfg, lang);
+        anyhow::bail!(
+            "本二进制未启用 `sherpa` feature，无法构建 lang={lang} 的 TTS 引擎（请用 --features sherpa 编译）"
+        );
+    }
+}
+
+/// 构造讯飞 AIUI 在线合成引擎（描述符 `tts.xfyun` 的 `build`）。
+pub fn build_xfyun(cfg: &XfyunTtsConfig) -> Result<Arc<dyn TtsEngine>> {
+    Ok(Arc::new(aiui::AiuiTts::new(cfg)?))
+}
+
 impl Default for TtsConfig {
     fn default() -> Self {
         TtsConfig {
-            backend: default_tts_backend(),
-            model: default_tts_model(),
-            voices: default_tts_voices(),
-            tokens: default_tts_tokens(),
-            data_dir: default_tts_data_dir(),
-            dict_dir: default_tts_dict_dir(),
-            lexicon: default_tts_lexicon(),
-            lang: default_tts_lang(),
-            speaker: 0,
-            speed: default_speed(),
-            num_threads: default_tts_threads(),
+            engine: String::new(), // 空 → engine_id() 取默认（kokoro）；normalize() 会补全
             cache_entries: default_cache_entries(),
+            speed: default_speed(),
+            speaker: 0,
+            kokoro: KokoroTtsConfig::default(),
             xfyun: XfyunTtsConfig::default(),
+            backend: String::new(),
+            model: String::new(),
+            voices: String::new(),
+            tokens: String::new(),
+            data_dir: String::new(),
+            dict_dir: String::new(),
+            lexicon: String::new(),
+            lang: String::new(),
+            num_threads: 0,
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

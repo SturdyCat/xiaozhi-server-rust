@@ -57,6 +57,8 @@ fun ViewContainer<*, *>.labeledField(
     onChange: (String) -> Unit,
     placeholder: String = "",
     height: Float = 48f,
+    /** 字段级提示（如"需重启 server 生效"）；传 lambda，见 [com.xiaozhi.admin.FormSchemaState.hotNote]。 */
+    note: () -> String = { "" },
 ) {
     fieldLabel(label)
     View {
@@ -81,6 +83,17 @@ fun ViewContainer<*, *>.labeledField(
                 placeholder(placeholder)
             }
             event { textDidChange { params -> onChange(params.text) } }
+        }
+    }
+    // 字段级生效语义（schema 驱动）：`live` 不显示，只有"新会话/需重启"才提示——见 FormSchemaState
+    vif({ note().isNotEmpty() }) {
+        Text {
+            attr {
+                fontSize(AdminType.micro)
+                color(AdminColors.warningTintText)
+                marginTop(4f)
+                text(note())
+            }
         }
     }
 }

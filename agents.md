@@ -12,7 +12,9 @@
 - 本地 ASR：SenseVoice INT8（离线，`sherpa-onnx`）
 - 本地 TTS：Kokoro INT8（离线，`sherpa-onnx`）
 - VAD：Silero VAD
-- 远程 LLM：OpenAI 兼容的 `chat/completions` HTTP 接口
+- 远程 LLM：OpenAI 兼容的 **Responses** HTTP 接口
+- 灵魂（`[soul]`）：结构化人格档案 → 有序 prompt 段（关闭时逐字节退回 `[llm].system_prompt`）
+- 记忆（`[memory]`）：本地图记忆（SQLite：原文事实源 + 摘要 + 倒排索引；关键路径召回 + 后台抽取）
 - 传输：WebSocket，协议**严格对齐本地 `xiaozhi-esp32` 固件**（文本消息 + 二进制 Opus 音频帧，支持 v1/v2/v3 二进制协议版本）
 
 设计目标：在 Intel Celeron N5105（x86-64）这类低功耗主机上用 Docker 跑一个 ASR/TTS 离线的小智服务端。
@@ -32,6 +34,7 @@
 | `reqwest` | 0.12 | `default-features = false, features = ["json", "rustls-tls"]` |
 | `audiopus` | 0.2 | Opus 编解码（`sherpa` feature 下启用，需系统 `libopus`） |
 | `rubato` | 0.15 | 重采样（`sherpa` feature 下启用） |
+| `rusqlite` | 0.40（`bundled`） | 图记忆库（SQLite 源码内置编译，**无需**系统 sqlite；首次构建多约 1 分钟） |
 | `serde` / `serde_json` / `toml` / `anyhow` / `thiserror` / `tracing` / `uuid` | 见 `Cargo.toml` | — |
 
 > `sherpa-onnx` 版本务必锁定 **1.13.8**（最新稳定版，2026-09 发布）。最初 spec 写的 `0.1` 是错的。API 已对照 1.13.8 rustdoc 核对：`OfflineSenseVoiceModelConfig`、`OfflineTtsKokoroModelConfig`、`VoiceActivityDetector` 字段与方法签名与实现一致。
@@ -74,7 +77,7 @@ cd server && ~/.cargo/bin/cargo run --features sherpa -- --config config.toml
 - `default = []`：无真实引擎，仅供 `cargo check/test` 编译（运行会报错）。
 - `sherpa = ["dep:sherpa-onnx", "dep:audiopus", "dep:rubato"]`：真实引擎（**无 mock**：ASR=SenseVoice、TTS=Kokoro、LLM=HTTP、VAD=Silero）。
 
-> TTS 有 `[tts].backend`（`sherpa`=本地 Kokoro / `xfyun`=科大讯飞在线，见 `[tts.xfyun]`），改后保存即热切换（新会话/测试台 tts_test 读盘重建引擎）；ASR/LLM 无 `backend` 配置项（已随 mock 移除，未知键被 serde 静默忽略）。默认（无配置文件）模型路径即 `/data/models/...` 生产值；`[llm]` 需填 `api_base`/`api_key`。ESP 接入走完整正式流水线；macApp 测试台 hello 带 `test:true`，走 `asr_test/tts_test/llm_test` 三个独立服务端点（非测试会话发送这三类消息会被忽略）。
+> TTS 用 `[tts].engine` 选实现（`kokoro`=本地 Kokoro / `xfyun`=科大讯飞在线，见 `[tts.xfyun]`；旧键 `backend` 与本地旧值 `sherpa` 仍可读），改后保存即热切换；**LLM（`[llm].model`/`api_key`/`api_base`…）与记忆（`[memory].*`）、人格（`[soul].*`）同样保存即对新会话生效**（`Engines::refresh_from_disk` 在会话开始按签名重建引擎，见 `engine.rs`）；ASR 与 `[server]`/`[audio]`/`[aiui]` 仍需重启。热生效语义的**唯一权威**是 `plugins/registry/` 每个描述符/字段的 `hot`（`live`/`next_session`/`restart_only`，`GET /api/config/schema` 直接暴露）。默认（无配置文件）模型路径即 `/data/models/...` 生产值；`[llm]` 需填 `api_base`/`api_key`。ESP 接入走完整正式流水线；macApp 测试台 hello 带 `test:true`，走 `asr_test/tts_test/llm_test` 三个独立服务端点（非测试会话发送这三类消息会被忽略）。
 
 ## 5. 🚨 关键约束与陷阱（AI 最容易踩）
 
@@ -106,7 +109,7 @@ pub enum ServerMessage { Hello { .. }, Stt { .. }, Llm { .. }, Tts { .. }, Syste
 
 LLM 只有 OpenAI 兼容 Responses API 一条路径；联调失败先检查 `[llm].api_base`/`api_key`/`model` 配置（服务端启动即构建引擎，模型/配置缺失会给出明确报错）。
 
-### 5.2b 讯飞在线 TTS（[tts].backend="xfyun"）要点
+### 5.2b 讯飞在线 TTS（`[tts].engine="xfyun"`）要点
 
 - 协议 = **AIUI 主动合成 API** `wss://aiui.xf-yun.com/v3/aiint/sos`
   （`scene="IFLYTEK.tts"`、`interact_mode="oneshot"`、`header.status=payload.text.status=3` 文本一帧发完；
@@ -121,10 +124,30 @@ LLM 只有 OpenAI 兼容 Responses API 一条路径；联调失败先检查 `[ll
   重采样器与 Opus 编码器**跨分片复用**（各自独立会在边界产生相位跳变/爆音）。
 - 合成失败（构建失败/凭据错误/网络）经 `tts_test` 结果帧回报测试台（`{type:"tts_test", state, engine, text}`），
   不再静默——卡片会显示「合成失败：原因」；测试台所选 vcn 随 `tts_test.vcn` 下发（本次合成即用，无需先保存）。
-- 密钥只在服务端配置里；管理页保存后无需重启（热切换：会话/tts_test 时读盘比对 `[tts]` 签名重建）。
-- **本地/远程分层（UI 与配置约定）**：`[tts]` 本体字段 = 本地引擎参数；`[tts.<provider>]` 独立段 = 远程供应商凭据
-  （现有 xfyun；azure/openai 等未来供应商各自一段）。管理页 TTS 卡为两级下拉（合成方式 → 引擎/服务商），
-  新增供应商 = `ConfigFormState.ttsRemoteEngines` 注册表追加 + 卡片按 backend 追加 vif 字段区 + 服务端三步（见 config.rs 注释）。
+- 密钥只在服务端配置里；管理页保存后无需重启（热切换：会话开始读盘比对签名重建 TTS/LLM 引擎）。
+  **密钥打码已上线**（2026-10，见 `docs/plugin-architecture-unification.md` §0.5）：`GET /api/config`
+  **永不回传明文**，只回 `has_api_key` / `has_api_secret` presence 标记；语义 = 表单留空不修改
+  （客户端 `putSecret` 干脆不发该字段）、显式 `null` 清除、非空覆盖。⚠️ **新增密钥字段必须三处同改**：
+  服务端 `SECRET_PATHS`（`app/ws/config.rs`，打码/空值语义/presence 共用该表）、客户端 `fill()` 读 presence、
+  `buildConfigJson()` 用 `putSecret`——漏一处就会出现「保存一次把密钥清空」或「明文回传」。
+- **本地/远程分层（UI 与配置约定）**：`[tts]` 本体只留**跨实现通用项**（`engine`/`speed`/`speaker`/`cache_entries`）；
+  实现私有参数进 `[tts.<id>]` 子段（本地 Kokoro 也进：`[tts.kokoro]`；远程凭据 `[tts.xfyun]`）。
+  管理页 TTS 卡为两级下拉（合成方式 → 引擎/服务商）。
+  新增供应商 = `plugins/tts/<id>.rs` 实现 + `[tts.<id>]` 结构 + `plugins/registry/impls.rs` **描述符加 1 条**
+  （`fields` 放 `registry/fields.rs`）。**不再需要**：枚举变体 / `backend_kind()` / 中心化 `match` 分发
+  （P4 已全部删除：选择走描述符 `selected`，构建走描述符 `build`，签名走描述符 `signature`）。
+  客户端仍需 `ConfigFormState.ttsRemoteEngines` 追加 + 卡片字段区（P5 目标：字段元数据驱动后只剩 1~2 处）。
+- **P4 配置约定（全能力统一，见 `docs/plugin-architecture-unification.md` §0.10）**：
+  ① `engine = "<实现 id>"` 选实现，id = 注册表描述符 id 去掉 `"<cap>."` 前缀（`[tts] engine="kokoro"` ↔ `tts.kokoro`）；
+  ② 私有字段进 `[<cap>.<id>]`；③ 跨实现参数（被 `Trait::method` 当入参用的，如 TTS 的 `speed`/`speaker`）留本体。
+  - **旧写法必须继续可读**：`[tts] backend="sherpa"`（别名 → `kokoro`）、`[tts].model` 等旧扁平字段、
+    `[memory].backend`。由 `Config::normalize()`（配置的唯一入口：`load`/`default`/`merge_client_patch`）
+    搬到规范位置；`app/ws/config.rs::rewrite_legacy_paths` 负责**旧客户端补丁**的重写
+    （否则旧 macApp 改 model 会被"新位置优先"静默丢弃）。保存只写新结构（旧字段 `skip_serializing`）。
+  - **未知 engine 值绝不静默回退默认**：`PluginHost::plan` 标 `Failed` + 可选值提示，`boot`/`decide_refresh` 直接报错
+    （`registry::unknown_engine_hint`）。`[memory].engine="none"` 是合法显式停用，不算未知。
+  - 新增/改名实现时必改的**只有两处**：`plugins/*/mod.rs` 的 `<CAP>_ENGINES` 表（含别名）与注册表描述符；
+    `config/tests.rs::declared_engine_ids_match_registry_implementations` 会守住二者一致。
 
 ### 5.2c 🚨 下行音频必须按实时节奏节流（`DownlinkPacer`，勿删）
 
@@ -165,6 +188,32 @@ LLM 只有 OpenAI 兼容 Responses API 一条路径；联调失败先检查 `[ll
    现 `ws/mod.rs` 握手时 `downlink_bin_ver = uplink_bin_ver`（hello.version）。
    `[audio].binary_protocol_version` 的作用改为**仅经 OTA 写进设备 NVS**
    （`ota_payload` 的 `websocket.version`），二者因此天然一致。
+
+### 5.2e 灵魂 / 记忆（`[soul]` / `[memory]`）接入要点（2026-10 新增）
+
+- **默认全关**：`[soul].enabled=false` 时 `instructions` = `[llm].system_prompt` **原文**
+  （逐字节一致，有回归单测）；`[memory].enabled=false` 时装配为 `NoopMemory`（不建库、不读盘、不调模型）。
+  改动这两条路径时**必须**保持该语义，否则"关掉就回到今天"这个回滚承诺失效。
+- **热生效**：两者都是 `next_session`（会话开始时 `Engines::refresh_from_disk` 按注册表签名重建记忆引擎；
+  人格每轮按 `live_config()` 组装）。改完保存 → **新会话生效**（与 TTS/LLM 一致）。
+- **`LlmProvider::chat_stream` 签名含 `&TurnPrompt`**：`TurnPrompt.instructions` 是稳定前缀
+  （平台约束 + 人格 + `[llm].system_prompt`），`memory` 块按 `inject_position` 插进 `input[]`
+  （默认 `after_history`：保住 `instructions + history` 的前缀缓存）。**新增 LLM provider 必须实现该入参**。
+- **记忆库路径必须在挂载卷内**（默认 `/data/memory.db`）：容器重建会丢全部记忆；
+  `docker-compose.yml` 已挂 `./server-data:/data`，但把 db 放到容器层里就会静默丢。
+- **关键路径纪律**：`recall` 有 `recall_budget_ms`（默认 300ms）硬预算，超时/失败一律**静默降级为空**、
+  绝不返回 `Err`；`record` 只落原文（快）；抽取（1 次辅助 LLM 调用）**只在后台任务**里跑，
+  失败进隔离表 + 有限重试，**永不阻塞对话**。改这条链路时不要把抽取挪回关键路径。
+- **密钥三处同改**：`[memory.extractor].api_key` 已加入 `SECRET_PATHS`（`app/ws/config.rs`），
+  客户端 `fill()` 读 `has_api_key` presence、`save()` 用 `putSecret`（留空不发送）。
+- **AIUI 全链路下人格/记忆不生效**：云端闭环绕过本地 LLM（`aiui_downlink` 既不 recall 也不 record）。
+  管理页记忆卡与 `GET /api/memory/status` 都带显式提示——否则用户会报"配了没用"。
+- **中文词法召回是自建倒排索引**（汉字二元组 + ASCII 单词），**不是** SQLite FTS5：
+  `unicode61` 把整个中文串当一个 token、`trigram` 要求 ≥3 字且换个说法就失配。
+  改召回时不要"顺手换成 FTS5"，会直接丢掉中文召回能力。
+- **保留策略不得删被引用的原文**：候选查询必须带
+  `id NOT IN (SELECT message_id FROM gm_turn_memory_sources)`——上游 graph-memory 正是在这里
+  误删了轮次记忆引用的证据（`docs/soul-and-graph-memory-plan.md` §2.4 缺陷 1），我们已修且有回归测试。
 
 ### 5.3 二进制协议版本 = 设备 hello 的 `version`
 
@@ -235,6 +284,32 @@ COPY 真实源码后**必须** `touch src` + `cargo clean -p xiaozhi-server-rust
 
 默认模型包（已完整下载验证，与 config.example.toml 路径一一对应）：`sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09`（SenseVoice INT8，`model.int8.onnx`）、`kokoro-int8-multi-lang-v1_1`（Kokoro INT8 **中英双语**，含 model.int8.onnx/voices.bin/tokens.txt/espeak-ng-data/lexicon-zh.txt/lexicon-us-en.txt/dict（jieba）/date-zh.fst）、`silero_vad.onnx`（Silero VAD）。⚠️ 此前误判 `kokoro-int8-multi-lang-v1_1` 不是完整包（流式列清单被管道截断所致），实际 144MB/417 文件完整；`kokoro-int8-en-v0_19` 仅英文、无 lexicon，中文场景勿用。
 
+### 5.10 文件规模：**逻辑文件 ≤ 600 行**（硬约定，2026-10 起）
+
+- **任何 `.rs` / `.kt` 逻辑文件不得超过 600 行**。接近上限时按职责拆分子模块，不要"再挤一点"。
+- **测试一律独立文件（无例外，2026-10 更新）**：任何 `#[cfg(test)] mod tests` 都必须外移到同级 `<name>/tests.rs`
+  （`foo.rs` → `foo/tests.rs`；`foo/mod.rs` → `foo/tests.rs`），外层只保留两行声明：
+
+  ```rust
+  #[cfg(test)]
+  mod tests;
+  ```
+
+  即使只有 1 个断言也不内联；测试文件首行用 `//!` 写明来源。**空的 `mod tests {}` 直接删除**，不要留占位。
+  子模块对父模块私有项的可见性与内联时**完全一致**（`use super::*;` 照旧），因此外移**不需要**放宽任何可见性。
+- 校验（两条都应无输出）：
+  ```bash
+  grep -rnE 'mod[[:space:]]+tests[[:space:]]*\{' server/src --include=*.rs   # 内联测试块
+  # ⚠️ 必须排除 wc 的 total 行，否则它的常量总数（万级）会被误判为"超 600 的文件"
+  find server/src -name '*.rs' -exec wc -l {} + | awk '$1>600 && $2!="total"'
+  ```
+- Rust 拆分布局：`foo.rs` + `foo/` 子目录（`foo.rs` 内 `mod bar;` → `foo/bar.rs`）。**子模块可访问父模块私有项**（字段、私有 fn 都行），所以大多数拆分**不需要**放宽可见性。**唯一例外**：被**父模块调用**的子模块方法必须标 `pub(super)`（父模块看不到子模块的私有项）——用 `pub(super)` 而不是 `pub`，若被迫写成 `pub` 说明拆错了边界。
+- 拆分只允许**行为不变的搬移**：搬完必须 `cargo test`（默认 + `--features sherpa`）或 `./gradlew :apps:h5App:publishWeb` 通过。
+- 现状（2026-10）：`server/src` 有 **31 个 `tests.rs`**、**0 个内联测试块**；client 侧暂无测试，新增请放 KMP `commonTest/`。
+  子目录拆分的既有先例：`plugins/registry/{fields,fields_context,impls}.rs`、`plugins/memory/store/{maintenance,tests}.rs`、
+  `app/ws/config/tests/{secrets}.rs`、`config/tests.rs`、`plugins/tts/tests.rs`（父模块只留 `mod`）。
+  整改记录见 `docs/plugin-architecture-unification.md` §0.7~§0.10。
+
 ## 6. 项目结构速查（monorepo）
 
 本仓库为 monorepo：`server/` 是 Rust 服务端，`client/` 是 Kuikly 多端工程（管理后台 web）。
@@ -243,20 +318,37 @@ COPY 真实源码后**必须** `touch src` + `cargo clean -p xiaozhi-server-rust
 server/                        # Rust 服务端
   src/
     main.rs       入口：加载配置 → 初始化引擎 → 启动 Axum
-    config.rs     TOML 配置聚合（Server/Audio 段 + 插件段 re-export；加载/默认值）
-    engine.rs     Engines 装配器：共享引擎池（ASR/TTS/LLM）+ 每会话 VAD 工厂 + TTS 热切换
+    config.rs     TOML 配置聚合（Server/Audio 段 + 插件段 re-export；加载/默认值/`normalize()` 约定）
+    config/tests.rs  规范化与 engine 约定护栏（engine id ↔ 注册表一致、样例可解析）
+    engine.rs     Engines 装配器：共享引擎池（ASR/TTS/LLM）+ 每会话 VAD 工厂 + TTS/LLM 热切换
     app/          应用层（与具体引擎无关）：
+      ws/           网关与 HTTP 端点组：mod.rs（路由）/ config.rs（+ tests/secrets.rs）/ memory.rs（记忆端点）/ plugins.rs / usage.rs / ota.rs
       ws.rs         WebSocket 网关：握手 / 协商 / 鉴权 + 静态托管管理页（/）+ OTA 端点
       session.rs    每连接会话状态机 + 语音流水线（支持 abort；AIUI 全链路分支）
       protocol.rs   消息枚举 + 二进制版本封装（v1/v2/v3）—— 改这里必看 §5.1
+      session/reply.rs  回复生成与下发（LLM→分句→TTS→下行；含人格/记忆组装与后台写入）
       transport.rs  承载抽象（WS/未来 MQTT+UDP）；downlink.rs 下行音频；splitter/sse
       audio/        Opus 编解码 + 重采样；firmware.rs 固件托管；voices.rs 发音人目录
-    plugins/      引擎插件层（按能力分目录；新增厂商 = 加文件 + 工厂注册一行）：
+    plugins/      引擎插件层（按能力分目录）：
+      registry/     能力/实现的可枚举清单（描述符：字段元数据 + 热生效 + 签名 + 校验 + 构建）
+        mod.rs        类型定义 + 全量注册表 + 查找 API + JSON 投影
+        fields.rs     字段元数据表（能力公共字段 + 各实现私有字段）
+        fields_context.rs  soul/memory 的字段元数据表（与 fields.rs 合并投影）
+        impls.rs      选择/签名/校验/构建 + 10 个描述符常量
+        tests.rs      回归测试（id 唯一性、字段漂移护栏、schema 形状）
+      host.rs       装配与校验前移、enabled/phase 分离的状态快照（/api/plugins 数据源）
+      （新增厂商 = 加实现文件 + registry/impls.rs 加 1 条 + registry/fields.rs 加字段表）
       asr/{mod,sensevoice}.rs   trait + SenseVoice 实现（sherpa）
-      tts/{mod,kokoro,xfyun}.rs trait + Kokoro 本地 / 讯飞在线实现
-      llm/{mod,openai}.rs       LlmProvider trait + OpenAI Responses 实现
+      tts/{mod,tests}.rs + {kokoro,xfyun}.rs  trait + Kokoro 本地 / 讯飞在线实现（`[tts.kokoro]`/`[tts.xfyun]`）
+      llm/{mod,openai}.rs       LlmProvider trait + OpenAI Responses 实现（+ failure/retry 护栏）
       vad/{mod,silero}.rs       trait + Silero 实现（sherpa）
       aiui/mod.rs               FullChainEngine trait + AIUI 全链路（识别+大模型+合成云闭环）
+      prompt/{mod,tests}.rs     有序 prompt 段注册表（稀疏 order + 启动期变量校验）
+      soul/{mod,tests}.rs       [soul] 人格档案 → prompt 段（关闭时逐字节退回 system_prompt）
+      memory/                   图记忆：mod.rs（配置/trait/NoopMemory）+ graph.rs（召回/抽取）
+                                 + store.rs + store/maintenance.rs（SQLite 读写/保留策略）
+                                 + schema.rs（DDL/迁移/稳定 ID）+ terms.rs（汉字二元组倒排索引）
+                                 + assemble.rs（注入块渲染 + token 预算裁剪）+ llm_extract.rs（抽取契约）
   config.toml / config.example.toml
   scripts/download_models.sh
   tests/mock_client.py         零依赖 WebSocket 联调客户端
@@ -267,6 +359,8 @@ client/                        # Kuikly 多端工程（管理后台 web + macOS 
   kotlin-js-store/yarn.lock   Kotlin/JS npm 依赖锁（⚠️ 必须入库，缺失则 yarn 解析漂移）
   shared/
     commonMain/               公共代码：@Page("config") 管理后台（跨端）+ 配置表单 + NetworkModule
+                              （P5 新文件：ConfigSections.kt 页签常量表 / PluginMetaState.kt 能力总览
+                               / ConfigOverviewCard.kt 总览渲染 / FormSchemaState.kt 字段热生效提示）
     macosArm64Main/           仅 macOS(arm64) 编译：@Page("test") ASR/TTS 测试台 + XiaoZhiModule
     （js(IR) 目标在此模块：@Page 注册靠 KSP(core-ksp)，业务包由 Kuikly 插件打包）
   apps/
@@ -276,6 +370,7 @@ client/                        # Kuikly 多端工程（管理后台 web + macOS 
     macosApp/                 macOS 宿主（原生，Mac Catalyst）：ASR/TTS 测试台，复用 iOS 渲染器
 ```
 
+> 单元测试一律在同级 `<name>/tests.rs`（外层只留 `#[cfg(test)] mod tests;`，见 §5.10）；`server/tests/mock_client.py` 是独立的协议联调客户端（非 Rust 单测）。
 > server 在 `/` 静态托管 `client/apps/h5App/web`（`[server].admin_dir` 默认值即此；
 > 容器内由镜像内置 `XIAOZHI_ADMIN_DIR=/app/web` 覆盖），并通过 `GET/POST /api/config`
 > 让管理页读写 `config.toml`。本地产出管理页：`cd client && ./gradlew :apps:h5App:publishWeb`。
@@ -299,6 +394,42 @@ client/                        # Kuikly 多端工程（管理后台 web + macOS 
 - **Podfile Catalyst 配方**：`platform :ios`（**不能** `:osx`——UIKit Pod 按 macOS 原生平台编不出产物）+ post_install 给全部 Pod 目标开 `SUPPORTS_MACCATALYST`、排除 x86_64、**强制 `IPHONEOS_DEPLOYMENT_TARGET=15.0`**（⚠️ Catalyst 的 macOS 部署目标由 iOS 目标**映射**而来：iOS 13→macOS 10.15 会被新 Xcode SDK 拒建；只改 MACOSX_DEPLOYMENT_TARGET 对 iOS 平台 Pod 无效，实测踩坑）。
 - **框架路径**：macosApp 在 `apps/` 子目录，shared 在 `client/` 根——相对路径要上**两级**（`../../shared/...`），且链接搜索路径用 `$(PROJECT_DIR)/../../shared/...`（纯相对路径 ld 找不到）；产物目录是 `releaseFramework`（无 releaseShared）。
 - **macabi 平台补丁（已自动化）**：Kotlin/Native 无 macabi 目标，静态框架（ar 归档）内目标文件平台标记是 macOS，ld 拒绝链入 Catalyst。`shared/linkReleaseFrameworkMacosArm64` 等框架链接任务已 `finalizedBy` 补丁任务，自动执行 `scripts/patch_framework_macabi.py`（ar x → 改写 LC_BUILD_VERSION platform 1→6、minos≥12.0 → ar cr → ranlib，幂等）。本机 vtool 不认 macabi 平台名，勿走 vtool。
+
+## 6.5 HTTP 端点与插件化约定（2026-10 新增）
+
+| 端点 | 语义 |
+|---|---|
+| `GET /api/plugins` | 能力清单 + 实际状态（`enabled` 与 `phase` 分离，带 `last_error`）；`config.path/persistent` 一并返回。**管理页「总览」tab 的唯一数据源**（`PluginMetaState.kt`）：必需/可选两组 + 计数摘要 + **降级/异常原因行内显示** |
+| `GET /api/config/schema` | 字段元数据（标签/类型/默认值提示/`hot` 热生效语义/`secret` 密钥标记）+ `app_sections`（`[server]`/`[audio]` 这类**非能力段**的档位）；**只做元数据，不做自动表单**。客户端 `FormSchemaState.kt` 用它渲染「这个字段多久生效」（`live` 不标注） |
+| `GET /api/usage`、`GET /api/session/{id}/usage` | 令牌用量（全局 + 按会话；`pressure` = 输入侧总量，回答"记忆注入让 prompt 长了多少"） |
+| `GET/POST /api/config` | **部分更新**（缺失字段保持不变、显式 `null` 清除）；GET **密钥打码**（明文永不回传，只给 `has_<field>` presence）并带 `revision`，POST 回传 `expected_revision` → 不一致 **409**（客户端顶栏出现「重新加载」，草稿保留）；密钥空串/缺失 = 保留原值。**POST 响应带 `hot`/`hot_hint`/`changed_sections`**：本次保存**实际**的生效档位（取变更字段里最严格的一个，判定在 `app/ws/config/impact.rs`），客户端据此显示三档文案 |
+| `GET /api/memory/status` | 记忆状态卡：引擎（`engine`）/库大小/条数/待抽取/隔离/各设备作用域 + 能力 `phase` 与降级原因 + AIUI 提示 |
+| `POST /api/memory/recall` | **当场试召回**（`{text, scope?}`；scope 省略 = 跨设备）：命中数/匹配词项/耗时/**将注入的正文预览**——"记忆开了没用"的唯一反馈手段 |
+| `POST /api/memory/maintain` | 立即维护（`{force, dry_run}`）：隔离释放 + 保留策略；`dry_run` 只报数量不删除 |
+| `POST /api/memory/clear` | 清空（**必须**显式给 `scope` 或 `all:true`，防误删长期记忆）|
+
+约定（改插件前必读）：
+
+- **热生效语义**由 `plugins/registry/` 的 `hot` 三档声明（`live`/`next_session`/`restart_only`），
+  **不要**在文档里另写一套"需重启"的说法；`GET /api/config/schema` 是给前端看的权威。
+  ⚠️ **新增配置段必须登记档位**：能力字段写进注册表字段表；`[server]`/`[audio]` 这类应用级段写进
+  `registry/APP_SECTION_HOT`。忘了登记不会报错，只会让 `POST /api/config` 的 `hot` 保守返回
+  `restart_only`、界面永远提示"需重启"——`config/tests/impact.rs::every_config_section_has_declared_hot_semantics`
+  把这种静默降级变成硬失败。
+- **`enabled` 与 `phase` 必须分开**：前者是用户保存的选择，后者是实际状态。只报一个布尔值会让 UI
+  无法表达「已启用但降级/加载失败」。
+- **必需 vs 可选**：`asr/vad/tts/llm` 校验/构建失败 = 启动失败；`fullchain`（AIUI）启用后校验失败
+  也是致命（保持既有行为）；其余可选能力（`memory`/`soul`/`voices`/`firmware`）失败只降级（`Degraded`）。
+  有共享实例的可选能力经 `PluginHost::build_optional` 构建（当前只有 `memory`）。
+- `GET /api/config/schema` 的 `common_fields` 是**数组**：`[{fields_path, fields}]`
+  （同一能力可有多个配置段，如 `[memory]` / `[memory.retention]` / `[memory.extractor]`）；
+  改这个形状要同步改消费方（`client/.../FormSchemaState.kt`，P5 已接入）。
+- **管理页 tab 由常量表驱动**：`client/.../ConfigSections.kt` 的 `SectionDescriptor(id, order, label)`
+  是唯一清单（构建期校验 id 唯一/order 升序），内容在 `ConfigCards.renderForm` 的 `when` 里。
+  新增 tab = 改这张表 + 加一条 `when` 分支；`id` 是稳定标识（不随 label 文案变化）。
+  ⚠️ 内容必须写在传给 `TabPage` 的 lambda 里——把 lambda 装进 `when` 再返回 `ViewBuilder`
+  会丢接收者（实测编译报 `receiver type mismatch`）。
+- 校验文案必须含「怎么修」，且**一次汇总多个问题**（不要修一个报一个）。
 
 ## 7. 运行与联调
 
@@ -328,7 +459,16 @@ python3 server/tests/mock_client.py
 - **VAD 模型加载**：每次会话 `VoiceActivityDetector::create` 会加载模型；连接数大时建议池化（待优化）。
 - **ASR 流式**：SenseVoice 为离线逐段识别；如需逐字流式可后续换 Zipformer `OnlineRecognizer`。
 - **未启用 `sherpa` 的编译下行音频为空帧**：`encode_opus_frame` 占位实现返回空，仅供编译/测试。
-- 残留编译 warning（预留未用字段/变体），不影响功能。
+- **记忆（P1）不含语义检索**：无 embedding、无 PPR/LPA 社区、无 SPO 三元组图（均属 P2）；
+  当前是"摘要 + 汉字二元组倒排索引"的本地词法召回（零外网调用，中文可用）。
+- **记忆未接测试台协议消息**：`protocol.rs` 未新增 `memory_test`（避免动协议枚举；管理页的
+  「测试召回」走 `POST /api/memory/recall`）。因此 `mock_client.py` 的断言序列不变。
+- **人格未支持 `profile_path`**（Markdown 档案文件）与设备级多人格绑定：属于后续阶段。
+- **AIUI 全链路下人格与记忆均不生效**（云端闭环绕过本地 LLM）：`aiui_downlink` 既不 recall 也不 record。
+- 编译 warning：**客户端两个 Kotlin 目标 0 warning**（2026-10 P5 批次清掉了未用导入与 `data == null`
+  这类编译期恒假的死判断——`NMAllResponse` 的 `data` 是非空 `JSONObject`，别再照抄该写法）；
+  Rust 侧 `cargo test` 0 warning，但 `cargo check` 仍有 **3 条既有 dead_code**（`ExtractorConfig::is_empty` /
+  `MaintainOpts::forced` / `ORDER_MEMORY`，属预留 API）。
 
 ## 10. 提交规范（重要）
 

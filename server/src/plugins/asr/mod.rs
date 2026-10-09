@@ -16,6 +16,15 @@ use anyhow::Context;
 use sensevoice::SherpaAsr;
 use std::sync::Arc;
 
+use crate::config::{canonical_engine, EngineSpec};
+
+/// ASR 可选实现（`[asr].engine` 的权威表）。当前只有 SenseVoice 一条真实路径。
+pub const ASR_ENGINES: &[EngineSpec] = &[EngineSpec {
+    id: "sensevoice",
+    aliases: &[],
+}];
+const DEFAULT_ASR_ENGINE: &str = "sensevoice";
+
 /// 识别引擎接口：把一段（已切分好的）单声道 f32 音频转为文本。
 pub trait AsrEngine: Send + Sync {
     fn recognize(&self, samples: &[f32], sample_rate: u32) -> Result<String>;
@@ -23,6 +32,9 @@ pub trait AsrEngine: Send + Sync {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AsrConfig {
+    /// 实现 id（`[asr].engine`，约定见 `crate::config` 模块文档）；空 = 默认 `sensevoice`。
+    #[serde(default)]
+    pub engine: String,
     /// SenseVoice INT8 模型路径（sherpa-onnx 离线识别器）。
     #[serde(default = "default_asr_model")]
     pub model: String,
@@ -36,6 +48,16 @@ pub struct AsrConfig {
     pub num_threads: u32,
     #[serde(default = "default_provider")]
     pub provider: String,
+}
+
+impl AsrConfig {
+    /// 规范化后的实现 id（空 → 默认；未知值原样返回，由校验报错）。
+    pub fn engine_id(&self) -> String {
+        canonical_engine(&self.engine, ASR_ENGINES, DEFAULT_ASR_ENGINE)
+    }
+    pub fn normalize(&mut self) {
+        self.engine = self.engine_id();
+    }
 }
 fn default_asr_model() -> String {
     "/data/models/SenseVoiceSmall/model.int8.onnx".into()
@@ -82,6 +104,7 @@ pub fn build_asr(cfg: &AsrConfig) -> Result<Arc<dyn AsrEngine>> {
 impl Default for AsrConfig {
     fn default() -> Self {
         AsrConfig {
+            engine: String::new(), // 空 → engine_id() 取默认；normalize() 会补全
             model: default_asr_model(),
             tokens: default_asr_tokens(),
             language: default_language(),

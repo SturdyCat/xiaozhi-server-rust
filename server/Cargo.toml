@@ -37,6 +37,7 @@ base64 = "0.23.1"
 httpdate = "1.0.3"
 rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }
 webpki-roots = "0.26"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
 
 [profile.release]
 opt-level = 3

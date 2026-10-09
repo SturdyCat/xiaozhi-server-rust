@@ -109,17 +109,26 @@ pub fn spawn_startup_probe(engines: Arc<Engines>) {
     });
 }
 
+/// 盘上三要素（**不校验完整性**；读盘失败回退内存）。
+///
+/// `GET /api/config` 已对密钥打码，前端表单里留空的字段 = "未修改，沿用已存凭据"，
+/// 因此"测试凭据"必须能逐字段回落到这里，否则用户不重填密钥就无法测试。
+fn tts_creds_raw(engines: &Engines) -> XfyunTtsConfig {
+    match &engines.config_path {
+        Some(p) => crate::config::Config::load(p)
+            .map(|c| c.tts.xfyun)
+            .unwrap_or_else(|e| {
+                tracing::warn!("发音人目录：读盘配置失败（用启动配置）: {e}");
+                engines.config.tts.xfyun.clone()
+            }),
+        None => engines.config.tts.xfyun.clone(),
+    }
+}
+
 /// 三要素凭据：**优先读盘**（用户可能在启动后才保存）；读盘失败回退内存。
 /// 三要素未填齐返回 None。
 fn tts_creds(engines: &Engines) -> Option<XfyunTtsConfig> {
-    let tts = match &engines.config_path {
-        Some(p) => crate::config::Config::load(p).map(|c| c.tts).unwrap_or_else(|e| {
-            tracing::warn!("发音人目录：读盘配置失败（用启动配置）: {e}");
-            engines.config.tts.clone()
-        }),
-        None => engines.config.tts.clone(),
-    };
-    let x = tts.xfyun;
+    let x = tts_creds_raw(engines);
     if x.app_id.trim().is_empty() || x.api_key.trim().is_empty() || x.api_secret.trim().is_empty() {
         return None;
     }
@@ -274,17 +283,28 @@ async fn test_credentials(
     if !auth_ok(&headers, &query, &engines.config.server) {
         return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
     }
+    // 密钥不再回传给前端（GET /api/config 打码），故表单里留空的字段 = "用盘上已存凭据"。
+    // 逐字段回落：只改发音人、或只重填其中一项时仍可测试。
+    let disk = tts_creds_raw(&engines);
+    let pick = |v: Option<&str>, fallback: &str| -> String {
+        v.map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or(fallback)
+            .to_string()
+    };
+    let voice_default = if disk.voice.trim().is_empty() {
+        "xiaoyan"
+    } else {
+        disk.voice.as_str()
+    };
     let cfg = XfyunTtsConfig {
-        app_id: body.get("app_id").and_then(|v| v.as_str()).unwrap_or("").trim().to_string(),
-        api_key: body.get("api_key").and_then(|v| v.as_str()).unwrap_or("").trim().to_string(),
-        api_secret: body.get("api_secret").and_then(|v| v.as_str()).unwrap_or("").trim().to_string(),
-        voice: body
-            .get("voice")
-            .and_then(|v| v.as_str())
-            .map(str::trim)
-            .filter(|v| !v.is_empty())
-            .unwrap_or("xiaoyan")
-            .to_string(),
+        app_id: pick(body.get("app_id").and_then(|v| v.as_str()), &disk.app_id),
+        api_key: pick(body.get("api_key").and_then(|v| v.as_str()), &disk.api_key),
+        api_secret: pick(
+            body.get("api_secret").and_then(|v| v.as_str()),
+            &disk.api_secret,
+        ),
+        voice: pick(body.get("voice").and_then(|v| v.as_str()), voice_default),
     };
     // 真连讯飞是阻塞调用（HTTPS 握手 + 合成 ~300ms+），放 spawn_blocking 隔离
     let result = tokio::task::spawn_blocking(move || crate::plugins::tts::aiui::test_credentials(&cfg))
@@ -485,72 +505,4 @@ fn candidates() -> Vec<Voice> {
 
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// 无硬编码可用列表的契约：内存态初始为空目录（仅探测/缓存填充）。
-    #[test]
-    fn state_starts_empty_without_cache() {
-        std::env::set_var("XIAOZHI_VOICES_CACHE", "/nonexistent/voices-test.json");
-        init();
-        let snap = state().read().unwrap_or_else(|e| e.into_inner()).clone();
-        assert!(snap.voices.is_empty(), "无缓存时应为空目录（不得回退硬编码可用列表）");
-        assert_eq!(snap.source, "empty");
-        std::env::remove_var("XIAOZHI_VOICES_CACHE");
-    }
-
-    /// 候选池契约：vcn 唯一、gender/type 合法（候选只是探测输入，不是可用列表）。
-    #[test]
-    fn candidates_are_unique_and_wellformed() {
-        let c = candidates();
-        let mut seen = std::collections::HashSet::new();
-        for v in &c {
-            assert!(seen.insert(v.vcn.clone()), "候选 vcn 重复: {}", v.vcn);
-            assert!(matches!(v.gender.as_str(), "female" | "male"), "非法性别: {}", v.vcn);
-            assert!(matches!(v.type_.as_str(), "classic" | "x6"), "非法类型: {}", v.vcn);
-        }
-        assert!(c.len() >= 100, "候选池过小（疑似被截断）: {}", c.len());
-    }
-
-    /// Voice 序列化：`type` 字段名（客户端按此解析）。
-    #[test]
-    fn voice_serializes_type_field() {
-        let v = Voice {
-            vcn: "xiaoyan".into(),
-            name: "小燕".into(),
-            gender: "female".into(),
-            type_: "classic".into(),
-            tag: "标准女声".into(),
-        };
-        let j = serde_json::to_value(&v).unwrap();
-        assert_eq!(j["vcn"], "xiaoyan");
-        assert_eq!(j["gender"], "female");
-        assert_eq!(j["type"], "classic");
-    }
-
-    /// 真实探测冒烟（**排障工具，日常不跑**）：三要素经环境变量传入——
-    /// `XFYUN_APP_ID=… XFYUN_API_KEY=… XFYUN_API_SECRET=… cargo test voices_probe_live -- --ignored --nocapture`
-    #[test]
-    #[ignore = "live AIUI 调用：需 XFYUN_APP_ID/XFYUN_API_KEY/XFYUN_API_SECRET 环境变量"]
-    fn voices_probe_live() {
-        let (Ok(app_id), Ok(api_key), Ok(api_secret)) = (
-            std::env::var("XFYUN_APP_ID"),
-            std::env::var("XFYUN_API_KEY"),
-            std::env::var("XFYUN_API_SECRET"),
-        ) else {
-            eprintln!("跳过：未设置 XFYUN_APP_ID/XFYUN_API_KEY/XFYUN_API_SECRET");
-            return;
-        };
-        let cfg = XfyunTtsConfig { app_id, api_key, api_secret, voice: String::new() };
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-        let t0 = std::time::Instant::now();
-        rt.block_on(probe_and_persist(cfg));
-        let snap = state().read().unwrap_or_else(|e| e.into_inner()).clone();
-        println!(
-            "== 探测完成：{} 条可用（耗时 {}s），示例: {:?}",
-            snap.voices.len(),
-            t0.elapsed().as_secs(),
-            snap.voices.first().map(|v| (&v.vcn, &v.name, &v.type_, v.gender.as_str()))
-        );
-    }
-}
+mod tests;

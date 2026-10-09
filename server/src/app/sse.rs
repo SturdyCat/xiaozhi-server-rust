@@ -8,6 +8,7 @@
 //! - `response.output_text.delta` → 文本增量
 //! - `response.output_item.added`（`item.type == "function_call"`）→ 按 `output_index` 注册工具调用
 //! - `response.function_call_arguments.delta` → 按 `output_index` 追加入参片段
+//! - `response.completed` → 记录 `response.usage`（**原始 JSON**，语义解释交给 `plugins/llm`）
 //! - `error` / `response.failed` → 记录错误（流结束后上报）
 
 use serde_json::Value;
@@ -30,6 +31,16 @@ impl Default for RawToolCall {
     }
 }
 
+/// 流结束时交给调用方的完整结果（用结构体而非元组：加字段不再破坏所有调用点）。
+pub(crate) struct SseOutcome {
+    pub text: String,
+    pub calls: Vec<ToolCall>,
+    pub error: Option<String>,
+    /// `response.completed.response.usage` 的**原始 JSON**：本模块只做搬运，
+    /// 令牌口径（含缓存桶/压力口径）由 [`crate::plugins::llm::TokenUsage`] 解释。
+    pub usage: Option<Value>,
+}
+
 /// SSE 增量解析器：被喂入任意字节块，吐出完整 `data:` 行中解析出的文本增量。
 pub struct SseParser {
     // 字节缓冲：SSE 行边界（\n）是 ASCII，整行解码可避免多字节 UTF-8 被网络分块切断。
@@ -37,6 +48,7 @@ pub struct SseParser {
     text: String,
     raw: Vec<RawToolCall>,
     error: Option<String>,
+    usage: Option<Value>,
 }
 
 impl SseParser {
@@ -46,6 +58,7 @@ impl SseParser {
             text: String::new(),
             raw: Vec::new(),
             error: None,
+            usage: None,
         }
     }
 
@@ -111,6 +124,14 @@ impl SseParser {
                         self.raw[index].arguments.push_str(d);
                     }
                 }
+                "response.completed" => {
+                    // 用量在终态事件里；非流式路径由 openai.rs 直接读整段 JSON 的 usage
+                    if let Some(u) = v.get("response").and_then(|r| r.get("usage")) {
+                        if !u.is_null() {
+                            self.usage = Some(u.clone());
+                        }
+                    }
+                }
                 "error" => {
                     let msg = v
                         .get("message")
@@ -130,8 +151,8 @@ impl SseParser {
         deltas
     }
 
-    /// 流结束：丢弃未完成的残余行，返回（完整文本, 终态工具调用, 错误）。
-    pub(crate) fn finish(self) -> (String, Vec<ToolCall>, Option<String>) {
+    /// 流结束：丢弃未完成的残余行，返回完整结果（文本 / 工具调用 / 错误 / 用量）。
+    pub(crate) fn finish(self) -> SseOutcome {
         let calls = self
             .raw
             .into_iter()
@@ -144,100 +165,14 @@ impl SseParser {
                 })
             })
             .collect();
-        (self.text, calls, self.error)
+        SseOutcome {
+            text: self.text,
+            calls,
+            error: self.error,
+            usage: self.usage,
+        }
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn sse_multi_delta_concatenates_text() {
-        let sse = concat!(
-            "event: response.output_text.delta\n",
-            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"你好\"}\n\n",
-            "event: response.output_text.delta\n",
-            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"世界\"}\n\n",
-            "event: response.completed\n",
-            "data: {\"type\":\"response.completed\",\"response\":{}}\n\n",
-        );
-        let mut parser = SseParser::new();
-        let mut all = String::new();
-        for chunk in sse.as_bytes().chunks(7) {
-            for d in parser.feed(chunk) {
-                all.push_str(&d);
-            }
-        }
-        let (text, calls, error) = parser.finish();
-        assert_eq!(text, "你好世界");
-        assert_eq!(all, "你好世界");
-        assert!(calls.is_empty());
-        assert!(error.is_none());
-    }
-
-    #[test]
-    fn sse_split_across_chunk_boundary() {
-        // 一个 data 行被切成两块的边界情况。
-        let part1 = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"AB";
-        let part2 = "CD\"}\n\ndata: {\"type\":\"response.completed\",\"response\":{}}\n\n";
-        let mut parser = SseParser::new();
-        let mut all = String::new();
-        for d in parser.feed(part1.as_bytes()) {
-            all.push_str(&d);
-        }
-        assert!(all.is_empty(), "未完成的行不应产出自增");
-        for d in parser.feed(part2.as_bytes()) {
-            all.push_str(&d);
-        }
-        let (text, _, _) = parser.finish();
-        assert_eq!(text, "ABCD");
-    }
-
-    #[test]
-    fn sse_function_call_assembled_from_events() {
-        let sse = concat!(
-            "data: {\"type\":\"response.output_item.added\",\"output_index\":1,\"item\":{\"id\":\"fc_1\",\"type\":\"function_call\",\"call_id\":\"call_1\",\"name\":\"get_weather\",\"arguments\":\"\"}}\n\n",
-            "data: {\"type\":\"response.function_call_arguments.delta\",\"output_index\":1,\"delta\":\"{\\\"loc\"}\n\n",
-            "data: {\"type\":\"response.function_call_arguments.delta\",\"output_index\":1,\"delta\":\"\\\":\\\"BJ\\\"}\"}\n\n",
-            "data: {\"type\":\"response.completed\",\"response\":{}}\n\n",
-        );
-        let mut parser = SseParser::new();
-        for chunk in sse.as_bytes().chunks(40) {
-            parser.feed(chunk);
-        }
-        let (_text, calls, error) = parser.finish();
-        assert!(error.is_none());
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].id, "call_1");
-        assert_eq!(calls[0].name, "get_weather");
-        assert_eq!(calls[0].arguments, "{\"loc\":\"BJ\"}");
-    }
-
-    #[test]
-    fn sse_ignores_non_data_and_message_items() {
-        let sse = concat!(
-            ": keep-alive\n\n",
-            "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"role\":\"assistant\"}}\n\n",
-            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"嗨 \"}\n\n",
-            "\r\n",
-            "data: [DONE]\n\n",
-        );
-        let mut parser = SseParser::new();
-        for chunk in sse.as_bytes().chunks(10) {
-            parser.feed(chunk);
-        }
-        let (text, calls, _) = parser.finish();
-        assert_eq!(text, "嗨 ");
-        assert!(calls.is_empty(), "message 项不应被当成工具调用");
-    }
-
-    #[test]
-    fn sse_captures_error_event() {
-        let sse = "data: {\"type\":\"error\",\"message\":\"boom\"}\n\n";
-        let mut parser = SseParser::new();
-        parser.feed(sse.as_bytes());
-        let (_, _, error) = parser.finish();
-        assert_eq!(error.as_deref(), Some("boom"));
-    }
-}
+mod tests;

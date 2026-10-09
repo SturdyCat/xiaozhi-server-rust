@@ -119,6 +119,9 @@ class ConnectState(private val scope: PagerScope) {
                 shell.form.fill(data)
                 shell.form.loadVoices(shell, base)
                 shell.form.loadConfigMeta(shell, base)
+                // 字段热生效元数据 + 能力清单（P5：字段级"多久生效"提示 / 总览页；失败不影响表单）
+                shell.form.schema.load(shell, base)
+                shell.plugins.load(shell, base)
                 // 从配置提取 WS 鉴权 token，派生 WS 地址并自动连接
                 val token = data.optJSONObject("server")?.optString("expected_token", "") ?: ""
                 shell.bench.serverUrl = ws

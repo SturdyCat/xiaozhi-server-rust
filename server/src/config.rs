@@ -7,14 +7,27 @@
 //!   前提，未启用时引擎构建直接报错（不再有 mock 回退）。
 //! - 默认（无 `--config`）即 [`Config::default()`]：模型路径指向 `/data/models/...`
 //!   （与 `config.example.toml`、容器挂载一致），LLM 需填 `api_base`/`api_key`。
-//! - 旧配置文件里残留的 `backend = "..."` 键会被 serde 静默忽略（无 `deny_unknown_fields`），
-//!   无需手工清理；管理页保存一次即写成新 schema。
+//! - 旧配置文件里残留的 `backend = "..."` / `[tts].model` 等旧位置写法会被
+//!   [`Config::normalize`] 读懂并搬到规范位置（管理页保存一次即写成新 schema）；
+//!   真正未知的键仍被 serde 静默忽略（无 `deny_unknown_fields`），无需手工清理。
 //!
 //! ## 加载优先级与持久化
 //!
 //! 配置从哪来、能否被管理页写回，由 `main.rs` 的 `load_config` 决定
 //!（`XIAOZHI_CONFIG` → `--config` → 内置默认）；`GET/PUT /api/config` 的读写语义
 //! 见 `app/ws.rs`。本文件只负责结构与默认值。
+//!
+//! ## 配置约定（P4，见 `docs/plugin-architecture-unification.md` §3.3）
+//!
+//! 1. **`engine` 键**：每个能力段用 `engine = "<实现 id>"` 选择实现，id 即注册表描述符 id
+//!    去掉 `"<cap>."` 前缀（`[tts] engine="kokoro"` ↔ 描述符 `tts.kokoro`）；
+//! 2. **私有段**：实现私有字段放 `[<cap>.<id>]`（`[tts.kokoro]` / `[tts.xfyun]` / `[memory.extractor]`），
+//!    本体只留**跨实现通用项**（如 `[tts].cache_entries`）；
+//! 3. **`normalize()` 双读**：旧写法（`[tts].model` 直接放本体、`backend = "sherpa"`）仍可读，
+//!    加载时搬到规范位置；保存只写新结构。**未知键继续静默忽略**（无 `deny_unknown_fields`）。
+//!
+//! 约定由 [`EngineSpec`] 表 + [`canonical_engine`] 唯一实现；注册表侧有漂移护栏测试
+//! 断言"每个声明的 engine id 都必须有对应描述符"。
 
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -23,13 +36,51 @@ use std::path::Path;
 pub use crate::plugins::aiui::AiuiConfig;
 pub use crate::plugins::asr::AsrConfig;
 pub use crate::plugins::llm::LlmConfig;
-pub use crate::plugins::tts::{TtsBackendKind, TtsConfig};
+pub use crate::plugins::memory::MemoryConfig;
+pub use crate::plugins::soul::SoulConfig;
+pub use crate::plugins::tts::TtsConfig;
 // 对外 API 面保留（bin crate 内暂无直接引用者）
 #[allow(unused_imports)]
 pub use crate::plugins::tts::XfyunTtsConfig;
 pub use crate::plugins::vad::VadConfig;
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+/// 一个能力**可选实现**的声明（配置层权威，不是注册表）。
+///
+/// `id` = 实现 id（= 注册表描述符 id 去掉 `"<cap>."` 前缀）；`aliases` = 历史写法（只读兼容，
+/// 例：TTS 的 `sherpa` → `kokoro`）。
+pub struct EngineSpec {
+    pub id: &'static str,
+    pub aliases: &'static [&'static str],
+}
+
+impl EngineSpec {
+    /// 该值（已小写化）是否命中本实现（id 或别名）。
+    fn matches(&self, low: &str) -> bool {
+        self.id == low || self.aliases.iter().any(|a| *a == low)
+    }
+}
+
+/// `engine` 键规范化（**唯一权威**，各能力配置都走它）：
+///
+/// - 空 → 默认实现 id（未指定 engine 的旧配置照常工作）；
+/// - id / 别名（大小写不敏感）→ 规范 id（`"sherpa"` → `"kokoro"`）；
+/// - **未知值原样小写返回**，交由各能力 `validate` 报错——静默回退默认会让用户
+///   以为"配置生效了"，这是本仓库最忌讳的一类故障（见 `docs/…unification.md` §7）。
+pub fn canonical_engine(raw: &str, specs: &[EngineSpec], default_id: &str) -> String {
+    let t = raw.trim();
+    if t.is_empty() {
+        return default_id.to_string();
+    }
+    let low = t.to_ascii_lowercase();
+    for s in specs {
+        if s.matches(&low) {
+            return s.id.to_string();
+        }
+    }
+    low
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Config {
     #[serde(default)]
     pub server: ServerConfig,
@@ -48,6 +99,12 @@ pub struct Config {
     /// 本地 ASR / LLM / TTS 引擎闲置（可随时切回）。
     #[serde(default)]
     pub aiui: AiuiConfig,
+    /// 灵魂（人格档案）：`[soul].enabled=false` 时完全退回 `[llm].system_prompt`。
+    #[serde(default)]
+    pub soul: SoulConfig,
+    /// 记忆（图记忆）：默认关闭，关闭时零依赖、行为与今天一致。
+    #[serde(default)]
+    pub memory: MemoryConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -110,14 +167,50 @@ impl Default for AudioConfig {
     }
 }
 
+impl Default for Config {
+    fn default() -> Self {
+        // 生产默认（模型路径指向 /data/models/...）：先构造再规范化，
+        // 使内存默认配置与"从空 TOML 加载"得到**同一形状**（engine 键已填、旧字段已搬）。
+        let mut c = Config {
+            server: ServerConfig::default(),
+            audio: AudioConfig::default(),
+            asr: AsrConfig::default(),
+            vad: VadConfig::default(),
+            tts: TtsConfig::default(),
+            llm: LlmConfig::default(),
+            aiui: AiuiConfig::default(),
+            soul: SoulConfig::default(),
+            memory: MemoryConfig::default(),
+        };
+        c.normalize();
+        c
+    }
+}
+
 impl Config {
     /// 读取并解析 TOML 配置文件。
     pub fn load(path: &str) -> anyhow::Result<Config> {
         let text = std::fs::read_to_string(Path::new(path))
             .map_err(|e| anyhow::anyhow!("读取配置文件 {path} 失败: {e}"))?;
-        let cfg: Config = toml::from_str(&text)
+        let mut cfg: Config = toml::from_str(&text)
             .map_err(|e| anyhow::anyhow!("解析配置文件 {path} 失败: {e}"))?;
+        // 旧写法（[tts].model / backend / [memory].backend…）在此搬到规范位置（幂等）。
+        cfg.normalize();
         Ok(cfg)
+    }
+
+    /// **配置规范化**（P4）：`engine` 键补全 + 旧位置字段搬到 `[<cap>.<id>]` 私有段。
+    ///
+    /// 幂等，且**只在配置入口调用**（[`Self::load`] / [`Self::default`] /
+    /// `app::ws::config::merge_client_patch`），因此：
+    /// - 运行期读到的一定是规范形状（GET /api/config、`signature`、`build` 都能直接取字段）；
+    /// - 保存时只写新结构（旧字段标了 `skip_serializing`），文件随一次保存完成迁移。
+    pub fn normalize(&mut self) {
+        self.asr.normalize();
+        self.vad.normalize();
+        self.tts.normalize();
+        self.llm.normalize();
+        self.memory.normalize();
     }
 
     /// 是否处于「真实音频模式」：`sherpa` feature（唯一路径，无 mock）。
@@ -157,4 +250,7 @@ fn default_worker_threads() -> u32 {
 fn default_admin_dir() -> String {
     "../client/apps/h5App/web".into()
 }
+
+#[cfg(test)]
+mod tests;
 

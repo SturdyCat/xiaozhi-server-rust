@@ -27,6 +27,8 @@ binary_protocol_version = 1
 downlink_lead_ms = 240
 
 [asr]
+# 引擎选择（P4 约定：engine = 实现 id，可选 sensevoice）。改后需重启 server。
+engine = "sensevoice"
 # ASR 恒为 SenseVoice INT8（sherpa-onnx 离线识别），无 mock。
 model = "/data/models/SenseVoiceSmall/model.int8.onnx"
 tokens = "/data/models/SenseVoiceSmall/tokens.txt"
@@ -37,18 +39,33 @@ num_threads = 2
 provider = "cpu"
 
 [vad]
+# 引擎选择（P4 约定，可选 silero）；阈值等参数对新会话生效。
+engine = "silero"
 model = "/data/models/silero_vad.onnx"
 threshold = 0.5
 min_silence_duration = 0.25
 min_speech_duration = 0.25
 
 [tts]
-# 引擎分两类：本地模型（离线）/ 远程服务（在线）。
-#   本地：backend = "sherpa"（Kokoro INT8，用下方 model/voices/tokens/... 路径字段）；
-#   远程：backend = "<服务商 id>"（如 "xfyun"，用对应 [tts.xfyun] 凭据段）。
+# ===== 配置约定（P4）：engine 选实现 + 私有参数进 [tts.<id>] 子段 =====
+#   engine = "kokoro"  → 本地 Kokoro INT8（离线），参数见下方 [tts.kokoro]
+#   engine = "xfyun"   → 讯飞在线合成（在线），凭据见 [tts.xfyun]
+# 旧写法（backend = "sherpa" + 把 model/voices/... 直接写在 [tts] 下）**仍然可读**：
+# 加载时自动搬到 [tts.kokoro]，保存一次即写成新结构。
 # 改后保存即热切换：新会话/测试台 tts_test 立即用新引擎（无需重启）。
-# 未来更多远程供应商 = 新增 [tts.<id>] 凭据段 + backend 填对应 id。
-backend = "sherpa"
+# 新增供应商 = 新实现文件 + 注册表加 1 条描述符（含字段/签名/构建），不再改工厂分发。
+engine = "kokoro"
+
+# 跨实现通用项（所有引擎共用）：
+speaker = 0
+speed = 1.0
+# TTS 结果缓存条目数（默认 256，0 = 关闭）：按句缓存**已编码**的下行 Opus 帧
+# （键 = 引擎签名+音色+语速+下行采样率/帧长+文本，跨会话共享）。命中的句子
+# 零合成/零编码延迟，直接按实时节奏下发——高频短句（"好的""我在"）TTFA 从
+# 合成耗时降到一次预充突发（≈[audio].downlink_lead_ms）。
+cache_entries = 256
+
+[tts.kokoro]
 model = "/data/models/Kokoro/model.int8.onnx"
 voices = "/data/models/Kokoro/voices.bin"
 tokens = "/data/models/Kokoro/tokens.txt"
@@ -57,20 +74,13 @@ dict_dir = "/data/models/Kokoro/dict"
 lexicon = "/data/models/Kokoro/lexicon-us-en.txt,/data/models/Kokoro/lexicon-zh.txt"
 # 合成语言（建模时固定；"zh"/"en"）。管理页面切换其他语言时按需自动构建对应引擎。
 lang = "zh"
-speaker = 0
-speed = 1.0
 # 合成线程数（默认 4）：用满计算预算。旧值 1（「与 ASR 错峰」）实测让合成只剩
 # 1/4 算力（CPU 25%、4 个字 8+ 秒、10 个字 20 秒）——流水线 ASR→LLM→TTS 本身串行，
 # 不存在抢占。容器部署（docker-compose.yml）已设 cpus: "3.5" 配额（留 0.5 核给宿主机），
 # 4 个合成线程在 3.5 核配额内调度；如需更保守可下调到 3。
 num_threads = 4
-# TTS 结果缓存条目数（默认 256，0 = 关闭）：按句缓存**已编码**的下行 Opus 帧
-# （键 = 引擎签名+音色+语速+下行采样率/帧长+文本，跨会话共享）。命中的句子
-# 零合成/零编码延迟，直接按实时节奏下发——高频短句（"好的""我在"）TTFA 从
-# 合成耗时降到一次预充突发（≈[audio].downlink_lead_ms）。
-cache_entries = 256
 
-# 科大讯飞在线合成（backend = "xfyun" 时生效）：
+# 科大讯飞在线合成（engine = "xfyun" 时生效）：
 # 在讯飞开放平台（xfyun.cn）创建应用 → 开通「在线语音合成（流式版）」→ 复制 APPID/APIKey/APISecret 三件密钥。
 # voice 为发音人（vcn），如 xiaoyan（默认女声）；更多音色在控制台「发音人」处选择后填入。
 [tts.xfyun]
@@ -83,6 +93,8 @@ voice = "xiaoyan"
 # （GET /api/tts/voices；macApp 配置卡「探测音色目录」触发），只列出实际可用的音色。
 
 [llm]
+# 引擎选择（P4 约定，可选 openai）；改后对新会话生效。
+engine = "openai"
 # LLM 恒为 OpenAI 兼容 Responses API（HTTP），无 mock。
 # OpenAI **Responses API** 端点（POST /v1/responses，非 chat/completions）；
 # 请求体为 model/instructions/input[]/stream，SSE 流式见下方 stream。
@@ -110,3 +122,69 @@ stream = true
 # volume = 50
 # pitch = 50
 # prompt = ""                          # 自定义人设（可空）
+
+# ===== 灵魂（人格档案）=====
+# 关闭（默认）时完全退回上面的 [llm].system_prompt —— 输出逐字节一致，可随时回滚。
+# 打开后，系统提示词由「平台约束 + 人格主体 + 表达风格 + [llm].system_prompt」按序拼成。
+# 可在任意字段里用 {{name}} / {{address_user}} / {{device_id}} 引用运行时值
+# （未声明的变量会在**保存/启动时**报错，而不是把 {{xxx}} 原样塞给模型）。
+# ⚠️ 语音第一性原则是「短」：max_sentences / max_chars 会作为硬约束写进提示词；
+#    emoji 默认关闭（TTS 会把 emoji 念出来）。
+[soul]
+enabled = false                     # true = 启用人格档案
+name = "小智"                        # 自称
+self_intro = ""                     # 自我定位（一段话：你是谁、在做什么）
+form = ""                           # 形象/物种，如「一只住在音箱里的小狐狸」
+age_feel = ""                       # 给人的年龄感，如「十来岁」
+worldview = ""                      # 世界观（世界是什么样的）
+backstory = ""                      # 来历/背景故事
+relationship_origin = ""            # 与用户的关系是怎么开始的（比"关系=朋友"更能锁定语气）
+traits = []                         # 性格：每行一条「标签：遇到 X 会怎么做」（只写形容词会失效）
+values = []                         # 坚持的价值
+boundaries = []                     # 红线/拒绝清单
+tone = ""                           # 语气，如「轻快、温和」
+colloquial = true                   # 说人话：短句、省略主语
+address_user = "你"                  # 称呼用户
+catchphrases = []                   # 口头禅（自然使用，不必每句都用）
+emoji = false                       # ⚠️ 语音默认关：TTS 会把 emoji 念出来
+max_sentences = 2                   # 回复句数硬上限（1~8）
+max_chars = 40                      # 回复字数硬上限（10~500）
+scenario = ""                       # 当前情境，如「书房里，晚上」
+device_hint = ""                    # 设备提示，如「这是放在客厅的音箱」
+examples = []                       # 风格范例：每条一组 Q/A（锁风格最有效的手段）
+                                    # 例：examples = ["用户：今天几度？\n小智：我看不到天气，你手机上看一眼？"]
+
+# ===== 记忆（本地图记忆）=====
+# 默认关闭 = 零依赖零成本（行为与加记忆之前完全一致）。
+# 打开后：每轮对话写入本地 SQLite（原文事实源），后台用一次辅助模型调用抽取摘要，
+# 下一轮提问时按词法（摘要汉字二元组倒排索引）召回，注入**原始 Q/A**作为背景资料。
+# ⚠️ 目前**不含 embedding**：召回是本地词法（中文场景可用、零外网调用）；语义检索为后续阶段。
+# ⚠️ 记忆只在本地 LLM 流水线生效：启用 [aiui] 全链路时云端闭环绕过本地 LLM，人格/记忆都不参与。
+[memory]
+enabled = false                     # true = 启用记忆
+engine = "graph"                    # graph = 内置图记忆；none = 保留配置但不生效（旧键 backend 仍可读）
+db_path = "/data/memory.db"         # ⚠️ 必须放在挂载卷内，否则重建容器即丢全部记忆
+db_busy_timeout_ms = 5000           # SQLite 写锁等待（与 DSH 桌面端共用同一库文件时才需调大）
+recall_enabled = true               # false = 只写不读（先积累数据）
+extraction_enabled = true           # false = 只存原文、不调用辅助模型（没有摘要可召回）
+fresh_turn_count = 5                # 最近这几轮原文已在会话上下文里，不重复召回（省 token）
+recall_max_nodes = 6                # 每次最多召回几条
+recall_max_tokens = 400             # 注入正文的硬上限（中文按约 1 token/字估算）
+recall_budget_ms = 300              # 关键路径预算：超时立即按「无记忆」继续，不拖慢首字延迟
+maintenance_interval = 6            # 每 N 轮做一次保留策略与隔离重试（后台）
+inject_position = "after_history"   # after_history（默认，护住前缀缓存）/ before_history
+quarantine_max_attempts = 3         # 抽取失败的最大尝试次数，超过即永久隔离
+scope_prefix = "xiaozhi"            # 记忆按 <前缀>:<设备号> 隔离
+
+[memory.retention]                  # 原文保留策略（默认全部保留，最安全）
+keep = "all"                        # all | referenced（只留被记忆引用的）/ recent（最近 N 轮外）
+recent_turns = 0                    # keep = "recent" 时生效
+retention_days = 0                  # 超过 N 天的未引用原文可删（0 = 不限）
+dry_run = false                     # true = 只演练不删除（先看清会删多少条）
+# ⚠️ 被轮次记忆引用的原文**永不删除**（上游 graph-memory 有误删证据的缺陷，我们刻意规避）。
+
+[memory.extractor]                  # 抽取专用模型路由（字段留空 = 复用 [llm]）
+api_base = ""                       # 可指向更便宜的端点
+api_key = ""                        # 留空不修改；GET /api/config 永不回传明文
+model = ""                          # 建议用小模型（抽取只要稳定 JSON）
+temperature = 0.1

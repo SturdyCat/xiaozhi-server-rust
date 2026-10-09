@@ -145,6 +145,10 @@ sequenceDiagram
 | `GET /` | 静态托管管理页面（h5App 构建产物，`[server].admin_dir` 指向；目录缺失时返回友好提示，见 `../server/src/app/ws.rs`） |
 | `GET /api/health` | 健康检查，返回 `xiaozhi-server-rust ok` |
 | `GET /api/ws` | WebSocket 会话入口 |
+| `GET /api/config` / `POST /api/config` | 读/写配置：**部分更新**（缺失=保持、`null`=清除）+ `revision` 乐观并发（过期写入 409） |
+| `GET /api/config/schema` | 字段元数据（类型/默认值/热生效语义/密钥标记） |
+| `GET /api/plugins` | 能力清单 + 状态（`enabled`/`phase`/`last_error`） |
+| `GET /api/usage`、`GET /api/session/{id}/usage` | 令牌用量（成本 / 上下文膨胀观测） |
 
 > 全部 HTTP 端点、鉴权（`?token=` 兜底）与 `/api/config` 读写语义，见 `../server/src/app/ws.rs` 模块注释（权威说明）。
 
@@ -161,7 +165,16 @@ sequenceDiagram
 5. **容器首启自动下载**：`docker-entrypoint.sh` 自检关键模型文件，缺失则从 k2-fsa/sherpa-onnx 官方 GitHub Release 下载整包 tar.bz2 并解压到挂载的 `/data/models`（默认走 `GITHUB_PROXY` 代理）；开关 `XIAOZHI_AUTO_DOWNLOAD_MODELS = missing | force | off`，下载失败中止启动。
 6. **配置回退链**：`XIAOZHI_CONFIG` 环境变量 → `--config` 参数 → 内置 mock 默认配置，任何一级失败告警后回退，保证进程总能起来（便于零配置联调）。加载优先级与 env 覆盖语义见 `../server/src/main.rs` 模块注释。
 7. **并发模型**：每个 WS 连接一个 tokio task（session），引擎跨会话共享；音频编解码均为纯函数，无共享可变状态。并发与 CPU 预算细节见 `../server/src/engine.rs` 模块注释。
-8. **CPU 占用上限**：tokio worker（默认 2，`[server].worker_threads`）+ ASR 识别（`[asr].num_threads`=2）+ TTS 合成（`[tts].num_threads`，默认 4）+ VAD（1），各段错峰执行，峰值控制在 4 核内为小主机留余量；容器侧由 `docker-compose.yml` 的 `cpus:"3.5"` 限核。线程预算设计见 `../server/src/engine.rs`。
+8. **插件化（能力可枚举）**：能力与实现由 `../server/src/plugins/registry/` 的 `'static` 描述符表声明
+   （字段元数据 + 热生效语义 + 签名 + 校验 + 构建入口），`../server/src/plugins/host.rs` 负责装配与状态上报；
+   五个引擎 trait 一行未改（P6 起 `LlmProvider::chat_stream` 增加 `&TurnPrompt` 入参，见下）。新增实现 = 加文件 + 描述符表加 1 条。
+   热切语义三档（`live`/`next_session`/`restart_only`）以描述符为唯一权威。设计与落地进度见 `plugin-architecture-unification.md`。
+9. **灵魂与记忆（LLM 之前的可插拔上下文生产者）**：`[soul]` 人格档案渲染为**有序 prompt 段**
+   （`plugins/prompt/`；关闭时逐字节退回 `[llm].system_prompt`），`[memory]` 本地图记忆
+   （`plugins/memory/`：SQLite 原文事实源 + 摘要倒排索引 + 后台抽取；关键路径召回有硬预算、失败静默降级）；
+   记忆块按 `[memory].inject_position` 插入 `input[]`，保住 `instructions + history` 的 prompt 缓存。
+   设计取舍见 `soul-and-graph-memory-plan.md`，落地偏差见其 §0.5。
+10. **CPU 占用上限**：tokio worker（默认 2，`[server].worker_threads`）+ ASR 识别（`[asr].num_threads`=2）+ TTS 合成（`[tts].num_threads`，默认 4）+ VAD（1），各段错峰执行，峰值控制在 4 核内为小主机留余量；容器侧由 `docker-compose.yml` 的 `cpus:"3.5"` 限核。线程预算设计见 `../server/src/engine.rs`。
 
 ---
 
@@ -176,7 +189,9 @@ sequenceDiagram
 | `[asr]` | `backend`（mock/sherpa）、`model`、`tokens`、`language`、`num_threads` | SenseVoice 离线识别 |
 | `[vad]` | `model`、`threshold`、`min_silence_duration` | Silero VAD 切段 |
 | `[tts]` | `backend`、`model`、`voices`、`tokens`、`data_dir`、`dict_dir`、`lexicon`、`lang`、`speaker`、`speed` | Kokoro 合成（中英）；`lang` 建模时固定，测试台切语言按需另建引擎 |
-| `[llm]` | `backend`（mock/http）、`api_base`、`api_key`、`model`、`system_prompt`、`max_history` | OpenAI 兼容接口 |
+| `[llm]` | `backend`（mock/http）、`api_base`、`api_key`、`model`、`system_prompt`、`max_history` | OpenAI 兼容接口；`system_prompt` 是人格关闭时的兜底 |
+| `[soul]` | `enabled`、`name`、`traits`、`tone`、`max_sentences`、`max_chars`、`examples`… | 人格档案（21 字段）；关闭时行为与没有本段完全一致 |
+| `[memory]` | `enabled`、`backend`、`db_path`、`recall_max_nodes`、`recall_max_tokens`、`inject_position`… | 本地图记忆；`[memory.retention]` 保留策略、`[memory.extractor]` 抽取模型路由 |
 
 ---
 

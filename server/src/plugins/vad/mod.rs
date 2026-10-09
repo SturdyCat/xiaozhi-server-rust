@@ -10,6 +10,16 @@
 //! （不似 ASR/TTS 那样单次耗时数秒，无需 `spawn_blocking`）。
 
 use serde::{Deserialize, Serialize};
+
+use crate::config::{canonical_engine, EngineSpec};
+
+/// VAD 可选实现（`[vad].engine` 的权威表）。当前只有 Silero 一条真实路径。
+pub const VAD_ENGINES: &[EngineSpec] = &[EngineSpec {
+    id: "silero",
+    aliases: &[],
+}];
+const DEFAULT_VAD_ENGINE: &str = "silero";
+
 /// VAD 引擎接口。每会话持有一个独立实例（内部有状态）。
 pub trait VadEngine: Send {
     /// 喂入一帧单声道 f32 音频；检测到的完整语音段通过 `cb` 回调传出。
@@ -20,6 +30,9 @@ pub trait VadEngine: Send {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct VadConfig {
+    /// 实现 id（`[vad].engine`，约定见 `crate::config` 模块文档）；空 = 默认 `silero`。
+    #[serde(default)]
+    pub engine: String,
     /// Silero VAD 模型路径；为空视为未配置（sherpa 构建下引擎初始化会报错）。
     #[serde(default = "default_vad_model")]
     pub model: String,
@@ -32,6 +45,13 @@ pub struct VadConfig {
 }
 
 impl VadConfig {
+    /// 规范化后的实现 id（空 → 默认；未知值原样返回，由校验报错）。
+    pub fn engine_id(&self) -> String {
+        canonical_engine(&self.engine, VAD_ENGINES, DEFAULT_VAD_ENGINE)
+    }
+    pub fn normalize(&mut self) {
+        self.engine = self.engine_id();
+    }
     /// 模型路径非空即视为配置了真实 VAD。
     #[allow(dead_code)]
     pub fn is_real(&self) -> bool {
@@ -92,6 +112,7 @@ impl VadEngine for MockVad {
 impl Default for VadConfig {
     fn default() -> Self {
         VadConfig {
+            engine: String::new(), // 空 → engine_id() 取默认；normalize() 会补全
             model: default_vad_model(),
             threshold: default_threshold(),
             min_silence_duration: default_min_silence(),

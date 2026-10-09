@@ -21,6 +21,9 @@ class ConfigPage : Pager() {
 
     val form = ConfigFormState(this)
 
+    /** 能力总览的数据源（`GET /api/plugins`，只读，不随表单回传）。 */
+    val plugins = PluginMetaState(this)
+
     /** 顶部 toast（跨端统一实现：状态 + 渲染见 commonMain 的 ToastState / ToastHost）。 */
     val toast = ToastState(this)
 
@@ -29,6 +32,7 @@ class ConfigPage : Pager() {
     override fun pageDidAppear() {
         super.pageDidAppear()
         form.load(this)
+        plugins.load(this)
     }
 
     override fun body(): ViewBuilder {
@@ -49,6 +53,13 @@ class ConfigPage : Pager() {
 
             // ⚠️ 非限定调用（接收者=当前容器），组件才能挂进正确的父容器
             largeTitleBar({ "配置" }, trailing = {
+                // 过期写入（409）后：草稿仍在本地，给一个「重新加载」出口（对齐 DSH 的冲突文案口径）
+                vif({ ctx.form.conflict }) {
+                    secondaryButton("重新加载") {
+                        ctx.form.reload(ctx)
+                    }
+                    View { attr { width(AdminSpace.sm) } }
+                }
                 // 三态按钮：saving 时菊花 + 灰底 + 拦截点击，保存期间不会重复提交。
                 primaryButton(
                     "保存配置",
@@ -64,9 +75,10 @@ class ConfigPage : Pager() {
             // 顶部 toast（跨端统一），3 秒自动消失
             ToastHost(ctx.toast)
 
-            // 配置标签页（tabbedPanel：官方 Tabs+PageList，六个 tab 全量配置汇总）
+            // 配置标签页（tabbedPanel：官方 Tabs+PageList；页签由 ConfigSections 常量表驱动）
             renderForm(
                 ctx.form,
+                ctx.plugins,
                 ctx,
                 pageWidth = pageWidth,
                 pageHeight = pageHeight,

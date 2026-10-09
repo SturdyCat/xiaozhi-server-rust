@@ -310,6 +310,33 @@ fun ViewContainer<*, *>.statusBadge(state: () -> String, text: () -> String) {
     }
 }
 
+// ===================== 能力状态徽标 =====================
+
+/**
+ * 能力状态徽标（`GET /api/plugins` 的 `phase` + `enabled`，见设计文档 §5.3）。
+ *
+ * **只在偏离时打标**（照 DSH 的规则）：`enabled && phase == active` 是"正常"，
+ * 返回**不渲染任何东西**——否则一屏绿点等于没有信息。
+ * `enabled`（用户保存的选择）与 `phase`（实际状态）是两种信息，必须都看：
+ * 「已启用但加载失败」要显示「异常」，而「用户关掉了」显示「已关闭」。
+ *
+ * ⚠️ 与 [statusBadge] 的 lambda 契约不同，这里接收的是**快照值**：调用方（总览页）
+ * 每次刷新整表重建，行本身就是不可变快照；把 phase/enabled 写成 lambda 反而会让人
+ * 误以为"行内状态会就地变化"。
+ */
+fun ViewContainer<*, *>.pluginStatusBadge(phase: String, enabled: Boolean) {
+    if (!enabled || phase == "disabled") {
+        statusBadge(state = { "idle" }, text = { "已关闭" })
+    } else {
+        when (phase) {
+            "degraded" -> statusBadge(state = { "busy" }, text = { "降级" })
+            "failed" -> statusBadge(state = { "error" }, text = { "异常" })
+            "active" -> Unit // 正常不打标
+            else -> statusBadge(state = { "idle" }, text = { phase })
+        }
+    }
+}
+
 // ===================== 顶栏 =====================
 
 /**

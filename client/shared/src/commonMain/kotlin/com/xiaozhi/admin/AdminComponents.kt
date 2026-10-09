@@ -54,6 +54,30 @@ fun ViewContainer<*, *>.dividerH() {
     }
 }
 
+/**
+ * 次级说明文字（表单 hint / 就地提示）：caption(15) 或 micro(13) 字号 + 语义色。
+ *
+ * tone：`tertiary`（默认，解释"这个字段是干什么的"）/
+ * `warn`（能构建但能力受限，如"未配 embedding → 词法模式"）/
+ * `error`（不可用/失败，如加载失败 + 怎么修）。
+ * 全站提示文字的**唯一**入口，避免每处各写一套字号与色值。
+ */
+fun ViewContainer<*, *>.textNote(text: String, tone: String = "tertiary", micro: Boolean = false) {
+    Text {
+        attr {
+            fontSize(if (micro) AdminType.micro else AdminType.caption)
+            color(
+                when (tone) {
+                    "warn" -> AdminColors.warningTintText
+                    "error" -> AdminColors.dangerTintText
+                    else -> AdminColors.textTertiary
+                },
+            )
+            text(text)
+        }
+    }
+}
+
 // ===================== 卡片 =====================
 
 /**

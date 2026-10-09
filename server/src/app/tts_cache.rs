@@ -96,6 +96,14 @@ impl TtsCache {
     }
 
     /// 当前条目数（观测/测试用）。
+    /// 清空缓存（**必需**）：TTS 引擎热切换后，缓存里是**旧引擎**产出的下行音频
+    /// （音色/采样率/语言可能都不同），继续命中会播出上一个引擎的声音。
+    pub fn clear(&self) {
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        inner.map.clear();
+        inner.order.clear();
+    }
+
     pub fn len(&self) -> usize {
         self.inner.lock().unwrap_or_else(|e| e.into_inner()).map.len()
     }
@@ -108,70 +116,4 @@ impl TtsCache {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn key(text: &str) -> u64 {
-        TtsCache::make_key("sig", 0, 1.0, 24000, 60, text)
-    }
-
-    #[test]
-    fn cache_roundtrip() {
-        let c = TtsCache::new(4);
-        c.insert(key("你好"), vec![vec![1, 2, 3]]);
-        let hit = c.get(key("你好")).expect("应命中");
-        assert_eq!(hit.opus_frames.as_slice(), &[vec![1u8, 2, 3]]);
-        assert!(c.get(key("再见")).is_none(), "未插入的键不得命中");
-    }
-
-    #[test]
-    fn key_varies_with_all_encoding_inputs() {
-        let a = TtsCache::make_key("sig", 0, 1.0, 24000, 60, "文本");
-        assert_ne!(a, TtsCache::make_key("sig2", 0, 1.0, 24000, 60, "文本"), "引擎签名");
-        assert_ne!(a, TtsCache::make_key("sig", 1, 1.0, 24000, 60, "文本"), "speaker");
-        assert_ne!(a, TtsCache::make_key("sig", 0, 1.1, 24000, 60, "文本"), "speed");
-        assert_ne!(a, TtsCache::make_key("sig", 0, 1.0, 16000, 60, "文本"), "下行采样率");
-        assert_ne!(a, TtsCache::make_key("sig", 0, 1.0, 24000, 40, "文本"), "帧长");
-        assert_ne!(a, TtsCache::make_key("sig", 0, 1.0, 24000, 60, "文本2"), "文本");
-        // 确定性：同输入同键（跨会话命中前提）
-        assert_eq!(a, TtsCache::make_key("sig", 0, 1.0, 24000, 60, "文本"));
-    }
-
-    #[test]
-    fn lru_evicts_oldest_and_touches_on_hit() {
-        let c = TtsCache::new(2);
-        c.insert(key("a"), vec![vec![1]]);
-        c.insert(key("b"), vec![vec![2]]);
-        let _ = c.get(key("a")); // touch a → b 变最旧
-        c.insert(key("c"), vec![vec![3]]); // 逐出 b
-        assert!(c.get(key("a")).is_some());
-        assert!(c.get(key("b")).is_none(), "最旧且未被 touch 的应被逐出");
-        assert!(c.get(key("c")).is_some());
-    }
-
-    #[test]
-    fn zero_capacity_disables() {
-        let c = TtsCache::new(0);
-        c.insert(key("a"), vec![vec![1]]);
-        assert!(c.get(key("a")).is_none(), "容量 0 = 禁用");
-        assert_eq!(c.len(), 0);
-    }
-
-    #[test]
-    fn empty_frames_not_cached() {
-        let c = TtsCache::new(4);
-        c.insert(key("a"), vec![]);
-        assert!(c.get(key("a")).is_none(), "空帧序列不值得占条目");
-    }
-
-    #[test]
-    fn overwrite_refreshes_same_key() {
-        let c = TtsCache::new(2);
-        c.insert(key("a"), vec![vec![1]]);
-        c.insert(key("b"), vec![vec![2]]);
-        c.insert(key("a"), vec![vec![9]]); // 覆盖 a，不新增条目、不逐出自己
-        assert_eq!(c.len(), 2);
-        let hit = c.get(key("a")).unwrap();
-        assert_eq!(hit.opus_frames.as_slice(), &[vec![9u8]]);
-    }
-}
+mod tests;

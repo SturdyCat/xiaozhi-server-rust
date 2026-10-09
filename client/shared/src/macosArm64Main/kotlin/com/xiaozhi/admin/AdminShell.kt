@@ -33,6 +33,9 @@ class AdminShell : Pager() {
     val conn = ConnectState(this)
     val bench = TestBenchState(this)
     val form = ConfigFormState(this)
+
+    /** 能力总览的数据源（`GET /api/plugins`，只读）。 */
+    val plugins = PluginMetaState(this)
     var selectedSection by observable("testbench")
 
     /** 顶部 toast（跨端统一实现：状态 + 渲染见 commonMain 的 ToastState / ToastHost）。 */
@@ -143,6 +146,13 @@ class AdminShell : Pager() {
                                 if (ctx.selectedSection == "config") "配置" else "测试台"
                             },
                             trailing = {
+                                vif({ ctx.selectedSection == "config" && ctx.form.conflict }) {
+                                    // 过期写入（409）：草稿保留，给一个「重新加载」出口
+                                    secondaryButton("重新加载") {
+                                        ctx.form.reload(ctx, ctx.conn.baseUrl)
+                                    }
+                                    View { attr { width(AdminSpace.sm) } }
+                                }
                                 vif({ ctx.selectedSection == "config" || ctx.selectedSection == "testbench" }) {
                                     // 三态按钮：saving 时菊花 + 灰底 + 拦截点击（loading 在 attr/event 闭包内实时读取，保存期间不会重复提交）。
                                     primaryButton(
@@ -172,6 +182,7 @@ class AdminShell : Pager() {
                         vif({ ctx.selectedSection == "config" }) {
                             renderForm(
                                 ctx.form,
+                                ctx.plugins,
                                 ctx,
                                 pageWidth = contentPageWidth,
                                 pageHeight = contentPageHeight,

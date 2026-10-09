@@ -5,6 +5,11 @@
 //! - `GET /api/health`：健康检查，返回 JSON（status/name/version）。
 //! - `GET /api/ws`：WebSocket 会话入口（先 [`auth_ok`] 鉴权，再 [`handle_handshake`] 协商）。
 //! - `GET/PUT/POST /api/config`：管理页面读写当前配置（语义见下）。
+//! - `GET /api/plugins`：能力清单 + 实际状态（`enabled`/`phase`/`last_error`）。
+//! - `GET /api/config/schema`：各能力/实现的字段元数据（类型/默认值提示/热生效语义/密钥标记）。
+//! - `GET /api/usage` / `GET /api/session/{id}/usage`：令牌用量（成本与上下文膨胀观测）。
+//! - `GET /api/memory/status` + `POST /api/memory/{recall,maintain,clear}`：图记忆的状态、
+//!   当场试召回（"记忆到底有没有在工作"的反馈）、立即维护与清空。
 //! - `GET/POST /api/ota(/)`：小智固件 OTA 引导（返回 websocket 接入信息 + 校时 + 版本，
 //!   契约见 [`ota`]；固件侧把 OTA_URL 指到本服务即自动接入，无需硬编码 WS 地址）。
 //! - 其余路径：静态托管 `[server].admin_dir`（h5App 构建产物，含 `index.html`）；
@@ -17,10 +22,12 @@
 //!
 //! ## `/api/config` 读写语义
 //! - `GET`：若启动指定了配置文件则实时读盘，否则返回内存中的内置默认配置（/data/models 生产路径）。
-//! - `PUT`/`POST`：写回启动加载的配置文件（TOML，**原注释会被覆盖丢失**）。
-//!   内置默认启动、`config_path` 为 `None` 时返回 400（无法持久化）。
-//! - ⚠️ 引擎相关参数（ASR/TTS/LLM）在启动时构建，改配置后**需重启 server** 才生效；
-//!   仅 `[server]` 部分（监听 / token / 管理页目录）下次启动生效。
+//! - `PUT`/`POST`：**部分更新**——只覆盖请求中出现的字段，未出现的保持现盘值
+//!   （显式 `null` = 清除该字段，回落 serde 默认值）；写回启动加载的配置文件
+//!   （TOML，**原注释会被覆盖丢失**）。内置默认启动、`config_path` 为 `None` 时返回 400。
+//! - 生效时机：TTS 引擎参数在**新会话**开始时按盘上配置热切换
+//!   （[`crate::engine::Engines::refresh_from_disk`]，经 `spawn_blocking`）；
+//!   ASR 模型、监听地址、token、管理页目录等仍需重启 server。
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -43,11 +50,17 @@ use crate::app::session::{run_session, send_text, SessionParams};
 use crate::app::transport::{IncomingFrame, Transport, WsTransport};
 
 mod config;
+mod memory;
 mod ota;
+mod plugins;
+mod usage;
 use config::{config_meta, get_config, put_config};
+use memory::{memory_clear, memory_maintain, memory_recall, memory_status};
 // 插件维护
 pub(crate) use config::config_is_persistent;
 use ota::ota;
+use plugins::{config_schema, list_plugins};
+use usage::{session_usage, usage};
 
 /// 构造 Axum 路由：API（健康检查 / WebSocket）之外，其余路径静态托管
 /// `config.server.admin_dir` 指向的管理页面（h5App 构建产物，含 index.html）。
@@ -61,6 +74,17 @@ pub fn router(engines: Arc<Engines>) -> Router {
         .route("/api/config", get(get_config).put(put_config).post(put_config))
         // 配置来源元信息（macApp 显示"配置文件路径 + 是否持久化"，排查配置丢失去向）
         .route("/api/config/meta", get(config_meta))
+        // 能力清单 + 状态（enabled/phase/last_error）与字段元数据（配置页据此校验/提示）
+        .route("/api/plugins", get(list_plugins))
+        .route("/api/config/schema", get(config_schema))
+        // 记忆：状态 / 测试召回 / 立即维护 / 清空（"记忆开了没用"的当场验证入口）
+        .route("/api/memory/status", get(memory_status))
+        .route("/api/memory/recall", axum::routing::post(memory_recall))
+        .route("/api/memory/maintain", axum::routing::post(memory_maintain))
+        .route("/api/memory/clear", axum::routing::post(memory_clear))
+        // 令牌用量：全局 + 单会话（回答"成本"与"上下文膨胀"）
+        .route("/api/usage", get(usage))
+        .route("/api/session/{id}/usage", get(session_usage))
         // 小智固件的 OTA 引导端点（带/不带尾斜杠都注册：固件配置的 URL 以 / 结尾）。
         // ⚠️ 所有接口必须在 /api 之下（接口规范），固件 OTA_URL 指到 /api/ota/ 即可——
         // 该地址完全可配置，无需对齐官方服务器的 /xiaozhi/ota/ 路径。
@@ -209,7 +233,15 @@ async fn handle_handshake(
             engines.config.audio.binary_protocol_version,
         );
     }
-    run_session(&mut transport, engines, params, session_id, hello.test).await
+    run_session(
+        &mut transport,
+        engines,
+        params,
+        session_id,
+        device_id.to_string(),
+        hello.test,
+    )
+    .await
 }
 
 async fn recv_hello<T: Transport>(transport: &mut T) -> anyhow::Result<ClientHello> {

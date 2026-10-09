@@ -43,6 +43,9 @@ class ConfigFormState(private val scope: PagerScope) {
     var downlinkFrameMs by scope.observable("60")
     var channels by scope.observable("1")
     var binaryProtocolVersion by scope.observable("1")
+    /// 下行抖动缓冲提前量（毫秒）：下发时间表比实时提前该时长，使 ESP 解码队列常备音频存货。
+    /// ⚠️ 上限建议 ≤400ms（固件解码队列 20 包 ≈1.2s；越大打断响应越迟钝）。
+    var downlinkLeadMs by scope.observable("240")
 
     // ===== [asr] =====（无 mock：ASR 恒为 SenseVoice，无 backend 字段）
     var asrModel by scope.observable("")
@@ -62,8 +65,9 @@ class ConfigFormState(private val scope: PagerScope) {
     /// 当前合成方式："local"（本地模型，离线）| "remote"（远程服务，在线）。
     /// 与 [ttsBackend] 联动：切方式时 backend 跟随切到对应组的引擎/服务商。
     var ttsMode by scope.observable("local")
-    /// 当前生效的引擎/服务商 id（本地组：sherpa…；远程组：xfyun…）。
-    var ttsBackend by scope.observable("sherpa")
+    /// 当前生效的引擎/服务商 id（= 服务端 `[tts].engine`；本地组：kokoro…；远程组：xfyun…）。
+    /// ⚠️ P4 前本地组叫 "sherpa"（旧 config.toml 的 `backend` 值），服务端仍认，这里统一为 "kokoro"。
+    var ttsBackend by scope.observable("kokoro")
     /// 上次使用的远程服务商（切回「远程」时恢复，默认 xfyun）。
     var lastRemoteEngine by scope.observable("xfyun")
     var ttsModel by scope.observable("")
@@ -75,12 +79,20 @@ class ConfigFormState(private val scope: PagerScope) {
     var ttsLang by scope.observable("zh")
     var ttsSpeaker by scope.observable("0")
     var ttsSpeed by scope.observable("1.0")
-    var ttsNumThreads by scope.observable("1")
+    var ttsNumThreads by scope.observable("4")
+    /// TTS 结果缓存条目数（按句缓存已编码下行 Opus 帧，跨会话共享；命中零合成延迟）。0 = 关闭。
+    var ttsCacheEntries by scope.observable("256")
 
-    // ===== [tts.xfyun] =====（backend=xfyun 时使用；讯飞开放平台「在线语音合成」控制台获取）
+    // ===== [tts.xfyun] =====（engine=xfyun 时使用；讯飞开放平台「在线语音合成」控制台获取）
     var xfyunAppId by scope.observable("")
     var xfyunApiKey by scope.observable("")
     var xfyunApiSecret by scope.observable("")
+    /**
+     * 密钥 **presence**：服务端 GET /api/config 已打码，只回 `has_api_key` / `has_api_secret`。
+     * 明文永不进表单，输入框留空 = 「不修改盘上已存值」；为 true 时提示「已配置」。
+     */
+    var xfyunApiKeyConfigured by scope.observable(false)
+    var xfyunApiSecretConfigured by scope.observable(false)
     var xfyunVoice by scope.observable("xiaoyan")
 
     /** 拉取目录/刷新用的服务器地址（连接流程写入；空=当前页同源）。 */
@@ -94,9 +106,12 @@ class ConfigFormState(private val scope: PagerScope) {
     /** 配置来源提示（配置文件路径 + 持久化状态；Server 配置卡展示）。 */
     var configMetaMsg by scope.observable("")
 
-    /** 讯飞三要素是否填齐——决定依赖凭据的音色选择区是否显示。 */
+    /** 讯飞三要素是否就绪——决定依赖凭据的音色选择区是否显示。
+     *  密钥可能只以 presence 形式存在（打码后表单里是空的），此时同样算就绪。 */
     fun xfyunCredsReady(): Boolean =
-        xfyunAppId.isNotBlank() && xfyunApiKey.isNotBlank() && xfyunApiSecret.isNotBlank()
+        xfyunAppId.isNotBlank() &&
+            (xfyunApiKey.isNotBlank() || xfyunApiKeyConfigured) &&
+            (xfyunApiSecret.isNotBlank() || xfyunApiSecretConfigured)
 
     // 音色两级选择：性别分组（女/男/自定义）× 音色类型（全部/普通/极速拟人）。
     // 音色列表经 /api/tts/voices 从服务端动态获取（服务端为唯一数据源：实测目录+控制台元数据）。
@@ -118,23 +133,55 @@ class ConfigFormState(private val scope: PagerScope) {
     // ===== [llm] =====（无 mock：LLM 恒为 OpenAI 兼容 HTTP，无 backend 字段）
     var llmApiBase by scope.observable("")
     var llmApiKey by scope.observable("")
+    /** 密钥 presence（服务端打码，只回 `has_api_key`）；见 xfyun 同名说明。 */
+    var llmApiKeyConfigured by scope.observable(false)
     var llmModel by scope.observable("")
     var llmSystemPrompt by scope.observable("")
     var llmMaxHistory by scope.observable("10")
     var llmTemperature by scope.observable("0.7")
     var llmStream by scope.observable("true")
 
+    // ===== [aiui] =====（全链路极速超拟人：VAD 切段 → 讯飞 AIUI 云端 ASR+LLM+TTS 闭环）
+    // ⚠️ 启用后设备流水线走云端闭环，**本地 ASR/LLM/TTS 全部闲置**（`[soul]`/`[memory]` 亦不生效）。
+    var aiuiEnabled by scope.observable("false")
+    var aiuiAppid by scope.observable("")
+    var aiuiApiKey by scope.observable("")
+    var aiuiApiSecret by scope.observable("")
+    /** 密钥 presence（服务端打码，只回 `has_api_key` / `has_api_secret`）。 */
+    var aiuiApiKeyConfigured by scope.observable(false)
+    var aiuiApiSecretConfigured by scope.observable(false)
+    var aiuiScene by scope.observable("main_box")
+    var aiuiSnPrefix by scope.observable("xiaozhi")
+    var aiuiVoice by scope.observable("x6_dongmanshaonv_pro")
+    var aiuiSpeed by scope.observable("50")
+    var aiuiVolume by scope.observable("50")
+    var aiuiPitch by scope.observable("50")
+    var aiuiPrompt by scope.observable("")
+    var aiuiPaceMs by scope.observable("10")
+
+    // ===== [soul] / [memory]：上下文生产者（拆到 ConfigContextState，见 AGENTS.md §5.10）=====
+    /// 人格档案与图记忆的表单状态 + 记忆动作（状态查询/测试召回/维护/清空）。
+    val sm = ContextSectionState(scope)
+
+    /// 字段元数据（`GET /api/config/schema`）：目前用于「这个字段多久生效」提示（见 FormSchemaState）。
+    val schema = FormSchemaState(scope)
+
     // ===== 状态 =====
+    /// 服务端配置内容指纹（GET /api/config 的 `revision`）：保存时回传，用于拒绝**过期写入**。
+    /// 两个标签页/两个端同时打开表单时，后保存者会拿到 409 而不是静默覆盖前者的改动。
+    var revision by scope.observable("")
     var dirty by scope.observable(false)
     var saving by scope.observable(false)
     var statusMsg by scope.observable("")
     var statusLevel by scope.observable("info")
     var lastSavedAt by scope.observable("")
+    /// 上次保存因**过期写入（409）**被拒：顶栏显示「重新加载」入口（草稿保留）。
+    var conflict by scope.observable(false)
 
-    /** 配置页标签页 UI 状态（Server/Audio/ASR/VAD/TTS/LLM 六个 tab，见 renderForm）。 */
+    /** 配置页标签页 UI 状态（Server/Audio/ASR/VAD/TTS/LLM/AIUI/灵魂/记忆 九个 tab，见 renderForm）。 */
     val tabUi = TabUiState(scope)
 
-    /** 当前展开的下拉（TTS backend 选择等，"" = 全部收起）；放状态类避免 Pager body 重建丢失展开态。 */
+    /** 当前展开的下拉（TTS engine 选择等，"" = 全部收起）；放状态类避免 Pager body 重建丢失展开态。 */
     var openDropdown by scope.observable("")
 
     // ============================================================
@@ -154,7 +201,7 @@ class ConfigFormState(private val scope: PagerScope) {
                 "remote" to "远程服务（在线 API）",
             ),
         )
-        ttsLocalEngines.addAll(listOf("sherpa" to "本地 Kokoro INT8（离线）"))
+        ttsLocalEngines.addAll(listOf("kokoro" to "本地 Kokoro INT8（离线）"))
         xfyunVoiceGroupOptions.addAll(
             listOf(
                 "female" to "女声",
@@ -223,7 +270,7 @@ class ConfigFormState(private val scope: PagerScope) {
     }
 
     /** 依已拉取目录反推当前 vcn 的性别分组与音色类型；目录未拉取时按前缀启发。 */
-    private fun deriveVoiceGroupAndType() {
+    internal fun deriveVoiceGroupAndType() {
         val v = xfyunVoice
         val inList: (ObservableList<Pair<String, String>>) -> Boolean = { l -> l.any { it.first == v } }
         when {
@@ -375,6 +422,9 @@ class ConfigFormState(private val scope: PagerScope) {
                 fill(data)
                 loadVoices(ctx, baseUrl)
                 loadConfigMeta(ctx, baseUrl)
+                // 字段热生效元数据（用于"这个字段多久生效"提示；失败静默）
+                schema.load(ctx, baseUrl)
+                conflict = false
                 statusMsg = "已加载配置"
                 statusLevel = "ok"
             } else {
@@ -382,6 +432,13 @@ class ConfigFormState(private val scope: PagerScope) {
                 statusLevel = "error"
             }
         }
+    }
+
+    /// 「重新加载」：409 冲突后按服务端现值重填表单（放弃本地草稿）。
+    fun reload(ctx: Pager, baseUrl: String = "") {
+        dirty = false
+        conflict = false
+        load(ctx, baseUrl)
     }
 
     fun save(ctx: Pager, baseUrl: String = "") {
@@ -398,6 +455,7 @@ class ConfigFormState(private val scope: PagerScope) {
                 put("downlink_frame_duration_ms", downlinkFrameMs.toIntOrNull() ?: 60)
                 put("channels", channels.toIntOrNull() ?: 1)
                 put("binary_protocol_version", binaryProtocolVersion.toIntOrNull() ?: 1)
+                put("downlink_lead_ms", downlinkLeadMs.toIntOrNull() ?: 240)
             })
             put("asr", JSONObject().apply {
                 put("model", asrModel)
@@ -414,27 +472,34 @@ class ConfigFormState(private val scope: PagerScope) {
                 put("min_speech_duration", vadMinSpeech.toDoubleOrNull() ?: 0.25)
             })
             put("tts", JSONObject().apply {
-                put("backend", ttsBackend)
-                put("model", ttsModel)
-                put("voices", ttsVoices)
-                put("tokens", ttsTokens)
-                put("data_dir", ttsDataDir)
-                put("dict_dir", ttsDictDir)
-                put("lexicon", ttsLexicon)
-                put("lang", ttsLang)
+                // P4 配置约定：`engine` 选实现；实现私有参数进 `[tts.<id>]` 子段；
+                // 跨实现通用项（音色槽/语速/缓存）留在本体。
+                put("engine", ttsBackend)
                 put("speaker", ttsSpeaker.toIntOrNull() ?: 0)
                 put("speed", ttsSpeed.toDoubleOrNull() ?: 1.0)
-                put("num_threads", ttsNumThreads.toIntOrNull() ?: 1)
+                put("cache_entries", ttsCacheEntries.toIntOrNull() ?: 256)
+                put("kokoro", JSONObject().apply {
+                    put("model", ttsModel)
+                    put("voices", ttsVoices)
+                    put("tokens", ttsTokens)
+                    put("data_dir", ttsDataDir)
+                    put("dict_dir", ttsDictDir)
+                    put("lexicon", ttsLexicon)
+                    put("lang", ttsLang)
+                    put("num_threads", ttsNumThreads.toIntOrNull() ?: 4)
+                })
                 put("xfyun", JSONObject().apply {
                     put("app_id", xfyunAppId)
-                    put("api_key", xfyunApiKey)
-                    put("api_secret", xfyunApiSecret)
+                    // 密钥：留空 = 「不修改盘上已存值」（服务端对空串按未修改处理；这里直接不发）
+                    putSecret("api_key", xfyunApiKey)
+                    putSecret("api_secret", xfyunApiSecret)
                     put("voice", xfyunVoice)
                 })
             })
             put("llm", JSONObject().apply {
                 put("api_base", llmApiBase)
-                put("api_key", llmApiKey)
+                // 打码后表单里没有明文：留空 = 不修改（不发送该字段）
+                putSecret("api_key", llmApiKey)
                 put("model", llmModel)
                 put("system_prompt", llmSystemPrompt)
                 put("max_history", llmMaxHistory.toIntOrNull() ?: 10)
@@ -443,6 +508,30 @@ class ConfigFormState(private val scope: PagerScope) {
                 // 手工在 TOML 里设的 stream=false 经 UI 保存一次就会丢。
                 put("stream", llmStream.toBooleanStrictOrNull() ?: true)
             })
+            // [soul] / [memory]：上下文生产者（P6）。与其它段一样**必须整段回传**：
+            // 后端虽是部分更新语义，但前端不回传就等于"这个段在 UI 里不可配置"。
+            sm.putJson(this)
+            // [aiui]：此前管理页**完全没有这个段**，保存一次就把它静默关掉（后端已改为部分更新
+            // 兜底；这里补齐前端，使全链路模式可在 UI 里配置与保留）。
+            put("aiui", JSONObject().apply {
+                put("enabled", aiuiEnabled.toBooleanStrictOrNull() ?: false)
+                put("appid", aiuiAppid)
+                putSecret("api_key", aiuiApiKey)
+                putSecret("api_secret", aiuiApiSecret)
+                put("scene", aiuiScene)
+                put("sn_prefix", aiuiSnPrefix)
+                put("voice", aiuiVoice)
+                put("speed", aiuiSpeed.toIntOrNull() ?: 50)
+                put("volume", aiuiVolume.toIntOrNull() ?: 50)
+                put("pitch", aiuiPitch.toIntOrNull() ?: 50)
+                put("prompt", aiuiPrompt)
+                put("pace_ms", aiuiPaceMs.toIntOrNull() ?: 10)
+            })
+        }
+        // 乐观并发控制：回传上次 GET 的指纹；服务端发现已变化则 409（不覆盖别人的改动）
+        val sendRevision = revision
+        if (sendRevision.isNotEmpty()) {
+            body.put("expected_revision", sendRevision)
         }
         // ⚠️ 必须显式带 Content-Type: application/json：
         // Kuikly 的 requestPost 默认 headers=null，原生 KRHttpRequestTool 在非 JSON
@@ -459,83 +548,38 @@ class ConfigFormState(private val scope: PagerScope) {
             val serverMsg = data?.optString("message", "") ?: ""
             if (success && (code == null || code in 200..299)) {
                 dirty = false
+                conflict = false
                 lastSavedAt = "已保存"
-                statusMsg = serverMsg.ifEmpty { "保存成功（引擎参数需重启生效）" }
+                // 服务端回传新指纹：无需再 GET 即可继续保存
+                revision = data?.optString("revision", revision) ?: revision
+                // 三档生效文案由**服务端**判定（字段级 hot 取最严格，见 docs §5.4-6）：
+                // 客户端只做翻译，避免"说立即生效、其实要重启"这类误导。
+                val hotText = when (data?.optString("hot", "") ?: "") {
+                    "live" -> "已保存并立即生效"
+                    "next_session" -> "已保存，新会话生效"
+                    "restart_only" -> "已保存，下次启动生效"
+                    else -> ""
+                }
+                statusMsg = if (hotText.isEmpty()) {
+                    serverMsg.ifEmpty { "保存成功（新会话生效）" }
+                } else {
+                    "$hotText。$serverMsg"
+                }
                 statusLevel = "ok"
                 // 三要素已填齐时：保存即自动触发音色探测（目录为空或想更新时最省事；失败不影响保存）
                 if (xfyunCredsReady()) {
                     refreshVoices(ctx)
                 }
+            } else if (code == 409) {
+                // 过期写入：**保留草稿**（dirty 不动），顶栏出现「重新加载」入口
+                dirty = true
+                conflict = true
+                statusMsg = serverMsg.ifEmpty { "配置已被其他窗口修改，请重新加载后再保存" }
+                statusLevel = "error"
             } else {
                 statusMsg = "保存失败: ${serverMsg.ifEmpty { if (errorMsg.isNotEmpty()) errorMsg else "HTTP $code" }}"
                 statusLevel = "error"
             }
-        }
-    }
-
-    /**
-     * 用服务端 /api/config 回包填充表单（公开：macOS ConnectState 连接流程自行 GET 后调用，
-     * 以便同时提取 expected_token 供 WS 鉴权；load() 内部也走这里）。
-     */
-    fun fill(obj: JSONObject) {
-        obj.optJSONObject("server")?.let { s ->
-            port = s.optInt("port", port.toIntOrNull() ?: 8000).toString()
-            expectedToken = s.optString("expected_token", expectedToken)
-            workerThreads = s.optInt("worker_threads", workerThreads.toIntOrNull() ?: 2).toString()
-            adminDir = s.optString("admin_dir", adminDir)
-        }
-        obj.optJSONObject("audio")?.let { a ->
-            downlinkSampleRate = a.optInt("downlink_sample_rate", downlinkSampleRate.toIntOrNull() ?: 24000).toString()
-            downlinkFrameMs = a.optInt("downlink_frame_duration_ms", downlinkFrameMs.toIntOrNull() ?: 60).toString()
-            channels = a.optInt("channels", channels.toIntOrNull() ?: 1).toString()
-            binaryProtocolVersion = a.optInt("binary_protocol_version", binaryProtocolVersion.toIntOrNull() ?: 1).toString()
-        }
-        obj.optJSONObject("asr")?.let { a ->
-            asrModel = a.optString("model", asrModel)
-            asrTokens = a.optString("tokens", asrTokens)
-            asrLanguage = a.optString("language", asrLanguage)
-            asrUseItn = a.optBoolean("use_itn", asrUseItn.toBooleanStrictOrNull() ?: true).toString()
-            asrNumThreads = a.optInt("num_threads", asrNumThreads.toIntOrNull() ?: 2).toString()
-            asrProvider = a.optString("provider", asrProvider)
-        }
-        obj.optJSONObject("vad")?.let { v ->
-            vadModel = v.optString("model", vadModel)
-            vadThreshold = v.optDouble("threshold", vadThreshold.toDoubleOrNull() ?: 0.5).toString()
-            vadMinSilence = v.optDouble("min_silence_duration", vadMinSilence.toDoubleOrNull() ?: 0.25).toString()
-            vadMinSpeech = v.optDouble("min_speech_duration", vadMinSpeech.toDoubleOrNull() ?: 0.25).toString()
-        }
-        obj.optJSONObject("tts")?.let { t ->
-            ttsBackend = t.optString("backend", ttsBackend)
-            ttsMode = if (ttsEngineIsRemote(ttsBackend)) "remote" else "local"
-            if (ttsMode == "remote") lastRemoteEngine = ttsBackend // 记住远程服务商，切回时恢复
-            ttsModel = t.optString("model", ttsModel)
-            ttsVoices = t.optString("voices", ttsVoices)
-            ttsTokens = t.optString("tokens", ttsTokens)
-            ttsDataDir = t.optString("data_dir", ttsDataDir)
-            ttsDictDir = t.optString("dict_dir", ttsDictDir)
-            ttsLexicon = t.optString("lexicon", ttsLexicon)
-            ttsLang = t.optString("lang", ttsLang)
-            ttsSpeaker = t.optInt("speaker", ttsSpeaker.toIntOrNull() ?: 0).toString()
-            ttsSpeed = t.optDouble("speed", ttsSpeed.toDoubleOrNull() ?: 1.0).toString()
-            ttsNumThreads = t.optInt("num_threads", ttsNumThreads.toIntOrNull() ?: 1).toString()
-            t.optJSONObject("xfyun")?.let { x ->
-                xfyunAppId = x.optString("app_id", xfyunAppId)
-                xfyunApiKey = x.optString("api_key", xfyunApiKey)
-                xfyunApiSecret = x.optString("api_secret", xfyunApiSecret)
-                xfyunVoice = x.optString("voice", xfyunVoice)
-                // 按已存音色反推分组：不在预置目录 → 自定义（手填）
-                deriveVoiceGroupAndType()
-                reloadXfyunVoiceOptions()
-            }
-        }
-        obj.optJSONObject("llm")?.let { l ->
-            llmApiBase = l.optString("api_base", llmApiBase)
-            llmApiKey = l.optString("api_key", llmApiKey)
-            llmModel = l.optString("model", llmModel)
-            llmSystemPrompt = l.optString("system_prompt", llmSystemPrompt)
-            llmMaxHistory = l.optInt("max_history", llmMaxHistory.toIntOrNull() ?: 10).toString()
-            llmTemperature = l.optDouble("temperature", llmTemperature.toDoubleOrNull() ?: 0.7).toString()
-            llmStream = l.optBoolean("stream", llmStream.toBooleanStrictOrNull() ?: true).toString()
         }
     }
 

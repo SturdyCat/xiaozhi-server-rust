@@ -1,7 +1,7 @@
 //! Kokoro INT8 离线合成器（sherpa-onnx）——TTS 插件的本地实现。
 //! `#[cfg(feature = "sherpa")]`：仅在启用 sherpa feature 的构建中存在。
 
-use super::TtsConfig;
+use super::KokoroTtsConfig;
 use anyhow::{Context, Result};
 use std::sync::Arc;
 
@@ -15,7 +15,7 @@ pub struct SherpaTts {
 
 #[cfg(feature = "sherpa")]
 impl SherpaTts {
-    pub fn new(cfg: &TtsConfig) -> Result<Self> {
+    pub fn new(cfg: &KokoroTtsConfig) -> Result<Self> {
         use sherpa_onnx::{
             OfflineTtsConfig, OfflineTtsKokoroModelConfig, OfflineTtsModelConfig,
         };
