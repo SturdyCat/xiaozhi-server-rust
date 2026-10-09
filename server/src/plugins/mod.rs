@@ -30,9 +30,16 @@
 //!
 //! 三者的产物经 [`prompt::TurnPrompt`] 交给 LLM（`instructions` = 稳定前缀，
 //! 记忆块按 `inject_position` 插入 `input[]`）。
+//!
+//! ## 指令闸门（`[command]`）
+//!
+//! [`command`] 是 ASR → LLM **之间**的一道拦截（不是上下文生产者，也调不到 LLM）：
+//! 识别文本归一化后按指令词表匹配（`exact` 默认 / `contains` 可选），命中即由会话层
+//! 说一句告别语并**断开本次会话**。默认关闭，关闭时零开销、行为与加它之前完全一致。
 
 pub mod aiui;
 pub mod asr;
+pub mod command;
 pub mod host;
 pub mod llm;
 pub mod memory;

@@ -21,6 +21,7 @@
 - **Feature 门控**：`default`（无真实引擎，仅供 `cargo check/test` 编译；运行必须 `--features sherpa`）；`sherpa`（引入 `sherpa-onnx` / `audiopus` / `rubato`，真实引擎）。
 - **无 mock**：ASR 恒为 SenseVoice、TTS 恒为 Kokoro、LLM 恒为 OpenAI 兼容 HTTP、VAD 恒为 Silero——ESP 接入走完整正式流水线；macApp 测试台连接带 `hello.test=true`，走 `asr_test`/`tts_test`/`llm_test` 三个独立服务请求-响应端点。
 - 可选 Bearer Token 鉴权（配置 `server.expected_token`）。
+- **语音指令闸门**（可选，`[command]`）：ASR 识别结果在送进 LLM **之前**按指令词匹配（默认「退下 / 闭嘴 / 关闭」），命中即先说一句可配置的告别语，随后**断开本次会话**——不调用大模型、不产生回复开销。只对短话生效（默认 ≤ 5 个字，`max_chars` 可调）：长句携带信息，直接交给大模型。默认关闭。
 
 ---
 
@@ -70,6 +71,9 @@ cd server && ~/.cargo/bin/cargo run -- --config config.toml
 - `audio.binary_protocol_version`：下行二进制协议版本（1/2/3）。**建议先用 1 真机验证，再切 2/3。**
 - `llm.api_base` / `api_key` / `model` / `system_prompt`：OpenAI 兼容 Responses API（LLM 恒为真实 HTTP，无 mock）。
 - `tts.backend`：`sherpa`（本地 Kokoro INT8，默认）或 `xfyun`（科大讯飞在线合成，需在 `[tts.xfyun]` 填 app_id/api_key/api_secret/voice）。
+- `command.enabled` / `keywords` / `match_mode` / `max_chars` / `reply`：语音指令闸门（ASR → LLM 之间）。开启后识别到指令词（默认「退下 / 闭嘴 / 关闭」）会先说 `reply` 再断开本次会话，跳过 LLM。
+  `match_mode = "exact"`（默认）要求整句相等——识别文本会先去标点并剥掉句末语气词（「退下吧。」≡「退下」），因此**不会**把「关闭闹钟」误判为关机；改成 `"contains"` 才是"句中出现即命中"。
+  `max_chars = 5`（默认）是**长度闸门**：归一化后超过这么多字的识别文本一律不做指令判断、直接交给大模型——「帮我关闭卧室的灯」含「关闭」但不会被断线；`0` = 不限制。注意指令词本身长于 `max_chars` 时会永远命中不了，保存时会被拦下提示。保存后**新会话**生效。
 
 
 ---

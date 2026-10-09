@@ -53,6 +53,15 @@ pub trait Transport: Send {
     /// 承载层保活。WS 实现发 Ping（tungstenite 自动回 Pong）；
     /// 自带心跳机制的承载（如 MQTT）留空即可。
     fn keepalive(&mut self) -> impl Future<Output = ()> + Send;
+
+    /// **主动断开**承载（会话级命令：指令闸门说完告别语后主动结束本次会话）。
+    ///
+    /// 与 `recv` 返回 [`IncomingFrame::Closed`]（对端断开）区分：这里是本端发起关闭。
+    /// WS 实现发关闭帧并置粘滞 `closed`；其他承载（MQTT/本机通道）按各自协议关闭即可，
+    /// 默认实现留空（仅丢弃会话 = 连接随 `Transport` 释放而关闭）。
+    fn close(&mut self) -> impl Future<Output = ()> + Send {
+        async {}
+    }
 }
 
 /// [`Transport`] 的 WebSocket 实现（xiaozhi 设备与 macApp 测试台共用）。
@@ -132,6 +141,16 @@ impl Transport for WsTransport {
 
     async fn keepalive(&mut self) {
         let _ = self.socket.send(Message::Ping("ping".into())).await;
+    }
+
+    /// 主动关闭：发关闭帧 → 置粘滞 `closed`（此后 recv/try_recv 恒报 `Closed`，
+    /// 与"对端断开"同一条语义，轮询方不会把半关闭误判为安静）。
+    async fn close(&mut self) {
+        if self.closed {
+            return;
+        }
+        self.closed = true;
+        let _ = self.socket.send(Message::Close(None)).await;
     }
 }
 

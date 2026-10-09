@@ -271,3 +271,65 @@ fn schema_json_shape() {
         assert_ne!(s["hot"], "live", "应用级段不可能是「保存即生效」: {s}");
     }
 }
+
+/// 指令闸门（`[command]`）的注册表语义护栏。
+///
+/// 它有两个"必须"：① 默认不选中（加插件不许改变现有部署行为）；
+/// ② 启用后必须**新会话生效**且**字段档位有出处**（否则管理页永远显示"需重启"，属静默不正确）。
+/// 坏配置（启用但词表为空）只能降级、不能拖垮语音服务，因此也不能是必需能力。
+#[test]
+fn command_gate_is_optional_and_hot_reloadable() {
+    let mut cfg = Config::default();
+    assert!(!cfg.command.enabled, "指令闸门默认必须关闭");
+    assert_eq!(active_impl(&cfg, Capability::Command), None);
+    assert!(
+        !Capability::Command.required() && !Capability::Command.fatal_if_enabled(),
+        "可选能力：坏配置只降级，不阻止启动"
+    );
+
+    cfg.command.enabled = true;
+    assert_eq!(active_impl(&cfg, Capability::Command), Some("command.gate"));
+    let d = find("command.gate").expect("应注册 command.gate");
+    (d.validate)(&cfg).unwrap_or_else(|e| panic!("默认词表应通过校验: {e:#}"));
+    assert_eq!(d.hot, HotReload::NextSession);
+    // 字段级档位：改 enabled/keywords 都是"新会话生效"（`POST /api/config` 的 hot 据此判定）
+    assert_eq!(
+        field_hot(&["command", "enabled"]),
+        Some(HotReload::NextSession)
+    );
+    assert_eq!(
+        field_hot(&["command", "keywords"]),
+        Some(HotReload::NextSession)
+    );
+    // 长度闸门同样必须是"新会话生效"（漏了它管理页会永远显示"需重启"）
+    assert_eq!(
+        field_hot(&["command", "max_chars"]),
+        Some(HotReload::NextSession)
+    );
+    assert_eq!(section_hot("command"), HotReload::NextSession);
+
+    // 启用但词表为空 = 闸门不生效：必须能被说成"配置问题"（而不是静默不拦）
+    cfg.command.keywords.clear();
+    let err = (d.validate)(&cfg).unwrap_err().to_string();
+    assert!(err.contains("keywords"), "{err}");
+
+    // schema 必须把这张卡的字段暴露出去（管理页「指令」页签的数据源）
+    let v = schema_json();
+    let cmd = v["capabilities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["id"] == "command")
+        .expect("schema 应包含 command 能力");
+    let keys: Vec<&str> = cmd["implementations"][0]["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|f| f["key"].as_str())
+        .collect();
+    assert_eq!(
+        keys,
+        vec!["enabled", "keywords", "match_mode", "max_chars", "reply"],
+        "{keys:?}"
+    );
+}

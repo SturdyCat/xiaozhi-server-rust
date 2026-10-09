@@ -60,20 +60,21 @@ class ConfigPage : Pager() {
                     }
                     View { attr { width(AdminSpace.sm) } }
                 }
-                // 三态按钮：saving 时菊花 + 灰底 + 拦截点击，保存期间不会重复提交。
+                // 三态按钮：saving → 「保存中…」灰底拦截点击；接口返回后短暂显示
+                // 「✓ 已保存 / ✕ 保存失败」（form.saveResult，约 2s 后自动回落）。
                 primaryButton(
                     "保存配置",
                     loading = { ctx.form.saving },
                     loadingText = "保存中…",
+                    result = { ctx.form.saveResult },
+                    successText = "✓ 已保存",
+                    errorText = "✕ 保存失败",
                 ) {
-                    ctx.form.save(ctx)
-                    // 保存结果经统一 toast 顶部弹出（成功=绿 / 失败=红）
-                    ctx.showToast(ctx.form.statusMsg, ctx.form.statusLevel)
+                    // toast 在**接口返回后**由 save 回调触发（不能在 save() 之后立即取 statusMsg：
+                    // 那时请求还没回来，会弹出上一条旧消息）
+                    ctx.form.save(ctx) { msg, level -> ctx.showToast(msg, level) }
                 }
             })
-
-            // 顶部 toast（跨端统一），3 秒自动消失
-            ToastHost(ctx.toast)
 
             // 配置标签页（tabbedPanel：官方 Tabs+PageList；页签由 ConfigSections 常量表驱动）
             renderForm(
@@ -83,6 +84,10 @@ class ConfigPage : Pager() {
                 pageWidth = pageWidth,
                 pageHeight = pageHeight,
             )
+
+            // 顶部浮动 toast（跨端统一，3 秒自动消失）：必须放在**页面根容器**最后——
+            // 绝对定位脱离布局（不占高度、不推挤内容），相对整页水平居中、盖在标题栏与内容之上。
+            ToastHost(ctx.toast)
         }
     }
 }

@@ -257,6 +257,36 @@ fn merge_patch_absent_field_is_preserved() {
     assert!(saved.aiui.enabled);
 }
 
+/// `[command].max_chars` 是后加的字段：**旧管理页**不认识它，补丁里就没有这个键——
+/// 盘上（或手写）的值必须保持不变，而不是被静默重置回默认 5（bug-1 同一类故障）。
+#[test]
+fn client_patch_without_command_max_chars_preserves_it() {
+    let mut base = full_test_config();
+    base.command.enabled = true;
+    base.command.max_chars = 9;
+
+    let saved = simulate_put(
+        &base,
+        serde_json::json!({"command": {
+            "enabled": true,
+            "keywords": ["退下"],
+            "match_mode": "exact",
+            "reply": "好的"
+        }}),
+    );
+    assert_eq!(
+        saved.command.max_chars, 9,
+        "旧客户端未发送 max_chars 时不得被重置"
+    );
+    assert_eq!(saved.command.keywords, vec!["退下"]);
+
+    // 新客户端发送时照常生效，同段其它字段不受影响
+    let saved2 = simulate_put(&base, serde_json::json!({"command": {"max_chars": 3}}));
+    assert_eq!(saved2.command.max_chars, 3);
+    assert_eq!(saved2.command.keywords, vec!["退下", "闭嘴", "关闭"]);
+    assert_eq!(saved2.command.reply, "好的，我先退下了。");
+}
+
 // ---------- bug-1 回归：旧客户端表单形状不再重置配置 ----------
 
 /// 旧版管理页 `ConfigFormState.save()` 只 `put` 六个段，且

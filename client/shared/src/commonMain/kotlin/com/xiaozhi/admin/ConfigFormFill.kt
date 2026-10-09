@@ -117,6 +117,8 @@ internal fun ConfigFormState.fill(obj: JSONObject) {
     }
     // [soul] / [memory]（上下文生产者）：字段较多，映射集中在 ConfigContextState
     sm.fill(obj)
+    // [command]（指令闸门）：映射同样集中在 ConfigCommandState
+    cmd.fill(obj)
 }
 
 /**

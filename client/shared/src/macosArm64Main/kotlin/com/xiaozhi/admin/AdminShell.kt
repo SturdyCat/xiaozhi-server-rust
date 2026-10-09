@@ -154,21 +154,25 @@ class AdminShell : Pager() {
                                     View { attr { width(AdminSpace.sm) } }
                                 }
                                 vif({ ctx.selectedSection == "config" || ctx.selectedSection == "testbench" }) {
-                                    // 三态按钮：saving 时菊花 + 灰底 + 拦截点击（loading 在 attr/event 闭包内实时读取，保存期间不会重复提交）。
+                                    // 三态按钮：saving → 「保存中…」灰底拦截点击；接口返回后短暂显示
+                                    // 「✓ 已保存 / ✕ 保存失败」（form.saveResult，约 2s 后自动回落）。
                                     primaryButton(
                                         "保存配置",
                                         loading = { ctx.form.saving },
                                         loadingText = "保存中…",
+                                        result = { ctx.form.saveResult },
+                                        successText = "✓ 已保存",
+                                        errorText = "✕ 保存失败",
                                     ) {
-                                        ctx.form.save(ctx, ctx.conn.baseUrl)
-                                        ctx.showToast(ctx.form.statusMsg, ctx.form.statusLevel)
+                                        // toast 在**接口返回后**由 save 回调触发（不能紧随 save() 取 statusMsg：
+                                        // 那时请求还没回来，会弹出上一条旧消息）
+                                        ctx.form.save(ctx, ctx.conn.baseUrl) { msg, level ->
+                                            ctx.showToast(msg, level)
+                                        }
                                     }
                                 }
                             },
                         )
-
-                        // 顶部 toast（跨端统一：成功=绿 / 失败=红 / 信息=中性），3 秒自动消失
-                        ToastHost(ctx.toast)
 
                         // section 切换：vif 闭包内读取 selectedSection（observable），切换时重建对应 tabbedPanel
                         //（tab 选中态等存于各状态类的 TabUiState，重建不丢）
@@ -191,6 +195,11 @@ class AdminShell : Pager() {
                     }
                 }
             }
+
+            // ===== 顶部浮动 toast（跨端统一：✓ 成功=绿 / ✕ 失败=红 / i 信息=中性）=====
+            // ⚠️ 必须放在**页面根容器**的最后：绝对定位脱离布局（不占高度、不推挤内容），
+            // 且相对整个窗口水平居中、盖在标题栏与内容之上；3 秒自动消失。
+            ToastHost(ctx.toast)
         }
     }
 }

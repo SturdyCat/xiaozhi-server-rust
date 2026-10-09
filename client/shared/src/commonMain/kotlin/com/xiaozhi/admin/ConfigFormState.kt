@@ -163,6 +163,10 @@ class ConfigFormState(private val scope: PagerScope) {
     /// 人格档案与图记忆的表单状态 + 记忆动作（状态查询/测试召回/维护/清空）。
     val sm = ContextSectionState(scope)
 
+    // ===== [command]：指令闸门（ASR → LLM 之间；退下/闭嘴/关闭 → 断开会话）=====
+    /// 拆到 `ConfigCommandState`（同上：`AGENTS.md` §5.10 文件规模约定）。
+    val cmd = CommandSectionState(scope)
+
     /// 字段元数据（`GET /api/config/schema`）：目前用于「这个字段多久生效」提示（见 FormSchemaState）。
     val schema = FormSchemaState(scope)
 
@@ -178,7 +182,17 @@ class ConfigFormState(private val scope: PagerScope) {
     /// 上次保存因**过期写入（409）**被拒：顶栏显示「重新加载」入口（草稿保留）。
     var conflict by scope.observable(false)
 
-    /** 配置页标签页 UI 状态（Server/Audio/ASR/VAD/TTS/LLM/AIUI/灵魂/记忆 九个 tab，见 renderForm）。 */
+    /**
+     * 「保存配置」按钮的**完成态**（三态按钮的第三态）："" 正常 / "ok" 保存成功 / "error" 保存失败。
+     * 请求进行中由 [saving] 表达（按钮文案切「保存中…」并拦截重复点击）；
+     * 完成态展示 [SAVE_RESULT_HOLD_MS] 后自动回落到正常态，随后由调用方弹出的顶部 toast 接力提示。
+     */
+    var saveResult by scope.observable("")
+
+    /// 完成态回落的代际号：连续多次保存时，只允许**最后一次**安排的定时器清状态。
+    private var saveResultSeq = 0
+
+    /** 配置页标签页 UI 状态（Server/Audio/ASR/VAD/TTS/LLM/指令/AIUI/灵魂/记忆 十个 tab，见 renderForm）。 */
     val tabUi = TabUiState(scope)
 
     /** 当前展开的下拉（TTS engine 选择等，"" = 全部收起）；放状态类避免 Pager body 重建丢失展开态。 */
@@ -441,8 +455,18 @@ class ConfigFormState(private val scope: PagerScope) {
         load(ctx, baseUrl)
     }
 
-    fun save(ctx: Pager, baseUrl: String = "") {
+    /**
+     * 保存配置（POST /api/config），**异步等待接口完成**：
+     * - 进入时 [saving]=true → 顶栏按钮切「保存中…」并拦截重复点击（三态按钮第一态）；
+     * - 完成后 [saving]=false 且 [saveResult] 置 "ok"/"error" → 按钮短暂显示「已保存 / 保存失败」（第三态）；
+     * - [onResult] 在**请求返回之后**回调（msg, level），由页面弹顶部 toast——
+     *   ⚠️ 不能在调用处紧随 save() 之后取 statusMsg：那时请求还没回来，拿到的是上一条旧消息。
+     */
+    fun save(ctx: Pager, baseUrl: String = "", onResult: ((String, String) -> Unit)? = null) {
         saving = true
+        // 进入"保存中"：清掉上一次的完成态，并作废旧的回落定时器
+        saveResult = ""
+        saveResultSeq++
         val body = JSONObject().apply {
             put("server", JSONObject().apply {
                 put("port", port.toIntOrNull() ?: 8000)
@@ -511,6 +535,8 @@ class ConfigFormState(private val scope: PagerScope) {
             // [soul] / [memory]：上下文生产者（P6）。与其它段一样**必须整段回传**：
             // 后端虽是部分更新语义，但前端不回传就等于"这个段在 UI 里不可配置"。
             sm.putJson(this)
+            // [command]：指令闸门（ASR → LLM 之间）——同样整段回传，否则保存一次就把它关掉。
+            cmd.putJson(this)
             // [aiui]：此前管理页**完全没有这个段**，保存一次就把它静默关掉（后端已改为部分更新
             // 兜底；这里补齐前端，使全链路模式可在 UI 里配置与保留）。
             put("aiui", JSONObject().apply {
@@ -580,6 +606,12 @@ class ConfigFormState(private val scope: PagerScope) {
                 statusMsg = "保存失败: ${serverMsg.ifEmpty { if (errorMsg.isNotEmpty()) errorMsg else "HTTP $code" }}"
                 statusLevel = "error"
             }
+            // ===== 接口已完成：三态按钮切「完成态」并安排回落，再交给调用方弹顶部 toast =====
+            // 完成态直接镜像本次结果级别（三个分支只会是 ok / error），展示 SAVE_RESULT_HOLD_MS 后复位。
+            saveResult = statusLevel
+            val resultSeq = ++saveResultSeq
+            scope.setTimeout(SAVE_RESULT_HOLD_MS) { if (resultSeq == saveResultSeq) saveResult = "" }
+            onResult?.invoke(statusMsg, statusLevel)
         }
     }
 
@@ -587,3 +619,6 @@ class ConfigFormState(private val scope: PagerScope) {
     // 渲染：见文件底部 ViewContainer.renderForm(form) 扩展
     // ============================================================
 }
+
+/** 「保存配置」按钮完成态（已保存 / 保存失败）的停留时长（毫秒），到点自动回落到正常态。 */
+private const val SAVE_RESULT_HOLD_MS = 2000

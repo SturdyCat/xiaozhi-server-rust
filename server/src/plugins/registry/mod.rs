@@ -39,6 +39,7 @@ use crate::plugins::llm::Llm;
 use crate::plugins::tts::TtsEngine;
 
 mod fields;
+mod fields_command;
 mod fields_context;
 mod impls;
 use fields::CAPABILITY_COMMON_FIELDS;
@@ -80,6 +81,9 @@ pub enum Capability {
     Memory,
     /// 灵魂/人格档案（规划中）。
     Soul,
+    /// 语音指令闸门（`[command]`）：ASR → LLM 之间拦截「退下/闭嘴/关闭」并断开会话。
+    /// 不是引擎（不产出共享实例、无 `engine` 选择器），只按 `[command].enabled` 开关。
+    Command,
 }
 
 /// 全部能力（顺序即 UI 展示顺序）。
@@ -93,6 +97,7 @@ pub const ALL_CAPABILITIES: &[Capability] = &[
     Capability::Firmware,
     Capability::Memory,
     Capability::Soul,
+    Capability::Command,
 ];
 
 impl Capability {
@@ -108,6 +113,7 @@ impl Capability {
             Capability::Firmware => "firmware",
             Capability::Memory => "memory",
             Capability::Soul => "soul",
+            Capability::Command => "command",
         }
     }
 
@@ -122,6 +128,7 @@ impl Capability {
             Capability::Firmware => "固件托管",
             Capability::Memory => "记忆（图记忆）",
             Capability::Soul => "灵魂（人格档案）",
+            Capability::Command => "指令闸门（ASR→LLM）",
         }
     }
 
@@ -420,6 +427,7 @@ pub static REGISTRY: &[PluginDescriptor] = &[
     FIRMWARE_HOST,
     MEMORY_GRAPH,
     SOUL_PROFILE,
+    COMMAND_GATE,
 ];
 
 /// 按 id 查描述符。
@@ -453,7 +461,8 @@ pub fn configured_engine(cfg: &Config, cap: Capability) -> Option<String> {
         Capability::Tts => Some(cfg.tts.engine_id()),
         Capability::Llm => Some(cfg.llm.engine_id()),
         Capability::Memory => Some(cfg.memory.engine_id().to_string()),
-        Capability::FullChain | Capability::Voices | Capability::Firmware | Capability::Soul => None,
+        Capability::FullChain | Capability::Voices | Capability::Firmware | Capability::Soul
+        | Capability::Command => None,
     }
 }
 

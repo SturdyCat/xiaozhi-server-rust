@@ -44,6 +44,7 @@ fun ViewContainer<*, *>.renderForm(
                     "vad" -> vadConfigCard(form)
                     "tts" -> ttsConfigCard(form, ctx)
                     "llm" -> llmConfigCard(form)
+                    "command" -> commandConfigCard(form)
                     "aiui" -> aiuiConfigCard(form)
                     "soul" -> soulConfigCard(form, ctx)
                     "memory" -> memoryConfigCard(form, ctx)

@@ -34,6 +34,9 @@ object AdminColors {
     val fieldBg = Color(0xFF2C2C2EL)
     val insetBg = Color(0xFF3A3A3CL)
 
+    /** 顶部浮动 toast 背景：比卡片再亮一档的浮层色，保证覆盖在内容之上时层次清晰。 */
+    val toastBg = Color(0xFF3A3A3CL)
+
     val textPrimary = Color(0xFFF5F5F7L)
     val textSecondary = Color(0xFFAEAEB2L)
     val textTertiary = Color(0xFF8E8E93L)

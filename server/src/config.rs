@@ -35,6 +35,7 @@ use std::path::Path;
 // 引擎子配置段随插件走（定义在各插件 mod.rs），此处转发以维持 `crate::config::*` 路径稳定：
 pub use crate::plugins::aiui::AiuiConfig;
 pub use crate::plugins::asr::AsrConfig;
+pub use crate::plugins::command::CommandConfig;
 pub use crate::plugins::llm::LlmConfig;
 pub use crate::plugins::memory::MemoryConfig;
 pub use crate::plugins::soul::SoulConfig;
@@ -105,6 +106,10 @@ pub struct Config {
     /// 记忆（图记忆）：默认关闭，关闭时零依赖、行为与今天一致。
     #[serde(default)]
     pub memory: MemoryConfig,
+    /// 语音指令闸门（`[command]`）：ASR → LLM **之前**拦截「退下/闭嘴/关闭」这类指令，
+    /// 命中即说一句告别语并断开本次会话（跳过 LLM 与正常回复）。默认关闭。
+    #[serde(default)]
+    pub command: CommandConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -181,6 +186,7 @@ impl Default for Config {
             aiui: AiuiConfig::default(),
             soul: SoulConfig::default(),
             memory: MemoryConfig::default(),
+            command: CommandConfig::default(),
         };
         c.normalize();
         c
@@ -212,6 +218,7 @@ impl Config {
         self.llm.normalize();
         self.memory.normalize();
         self.soul.normalize();
+        self.command.normalize();
     }
 
     /// 是否处于「真实音频模式」：`sherpa` feature（唯一路径，无 mock）。

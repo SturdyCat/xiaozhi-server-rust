@@ -234,6 +234,41 @@ LLM 只有 OpenAI 兼容 Responses API 一条路径；联调失败先检查 `[ll
   `id NOT IN (SELECT message_id FROM gm_turn_memory_sources)`——上游 graph-memory 正是在这里
   误删了轮次记忆引用的证据（`docs/soul-and-graph-memory-plan.md` §2.4 缺陷 1），我们已修且有回归测试。
 
+### 5.2f 语音指令闸门（`[command]`）接入要点（2026-10 新增）
+
+说「退下 / 闭嘴 / 关闭」这类**不是提问**的话，送进 LLM 只会换来一段没用的回复（还计费、还合成）；
+正确处置是结束这次会话。实现落在 ASR → LLM **之间**：
+
+- **位置**：级联链路在 `session.rs::recognize_segments` 里 `handle_command_gate(&user_text)`，
+  命中即 `return`（本批剩余语音段一并丢弃，**一次 LLM 都不调用**）；AIUI 全链路在
+  `aiui_segments` 里对回来的 `turn.stt` 同样判定——识别在云端闭环内完成，只能在轮次回来后
+  "丢弃本轮云端回复"，但会话照样按指令断开（两种链路语义一致，见 `session/command.rs`）。
+- **断开方式 = 主循环收尾**：命中置位 `close_requested` → `run()` 跳出循环 → **跳过 VAD flush**
+  （用户已明确要求退下，不该再为残留音频开一轮对话）→ 等一段排空时间（`downlink_lead_ms`，
+  夹在 100ms~1s；告别语是按实时节奏下发的，最后一帧发出时设备队列里还有约一个 lead 的音频，
+  立即 close 会把告别语尾巴掐掉）→ 调 `Transport::close()`（WS 发关闭帧并让 `closed` 粘滞）
+  → `run_session` 返回、`WsTransport` 释放。**不要**在分支里直接 drop socket/break：
+  那会绕过告别语、日志与节流收尾。
+- **⚠️ 命中后必须先 `abort.store(false)`**：`abort` 只在 `stream_response` 入口重置，而指令闸门
+  刻意不走那条路；上一轮若以设备打断结束（abort 仍为 true），告别语会被逐帧打断轮询立刻掐断，
+  表现为"没告别就断线"（`session/command.rs` 有注释，勿删）。
+- **默认 `exact` 是刻意的**：识别文本先归一化（只留字母数字/汉字 → 剥掉句末语气助词「吧/啊/了…」）
+  再整句比较，「退下吧。」≡「退下」；宽松的 `contains` 会让「关闭闹钟」「把灯关闭」直接断线——
+  那比"没识别到指令"严重得多，只在确认场景后显式开启。
+- **长度闸门（`max_chars`，默认 5）是第二道独立保险**：归一化后超过 5 个字的识别文本**不做指令判断**、
+  直接放行给 LLM。理由是"长句携带信息"——「帮我关闭卧室的灯」「退下之后帮我放首歌」都含指令词，
+  但它们是正常请求/追问，断线是灾难；真正的指令只有两三个字。两道闸的关系：长度挡"长句误伤"、
+  `exact` 挡"短句误伤"（关闭闹钟），缺一不可。计数口径与匹配**一致**（归一化之后，标点/空白/句末
+  语气词不计入），所以「退下！！！！」仍是 2 个字、照常命中；`max_chars = 0` = 不限制（拆掉保险）。
+  ⚠️ 与词表的交互坑：指令词本身长于 `max_chars` 时永远命中不了（静默失效），
+  `CommandConfig::validate` 会拦下并说明怎么改——加/改词表时别把这条校验删了。
+- **配置与语义**：`[command]`（`enabled` 默认 false / `keywords` 默认 退下·闭嘴·关闭 / `match_mode` /
+  `max_chars` 默认 5 / `reply`），注册表声明为 `next_session` + **非必需能力**（"启用但词表为空"只降级上报，绝不阻止启动）；
+  词表为空时闸门恒不拦截（若按"空 = 命中一切"处理，用户清空一次就会断掉所有会话）。
+  默认关闭时零开销、行为与加它之前完全一致——这是可回滚承诺，勿破。
+- **改配置段必须同步注册表字段元数据**（`registry/fields_command.rs`），否则
+  `config/tests/impact.rs::every_config_section_has_declared_hot_semantics` 打红、界面永远显示"需重启"。
+
 ### 5.3 二进制协议版本 = 设备 hello 的 `version`
 
 - `version` 字段 = **二进制协议版本（1/2/3）**，不是握手协议号。
@@ -346,14 +381,16 @@ server/                        # Rust 服务端
       session.rs    每连接会话状态机 + 语音流水线（支持 abort；AIUI 全链路分支）
       protocol.rs   消息枚举 + 二进制版本封装（v1/v2/v3）—— 改这里必看 §5.1
       session/reply.rs  回复生成与下发（LLM→分句→TTS→下行；含人格/记忆组装与后台写入）
-      transport.rs  承载抽象（WS/未来 MQTT+UDP）；downlink.rs 下行音频；splitter/sse
+      session/command.rs 指令闸门落点（ASR→LLM 之间：命中即说告别语 + 断开会话，见 §5.2f）
+      transport.rs  承载抽象（WS/未来 MQTT+UDP；`close()` = 本端主动断开）；downlink.rs 下行音频；splitter/sse
       audio/        Opus 编解码 + 重采样；firmware.rs 固件托管；voices.rs 发音人目录
     plugins/      引擎插件层（按能力分目录）：
       registry/     能力/实现的可枚举清单（描述符：字段元数据 + 热生效 + 签名 + 校验 + 构建）
         mod.rs        类型定义 + 全量注册表 + 查找 API + JSON 投影
         fields.rs     字段元数据表（能力公共字段 + 各实现私有字段）
         fields_context.rs  soul/memory 的字段元数据表（与 fields.rs 合并投影）
-        impls.rs      选择/签名/校验/构建 + 10 个描述符常量
+        fields_command.rs  指令闸门（[command]）字段元数据表
+        impls.rs      选择/签名/校验/构建 + 11 个描述符常量
         tests.rs      回归测试（id 唯一性、字段漂移护栏、schema 形状）
       host.rs       装配与校验前移、enabled/phase 分离的状态快照（/api/plugins 数据源）
       （新增厂商 = 加实现文件 + registry/impls.rs 加 1 条 + registry/fields.rs 加字段表）
@@ -370,6 +407,9 @@ server/                        # Rust 服务端
                                  + store.rs + store/maintenance.rs（SQLite 读写/保留策略）
                                  + schema.rs（DDL/迁移/稳定 ID）+ terms.rs（汉字二元组倒排索引）
                                  + assemble.rs（注入块渲染 + token 预算裁剪）+ llm_extract.rs（抽取契约）
+      command/{mod,tests}.rs    语音指令闸门（[command]）：ASR→LLM 之间拦截指令词，
+                                 长度闸门（max_chars，默认 5）+ 词表匹配，命中即由会话层
+                                 说告别语并断开会话（默认关闭；见 §5.2f）
   config.toml / config.example.toml
   scripts/download_models.sh
   tests/mock_client.py         零依赖 WebSocket 联调客户端
@@ -382,6 +422,7 @@ client/                        # Kuikly 多端工程（管理后台 web + macOS 
     commonMain/               公共代码：@Page("config") 管理后台（跨端）+ 配置表单 + NetworkModule
                               （P5 新文件：ConfigSections.kt 页签常量表 / PluginMetaState.kt 能力总览
                                / ConfigOverviewCard.kt 总览渲染 / FormSchemaState.kt 字段热生效提示）
+                              （[command] 指令卡：ConfigCommandState.kt 表单状态 + ConfigCommandCard.kt 渲染）
     macosArm64Main/           仅 macOS(arm64) 编译：@Page("test") ASR/TTS 测试台 + XiaoZhiModule
     （js(IR) 目标在此模块：@Page 注册靠 KSP(core-ksp)，业务包由 Kuikly 插件打包）
   apps/

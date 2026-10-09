@@ -2,6 +2,8 @@
 //!
 //! 两条路径（由 hello 的 `test` 参数区分）：
 //! - ESP 设备（正式流程）：上行 Opus → 解码 → VAD → ASR → stt → LLM → tts → 下行 Opus。
+//!   其中 ASR 与 LLM **之间**还有一道可选的指令闸门（`[command]`，见 [`command`] 子模块）：
+//!   识别到「退下/闭嘴/关闭」这类指令即说一句告别语并**断开本次会话**（跳过 LLM）。
 //! - macApp 测试台（hello 带 `test:true`）：`asr_test`/`tts_test`/`llm_test` 三种
 //!   **独立服务请求-响应**（各自直调对应真实引擎、各自回包），不进设备流水线；
 //!   设备会话收到这三类消息一律忽略。
@@ -16,9 +18,11 @@ use crate::app::transport::{IncomingFrame, Transport};
 use crate::engine::Engines;
 use crate::plugins::aiui::{AiuiSession, FullChainEngine, FullChainTurn};
 use crate::plugins::asr::AsrEngine;
+use crate::plugins::command::CommandGate;
 use crate::plugins::vad::VadEngine;
 
 mod bench;
+mod command;
 mod reply;
 
 /// 在 `spawn_blocking` 中执行同步阻塞的 CPU 密集调用（ASR/TTS 推理），
@@ -83,6 +87,11 @@ pub struct Session<'a, T: Transport> {
     /// 下行节拍器：按帧长匀速下发（保护 ESP 解码队列，见 `downlink` 模块文档）。
     /// 一次回复内跨句共享时间表（句间无缝）；每轮回复开始时 reset。
     pacer: DownlinkPacer,
+    /// 语音指令闸门（`[command]`）：ASR → LLM 之间的拦截器。
+    /// 会话开始时按配置快照构造一次 = 注册表声明的 `next_session` 语义。
+    commands: CommandGate,
+    /// 指令要求断开本次会话（告别语已下发）：主循环收尾时主动关闭承载。
+    close_requested: bool,
 }
 
 impl<'a, T: Transport> Session<'a, T> {
@@ -101,14 +110,29 @@ impl<'a, T: Transport> Session<'a, T> {
                 // 承载关闭/读取错误：会话结束（recv 内已记日志）
                 IncomingFrame::Closed => break,
             }
+            // 指令闸门命中（[command]）：告别语已下发，主动断开本次会话
+            if self.close_requested {
+                tracing::info!("session {} 按指令断开本次会话", self.session_id);
+                break;
+            }
         }
 
         // 会话结束：flush VAD 残留语音段（真实音频模式），尽力把最后一句话送完流水线。
         // 连接可能已关闭，此时发送会失败并被记录，属正常情况。
-        if self.real_audio {
+        // ⚠️ 指令断开会话时**不** flush：用户已明确要求退下，不该再为残留音频开一轮对话。
+        if self.real_audio && !self.close_requested {
             let mut segments = Vec::new();
             self.vad.flush(&mut |seg| segments.push(seg));
             self.recognize_segments(segments).await;
+        }
+        if self.close_requested {
+            // 告别语的下行帧是**按实时节奏**下发的：最后一帧发出时，设备解码队列里还有约
+            // `downlink_lead_ms` 的音频没播完（见 `downlink` 模块的节拍器文档）。立即关闭连接
+            // 有可能把告别语的尾巴掐掉，因此留一段等长的排空时间（夹在 100ms~1s，避免异常
+            // 配置把会话收尾拖住）。失败无妨——会话即将随 Transport 释放而结束。
+            let drain_ms = self.params.downlink_lead_ms.clamp(100, 1000) as u64;
+            tokio::time::sleep(std::time::Duration::from_millis(drain_ms)).await;
+            self.transport.close().await;
         }
         Ok(())
     }
@@ -153,6 +177,11 @@ impl<'a, T: Transport> Session<'a, T> {
                 t0.elapsed().as_millis(),
                 user_text.chars().count()
             );
+            // 指令闸门（ASR → LLM **之间**）：命中即说告别语并断开会话，**一次 LLM 都不调用**。
+            // 本批剩余语音段一并丢弃（用户已经要求退下）。
+            if self.handle_command_gate(&user_text).await {
+                return;
+            }
             if let Err(e) = self.stream_response(&user_text).await {
                 tracing::warn!("流水处理失败: {e}");
             }
@@ -191,6 +220,11 @@ impl<'a, T: Transport> Session<'a, T> {
                 turn.reply.chars().count(),
                 turn.audio.len()
             );
+            // 指令闸门同样适用于全链路：识别文本要等云端闭环回来才可见（本地没有 ASR 可拦），
+            // 因此这里只能"丢弃本轮云端回复"—但会话照样按指令断开（语义与级联流水线一致）。
+            if self.handle_command_gate(&turn.stt).await {
+                return;
+            }
             if let Err(e) = self.aiui_downlink(&turn).await {
                 tracing::warn!("session {session_id} AIUI 下行失败: {e}");
             }
@@ -386,6 +420,9 @@ pub async fn run_session<T: Transport>(
     } else {
         None
     };
+    // 指令闸门快照：会话开始时取一次（= 注册表声明的 next_session 语义）。
+    // 未启用时是恒不命中的空闸门，零开销、零行为变化。
+    let commands = CommandGate::new(&engines.live_config().command);
     let session = Session {
         transport,
         engines,
@@ -403,6 +440,8 @@ pub async fn run_session<T: Transport>(
         abort: Arc::new(AtomicBool::new(false)),
         aiui,
         pacer: DownlinkPacer::new(params.downlink_lead_ms as u64),
+        commands,
+        close_requested: false,
     };
     session.run().await
 }

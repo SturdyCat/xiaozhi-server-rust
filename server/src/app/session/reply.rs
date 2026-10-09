@@ -291,17 +291,30 @@ impl<'a, T: Transport> Session<'a, T> {
 
     /// 用一句兜底话术回应 LLM 失败（拔网 / 限流 / 超时），**绝不静默**。
     ///
-    /// 复用 [`Self::speak_sentence`] 的完整下行链路（结果缓存 / 节拍器 / 首帧时刻），
+    /// 复用 [`Self::speak_canned`] 的完整下行链路（结果缓存 / 节拍器 / 首帧时刻），
     /// 因此兜底话术的听感与正常回复完全一致；失败只记日志，不再向上抛
     ///（兜底本身失败时向上抛错误没有意义，会话该结束还是结束）。
     async fn speak_fallback(&mut self, text: &str) -> anyhow::Result<()> {
+        self.speak_canned(text).await?;
+        tracing::info!("session {} 已下发兜底话术", self.session_id);
+        Ok(())
+    }
+
+    /// 主动说一句**非 LLM 生成**的话（LLM 失败兜底 / 指令闸门的告别语）。
+    ///
+    /// 抽成方法是为了让"必须由本地下行链路说出的一句话"只有一个实现：tts start →
+    /// 逐句合成下发 → tts stop，缓存/节拍器/打断语义与正常回复完全一致。
+    /// 合成失败只记日志（调用方各自决定后续行为：兜底继续返回、指令闸门照常断开）。
+    pub(super) async fn speak_canned(&mut self, text: &str) -> anyhow::Result<()> {
+        // 一句独立的话 = 一次独立回复：节拍器时间表重置（指令闸门路径不会经过
+        // `stream_response` 的 reset，不重置会沿用上一轮的时间锚点）。
+        self.pacer.reset();
         send_tts_state(self.transport, &self.session_id, "start").await?;
         let mut first_frame_at: Option<std::time::Instant> = None;
         if let Err(e) = self.speak_sentence(text, &mut first_frame_at).await {
-            tracing::warn!("兜底话术下发失败: {e}");
+            tracing::warn!("话术下发失败: {e}");
         }
         send_tts_state(self.transport, &self.session_id, "stop").await?;
-        tracing::info!("session {} 已下发兜底话术", self.session_id);
         Ok(())
     }
 

@@ -126,6 +126,15 @@ fn example_config_parses_and_normalizes() {
     assert_eq!(cfg.tts.kokoro.lang, "zh");
     assert_eq!(cfg.llm.engine, "openai");
     assert_eq!(cfg.memory.engine_id(), "graph");
+    // 指令闸门：样例里默认关闭，且填的默认词表就是需求里那三个词
+    assert!(!cfg.command.enabled);
+    assert_eq!(cfg.command.keywords, vec!["退下", "闭嘴", "关闭"]);
+    assert_eq!(
+        cfg.command.match_mode,
+        crate::plugins::command::MatchMode::Exact
+    );
+    // 长度闸门：样例里同样写明（漏写 = 用户不知道有这道保险），且默认值必须是 5
+    assert_eq!(cfg.command.max_chars, 5);
     // 内置默认灵魂：样例里写了 preset，且它必须是真实存在的预设（写错样例 = 每个新用户踩一次）
     assert_eq!(cfg.soul.preset, crate::plugins::soul::presets::DEFAULT_ID);
     assert!(

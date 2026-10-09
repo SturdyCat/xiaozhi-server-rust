@@ -10,6 +10,7 @@ use crate::plugins::llm::build_llm;
 use crate::plugins::tts::{build_kokoro, build_xfyun};
 
 use super::fields::*;
+use super::fields_command::COMMAND_FIELDS;
 use super::fields_context::{MEMORY_FIELDS, SOUL_FIELDS};
 use super::{Built, Capability, HotReload, PluginDescriptor, Requirement};
 
@@ -41,6 +42,9 @@ fn sel_memory(cfg: &Config) -> bool {
 }
 fn sel_soul(cfg: &Config) -> bool {
     cfg.soul.enabled
+}
+fn sel_command(cfg: &Config) -> bool {
+    cfg.command.enabled
 }
 
 // ---- 未知 engine 校验（P4 约定：静默回退默认是最糟的失败模式，必须报错并给可选值）----
@@ -106,6 +110,10 @@ fn sig_memory(cfg: &Config) -> String {
 }
 fn sig_soul(cfg: &Config) -> String {
     cfg.soul.signature()
+}
+/// 指令闸门无共享实例（每会话按快照构造 `CommandGate`），签名只用于状态上报。
+fn sig_command(cfg: &Config) -> String {
+    cfg.command.signature()
 }
 
 // ---- 校验（错误文案必须含「怎么修」）----
@@ -229,6 +237,13 @@ fn warn_memory(cfg: &Config) -> Option<String> {
 
 fn validate_soul(cfg: &Config) -> Result<()> {
     cfg.soul.validate()
+}
+
+/// 指令闸门的硬条件：启用时词表不得为空。
+/// （词表为空 = 闸门不拦任何话——不致命但必须能被 `/api/plugins` 说成 `Degraded`，
+/// 否则用户会得到"配了没用"的静默失败。）
+fn validate_command(cfg: &Config) -> Result<()> {
+    cfg.command.validate()
 }
 
 // ---- 构建入口 ----
@@ -430,4 +445,25 @@ pub const FIRMWARE_HOST: PluginDescriptor = PluginDescriptor {
     build: None,
     warn_if: None,
     selected: sel_always,
+};
+
+/// 语音指令闸门（`[command]`）：ASR → LLM **之前**的拦截。
+///
+/// **可选能力**：默认 `enabled=false` 时不选中、零开销、行为与加它之前完全一致；
+/// 坏配置（启用但词表为空）只降级（`Degraded`），绝不阻止启动——语音服务照常。
+/// 无共享实例：每会话按配置快照构造 `CommandGate`（与 VAD 同为"每会话有状态对象"模式）。
+pub const COMMAND_GATE: PluginDescriptor = PluginDescriptor {
+    id: "command.gate",
+    capability: Capability::Command,
+    display: "指令闸门（退下/闭嘴/关闭 → 断开会话）",
+    local: true,
+    hot: HotReload::NextSession,
+    requires: &[],
+    fields_path: &["command"],
+    fields: COMMAND_FIELDS,
+    signature: sig_command,
+    validate: validate_command,
+    build: None,
+    warn_if: None,
+    selected: sel_command,
 };

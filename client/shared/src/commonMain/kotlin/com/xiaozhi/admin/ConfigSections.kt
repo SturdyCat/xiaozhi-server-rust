@@ -30,6 +30,8 @@ object ConfigSections {
         SectionDescriptor("vad", 40, "VAD"),
         SectionDescriptor("tts", 50, "TTS"),
         SectionDescriptor("llm", 60, "LLM"),
+        // 指令闸门：ASR → LLM 之间的拦截（退下/闭嘴/关闭 → 断开会话）
+        SectionDescriptor("command", 65, "指令"),
         SectionDescriptor("aiui", 70, "AIUI"),
         SectionDescriptor("soul", 80, "灵魂"),
         SectionDescriptor("memory", 90, "记忆"),
