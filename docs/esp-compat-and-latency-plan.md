@@ -131,13 +131,16 @@ ESP 类设备是受限端（MCU、opus 固定 60ms 帧、带宽有限），serve
 
 ### 3.2 逐句 TTS 流水线 —— `session.rs::stream_response` ✅ 已落地
 
-**已实现形态（生产者/消费者）**
+**已实现形态（生产者 / 预取 / 消费者三级）**
 - **生产者 task**：`engines.llm.chat_stream`（回调返回 `false` 即取消——abort 时停止读 LLM 流）→ `SentenceSplitter` 按句切分 → `mpsc::unbounded_channel` 推句（文本量小无需反压）。
 - **`SentenceSplitter`**：命中 `。！？；` 及 ASCII `! ? ; \n` 即出句（标点保留）；末尾 `flush` 残句；无标点超长按 50 字符兜底硬切（循环切块、对齐字符边界）。单测 7 项覆盖。
-- **消费者（session task）**：`tts start`（一轮一次）→ 逐句 `spawn_blocking` 合成 → `send_sentence_audio`（`sentence_start(text)` + 重采样/Opus 分帧逐帧下行 + 逐帧轮询打断）→ `tts stop`。
-- **TTFA 打点**：首句下发完成日志 `TTFA≈xxms`；本轮完成日志含 LLM 流耗时/字数/工具调用数/句数。
+- **预取 worker（2026-10 补，`app/prefetch.rs`）**：句子 → **成品（文本 + PCM 分片流）**，合成跑在上一句播放期间；同一时刻只跑一句（串行），有界通道 `PREFETCH_SENTENCES` 做背压；abort 在回调里轮询即停。**这是长回复断音的关键修复**：旧实现"合成一句 → 播完 → 再合成下一句"，每个句边界都要重付一次合成启动延迟（在线合成是一条短连接）。
+- **下载缓冲（2026-10 补，`app/prefetch.rs::DownloadBudget`）**：TTS 是**流式**的，服务端一边从上游下载 PCM 一边转成 ESP 需要的 Opus 帧。上游不能无界下载（PCM f32 是 96KB/s，比水库里的 Opus 大 ~50 倍），也不该"用一片取一片"（会把流式下载退化成逐片节拍，上游一慢直接打穿到播放）。故按**音频秒数**给下载定预算（`AudioConfig::download_budget_ms()` = `clamp(downlink_buffer_ms, 1s, 10s)`）：积压到预算就**暂停下载**，编码入水库即归还额度（额度随分片 `PcmChunk` 的 Drop 归还，任何退出路径都不泄漏）。上游能多快就多快，积压永远 ≤ 预算（每会话 ≤ ~640KB）。每轮打印"下载缓冲：预算/峰值水位/限速等待"。
+- **水库填充 task（2026-10 补，`app/downlink/reservoir.rs`）**：逐句成品 → 重采样 + Opus 分帧 → 按序推入**服务器内存水库**（`[audio].downlink_buffer_ms`，默认 30s；满则等待 = 背压，不再无界合成/占内存）；句首通知与音频帧同序入队，完整句顺便写结果缓存。**这是"设备队列只有 ~1.2s、上游慢于实时必断续"的正面对策**：把已合成音频多备几秒，发送端就有货可发。⚠️ 水库只能备住**已经合成出来**的音频：上游**平均**慢于实时时缺口是累积的（`所需缓冲 ≈ (1/生产速率 − 1) × 音频总长`），那种情形只有提速上游（提高 `[tts].speed` / 换更快 LLM）才是根治——每轮日志的"本轮吞吐 ≈ N× 实时"（N<1）即判据。
+- **消费者（session task，`app/downlink/sender.rs::drain_reservoir`）**：起跑闸（`downlink_buffer_start_ms`，短回复立即放行）→ `tts start`（一轮一次，首项到达时）→ 从水库按实时节拍取 `sentence_start(text)` / 音频帧逐帧下行（`DownlinkPacer` + 逐帧轮询打断）→ `tts stop`；每轮打印**设备解码队列余量最低估计**（断音现场证据）、**水库水位/背压/上游断供**（该调水库还是该治上游）、**下载缓冲水位/限速**（下载是否被按预算压住）与**本轮吞吐**（音频 / 播放窗口，< 1.0× 即上游持续慢于实时）。
+- **TTFA 打点**：首帧实际下发日志 `TTFA≈xxms`（含起跑闸等待/水位）；本轮完成日志含耗时/音频时长/字数/工具调用数/句数。
 - **历史压入**：仅未中断且流正常结束时压入 `history`，避免脏历史。
-- **`tts_test` 路径**：`send_tts_audio` 重构为 `send_tts_start`/`send_sentence_audio`/`send_tts_stop` 三段复用，测试台与设备流水线同一下行实现。
+- **`tts_test` 路径 / AIUI 全链路**：走**同一条**水库 + 节拍器链路（`spawn_single_sentence_filler` + `drain_reservoir`），只有"音频从哪来"不同。
 
 > `take_sentence` 已知 case：英文缩写 `Mr./Dr.` 误切——第一版接受，后续可加「标点后空格+小写则续」启发式，不阻塞。
 
@@ -162,6 +165,26 @@ ESP 类设备是受限端（MCU、opus 固定 60ms 帧、带宽有限），serve
 **废弃处理**：删除 `session.rs:157-166` 的 `mcp` 回显；`iot` 消息类型不新增（固件已废弃）。
 
 **边界**：`features.mcp` 为 `false` 的设备 → 不启用 `tools`，LLM 纯文本（向后兼容）。
+
+**已落地（2026-10-11，部分）**
+- ✅ `mcp` 回显已删除：`handle_text` 的 `ClientMessage::Mcp` 分支只记一行日志（不再把设备 payload 发回去）。
+- ✅ MCP **客户端底座**就绪：协议原语 `server/src/app/mcp.rs`（纯函数，报文形态逐字对齐固件）
+  + 请求-响应关联 `server/src/app/session/mcp.rs`。`features.mcp` 已从 hello 透传进 `run_session`。
+  ⚠️ 关联方式分两种：**主循环内**发起的调用用同任务抽帧（`await_tool_reply`，内联 await = 死锁）；
+  本节的 LLM 闭环在**独立 task** 里跑，届时按上面的 `pending_mcp: HashMap<id, oneshot>` 接入。
+- ✅ 第一个真实用例：指令闸门「退下」→ 告别语后 `tools/call` 调 `self.audio_listener.stop`
+  （固件 `AddUserOnlyTool`），让设备**自己**结束聆听——音频通道保留、下次唤醒不重连；
+  设备不支持 / 未刷该工具 / 超时一律降级为断开本次会话（见 `agents.md` §5.2f）。
+- ✅ **能力发现已落地**（2026-10-11，路线 A 的第一块可见能力）：会话开始时 `initialize` +
+  `tools/list`（`withUserTools: true` 拉全量，靠 `annotations.audience` 标 `user_only`）→
+  落 `app/mcp/registry.rs`（按 `device_id`，64 台上界）→ `GET /api/mcp/tools` →
+  管理页「MCP 工具」tab。**探测失败不致命**（预算 2s；失败保留上次结果）；探测期间的上行帧
+  缓冲后按原序补派发（`BinaryPolicy::Keep`，一帧不丢）。测试台会话不探测。
+  **本次只做"可见性"**：服务器还没有把这些工具喂给 LLM（即下面的待办）。
+- ⏳ 仍待办（本节 1~3 步）：把已发现工具的 `params`/`signature` 转 `ToolSpec` 喂 LLM
+  → 收集 `tool_calls` → 结果作为 `function_call_output` 回填后再流式一轮。
+  ⚠️ 这一步的调用发生在**独立 task** 内，请求-响应关联要按上面的 `pending_mcp: HashMap<id, oneshot>`
+  接（**不能**用主循环的抽帧泵：那样会与主循环抢同一份上行帧）。
 
 ### 3.4 打断 / 保活 / 健壮性（贯穿全链路）✅ 已落地（除设备头记录）
 
@@ -218,6 +241,9 @@ ESP 类设备是受限端（MCU、opus 固定 60ms 帧、带宽有限），serve
 | `[llm].stream` | **新增**（默认 `true`）；`false` 退回整段（兼容不支持 SSE 的端点） |
 | `[llm].tools`（或设备 `features.mcp` 驱动） | **新增**：设备能力 schema 来源；`false`/不支持时 LLM 纯文本 |
 | `[audio].binary_protocol_version` | **默认值 1 → 3**（最新推荐）；实际下行版本以设备 `hello.version` 为准，此字段仅作设备未协商时的兜底 |
+| `[audio].downlink_lead_ms` / `downlink_queue_packets` | **新增**（2026-10）：设备解码队列口径（lead 默认 1000ms、包数默认 20），超限收敛并告警 |
+| `[audio].downlink_buffer_ms` / `downlink_buffer_start_ms` / `downlink_buffer_start_max_ms` | **新增**（2026-10）：服务器侧水库（内存换流畅）。容量默认 **30000ms**（上限 180000）、起跑闸默认 1500ms、闸门最长等待默认 4000ms；0 = 关闭。三条不变式由 `AudioConfig::normalize` 收敛 |
+| `[audio]` 下载缓冲预算 | **新增**（2026-10，**无独立配置键**）：`AudioConfig::download_budget_ms()` = `clamp(downlink_buffer_ms, 1000, 10000)`，控制 TTS 流下载流速（积压到预算即暂停下载），见 `app/prefetch.rs::DownloadBudget` |
 | `[vad].min_silence_duration` | 可选下调以更快切句（权衡误切），不改默认值 |
 
 ---

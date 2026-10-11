@@ -4,11 +4,12 @@
 //! **子模块可直接访问其私有字段**，因此拆分无需放宽任何可见性。
 
 use std::sync::atomic::Ordering;
-use std::time::Duration;
+use std::time::Instant;
 
 use crate::app::downlink::{
-    poll_abort, send_cached_sentence_audio, send_sentence_audio_stream, send_tts_state,
+    drain_reservoir, new_reservoir, send_tts_state, spawn_reservoir_filler,
 };
+use crate::app::prefetch::{PreparedSentence, SentenceSource};
 use crate::app::protocol::ServerMessage;
 use crate::app::splitter::SentenceSplitter;
 use crate::app::transport::Transport;
@@ -17,6 +18,17 @@ use crate::plugins::llm::LlmEvent;
 use crate::plugins::prompt::TurnPrompt;
 
 use super::{send_text, Session, FALLBACK_REPLY};
+
+/// 一次回复的下行结果（供日志与兜底判定）。
+#[derive(Debug, Default, Clone, Copy)]
+struct DownlinkOutcome {
+    /// 已下发句数（含缓存命中句）
+    sentences: usize,
+    /// 已下发音频帧数（整轮）：`frames × 帧长` = 本轮音频时长（与整轮耗时对比判节流）
+    frames: usize,
+    /// 是否被打断（abort / 承载断开）
+    interrupted: bool,
+}
 
 impl<'a, T: Transport> Session<'a, T> {
     /// 组装本轮 prompt：人格（`[soul]`）+ 记忆召回（`[memory]`，关键路径**硬预算**）。
@@ -144,7 +156,7 @@ impl<'a, T: Transport> Session<'a, T> {
         let prompt = self.build_turn_prompt(user_text).await;
         // 生产者：读 LLM 流 → 按句切分 → channel。
         // unbounded：文本量级小（KB），无需反压；闭包借用 splitter/tx，流结束后仍可 flush。
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
         let producer = {
             // 本轮固定用"当前生效"的 LLM 引擎（读锁后克隆 Arc）：热切换发生在会话之间，
             // 不会在一轮对话中途换掉引擎。
@@ -180,61 +192,19 @@ impl<'a, T: Transport> Session<'a, T> {
             })
         };
 
-        // 消费者：tts start → 逐句（sentence_start + spawn_blocking TTS + 逐帧下行）→ tts stop
+        // 预取：句子 → 成品（下一句的合成跑在**本句播放期间**，消除句间合成气泡——
+        // 在线合成每次调用都是一条短连接，旧串行实现每句边界都要重付一次握手延迟）
+        let (prepared, download) = self.spawn_prefetch(rx);
+        // 消费者：水库按实时节拍抽取下发（`tts start` 在首项到达时才发）→ 整轮结束 `tts stop`
         // 新一轮回复：节拍器时间表重置（本回复内各句共享同一时间表 → 句间无缝）
         self.pacer.reset();
-        // 首帧实际下发时刻（TTFA 观测用；pacing 后"句子下发完成"≠首帧出声时刻）
-        let mut first_frame_at: Option<std::time::Instant> = None;
-        let mut tts_started = false;
-        let mut interrupted = false;
-        let mut sentences_done = 0usize;
-        let mut last_ping = std::time::Instant::now();
-        loop {
-            // 200ms 粒度等待下一句：等待间隙轮询打断 + 定期 ping 保活
-            match tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
-                Ok(Some(sentence)) => {
-                    if poll_abort(self.transport, &self.session_id, &self.abort) {
-                        interrupted = true;
-                        break;
-                    }
-                    if !tts_started {
-                        send_tts_state(self.transport, &self.session_id, "start").await?;
-                        tts_started = true;
-                    }
-                    let frames = self.speak_sentence(&sentence, &mut first_frame_at).await?;
-                    sentences_done += 1;
-                    if sentences_done == 1 {
-                        // TTFA = 用户文本就绪 → **首帧音频实际下发**（非句子播完）
-                        let ttfa_ms = first_frame_at
-                            .map(|t| t.duration_since(t0).as_millis())
-                            .unwrap_or_else(|| t0.elapsed().as_millis());
-                        tracing::info!(
-                            "session {session_id} 首帧音频已下发（TTFA≈{ttfa_ms}ms，本句 {frames} 帧）"
-                        );
-                    }
-                    if poll_abort(self.transport, &self.session_id, &self.abort) {
-                        interrupted = true;
-                        break;
-                    }
-                }
-                Ok(None) => break, // 生产者结束（tx 已 drop）
-                Err(_elapsed) => {
-                    // 等待超时：轮询打断 + 长静默期 Ping 保活（tungstenite 自动回 Pong）
-                    if poll_abort(self.transport, &self.session_id, &self.abort) {
-                        interrupted = true;
-                        break;
-                    }
-                    if last_ping.elapsed() >= Duration::from_secs(10) {
-                        last_ping = std::time::Instant::now();
-                        self.transport.keepalive().await;
-                    }
-                }
-            }
-        }
-        if tts_started {
-            // 打断时也发 stop：设备据此立即停止播放并清理队列
-            send_tts_state(self.transport, &self.session_id, "stop").await?;
-        }
+        let outcome = self.drain_prepared(prepared, download, t0).await?;
+        let DownlinkOutcome {
+            sentences: sentences_done,
+            frames: frames_total,
+            interrupted,
+            ..
+        } = outcome;
 
         // 汇总 LLM 结果；仅未打断且流正常结束时压入历史，避免脏历史
         let llm_out = match producer.await {
@@ -251,14 +221,14 @@ impl<'a, T: Transport> Session<'a, T> {
                 // ⚠️ 语音场景**绝不能静默**：用户听不到任何声音 = "AI 没反应"（最差体验，
                 // 也是此前运行期失败全部只 warn! 的老问题）。一个字都还没下发时，用一句
                 // 兜底话术回应；已经出过声就不再补充（避免"说完半句又道歉"）。
-                if !interrupted && !tts_started {
+                if !interrupted && frames_total == 0 {
                     self.speak_fallback(FALLBACK_REPLY).await?;
                 }
                 return Ok(());
             }
             Err(e) => {
                 tracing::warn!("session {session_id} LLM 任务异常: {e}");
-                if !interrupted && !tts_started {
+                if !interrupted && frames_total == 0 {
                     self.speak_fallback(FALLBACK_REPLY).await?;
                 }
                 return Ok(());
@@ -266,8 +236,13 @@ impl<'a, T: Transport> Session<'a, T> {
         };
         // 令牌计量：回答"成本多少 / 记忆与灵魂让上下文长了多少"
         self.engines.usage.record(&session_id, llm_out.usage);
+        // ⚠️ 这里打印的是**整轮耗时**（t0 → 最后一帧下发完成），不是"LLM 流耗时"：
+        // 旧文案写"LLM 流 Xms"会让人误读成 LLM 吞吐（曾据此误判上游速度）。
+        // 与"音频 Xms"对比才是判断节流的正确口径：两者接近 = 全程实时无缝；
+        // 耗时远大于音频 = 中间被供数拖住了（结合下面的队列余量日志定位是谁慢）。
+        let audio_ms = frames_total as u64 * self.params.downlink_frame_ms.max(1) as u64;
         tracing::info!(
-            "session {session_id} 本轮完成：LLM 流 {}ms / {} 字 / {} 个工具调用，下发 {sentences_done} 句{}",
+            "session {session_id} 本轮完成：耗时 {}ms / 音频 {audio_ms}ms（{frames_total} 帧）/ LLM 输出 {} 字 / {} 个工具调用，下发 {sentences_done} 句{}",
             t0.elapsed().as_millis(),
             llm_out.text.chars().count(),
             llm_out.tool_calls.len(),
@@ -302,120 +277,223 @@ impl<'a, T: Transport> Session<'a, T> {
 
     /// 主动说一句**非 LLM 生成**的话（LLM 失败兜底 / 指令闸门的告别语）。
     ///
-    /// 抽成方法是为了让"必须由本地下行链路说出的一句话"只有一个实现：tts start →
-    /// 逐句合成下发 → tts stop，缓存/节拍器/打断语义与正常回复完全一致。
-    /// 合成失败只记日志（调用方各自决定后续行为：兜底继续返回、指令闸门照常断开）。
+    /// 走与正常回复**完全同一条**下行链路（预取 → 节拍器 → tts start/stop），
+    /// 因此听感与打断语义一致；合成失败只记日志（调用方各自决定后续行为：
+    /// 兜底继续返回、指令闸门照常断开）。
     pub(super) async fn speak_canned(&mut self, text: &str) -> anyhow::Result<()> {
         // 一句独立的话 = 一次独立回复：节拍器时间表重置（指令闸门路径不会经过
         // `stream_response` 的 reset，不重置会沿用上一轮的时间锚点）。
         self.pacer.reset();
-        send_tts_state(self.transport, &self.session_id, "start").await?;
-        let mut first_frame_at: Option<std::time::Instant> = None;
-        if let Err(e) = self.speak_sentence(text, &mut first_frame_at).await {
-            tracing::warn!("话术下发失败: {e}");
+        // 自包含：清掉上一轮遗留的打断标志。否则预取 worker 在入口即退出，
+        // `tts start`/`stop` 都不发 —— 客户端/测试台会卡在"合成中"，用户则听到静音。
+        // 指令闸门路径本来就会清（见 `command.rs`），这里给兜底路径补上同一语义。
+        self.abort.store(false, Ordering::Relaxed);
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let _ = tx.send(text.to_string());
+        drop(tx); // 只有一句 → 关掉句子流，预取 worker 处理完即退出
+        let (prepared, download) = self.spawn_prefetch(rx);
+        let t0 = Instant::now();
+        match self.drain_prepared(prepared, download, t0).await {
+            Ok(o) if o.sentences == 0 => {
+                tracing::warn!("session {} 话术未下发任何音频: {text}", self.session_id);
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!("session {} 话术下发失败: {e}", self.session_id),
         }
-        send_tts_state(self.transport, &self.session_id, "stop").await?;
         Ok(())
     }
 
-    /// 合成**一句**并下行（含结果缓存命中路径），返回下发帧数。
+    /// 启动逐句**预取**（见 [`crate::app::prefetch`]）：句子流 → 成品流。
     ///
-    /// 抽成方法是为了让 LLM 失败时的**兜底话术**复用同一条经过验证的下行链路
-    /// （结果缓存 / 节拍器 / 首帧时刻 / 打断语义全都一致），而不是另写一份简化实现。
-    async fn speak_sentence(
-        &mut self,
-        sentence: &str,
-        first_frame_at: &mut Option<std::time::Instant>,
-    ) -> anyhow::Result<usize> {
-        let session_id = self.session_id.clone();
-        // 流式合成：spawn_blocking 里跑引擎（同步阻塞），分片经 channel 回流；
-        // 本 task 边收边重采样/编码/下发——首片即发声（TTFA 从「整句合成完」提前到
-        // 「首片合成完」）。abort 时回调返回 false，引擎尽早停止合成。
-        // 缓存命中（同一句已合成过：引擎签名+音色+语速+下行参数+文本同键）跳过合成，
-        // 已编码帧直接按节拍下发——高频短句 TTFA 降到一次预充突发。
-        // 会话级最新快照（热刷新后的值）：发音人/语速/引擎签名都要跟着变，
-        // 否则切引擎后缓存键仍是旧签名，可能命中上一个引擎的音频。
-        let live = self.engines.live_config();
-        let speed = live.tts.speed;
-        let speaker = live.tts.speaker;
-        let cache_key = TtsCache::make_key(
-            // 引擎签名口径的唯一权威在注册表（含密钥字段，仅内存比较、不打日志）
-            &crate::plugins::registry::signature_of(
-                &live,
-                crate::plugins::registry::Capability::Tts,
-            ),
-            speaker,
-            speed,
-            self.params.downlink_sr,
-            self.params.downlink_frame_ms,
-            &sentence,
-        );
-        let frames = if let Some(cached) = self.engines.tts_cache.get(cache_key) {
-            tracing::debug!(
-                "session {session_id} TTS 缓存命中（{} 帧直接下发）",
-                cached.opus_frames.len()
-            );
-            send_cached_sentence_audio(
-                self.transport,
-                &self.params,
-                &mut self.downlink_ts,
-                &self.abort,
-                &self.session_id,
-                sentence,
-                &cached.opus_frames,
-                &mut self.pacer,
-                first_frame_at,
-            )
-            .await?
-        } else {
-            let tts = self.engines.tts();
-            let tts_sr = tts.output_sample_rate();
-            let t_tts = std::time::Instant::now();
-            let s = sentence.to_string();
-            let (tx, chunk_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<f32>>();
-            let producer = tokio::task::spawn_blocking(move || {
-                tts.synthesize_stream(
-                    &s,
-                    speed,
+    /// 每句都按**会话级最新配置**解析引擎/音色/语速/引擎签名与缓存键——与旧实现的
+    /// "句间热切换"语义一致（切引擎后不会命中上一个引擎的缓存音频）。
+    ///
+    /// 同时建出本轮的**下载缓冲**（[`DownloadBudget`]）：合成回调据此按预算暂停/恢复
+    /// TTS 流下载（内存换性能 + 下载限速），返回值随行交给 [`Self::drain_prepared`]
+    /// 打印每轮观测。
+    fn spawn_prefetch(
+        &self,
+        sentences: tokio::sync::mpsc::UnboundedReceiver<String>,
+    ) -> (
+        tokio::sync::mpsc::Receiver<PreparedSentence>,
+        std::sync::Arc<crate::app::prefetch::DownloadBudget>,
+    ) {
+        let engines = self.engines.clone();
+        let params = self.params;
+        let download =
+            crate::app::prefetch::DownloadBudget::new(self.params.download_buffer_ms);
+        let prepared = crate::app::prefetch::spawn_sentence_prefetch(
+            self.abort.clone(),
+            self.engines.tts_cache.clone(),
+            download.clone(),
+            move |sentence: &str| {
+                let live = engines.live_config();
+                let speed = live.tts.speed;
+                let speaker = live.tts.speaker;
+                // 引擎签名口径的唯一权威在注册表（含密钥字段，仅内存比较、不打日志）
+                let cache_key = TtsCache::make_key(
+                    &crate::plugins::registry::signature_of(
+                        &live,
+                        crate::plugins::registry::Capability::Tts,
+                    ),
                     speaker,
-                    Box::new(move |_sr, chunk| tx.send(chunk.to_vec()).is_ok()),
-                )
-            });
-            let mut cache_buf: Vec<Vec<u8>> = Vec::new();
-            let frames = send_sentence_audio_stream(
-                self.transport,
-                &self.params,
-                &mut self.downlink_ts,
-                &self.abort,
-                &self.session_id,
-                sentence,
-                tts_sr,
-                chunk_rx,
-                &mut self.pacer,
-                Some(&mut cache_buf),
-                first_frame_at,
-            )
-            .await?;
-            let synth_result = producer.await;
-            match synth_result {
-                Ok(Ok(())) => {
-                    tracing::debug!(
-                        "session {session_id} 句子合成完成（耗时 {}ms）",
-                        t_tts.elapsed().as_millis()
-                    );
-                    // 完整合成成功才入缓存（打断/合成失败的残缺句不缓存）
-                    if !cache_buf.is_empty() {
-                        self.engines.tts_cache.insert(cache_key, cache_buf);
-                    }
-                }
-                Ok(Err(e)) => tracing::warn!(
-                    "session {session_id} 句子合成失败（耗时 {}ms）: {e}",
-                    t_tts.elapsed().as_millis()
-                ),
-                Err(e) => tracing::warn!("session {session_id} 合成任务异常: {e}"),
+                    speed,
+                    params.downlink_sr,
+                    params.downlink_frame_ms,
+                    sentence,
+                );
+                SentenceSource { tts: engines.tts(), cache_key, speed, speaker }
+            },
+            sentences,
+        );
+        (prepared, download)
+    }
+
+    /// 消费预取成品：水库填充 → 按实时节拍下发 → `tts stop`。
+    ///
+    /// 分工（见 `app/downlink` 模块文档）：
+    /// - **填充任务**（[`spawn_reservoir_filler`]）在后台把每句合成/编码后的帧按序推入
+    ///   **服务器内存水库**（`[audio].downlink_buffer_ms`，默认 30s），满则等待（背压）；
+    /// - **本函数**（发送端）按实时节拍从水库取帧下发——上游停顿由水库存货吸收，
+    ///   设备解码队列不再被抽干（这是"长回复断续"的正面解）。
+    ///
+    /// 每轮结束打印三类观测：节拍器的**设备解码队列余量最低估计**（断音现场证据）、
+    /// 水库水位/饥饿（上游供数是否慢于播放）、下载缓冲水位/限速（TTS 流下载是否被按预算压住）
+    /// 与**本轮吞吐**（音频时长 / 播放窗口，< 1.0× 即上游持续慢于实时——缓冲只能推迟断音）。
+    async fn drain_prepared(
+        &mut self,
+        prepared: tokio::sync::mpsc::Receiver<PreparedSentence>,
+        download: std::sync::Arc<crate::app::prefetch::DownloadBudget>,
+        t0: Instant,
+    ) -> anyhow::Result<DownlinkOutcome> {
+        let session_id = self.session_id.clone();
+        // 水库容量与起跑闸都取**会话级快照**（`[audio]` 是 restart_only，会话内不变）
+        let (sink, source) =
+            new_reservoir(self.params.downlink_buffer_ms, self.params.downlink_frame_ms);
+        let filler = spawn_reservoir_filler(
+            self.abort.clone(),
+            self.engines.tts_cache.clone(),
+            self.params,
+            prepared,
+            sink,
+        );
+        // 首帧实际下发时刻（TTFA 观测用；pacing 后"句子下发完成"≠首帧出声时刻）
+        let mut first_frame_at: Option<Instant> = None;
+        let drain = drain_reservoir(
+            self.transport,
+            &self.params,
+            &self.session_id,
+            &self.abort,
+            &mut self.downlink_ts,
+            &mut self.pacer,
+            source,
+            t0,
+            &mut first_frame_at,
+        )
+        .await?;
+        // 收尾：正常路径填充任务已自行收工（写端丢弃）；打断/异常时立刻停掉，
+        // 别再白合成、白编码本轮剩余音频。
+        filler.abort();
+        if drain.tts_started {
+            // 打断时也发 stop：设备据此进入"排空 → 聆听"（**不会**清空解码队列，见
+            // `downlink.rs` 的节拍器文档：残留量 ≈ 提前量）
+            send_tts_state(self.transport, &self.session_id, "stop").await?;
+        }
+        self.log_downlink(&session_id, &drain, &download, first_frame_at);
+        Ok(DownlinkOutcome {
+            sentences: drain.sentences,
+            frames: drain.frames,
+            interrupted: drain.interrupted,
+        })
+    }
+
+    /// 每轮下行汇总日志：① 设备解码队列余量最低估计（断音现场证据）；
+    /// ② 水库水位/背压/饥饿（上游供数速度——判断"该调大水库还是该治上游"）；
+    /// ③ 下载缓冲水位/限速（TTS 流下载是否被预算压住）；
+    /// ④ **本轮吞吐**（音频时长 / 播放窗口）：< 1.0× 即上游持续慢于实时。
+    fn log_downlink(
+        &self,
+        session_id: &str,
+        drain: &crate::app::downlink::ReservoirDrain,
+        download: &crate::app::prefetch::DownloadBudget,
+        first_frame_at: Option<Instant>,
+    ) {
+        let stats = self.pacer.stats();
+        let res = drain.reservoir;
+        let frame_ms = self.params.downlink_frame_ms.max(1) as i64;
+        let lead = self.params.downlink_lead_ms as i64;
+        // 安全上限随设备队列包数与帧长而定（见 `[audio].downlink_queue_packets`）
+        let cap = self.engines.live_config().audio.max_lead_ms();
+        match stats.queue_min_ms {
+            Some(depth) if depth < frame_ms => tracing::warn!(
+                "session {session_id} 本轮下行**断音**：设备解码队列余量最低估计 {depth}ms（< 1 帧 {frame_ms}ms）\
+                 ，真空 {} 次（最长 {}ms），抖动缓冲 {lead}ms。——上游供数慢于播放（LLM 出句 / TTS 合成 RTF）\
+                 或网络抖动；可上调 [audio].downlink_lead_ms（当前安全上限 {cap}ms，受设备解码队列包数×帧长限制，\
+                 想更深必须先放大固件 MAX_DECODE_PACKETS_IN_QUEUE）、或调大 [audio].downlink_buffer_ms / \
+                 downlink_buffer_start_ms（服务器侧水库），或降低合成耗时",
+                stats.vacuum_events,
+                stats.max_vacuum_ms
+            ),
+            Some(depth) => tracing::info!(
+                "session {session_id} 本轮下行平顺：设备解码队列余量最低估计 {depth}ms，真空 {} 次（最长 {}ms）",
+                stats.vacuum_events,
+                stats.max_vacuum_ms
+            ),
+            None => tracing::debug!("session {session_id} 本轮下行过短，未采集队列余量"),
+        }
+        tracing::info!(
+            "session {session_id} 本轮水库：容量 {}ms（峰值水位 {}ms / {}KB），起跑闸等待 {}ms（水位 {}ms），\
+             背压 {}ms，上游断供 {} 次（累计 {}ms）{}",
+            res.cap_ms,
+            res.peak_ms,
+            res.peak_bytes / 1024,
+            res.gate_ms,
+            res.gate_depth_ms,
+            res.backpressure_ms,
+            res.starve_events,
+            res.starve_ms,
+            if res.starve_ms > 0 {
+                "——上游供数慢于播放：调大 [audio].downlink_buffer_ms / downlink_buffer_start_ms 可再吸收一段"
+            } else {
+                ""
             }
-            frames
-        };
-        Ok(frames)
+        );
+        // ③ 下载缓冲（PCM）：预算 = 上游 PCM 积压上限；限速等待 > 0 = 服务端按预算压住了下载
+        //    速率（上游下载快于消费，内存因此有界——这正是"根据缓存需要控制下载流速"）
+        let dl = download.stats();
+        tracing::info!(
+            "session {session_id} 本轮下载缓冲：预算 {}ms（峰值水位 {}ms），下载限速等待 {}ms / {} 次{}",
+            dl.budget_ms,
+            dl.peak_ms,
+            dl.throttle_ms,
+            dl.throttle_events,
+            if dl.throttle_ms > 0 {
+                "——TTS 流下载快于消费，已按预算压住（内存有界）"
+            } else {
+                ""
+            }
+        );
+        // ④ 本轮吞吐：音频时长 / **播放窗口**（首帧 → 末帧，TTFA 不计入）。
+        //    < 1.0× 说明上游**持续**慢于实时：缺口是累积的，缓冲只能推迟断音、不能消除
+        //    （见 `config::AudioConfig::downlink_buffer_ms` 文档的"所需缓冲"公式）。
+        let audio_ms = drain.frames as u64 * self.params.downlink_frame_ms.max(1) as u64;
+        if let Some(first) = first_frame_at {
+            let window_ms = first.elapsed().as_millis() as u64;
+            if window_ms > 0 && audio_ms > 0 {
+                let rate = audio_ms as f64 / window_ms as f64;
+                if rate < 0.98 {
+                    tracing::warn!(
+                        "session {session_id} 本轮吞吐：音频 {audio_ms}ms / 播放窗口 {window_ms}ms ≈ {rate:.2}× 实时\
+                         ——上游**持续**慢于播放，缓冲只能把断音往后推、不能消除。根治方向：提高 [tts].speed\
+                         （音频变短，直接缩小缺口）、换更快的 LLM/TTS，或把 [audio].downlink_buffer_start_ms\
+                         调大（先攒后播：要整轮不断音需攒 ≈ (1/{rate:.2} − 1) × {audio_ms}ms）"
+                    );
+                } else {
+                    tracing::info!(
+                        "session {session_id} 本轮吞吐：音频 {audio_ms}ms / 播放窗口 {window_ms}ms ≈ {rate:.2}× 实时（上游跟得上播放）"
+                    );
+                }
+            }
+        }
     }
 }

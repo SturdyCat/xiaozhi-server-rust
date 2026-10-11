@@ -185,7 +185,7 @@ sequenceDiagram
 | 段 | 关键项 | 说明 |
 |---|---|---|
 | `[server]` | `port`、`expected_token`、`worker_threads` | 监听端口（永远绑 0.0.0.0）、Bearer 鉴权（空 = 不校验）、tokio worker 线程数 |
-| `[audio]` | `downlink_sample_rate`、`downlink_frame_duration_ms`、`binary_protocol_version` | 下行音频参数，写入服务器 hello |
+| `[audio]` | `downlink_sample_rate`、`downlink_frame_duration_ms`、`binary_protocol_version`、`downlink_lead_ms`、`downlink_queue_packets`、`downlink_buffer_ms`、`downlink_buffer_start_ms`、`downlink_buffer_start_max_ms` | 下行音频参数（写入服务器 hello）+ 设备队列口径 + 服务器侧**三段缓冲**（PCM 下载缓冲按秒限速 → Opus 水库多秒 → 实时节拍；`download_budget_ms()` 由 `downlink_buffer_ms` 派生，无独立键） |
 | `[asr]` | `backend`（mock/sherpa）、`model`、`tokens`、`language`、`num_threads` | SenseVoice 离线识别 |
 | `[vad]` | `model`、`threshold`、`min_silence_duration` | Silero VAD 切段 |
 | `[tts]` | `backend`、`model`、`voices`、`tokens`、`data_dir`、`dict_dir`、`lexicon`、`lang`、`speaker`、`speed` | Kokoro 合成（中英）；`lang` 建模时固定，测试台切语言按需另建引擎 |

@@ -107,7 +107,8 @@ pub struct Config {
     #[serde(default)]
     pub memory: MemoryConfig,
     /// 语音指令闸门（`[command]`）：ASR → LLM **之前**拦截「退下/闭嘴/关闭」这类指令，
-    /// 命中即说一句告别语并断开本次会话（跳过 LLM 与正常回复）。默认关闭。
+    /// 命中即说一句告别语，再用 MCP 让设备结束聆听（设备不支持 MCP 时断开本次会话），
+    /// 跳过 LLM 与正常回复。默认关闭。
     #[serde(default)]
     pub command: CommandConfig,
 }
@@ -143,11 +144,61 @@ pub struct AudioConfig {
     #[serde(default = "default_bin_ver")]
     pub binary_protocol_version: u8,
     /// 下行抖动缓冲（提前量，毫秒）：下发时间表整体比实时**提前** lead_ms，
-    /// 使设备解码队列常备约 lead_ms 的音频存货，吸收网络/调度抖动。
-    /// ESP 固件解码队列上限 20 包（60ms 帧 ≈ 1200ms），默认 240ms（4 帧）远低于上限；
-    /// 上限建议 ≤400ms（约 6~7 包），超过会明显增加打断（barge-in）的响应延迟。
+    /// 使设备解码队列常备约 lead_ms 的音频存货，吸收网络/调度抖动**以及上游
+    /// LLM 出句/TTS 合成的停顿**（长回复"前面流畅、后面断续"的根因，见 `app/prefetch.rs`）。
+    ///
+    /// 默认 1000ms：逼近设备侧硬上限（见 [`AudioConfig::downlink_queue_packets`]）。
+    /// 设备缓冲是"后续断续"的唯一解药，而 ESP 固件 20 包队列（60ms 帧）只装得下 ~1.1s；
+    /// 想要更多必须先改固件。安全上限 = `(队列包数 − 2) × 帧长`，超限由
+    /// [`AudioConfig::normalize`] 收敛并告警（开局预充超队容量 = 固件静默丢包 = 回复开头少一截）。
+    /// ⚠️ 代价（固件实测语义）：`tts stop` 不清队列，设备会把已缓存的 ~lead 音频播完才
+    /// 进入聆听 → 提前量越大，**打断后的"停口"越晚**（240ms ≈ 一个字，1000ms ≈ 三个字）。
     #[serde(default = "default_downlink_lead_ms")]
     pub downlink_lead_ms: u32,
+    /// 设备解码队列**包数**：必须与固件一致
+    ///（`main/audio/audio_service.h` 的 `MAX_DECODE_PACKETS_IN_QUEUE`；官方默认 20 包）。
+    ///
+    /// ⚠️ 单位是**包**不是毫秒：队列能装多少音频取决于协商帧长（`20 × 帧长`，60ms 帧
+    /// → 1200ms；40ms 帧 → 800ms）。服务端据此推出 [`Self::max_lead_ms`]。
+    ///
+    /// 想要"更多缓存"时它是唯一开关：① 改固件把队列包数放大（如 `4000/OPUS_FRAME_DURATION_MS`
+    /// = 66 包）→ ② 重刷设备 → ③ 本项改为 66 → ④ 调大 `downlink_lead_ms`。
+    /// 只改服务端不改固件无效：超出队容量的下行帧会被固件**静默丢弃**（零日志）。
+    #[serde(default = "default_downlink_queue_packets")]
+    pub downlink_queue_packets: u32,
+    /// **服务器侧下行水库容量**（毫秒）：把已编码的 Opus 帧在服务器内存里多备几秒，
+    /// 发送端从水库取（而不是"现合成、现发送"）。这是设备队列（~1.2s 硬上限，见
+    /// [`Self::downlink_queue_packets`]）之外**唯一**能继续加深缓冲的地方——
+    /// 用服务器内存换下行连续性。
+    ///
+    /// 为什么需要：上游（LLM 出句 / 在线 TTS 首片）只要持续慢于实时，设备那 ~1s 存货
+    /// 必被抽干 → 长回复"从中间某句起断断续续"。水库把"已合成好的音频"提前备好，
+    /// 发送端就能在**上游停顿**时继续按实时节奏供数；听感连续的前提是
+    /// `停顿 ≤ 水库水位 + 设备队列`。
+    ///
+    /// 内存口径：水库里是**已编码帧**（约 2KB/s），30s ≈ 60KB/会话，代价可忽略；
+    /// 真正的代价是**起跑延迟**（见 [`Self::downlink_buffer_start_ms`]）。
+    /// 0 = 关闭水库缓冲（退化为逐帧直通，仅保留节流）。
+    ///
+    /// ⚠️ 水库只能"备住**已经合成出来**的音频"。上游**平均**慢于实时（如 LLM 逐字吐出
+    /// 只有 0.6× 实时）时，缺口是**累积**的，要整轮不断音就得先把累计缺口攒出来：
+    /// `所需缓冲 ≈ (1/生产速率 − 1) × 音频总长`（0.64× 生产 + 80s 音频 → 约 45s）。
+    /// 因此 30s 默认值解决的是"上游**间歇**停顿"，不是"上游**持续**慢"——后者只有
+    /// 提高 `[tts].speed`（音频变短）或换更快的 LLM/TTS 才是根治（见每轮吞吐日志）。
+    #[serde(default = "default_downlink_buffer_ms")]
+    pub downlink_buffer_ms: u32,
+    /// **起跑闸**（毫秒）：本轮首帧下发前，先等水库攒够这么多音频再开播。
+    ///
+    /// 上游略慢于实时且立刻开播时，缺口会被摊成一整轮的断续（听感最差）；先攒一段再播，
+    /// 缺口由水库吸收，代价是一次性起跑等待。生产端已收工（短回复）时闸门立刻放行，
+    /// 不会白等。0 = 关闭（首帧一到就发，TTFA 最小）。
+    /// 上限受 [`Self::downlink_buffer_ms`] 约束（攒不出比容量更多的音频）。
+    #[serde(default = "default_downlink_buffer_start_ms")]
+    pub downlink_buffer_start_ms: u32,
+    /// 起跑闸**最长等待**（毫秒）：生产端持续慢于实时时不把首帧无限期拖住。
+    /// 到点即以当前水位起跑（日志会写明"上游供数慢于实时"）。
+    #[serde(default = "default_downlink_buffer_start_max_ms")]
+    pub downlink_buffer_start_max_ms: u32,
 }
 
 impl Default for ServerConfig {
@@ -160,6 +211,125 @@ impl Default for ServerConfig {
         }
     }
 }
+
+impl AudioConfig {
+    /// 下行抖动缓冲**安全上限**（毫秒）。
+    ///
+    /// 固件解码队列是 **N 包**（不是固定毫秒）：一包装 `帧长` 毫秒音频。节拍器开局预充
+    /// `ceil(lead/帧长)+1` 帧（见 `app/downlink.rs`），队满即**静默丢包**（固件返回 false、
+    /// 零日志）。故安全上限 = `(包数 − 2) × 帧长`——
+    /// 60ms 帧 → `18 × 60 = 1080ms`；40ms 帧 → `18 × 40 = 720ms`（**不能**按 1200ms 算！）。
+    pub fn max_lead_ms(&self) -> u32 {
+        self.downlink_queue_packets
+            .saturating_sub(2)
+            .saturating_mul(self.frame_ms())
+    }
+
+    /// 协商帧长（毫秒），恒 ≥1：0 会让节拍器"零等待"退化成尽速灌入（见 `normalize`）。
+    pub fn frame_ms(&self) -> u32 {
+        self.downlink_frame_duration_ms.max(1)
+    }
+
+    /// **下载缓冲预算**（毫秒）：TTS 流下载在积压达到它时暂停（见
+    /// `app::prefetch::DownloadBudget`），消费（编码入水库）释放额度后恢复。
+    ///
+    /// 为什么由水库容量**派生**而不是独立开关：两者的"多秒"是同一个运维意图
+    ///（用服务器内存换下行连续），分两个旋钮只会让人调错；而两者又**不能等深**——
+    /// 水库里是 Opus 帧（~2KB/s，30s ≈ 60KB），下载缓冲里是 PCM f32（~64KB/s @16kHz，
+    /// 是前者的 ~30 倍），等深会把每会话内存从几十 KB 抬到几 MB。
+    ///
+    /// 故夹在 `[1s, 10s]`：下限保证"下载"与"编码入水库"真的解耦（上游一片一片地等消费
+    /// 会把流式下载退化成逐片节拍），上限保证每会话 PCM 内存 ≤ ~640KB。
+    /// 10s 的下载缓冲 + 多秒水库 = 服务器侧总领先量，见 [`Self::downlink_buffer_ms`] 文档。
+    pub fn download_budget_ms(&self) -> u32 {
+        self.downlink_buffer_ms.clamp(DOWNLOAD_BUDGET_MIN_MS, DOWNLOAD_BUDGET_MAX_MS)
+    }
+
+    /// 配置规范化：
+    /// ① 帧长非法（0）→ 回落到固件默认 60ms（否则节流失效、`2×帧长` 也会算错）；
+    /// ② 把超限的 `downlink_lead_ms` 收敛到安全上限并告警；
+    /// ③ 水库三参数自洽（容量上限、关闭水库则关起跑闸、闸门不超过容量、最长等待 ≥ 闸门）。
+    ///
+    /// "调得越大越稳"在这里**不成立**：超过上限后开局预充本身就超队容量，会被固件静默丢弃
+    /// ——表现为"回复开头少一截"，比抖动更难排查。故此处硬收敛（对齐 `session::run` 里
+    /// `drain_ms.clamp(100, 1000)` 的护栏风格）。
+    pub fn normalize(&mut self) {
+        if self.downlink_frame_duration_ms == 0 {
+            tracing::warn!(
+                "[audio].downlink_frame_duration_ms=0 非法（节拍器会退化成零等待尽速灌入，\
+                 必然撑爆设备解码队列），已回落到默认 {}ms",
+                default_frame_ms()
+            );
+            self.downlink_frame_duration_ms = default_frame_ms();
+        }
+        let cap = self.max_lead_ms();
+        if self.downlink_lead_ms > cap {
+            tracing::warn!(
+                "[audio].downlink_lead_ms={} 超过安全上限 {cap}ms（设备解码队列 {} 包 × {}ms 帧；\
+                 开局预充 ceil(lead/帧长)+1 帧，超限即静默丢包），已收敛到 {cap}ms。\
+                 想要更大缓冲请先放大固件 MAX_DECODE_PACKETS_IN_QUEUE，再同步 [audio].downlink_queue_packets",
+                self.downlink_lead_ms,
+                self.downlink_queue_packets,
+                self.frame_ms(),
+            );
+            self.downlink_lead_ms = cap;
+        }
+        self.normalize_reservoir();
+    }
+
+    /// 服务器侧水库参数自洽（`downlink_buffer_*`）。
+    ///
+    /// 三条不变式：① 容量有上限（配置手滑写个 10^9 也不会把内存吃光——水库容量就是
+    /// 每会话的缓冲上限）；② 水库关闭（0）时起跑闸必然无效，一并归零；
+    /// ③ 起跑闸 ≤ 容量、最长等待 ≥ 起跑闸（否则语义互相矛盾）。
+    fn normalize_reservoir(&mut self) {
+        if self.downlink_buffer_ms > MAX_BUFFER_MS {
+            tracing::warn!(
+                "[audio].downlink_buffer_ms={} 超过上限 {MAX_BUFFER_MS}ms，已收敛（水库是每会话内存，\
+                 {MAX_BUFFER_MS}ms 已远超任何上游停顿的合理吸收范围）",
+                self.downlink_buffer_ms
+            );
+            self.downlink_buffer_ms = MAX_BUFFER_MS;
+        }
+        if self.downlink_buffer_ms == 0 {
+            if self.downlink_buffer_start_ms > 0 {
+                tracing::warn!(
+                    "[audio].downlink_buffer_ms=0（水库关闭）但 downlink_buffer_start_ms={} > 0：\
+                     没有水库可攒，起跑闸一并归零",
+                    self.downlink_buffer_start_ms
+                );
+            }
+            self.downlink_buffer_start_ms = 0;
+            self.downlink_buffer_start_max_ms = 0;
+            return;
+        }
+        if self.downlink_buffer_start_ms > self.downlink_buffer_ms {
+            tracing::warn!(
+                "[audio].downlink_buffer_start_ms={} 超过水库容量 {}ms，已收敛到容量（攒不出更多）",
+                self.downlink_buffer_start_ms,
+                self.downlink_buffer_ms
+            );
+            self.downlink_buffer_start_ms = self.downlink_buffer_ms;
+        }
+        if self.downlink_buffer_start_max_ms < self.downlink_buffer_start_ms {
+            self.downlink_buffer_start_max_ms = self.downlink_buffer_start_ms;
+        }
+    }
+}
+
+/// 服务器侧水库容量上限（毫秒）：水库是每会话内存，180s 已远超任何上游停顿的合理吸收范围
+/// （且 180s × ~2KB/s ≈ 360KB/会话，仍然很便宜）。
+const MAX_BUFFER_MS: u32 = 180_000;
+/// 下载缓冲（PCM）预算的下限/上限（毫秒），见 [`AudioConfig::download_budget_ms`]。
+const DOWNLOAD_BUDGET_MIN_MS: u32 = 1_000;
+const DOWNLOAD_BUDGET_MAX_MS: u32 = 10_000;
+
+/// 官方固件的解码队列容量（**包数**）：ESP `AudioService::MAX_DECODE_PACKETS_IN_QUEUE`
+/// = `1200 / OPUS_FRAME_DURATION_MS`，`OPUS_FRAME_DURATION_MS = 60` → 20 包。
+/// 仅作 [`AudioConfig`] 的默认值；实测值以 `[audio].downlink_queue_packets` 为准
+///（自刷固件放大队列后要同步改它）。
+pub const FIRMWARE_DECODE_QUEUE_PACKETS: u32 = 20;
+
 impl Default for AudioConfig {
     fn default() -> Self {
         AudioConfig {
@@ -168,6 +338,10 @@ impl Default for AudioConfig {
             channels: default_channels(),
             binary_protocol_version: default_bin_ver(),
             downlink_lead_ms: default_downlink_lead_ms(),
+            downlink_queue_packets: default_downlink_queue_packets(),
+            downlink_buffer_ms: default_downlink_buffer_ms(),
+            downlink_buffer_start_ms: default_downlink_buffer_start_ms(),
+            downlink_buffer_start_max_ms: default_downlink_buffer_start_max_ms(),
         }
     }
 }
@@ -212,6 +386,7 @@ impl Config {
     /// - 运行期读到的一定是规范形状（GET /api/config、`signature`、`build` 都能直接取字段）；
     /// - 保存时只写新结构（旧字段标了 `skip_serializing`），文件随一次保存完成迁移。
     pub fn normalize(&mut self) {
+        self.audio.normalize();
         self.asr.normalize();
         self.vad.normalize();
         self.tts.normalize();
@@ -239,7 +414,29 @@ fn default_frame_ms() -> u32 {
     60
 }
 fn default_downlink_lead_ms() -> u32 {
-    240
+    // 逼近设备侧上限（1200−2×60=1080）：缓冲越深，长回复越抗上游停顿。
+    1000
+}
+/// 设备解码队列包数默认值 = 官方固件 `MAX_DECODE_PACKETS_IN_QUEUE`（20 包）。
+/// 自刷固件放大队列后必须同步本值（见 `AudioConfig::downlink_queue_packets` 文档）。
+fn default_downlink_queue_packets() -> u32 {
+    FIRMWARE_DECODE_QUEUE_PACKETS
+}
+/// 服务器侧水库容量默认 30s：比设备队列（~1.2s）深一个数量级，足以吸收 LLM 逐句吐字
+/// 与在线合成首片的常见停顿；内存代价 ~60KB/会话（存的是已编码帧）。
+/// 30s 是"上游**间歇**停顿"的解法；上游**持续**慢于实时属于吞吐问题，见
+/// [`AudioConfig::downlink_buffer_ms`] 文档（要根治得提速上游，不是加缓冲）。
+fn default_downlink_buffer_ms() -> u32 {
+    30_000
+}
+/// 起跑闸默认 1500ms：约 4~5 个汉字的量。合成 ~7 倍速时几百 ms 就能攒到；
+/// 短回复（生产端已收工）立即放行，不白等。
+fn default_downlink_buffer_start_ms() -> u32 {
+    1_500
+}
+/// 起跑闸最长等待默认 4000ms：上游持续慢于实时时不至于把首帧无限期拖住。
+fn default_downlink_buffer_start_max_ms() -> u32 {
+    4_000
 }
 fn default_channels() -> u16 {
     1

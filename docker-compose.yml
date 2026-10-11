@@ -56,8 +56,9 @@ services:
       #   /data/models/SenseVoiceSmall 等   模型（首启缺失时入口脚本自动下载，持久化）
       #   /data/config.toml                 服务端配置（管理页「保存配置」回写此文件；
       #                                首启缺失时入口脚本用内置示例自动生成）
-      #   /data/firmware/            ESP32 固件 OTA 托管（/api/ota/firmware 上传，
-      #                                设备经 /api/ota 检查并自升级）
+      #   /data/firmware/<功能>/<型号>/<板型|_>/
+      #                             ESP32 固件 OTA 托管（按「功能 + 型号」分目录，
+      #                               /api/ota/firmware 上传；设备经 /api/ota 按同功能同型号匹配并自升级）
       # ⚠️ 必须是**可写**挂载（勿加 :ro）。目录挂载支持原子 rename——
       #   旧版「单文件 bind mount → rename EBUSY → 回退原地写」的问题自此布局起不存在。
       - ./server-data:/data

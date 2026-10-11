@@ -36,6 +36,12 @@ class AdminShell : Pager() {
 
     /** 能力总览的数据源（`GET /api/plugins`，只读）。 */
     val plugins = PluginMetaState(this)
+
+    /** 「MCP 工具」的数据源（`GET /api/mcp/tools`，只读）。 */
+    val mcpTools = McpToolsState(this)
+
+    /** 「OTA 固件」的数据源（`GET /api/ota/firmware` + 上传/删除；与 `/api/config` 无关）。 */
+    val ota = OtaState(this)
     var selectedSection by observable("testbench")
 
     /** 顶部 toast（跨端统一实现：状态 + 渲染见 commonMain 的 ToastState / ToastHost）。 */
@@ -187,6 +193,9 @@ class AdminShell : Pager() {
                             renderForm(
                                 ctx.form,
                                 ctx.plugins,
+                                ctx.mcpTools,
+                                ctx.ota,
+                                ctx.toast,
                                 ctx,
                                 pageWidth = contentPageWidth,
                                 pageHeight = contentPageHeight,

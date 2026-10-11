@@ -43,9 +43,25 @@ class ConfigFormState(private val scope: PagerScope) {
     var downlinkFrameMs by scope.observable("60")
     var channels by scope.observable("1")
     var binaryProtocolVersion by scope.observable("1")
-    /// 下行抖动缓冲提前量（毫秒）：下发时间表比实时提前该时长，使 ESP 解码队列常备音频存货。
-    /// ⚠️ 上限建议 ≤400ms（固件解码队列 20 包 ≈1.2s；越大打断响应越迟钝）。
-    var downlinkLeadMs by scope.observable("240")
+    /// 下行抖动缓冲提前量（毫秒）：下发时间表比实时提前该时长，使 ESP 解码队列常备音频存货，
+    /// 吸收网络抖动 + 上游 LLM 出句/TTS 合成的停顿（长回复断音的来源）。
+    /// ⚠️ 上限 = (downlink_queue_packets − 2) × 帧长（默认 (20−2)×60 = 1080ms；超限收敛并告警）。
+    /// 默认 1000 ≈ 设备端极限（设备解码队列只有 ~1.2s，想更深必须改固件队列）。
+    /// 代价：提前量越大，打断后设备把已缓存音频播完才停口。
+    var downlinkLeadMs by scope.observable("1000")
+    /// 服务器侧下行**水库**容量（毫秒）：把已编码的 Opus 帧在服务器内存里多备几秒，
+    /// 发送端从水库取帧（而不是"现合成、现发送"）→ 上游（LLM 出句 / 在线 TTS 首片）
+    /// 慢于实时也不再抽干设备解码队列。0 = 关闭（逐帧直通）。内存代价极小（~2KB/s，30s ≈ 60KB）。
+    /// 它同时派生 PCM **下载缓冲**预算（`clamp(本值, 1s, 10s)`，见 `src/app/prefetch.rs`）。
+    /// 设备解码队列**包数**（必须与固件一致）：`20 × 帧长` 决定设备侧存货上限，
+    /// 也是 `downlink_lead_ms` 安全上限的来源。自刷固件放大队列后必须同步本值。
+    var downlinkQueuePackets by scope.observable("20")
+    var downlinkBufferMs by scope.observable("30000")
+    /// **起跑闸**（毫秒）：本轮首帧下发前先等水库攒够这么多音频再开播（把散在全句的
+    /// 断续换成一次起跑等待）；生产端已收工的短回复立即放行，不白等。0 = 关闭。
+    var downlinkBufferStartMs by scope.observable("1500")
+    /// 起跑闸**最长等待**（毫秒）：上游持续慢于实时时不把首帧无限期拖住。
+    var downlinkBufferStartMaxMs by scope.observable("4000")
 
     // ===== [asr] =====（无 mock：ASR 恒为 SenseVoice，无 backend 字段）
     var asrModel by scope.observable("")
@@ -479,7 +495,11 @@ class ConfigFormState(private val scope: PagerScope) {
                 put("downlink_frame_duration_ms", downlinkFrameMs.toIntOrNull() ?: 60)
                 put("channels", channels.toIntOrNull() ?: 1)
                 put("binary_protocol_version", binaryProtocolVersion.toIntOrNull() ?: 1)
-                put("downlink_lead_ms", downlinkLeadMs.toIntOrNull() ?: 240)
+                put("downlink_lead_ms", downlinkLeadMs.toIntOrNull() ?: 1000)
+                put("downlink_queue_packets", downlinkQueuePackets.toIntOrNull() ?: 20)
+                put("downlink_buffer_ms", downlinkBufferMs.toIntOrNull() ?: 30000)
+                put("downlink_buffer_start_ms", downlinkBufferStartMs.toIntOrNull() ?: 1500)
+                put("downlink_buffer_start_max_ms", downlinkBufferStartMaxMs.toIntOrNull() ?: 4000)
             })
             put("asr", JSONObject().apply {
                 put("model", asrModel)

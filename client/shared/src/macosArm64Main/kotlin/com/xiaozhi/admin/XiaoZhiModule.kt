@@ -158,6 +158,28 @@ class XiaoZhiModule : Module() {
     }
 
     /**
+     * 选一个本地固件包（OTA 上传用）：原生 `UIDocumentPicker` → 读成字节回传。
+     *
+     * 走 **原子桥**（`asyncToNativeMethod`）而不是 JSON 回调：回参是
+     * `[infoJsonString, ByteArray]`，几 MB 的 bin 不做 JSON/base64 编解码（省两次拷贝）。
+     * 回调 (文件名, 字节)；用户取消 / 读取失败 → `("", null)`。
+     */
+    fun pickFirmwareFile(callback: (name: String, bytes: ByteArray?) -> Unit) {
+        asyncToNativeMethod(
+            methodName = "pickFirmwareFile",
+            args = arrayOf<Any>("firmware"),
+            callbackFn = { res ->
+                if (res is Array<*> && res.size >= 2) {
+                    val info = (res[0] as? String)?.let { runCatching { JSONObject(it) }.getOrNull() }
+                    callback(info?.optString("name", "") ?: "", res[1] as? ByteArray)
+                } else {
+                    callback("", null)
+                }
+            },
+        )
+    }
+
+    /**
      * LLM 对话测试：发送 llm_test（服务端按磁盘上最新 [llm] 配置直调 LLM，单轮无历史）。
      * 结果经回调返回：{state: "ok"|"error", text: 回复正文或错误信息, elapsedMs: 服务端耗时}。
      * 与 speak 相同为「稍后一次性回调」，keepCallbackAlive=false。

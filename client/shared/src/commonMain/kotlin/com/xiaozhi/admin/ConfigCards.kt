@@ -17,7 +17,10 @@ import com.tencent.kuikly.core.views.View
  * 配置页主体：官方 Tabs + PageList，页签**由 [ConfigSections] 常量表驱动**（P5，§5.9）。
  *
  * 新增/调整一个 tab：改 `ConfigSections.all` + 在下面的 `when` 里加一条分支。
- * `meta` 是总览页的数据源（`GET /api/plugins`，只读，不参与表单回传）。
+ * `meta` 是总览页的数据源（`GET /api/plugins`，只读，不参与表单回传）；
+ * `mcp` 是「MCP 工具」页的数据源（`GET /api/mcp/tools`，同样只读）；
+ * `ota` 是「OTA」页的数据源（固件托管清单 + 上传/删除，**不写 `/api/config`**）；
+ * `toast` 只用来弹上传/删除结果（顶部浮动 toast 由页面根部渲染）。
  *
  * ⚠️ 内容写在传给 `TabPage` 的 lambda 里（而不是先装进 `when` 再返回 ViewBuilder）：
  * Kuikly 的 `ViewBuilder` 接收者由调用点的期望类型推断，绕一层会丢失（实测编译报
@@ -26,6 +29,9 @@ import com.tencent.kuikly.core.views.View
 fun ViewContainer<*, *>.renderForm(
     form: ConfigFormState,
     meta: PluginMetaState,
+    mcp: McpToolsState,
+    ota: OtaState,
+    toast: ToastState,
     ctx: Pager,
     pageWidth: () -> Float,
     pageHeight: () -> Float,
@@ -38,6 +44,8 @@ fun ViewContainer<*, *>.renderForm(
             TabPage(d.label) {
                 when (d.id) {
                     "overview" -> overviewCard(meta, ctx)
+                    "mcp" -> mcpToolsCard(mcp, ctx)
+                    "ota" -> otaCard(ota, toast, ctx)
                     "server" -> serverConfigCard(form)
                     "audio" -> audioConfigCard(form)
                     "asr" -> asrConfigCard(form)
@@ -96,13 +104,27 @@ fun ViewContainer<*, *>.audioConfigCard(form: ConfigFormState) {
         labeledField("downlink_frame_duration_ms", { form.downlinkFrameMs }, { form.downlinkFrameMs = it; form.dirty = true })
         labeledField("channels", { form.channels }, { form.channels = it; form.dirty = true })
         labeledField("binary_protocol_version", { form.binaryProtocolVersion }, { form.binaryProtocolVersion = it; form.dirty = true })
-        // 抖动缓冲提前量：下发时间表比实时提前该时长，使设备解码队列常备音频存货。
-        labeledField("downlink_lead_ms", { form.downlinkLeadMs }, { form.downlinkLeadMs = it; form.dirty = true }, "240")
+        // 抖动缓冲提前量：下发时间表比实时提前该时长，使设备解码队列常备音频存货，
+        // 吸收网络抖动 + 上游 LLM 出句/TTS 合成的停顿（长回复断音的主要来源）。
+        labeledField("downlink_lead_ms", { form.downlinkLeadMs }, { form.downlinkLeadMs = it; form.dirty = true }, "1000")
+        labeledField("downlink_queue_packets", { form.downlinkQueuePackets }, { form.downlinkQueuePackets = it; form.dirty = true }, "20")
         Text {
             attr {
                 fontSize(AdminType.caption)
                 color(AdminColors.textTertiary)
-                text("提前量越大越抗网络抖动，但打断响应越迟钝（建议 ≤400ms；设备解码队列上限约 1.2s）。")
+                text("缓冲越深，长回复越抗上游变慢（默认 1000，接近设备端极限 1080）。想要更深必须先放大固件解码队列 MAX_DECODE_PACKETS_IN_QUEUE，并同步 [audio].downlink_queue_packets。代价：打断后设备会把已缓存的 ~提前量 音频播完才停口。")
+            }
+        }
+        // 服务器侧缓冲：设备队列只有 ~1.2s，上游慢于实时（LLM 逐句吐字 / 在线合成首片）
+        // 时唯一还能加深缓冲的地方——用服务器内存换下行连续性。
+        labeledField("downlink_buffer_ms", { form.downlinkBufferMs }, { form.downlinkBufferMs = it; form.dirty = true }, "30000")
+        labeledField("downlink_buffer_start_ms", { form.downlinkBufferStartMs }, { form.downlinkBufferStartMs = it; form.dirty = true }, "1500")
+        labeledField("downlink_buffer_start_max_ms", { form.downlinkBufferStartMaxMs }, { form.downlinkBufferStartMaxMs = it; form.dirty = true }, "4000")
+        Text {
+            attr {
+                fontSize(AdminType.caption)
+                color(AdminColors.textTertiary)
+                text("服务器缓冲三段：TTS 流下载 → PCM 下载缓冲（按秒限速，由水库容量派生、上限 10s）→ 已编码 Opus 水库（默认 30s ≈ 60KB/会话）→ 按实时节拍下发。上游停顿 ≤ 水库水位 + 设备队列 时听感全程连续。起跑闸先攒后播（默认 1.5s，短回复立即放行），最长等待 4s 兜底。⚠️ 上游**持续**慢于实时（每轮日志“本轮吞吐 ≈ N× 实时”，N<1）时缺口会累积，缓冲只能推迟断音——根治要提速上游（提高 [tts].speed / 换更快 LLM）。全部重启生效。")
             }
         }
     }

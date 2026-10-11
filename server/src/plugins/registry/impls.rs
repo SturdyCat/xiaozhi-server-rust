@@ -455,7 +455,7 @@ pub const FIRMWARE_HOST: PluginDescriptor = PluginDescriptor {
 pub const COMMAND_GATE: PluginDescriptor = PluginDescriptor {
     id: "command.gate",
     capability: Capability::Command,
-    display: "指令闸门（退下/闭嘴/关闭 → 断开会话）",
+    display: "指令闸门（退下/闭嘴/关闭 → 结束聆听）",
     local: true,
     hot: HotReload::NextSession,
     requires: &[],

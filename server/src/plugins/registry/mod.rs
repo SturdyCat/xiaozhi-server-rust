@@ -81,7 +81,8 @@ pub enum Capability {
     Memory,
     /// 灵魂/人格档案（规划中）。
     Soul,
-    /// 语音指令闸门（`[command]`）：ASR → LLM 之间拦截「退下/闭嘴/关闭」并断开会话。
+    /// 语音指令闸门（`[command]`）：ASR → LLM 之间拦截「退下/闭嘴/关闭」，命中即说告别语
+    /// 并用 MCP 让设备结束聆听（设备不支持 MCP 时断开本次会话）。
     /// 不是引擎（不产出共享实例、无 `engine` 选择器），只按 `[command].enabled` 开关。
     Command,
 }

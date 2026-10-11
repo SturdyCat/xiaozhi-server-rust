@@ -149,12 +149,12 @@ LLM 只有 OpenAI 兼容 Responses API 一条路径；联调失败先检查 `[ll
   - 新增/改名实现时必改的**只有两处**：`plugins/*/mod.rs` 的 `<CAP>_ENGINES` 表（含别名）与注册表描述符；
     `config/tests.rs::declared_engine_ids_match_registry_implementations` 会守住二者一致。
 
-### 5.2c 🚨 下行音频必须按实时节奏节流（`DownlinkPacer`，勿删）
+### 5.2c 🚨 下行必须按实时节奏节流 + 逐句预取（`DownlinkPacer` / `app::prefetch`，勿删）
 
 **症状**：ESP 短回复正常，长回复「先听到头几个字 → 卡住 → 断断续续」；而 macApp（无队列限制）
-反而流畅——勿因此误判"服务端没问题"。
+反而流畅——勿因此误判"服务端没问题"。真机实测：让它背《乘法口诀表》，从中间某一句起持续断续。
 
-**根因链**（三方证据）：
+**根因链**（三方证据 + 2026-10 真机复现）：
 1. ESP 固件 `AudioService` 解码队列上限 `MAX_DECODE_PACKETS_IN_QUEUE = 1200/OPUS_FRAME_DURATION_MS`
    = **20 包（≈1.2 秒音频）**；队满时 `PushPacketToDecodeQueue(wait=false)` **直接丢弃、零日志**
    （`main/audio/audio_service.h` + `audio_service.cc`）。
@@ -162,17 +162,108 @@ LLM 只有 OpenAI 兼容 Responses API 一条路径；联调失败先检查 `[ll
    长回复必然溢出：设备先播完 1.2s 缓冲，随后队列在阈值上下震荡 → 断续。
 3. 官方 Python 服务端有专门的 `core/utils/audioRateController.py`（`AudioRateController`，
    注释"按照60ms帧时长精确控制音频发送"）——**节流是协议层的隐含要求，不写在 hello 协商里**。
+4. **句间气泡**（长回复断续的第二来源）：旧实现"合成一句 → 按实时把这一句发完 → 再合成下一句"，
+   每到一个句边界都要重付一次合成启动延迟（在线合成每次调用是**一条短连接**：DNS/TCP/TLS/WS
+   握手 + 服务端首帧，数百 ms），而设备解码队列只有 `downlink_lead_ms` 的存货 → 每句断一次。
+   短回复只有一句，永远看不到；长回复句越多断得越密。
+5. **句间真空的突发回补**：旧节拍器只在"同一句内 `recv` 等待"处重锚定，句间停顿（LLM 还没出
+   下一句）**完全漏判**——恢复供数时时间表已落后数秒，补回的目标时刻全在过去 → 以 ~7 倍速把
+   数秒音频一次性灌进 20 包队列 → 队满静默丢包 → 断断续续。
+6. **上游持续略慢于实时**（节流治不了，只能靠**服务端水库**吸收）：LLM 出句速度或 TTS RTF
+   只要略低于播放消耗速度，缓冲就会被一路抽干 → "开头几句正常、后面一直断续"。此时单次下发
+   间隔够不上重锚定阈值 ⇒ 真空次数为 0，只能靠**队列余量估计**看见（见下方诊断）。
+   真机实测一例：LLM 14 字用 5.7s、音频 3.7s（≈0.64 倍速）——设备那 ~1s 存货必然被抽干。
+7. **设备队列之外只有服务器内存能加深缓冲**（2026-10 新增，`app/downlink/reservoir.rs`）：
+   把"已经合成好的音频"（已编码 Opus 帧）多备几秒在服务器内存里，发送端从水库取帧，
+   于是上游停顿 ≤ **水库水位 + 设备队列** 时听感全程连续。代价 = 内存（~2KB/s，可忽略）
+   + **起跑延迟**（`[audio].downlink_buffer_start_ms`：先攒后播，把"散在全句的断续"
+   换成"一次起跑等待"；生产端已收工的短回复立即放行）。
+   ⚠️ 但水库只能备住**已经合成出来**的音频：上游**平均**慢于实时（第 6 条）时缺口是
+   **累积**的，要整轮不断音得先攒出累计缺口 `所需缓冲 ≈ (1/生产速率 − 1) × 音频总长`
+   （0.64× 生产 + 80s 音频 → 约 45s，等于开口前先静默 45s）。**结论：缓冲能吸收
+   "上游间歇停顿"，不能救"上游持续慢"——后者必须提速上游**（提高 `[tts].speed`
+   让音频变短、换更快的 LLM/TTS）。判据是每轮日志的
+   `本轮吞吐：音频 Xms / 播放窗口 Yms ≈ N× 实时`：N ≥ 1 才可能靠缓冲做到整轮连续。
+
+> 固件侧三处已核对（`xiaozhi-esp32/main/application.cc`，2026-10）：① `tts stop` 只切状态，
+> 设备会等 `MAIN_EVENT_PLAYBACK_DRAINED` 才进聆听（**不清解码队列** → 提前量 = 打断后的停口时间）；
+> ② `OnIncomingAudio` 在 `state != Speaking` 时**静默丢弃**音频；③ 进入 Speaking 会 `ResetDecoder()`
+> 清队列。
 
 **How to apply**：
-- 实现于 `app/downlink.rs` 的 [`DownlinkPacer`]：每帧目标时刻 = 锚点 + N×帧长（**绝对时间表**，
-  无累积漂移）；生产者慢（本地 Kokoro RTF>1）时自然零等待；数据源真空 ≥1 帧后重锚定
-  （播放已追平，不突发回补）。
-- 生命周期 = **一次回复**（`stream_response` / `aiui_downlink` 入口 `reset()`）；多句共享时间表
-  → 句间无缝。**切勿**在句间 reset（每句重新锚定会把句间隙暴露成听感停顿）。
+- 节流实现于 `app/downlink.rs` 的 [`DownlinkPacer`]：每帧目标时刻 = 锚点 + N×帧长 − lead
+  （**绝对时间表**，无累积漂移）；生产者慢（本地 Kokoro RTF>1）时自然零等待。
+- **真空重锚定**改为基于**两次实际下发之间的间隔**（`last_sent_at`，阈值 `max(lead, 帧长)`）：
+  句内、句间、网络停顿一律覆盖；重锚定后一次性补发量被限制在 lead 以内，不会突发回补。
+  ⚠️ 阈值**不得**小于帧长；同时 `last_sent_at` **必须在下发之后**记录（`DownlinkPacer::mark_sent`
+  只在 `pace` 的 sleep 之后调用）：记录在下发之前的话，贴实时（lead=0）时每帧都会把睡眠时长
+  算成真空从而反复重锚定 → 节流失效（`downlink/tests.rs::pacer_keeps_real_time_cadence` 守）。
+- **逐句预取**实现于 `app/prefetch.rs`：下一句的合成跑在"上一句播放期间"，同一时刻只跑一句
+  （串行——本地引擎并发只会过订阅 CPU），成品经有界通道交给节拍器；打断（abort）或消费者退出
+  （`tx.is_closed()`）在回调里轮询，立即收尾。⚠️ **不要**把合成再串回播放之后（那就是旧实现，
+  长回复必断）；也不要让预取无界跑飞（`PREFETCH_SENTENCES` 是有意为之的背压）。
+- **服务器侧三段缓冲**（2026-10 新增，`app/prefetch.rs` + `app/downlink/`）：链路 =
+  `TTS 接口 ─流式下载─▶ 下载缓冲(PCM) ─重采样+Opus─▶ 水库(Opus) ─▶ 发送端`：
+  ① `prefetch` 逐句合成；② **下载缓冲**（`prefetch::DownloadBudget`：按**秒**给 TTS 流下载
+  定预算，积压到预算就暂停下载，编码入水库即归还额度——额度随分片 `PcmChunk` 的 Drop 归还，
+  任何退出路径都不泄漏；预算 = `AudioConfig::download_budget_ms()` = `clamp(downlink_buffer_ms,
+  1s, 10s)`，**无独立配置键**）；③ **填充 task**（`reservoir.rs::spawn_reservoir_filler`：
+  重采样 + Opus 分帧 → 有界水库，满则等待 = 背压）；④ **发送端**
+  （`sender.rs::drain_reservoir`：从水库按实时节拍取 `sentence_start` / 帧下发，逐帧
+  `pacer.pace()` 不变）。三个开关：`[audio].downlink_buffer_ms`（水库容量，默认 **30000**，
+  上限 180000；0 = 关闭）、`downlink_buffer_start_ms`（起跑闸，默认 1500；0 = 关闭）、
+  `downlink_buffer_start_max_ms`（闸门最长等待，默认 4000）。
+  ⚠️ 水库**不是**"尽速灌入"的借口：发送端仍逐帧 `pace`（设备队列保护），水库只决定
+  "取哪一帧"；也**不要**把起跑闸写成无限等待——上游慢于实时时会白等（故有 `start_max_ms`）。
+  单句路径（AIUI 全链路 / 测试台）用 `spawn_single_sentence_filler` + `drain_reservoir`，
+  与级联流水线同一条链路（AIUI 音频已在内存，走 `PcmChunk::unbudgeted`，不经下载缓冲）。
+  ⚠️ 下载缓冲**必须**按秒计量而不是"通道槽位数"：分片大小随上游而变（20ms~1s），
+  槽位口径会让内存随上游漂移（`PREFETCH_PCM_SLOTS` 只是兜底）。
+  ⚠️ 在线合成引擎的**总超时不得用墙上时钟**：下载限速会让回调长时间阻塞，把限速等待算进
+  超时 = "缓冲越深越容易合成超时"（长回复中间整句丢失）。AIUI 用 `ActiveDeadline`
+  （`plugins/tts/aiui.rs`）只计"上游不给数据"的活跃耗时（有单测守）。
+- 提前量 `[audio].downlink_lead_ms` 默认 **1000ms**（贴设备端极限），
+  **安全上限 = `([audio].downlink_queue_packets − 2) × 帧长`**（默认 `(20−2)×60 = 1080ms`；
+  开局预充 `ceil(lead/帧长)+1` 帧，超限即固件静默丢包 = 回复开头少一截）。超限由
+  `config::AudioConfig::normalize` 收敛并告警（有单测）。
+  ⚠️ **两层缓冲，别混淆**：① **设备队列**（`downlink_queue_packets × 帧长`）决定
+  "服务端能提前多少"与打断后的停口时间；想加深它必须先放大固件
+  `MAX_DECODE_PACKETS_IN_QUEUE`（`main/audio/audio_service.h`，例
+  `4000 / OPUS_FRAME_DURATION_MS` = 66 包 ≈4s）并重刷，再把
+  `[audio].downlink_queue_packets` 改成 66，最后调大 lead——只改服务端无效（超出队容量的
+  帧被固件静默丢弃）。② **服务器水库**（`downlink_buffer_ms`）不占设备队列，是"上游停顿"
+  的吸收池，**改服务端即可生效**（这就是"用服务器内存换流畅"的开关）。
+  ⚠️ 它同时是**打断后的"停口"时间**（固件实测：`tts stop` 不清队列，设备把已缓存音频播完
+  才进聆听）——240ms ≈ 一个字，1000ms ≈ 三个字。想要更灵敏的打断就调小它。
+- **首帧起跑缓冲**（`drain_prepared` 里 `tts start` 后等一帧再发首帧）：固件 `OnIncomingAudio`
+  在 `state != Speaking` 时**直接丢弃**音频、且进入 Speaking 会 `ResetDecoder()`；提前量越大、
+  开局预充帧越多，抢在状态切换前被丢的就越多（表现为"开头少一截"）。等一帧（60ms）几乎零成本。
+- 生命周期 = **一次回复**（`stream_response` / `aiui_downlink` / `speak_canned` 入口 `reset()`）；
+  多句共享时间表 → 句间无缝。**切勿**在句间 reset（每句重新锚定会把句间隙暴露成听感停顿）。
 - ⚠️ 改下行链路时**不得移除 `pacer.pace()` 调用**——它看起来像"多余延迟"，实为 ESP 队列保护；
   删掉后 macApp 依旧流畅、ESP 长回复必现断续（自动化测试也很难在没有真机时发现）。
 - 测试台路径（`session/bench.rs`）同样节流（单次合成即一整段，更快、更容易溢出，更需要）。
 - TTFA 日志 = **首帧实际下发时刻**（`first_frame_at`，非"句子下发完成"）——pacing 后两者含义不同。
+- **现场诊断**（每轮回复结束打印，`DownlinkPacer::stats`）：① 真空次数/最长真空；
+  ② **设备解码队列余量最低估计**（`已下发音频 − 已流逝播放时间`，≤1 帧即报"断音"）。
+  ② 是关键：上游**只是略慢于实时**时单次间隔够不上重锚定阈值（真空次数为 0），
+  但缓冲会被一路抽干——正是"长回复越到后面越断续"的形态，只看真空会漏判。
+  两者都正常却仍断续 ⇒ 查设备侧（WiFi/供电/固件）或 `tts stop` 语义。
+- 回归测试：`downlink/tests.rs::{pacer_bounds_catch_up_burst_after_long_vacuum,
+  pacer_reports_vacuum_and_queue_stats, pacer_real_path_pre_fills_then_throttles,
+  pacer_keeps_real_time_cadence}`、
+  `downlink/reservoir/tests.rs::{push_preserves_order_and_tracks_depth,
+  producer_done_closes_source_after_drain, full_reservoir_backpressures_producer,
+  filler_pushes_sentence_start_first_and_caches_complete_sentence,
+  filler_skips_cache_for_incomplete_sentence, filler_exits_when_reader_dropped,
+  recv_records_starvation_when_empty}`、
+  `downlink/sender/tests.rs::{sentence_start_exactly_once_and_before_frames,
+  drain_keeps_real_time_cadence, start_gate_waits_for_buffer_before_first_frame,
+  start_gate_skips_when_producer_already_done, abort_during_drain_stops_sending}`、
+  `downlink/framer/tests.rs::*`、
+  `prefetch/tests.rs::prefetch_starts_next_synthesis_before_current_finishes_playing`、
+  `config/tests.rs::{audio_lead_ms_is_capped_to_device_queue_packets,
+  audio_reservoir_params_are_normalized}`。
 
 ### 5.2d 二进制帧 v2/v3 是**网络序（大端）** + 下行版本必须跟随设备（2026-10-07 实测修正）
 
@@ -237,13 +328,32 @@ LLM 只有 OpenAI 兼容 Responses API 一条路径；联调失败先检查 `[ll
 ### 5.2f 语音指令闸门（`[command]`）接入要点（2026-10 新增）
 
 说「退下 / 闭嘴 / 关闭」这类**不是提问**的话，送进 LLM 只会换来一段没用的回复（还计费、还合成）；
-正确处置是结束这次会话。实现落在 ASR → LLM **之间**：
+正确处置是让设备结束聆听。实现落在 ASR → LLM **之间**：
 
 - **位置**：级联链路在 `session.rs::recognize_segments` 里 `handle_command_gate(&user_text)`，
   命中即 `return`（本批剩余语音段一并丢弃，**一次 LLM 都不调用**）；AIUI 全链路在
   `aiui_segments` 里对回来的 `turn.stt` 同样判定——识别在云端闭环内完成，只能在轮次回来后
-  "丢弃本轮云端回复"，但会话照样按指令断开（两种链路语义一致，见 `session/command.rs`）。
-- **断开方式 = 主循环收尾**：命中置位 `close_requested` → `run()` 跳出循环 → **跳过 VAD flush**
+  "丢弃本轮云端回复"，但照样按指令结束聆听（两种链路语义一致，见 `session/command.rs`）。
+- **命中后 = 告别语 → 用 MCP 让设备自己结束聆听（2026-10 改）**：设备是 MCP Server、服务器是
+  MCP Client。`session/command.rs::stand_down_via_mcp` 在告别语（`tts start` → 音频 → `tts stop`）
+  发完后**紧接着**发 `tools/call` 调 `self.audio_listener.stop`（契约常量 `app/mcp.rs::STOP_LISTENING_TOOL`，
+  固件对应 `main/mcp_server.cc` 的 `AddUserOnlyTool`）。设备随即 `SendStopListening()` + 回到 idle，
+  **音频通道保留** → 下次唤醒复用同一条连接。旧行为"直接断开"会让用户下次唤醒重付一次
+  握手 + 会话重建，现场表现就是"退下之后它又重连了一次"——这正是本次改动的目的。
+  ⚠️ **顺序不能颠倒**：设备处理完 `tts stop` 才进入 listening，固件 `HandleStopListeningEvent`
+  只在 listening 态生效；两者在同一条连接上按序到达，**不要**在中间加 sleep（加了反而会把
+  麦克风短暂打开）。
+- **三条降级路径（一条都不能删）**：① 设备未声明 `features.mcp`（极老固件）→ 一个报文都不发；
+  ② 固件没刷上该工具 → 设备回 `-32602 Unknown tool`（**这是正常响应，不是传输错误**，日志口径要分开）；
+  ③ 超时 / 等待期间断开。三者一律降级为旧行为「断开本次会话」（`close_requested`），
+  且日志必须有 warn 说明为什么没走 MCP——**不允许静默失败**。
+- **请求-响应关联不能内联 `await`**：设备的响应只有会话主循环在读，而指令闸门本身就跑在主循环
+  **内部**（`handle_binary` → `recognize_segments` → `handle_command_gate`），干等信号 = 自己等自己
+  （死锁）。因此 `session/mcp.rs::await_tool_reply` 在**同一任务内抽帧**：配对 `id` 即返回，
+  其余帧（`listen stop` / `abort`…）原样交回调用方补派发，**不得丢弃**；抽帧期间的上行音频直接丢弃
+  （用户已退下，不该再为残留音频开一轮对话）。将来接 LLM 工具闭环（`docs/esp-compat-and-latency-plan.md`
+  §3.3）时，那条路径在**独立 task** 里跑，才改用 `pending_mcp: HashMap<id, oneshot>`。
+- **降级后的断开仍走主循环收尾**：置位 `close_requested` → `run()` 跳出循环 → **跳过 VAD flush**
   （用户已明确要求退下，不该再为残留音频开一轮对话）→ 等一段排空时间（`downlink_lead_ms`，
   夹在 100ms~1s；告别语是按实时节奏下发的，最后一帧发出时设备队列里还有约一个 lead 的音频，
   立即 close 会把告别语尾巴掐掉）→ 调 `Transport::close()`（WS 发关闭帧并让 `closed` 粘滞）
@@ -268,6 +378,65 @@ LLM 只有 OpenAI 兼容 Responses API 一条路径；联调失败先检查 `[ll
   默认关闭时零开销、行为与加它之前完全一致——这是可回滚承诺，勿破。
 - **改配置段必须同步注册表字段元数据**（`registry/fields_command.rs`），否则
   `config/tests/impact.rs::every_config_section_has_declared_hot_semantics` 打红、界面永远显示"需重启"。
+
+### 5.2g MCP 客户端（设备工具调用）接入要点（2026-10 新增）
+
+**设备是 MCP Server，服务器是 MCP Client**——方向不能反（设备在 NAT 后，只能由设备先建连，
+服务器在既有那条 WS 上发 `tools/call`）。传输不新增连接：JSON-RPC 2.0 套在
+`{"type":"mcp","payload":{…}}` 里（固件 `Protocol::SendMcpMessage`）。
+
+- **协议原语在 `server/src/app/mcp.rs`**（纯函数、可单测）：`tools_call()` 构造请求、
+  `parse_reply()` 解析响应、`take_reply_for()` 从上行信封里取配对响应、`summarize()` 出一行日志；
+  I/O 与请求-响应关联在 `server/src/app/session/mcp.rs`。**新加工具调用请复用这两个模块**，
+  不要在会话层手写 JSON。
+- **报文形态逐字对齐固件**（`main/mcp_server.cc` 的 `ReplyResult`/`ReplyError`、`mcp_server.h` 的
+  `content[]` 包装）：成功 `{"jsonrpc":"2.0","id":N,"result":{"content":[{"type":"text","text":"true"}],"isError":false}}`；
+  失败 `{"jsonrpc":"2.0","id":N,"error":{"code":-32602,"message":"…"}}`。
+  ⚠️ `id` **必须是数字**（固件 `mcp_server.cc` 强制校验）、`jsonrpc` 必须是 `"2.0"`：写错设备只打
+  一行 log、**不回错误响应**，表现为"服务器发了但没反应"。解析因此收得很紧——畸形报文返回 `None`
+  （继续等），绝不误判成"调用成功"。
+- **`features.mcp` 是开关**：`ws.rs` 从 hello 读 `features.mcp`（最新固件硬编码 `true`）传进
+  `run_session(…, mcp)`；为 `false` 时**一个报文都不发**（老固件向后兼容）。接入日志带 `mcp=on|off`。
+- **请求-响应关联有三种形态，别用错**：
+  - **主循环内发起**（指令闸门的 `self.audio_listener.stop`）→ 用
+    `session/mcp.rs::await_tool_reply` **同任务抽帧**。内联 `await` 一个由主循环投递的信号 = 死锁
+    （指令闸门本身就跑在主循环内部）。
+  - **主循环之前发起**（会话开始时的能力发现，见下一条）→ 同一个抽帧泵，但**音频帧必须缓冲后
+    补派发**（`BinaryPolicy::Keep`）而不是丢弃：那时收到的是用户正要说的第一句话。
+  - **独立 task 内发起**（将来的 LLM 工具闭环，`docs/esp-compat-and-latency-plan.md` §3.3）→
+    才用 `pending_mcp: HashMap<id, oneshot::Sender>`。
+- **`mcp` 消息不再回显**：`handle_text` 的 `ClientMessage::Mcp` 分支只记日志。旧实现把设备 payload
+  原样发回去，设备因缺 `method` 丢弃——纯占位逻辑，删除是 §3.3 的既定动作。
+- **工具名是跨仓库契约**：`app/mcp.rs::STOP_LISTENING_TOOL` ↔ 固件 `main/mcp_server.cc` 的
+  `AddUserOnlyTool("self.audio_listener.stop", …)`。改一边必须改另一边，否则设备回
+  `-32602 Unknown tool`（服务器按"不支持"降级：功能退化但不出错）。单测
+  `app::mcp::tests::stop_listening_tool_name_is_the_firmware_contract` 是这条契约的护栏。
+- **设备侧工具注册位置**：通用/管理类工具在 `main/mcp_server.cc`（`AddCommonTools` /
+  `AddUserOnlyTools`），板级工具在 `main/boards/<板>/<板>.cc` 的 `InitializeTools()`。
+  只给服务器用的控制指令用 `AddUserOnlyTool`：默认不出现在 `tools/list` 里、**不会被大模型看到**
+  （服务器按名字直接调用，`user_only` 不拦截 `tools/call`）。
+- **能力发现（`initialize` + `tools/list`）在会话开始时做一次**（2026-10 新增；管理界面
+  「MCP 工具」页 / `GET /api/mcp/tools` 的数据源）。固件两端都实现了：`initialize` 回
+  `protocolVersion` + `capabilities.tools` + `serverInfo{name=板型名, version=固件版本}`；
+  `tools/list` 支持 `cursor` 分页（8000 字节一页，`nextCursor` = **下一页第一个工具名**，
+  **包含**语义）与 `withUserTools`。服务器用 `withUserTools: true` 拉全量，靠固件给的
+  `annotations.audience=["user"]` 标出 `user_only`——**这是判断"是否暴露给 AI"的唯一可靠信号**
+  （`withUserTools=false` 时固件根本不返回这些工具）。
+  - 报文构造/解析在 `app/mcp/discovery.rs`（纯函数；含 `inputSchema.properties` → 参数投影
+    与一行 `signature`）；I/O 与分页循环在 `app/session/mcp.rs::discover_tools`；结果落
+    `app/mcp/registry.rs`（按 `device_id` 索引，64 台上界），由 `app/ws/mcp.rs` 暴露。
+  - **必须在进入会话主循环之前做**：设备建连后立刻上行音频，主循环一开跑就没有"插队发请求"
+    的时机。因此探测期间的上行帧**全部缓冲后按原序补派发**（`Session::handle_frame` 与主循环
+    共用同一处置，音频一帧不丢、不会走出不同分支）；探测只读到最后一页响应为止，**不多读**。
+  - **失败绝不致命**：预算 `DISCOVERY_BUDGET`（2s，`initialize` + 全部页共用），超时 / 设备拒绝
+    （`-32601`）/ 承载断开都只写进 `error` 并照常进入主循环。探测失败时注册表**保留上次成功的
+    工具与板型/版本**（否则界面会从"有 5 个工具"变成"什么都没有"，看起来像设备被清空了）。
+  - 测试台会话（`hello.test=true`，macApp）**不探测**：它不是设备，不该进设备注册表，
+    也不该为 `asr_test` 这类即时请求付探测延迟。
+  - `user_only` 工具**照常可被 `tools/call` 调用**（它只影响 `tools/list` 的过滤）——
+    服务器按名字直接调 `self.audio_listener.stop` 就是这么工作的。
+- **降级纪律**：任何 MCP 失败都必须能退回"旧行为"且**日志写明原因**（未声明 MCP / 设备拒绝 /
+  超时 / 承载断开四档），不允许静默失败，也不允许把失败升级成致命错误。
 
 ### 5.3 二进制协议版本 = 设备 hello 的 `version`
 
@@ -359,7 +528,7 @@ COPY 真实源码后**必须** `touch src` + `cargo clean -p xiaozhi-server-rust
   ```
 - Rust 拆分布局：`foo.rs` + `foo/` 子目录（`foo.rs` 内 `mod bar;` → `foo/bar.rs`）。**子模块可访问父模块私有项**（字段、私有 fn 都行），所以大多数拆分**不需要**放宽可见性。**唯一例外**：被**父模块调用**的子模块方法必须标 `pub(super)`（父模块看不到子模块的私有项）——用 `pub(super)` 而不是 `pub`，若被迫写成 `pub` 说明拆错了边界。
 - 拆分只允许**行为不变的搬移**：搬完必须 `cargo test`（默认 + `--features sherpa`）或 `./gradlew :apps:h5App:publishWeb` 通过。
-- 现状（2026-10）：`server/src` 有 **33 个 `tests.rs`**、**0 个内联测试块**；client 侧暂无测试，新增请放 KMP `commonTest/`。
+- 现状（2026-10）：`server/src` 有 **40 个 `tests.rs`**、**0 个内联测试块**；client 侧暂无测试，新增请放 KMP `commonTest/`。
   子目录拆分的既有先例：`plugins/registry/{fields,fields_context,impls}.rs`、`plugins/memory/store/{maintenance,tests}.rs`、
   `app/ws/config/tests/{secrets}.rs`、`config/tests.rs`、`plugins/tts/tests.rs`（父模块只留 `mod`）。
   整改记录见 `docs/plugin-architecture-unification.md` §0.7~§0.10。
@@ -381,8 +550,14 @@ server/                        # Rust 服务端
       session.rs    每连接会话状态机 + 语音流水线（支持 abort；AIUI 全链路分支）
       protocol.rs   消息枚举 + 二进制版本封装（v1/v2/v3）—— 改这里必看 §5.1
       session/reply.rs  回复生成与下发（LLM→分句→TTS→下行；含人格/记忆组装与后台写入）
-      session/command.rs 指令闸门落点（ASR→LLM 之间：命中即说告别语 + 断开会话，见 §5.2f）
-      transport.rs  承载抽象（WS/未来 MQTT+UDP；`close()` = 本端主动断开）；downlink.rs 下行音频；splitter/sse
+      session/command.rs 指令闸门落点（ASR→LLM 之间：命中即说告别语 + 用 MCP 让设备结束聆听，
+                         失败降级为断开会话，见 §5.2f）
+      mcp.rs        MCP 客户端协议原语（设备是 Server，见 §5.2g）；session/mcp.rs 请求-响应关联
+      transport.rs  承载抽象（WS/未来 MQTT+UDP；`close()` = 本端主动断开）；splitter/sse
+      downlink.rs   下行节拍器（`DownlinkPacer`，ESP 队列保护）+ 协议原语（tts 状态/sentence_start）
+      downlink/framer.rs    PCM 分片 → 重采样 → Opus 逐帧（跨片复用相位/编码器）
+      downlink/reservoir.rs 服务器侧音频水库（有界 + 背压 + 水位观测）+ 填充 task
+      downlink/sender.rs    发送端：起跑闸 + 按实时节拍从水库取帧下发 + 打断轮询
       audio/        Opus 编解码 + 重采样；firmware.rs 固件托管；voices.rs 发音人目录
     plugins/      引擎插件层（按能力分目录）：
       registry/     能力/实现的可枚举清单（描述符：字段元数据 + 热生效 + 签名 + 校验 + 构建）
@@ -409,7 +584,8 @@ server/                        # Rust 服务端
                                  + assemble.rs（注入块渲染 + token 预算裁剪）+ llm_extract.rs（抽取契约）
       command/{mod,tests}.rs    语音指令闸门（[command]）：ASR→LLM 之间拦截指令词，
                                  长度闸门（max_chars，默认 5）+ 词表匹配，命中即由会话层
-                                 说告别语并断开会话（默认关闭；见 §5.2f）
+                                 说告别语并用 MCP 让设备结束聆听（MCP 不可用则断开会话；
+                                 默认关闭；见 §5.2f / §5.2g）
   config.toml / config.example.toml
   scripts/download_models.sh
   tests/mock_client.py         零依赖 WebSocket 联调客户端
@@ -464,6 +640,8 @@ client/                        # Kuikly 多端工程（管理后台 web + macOS 
 | `GET /api/plugins` | 能力清单 + 实际状态（`enabled` 与 `phase` 分离，带 `last_error`）；`config.path/persistent` 一并返回。**管理页「总览」tab 的唯一数据源**（`PluginMetaState.kt`）：必需/可选两组 + 计数摘要 + **降级/异常原因行内显示** |
 | `GET /api/config/schema` | 字段元数据（标签/类型/默认值提示/`hot` 热生效语义/`secret` 密钥标记）+ `app_sections`（`[server]`/`[audio]` 这类**非能力段**的档位）；**只做元数据，不做自动表单**。客户端 `FormSchemaState.kt` 用它渲染「这个字段多久生效」（`live` 不标注） |
 | `GET /api/usage`、`GET /api/session/{id}/usage` | 令牌用量（全局 + 按会话；`pressure` = 输入侧总量，回答"记忆注入让 prompt 长了多少"） |
+| `GET /api/mcp/tools` | **设备 MCP 工具清单**（按 `device_id`：工具名/描述/参数投影 `params` + 一行 `signature`/`user_only`/板型/固件版本/探测时间 `age_ms`/在线）。数据来自**会话开始时的 MCP 能力发现**（§5.2g），设备空闲时显示上次结果——因此**刚部署、或设备长期未唤醒时是空的**（响应里的 `note` 已说明）。管理页「MCP 工具」tab（`McpToolsState.kt`/`McpToolsCard.kt`）的唯一数据源；`user_only=true` 的工具不暴露给大模型 |
+| `POST/GET /api/ota/firmware`、`GET /api/ota/firmware/latest`、`POST /api/ota/firmware/delete` | **固件 OTA 托管（多型号 × 多功能）**：按 `功能(project) × 型号(model)`（可选 `板型(board)`）分目录存 `<dir>/<project>/<model>/<board|_>/firmware.bin + meta.json`；上传时从 ESP-IDF app 镜像**自动解析** `chip_id → 型号` 与 `esp_app_desc_t` 的 功能/版本/IDF/编译时间（非 ESP-IDF 镜像才要 `?project=&model=&version=` 覆盖）。`/api/ota` 只对**同功能 + 同型号**（板型精确优先，否则该型号通用）**且版本更新**的设备下发下载地址——不同型号/功能的包绝不互发（发错包 = 变砖）。旧版根目录单固件列为 `_legacy`（可删除、不参与匹配）。实现 `app/firmware.rs`，匹配/版本比较在 `app/ws/ota.rs`；管理页「OTA」tab（`OtaState.kt`/`OtaCard.kt` + 平台选包桥 `OtaFilePicker.kt`） |
 | `GET/POST /api/config` | **部分更新**（缺失字段保持不变、显式 `null` 清除）；GET **密钥打码**（明文永不回传，只给 `has_<field>` presence）并带 `revision`，POST 回传 `expected_revision` → 不一致 **409**（客户端顶栏出现「重新加载」，草稿保留）；密钥空串/缺失 = 保留原值。**POST 响应带 `hot`/`hot_hint`/`changed_sections`**：本次保存**实际**的生效档位（取变更字段里最严格的一个，判定在 `app/ws/config/impact.rs`），客户端据此显示三档文案 |
 | `GET /api/memory/status` | 记忆状态卡：引擎（`engine`）/库大小/条数/待抽取/隔离/各设备作用域 + 能力 `phase` 与降级原因 + AIUI 提示 |
 | `POST /api/memory/recall` | **当场试召回**（`{text, scope?}`；scope 省略 = 跨设备）：命中数/匹配词项/耗时/**将注入的正文预览**——"记忆开了没用"的唯一反馈手段 |

@@ -3,16 +3,30 @@
 //! 两条路径（由 hello 的 `test` 参数区分）：
 //! - ESP 设备（正式流程）：上行 Opus → 解码 → VAD → ASR → stt → LLM → tts → 下行 Opus。
 //!   其中 ASR 与 LLM **之间**还有一道可选的指令闸门（`[command]`，见 [`command`] 子模块）：
-//!   识别到「退下/闭嘴/关闭」这类指令即说一句告别语并**断开本次会话**（跳过 LLM）。
+//!   识别到「退下/闭嘴/关闭」这类指令即说一句告别语（跳过 LLM），随后
+//!   **通过 MCP 通知设备「结束聆听」**（见 [`mcp`] 子模块）——设备回到待唤醒、音频通道保留，
+//!   下次唤醒复用连接不重连；只有在设备不支持 MCP 或调用失败时才降级为断开本次会话。
 //! - macApp 测试台（hello 带 `test:true`）：`asr_test`/`tts_test`/`llm_test` 三种
 //!   **独立服务请求-响应**（各自直调对应真实引擎、各自回包），不进设备流水线；
 //!   设备会话收到这三类消息一律忽略。
+//!
+//! ## 与设备的关系（MCP 方向，勿反）
+//!
+//! **设备是 MCP Server、服务器是 MCP Client**：设备的工具（音量/屏幕/灯…）由设备注册，
+//! 服务器在**既有那条 WS** 上发 `tools/call`。协议原语见 [`crate::app::mcp`]。
+//!
+//! 会话开始时还会做一次**能力发现**（`initialize` + `tools/list`，见 [`mcp`] 子模块）：
+//! 结果写进 [`crate::app::mcp::registry`]，管理界面「MCP 工具」页据此显示"这台设备支持
+//! 哪些工具、每个能干什么"。发现期间的上行帧全部缓冲后补派发，一帧不丢。
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::app::audio::opus::OpusFrameDecoder;
-use crate::app::downlink::{send_sentence_audio_stream, send_tts_state, DownlinkPacer};
+use crate::app::downlink::{
+    DownlinkPacer, drain_reservoir, new_reservoir, send_tts_state, spawn_single_sentence_filler,
+};
+use crate::app::prefetch::PreparedAudio;
 use crate::app::protocol::{unwrap_uplink, BinVersion, ClientMessage, ServerMessage};
 use crate::app::transport::{IncomingFrame, Transport};
 use crate::engine::Engines;
@@ -23,6 +37,7 @@ use crate::plugins::vad::VadEngine;
 
 mod bench;
 mod command;
+mod mcp;
 mod reply;
 
 /// 在 `spawn_blocking` 中执行同步阻塞的 CPU 密集调用（ASR/TTS 推理），
@@ -50,6 +65,14 @@ pub struct SessionParams {
     pub downlink_frame_ms: u32,
     /// 下行抖动缓冲提前量（毫秒），见 `[audio].downlink_lead_ms`。
     pub downlink_lead_ms: u32,
+    /// 服务器侧下行水库容量（毫秒），见 `[audio].downlink_buffer_ms`。
+    pub downlink_buffer_ms: u32,
+    /// 下载缓冲预算（毫秒，由水库容量派生），见 `[audio].download_budget_ms`。
+    pub download_buffer_ms: u32,
+    /// 起跑闸（毫秒）：首帧前先攒够这么多音频，见 `[audio].downlink_buffer_start_ms`。
+    pub downlink_buffer_start_ms: u32,
+    /// 起跑闸最长等待（毫秒），见 `[audio].downlink_buffer_start_max_ms`。
+    pub downlink_buffer_start_max_ms: u32,
 }
 
 /// LLM 失败且用户尚未听到任何内容时的兜底回应（**不暴露技术细节**，只给可行动的安抚）。
@@ -92,29 +115,46 @@ pub struct Session<'a, T: Transport> {
     commands: CommandGate,
     /// 指令要求断开本次会话（告别语已下发）：主循环收尾时主动关闭承载。
     close_requested: bool,
+    /// 设备 hello 是否声明 `features.mcp`（最新固件硬编码 `true`；极老固件为 `false`）。
+    ///
+    /// `false` 时本会话**一个 MCP 报文都不发**（零开销、零行为变化），指令闸门直接走
+    /// 「断开本次会话」的降级路径——这是对老固件的向后兼容承诺。
+    mcp_enabled: bool,
+    /// 下一个 MCP JSON-RPC `id`（自增；响应靠它配对，见 [`mcp`] 子模块）。
+    mcp_next_id: u64,
 }
 
 impl<'a, T: Transport> Session<'a, T> {
     /// 主循环：接收上行帧并分发；循环结束后 flush VAD 残留段并送流水线。
     async fn run(mut self) -> anyhow::Result<()> {
-        loop {
-            match self.transport.recv().await {
-                IncomingFrame::Text(s) => {
-                    if let Err(e) = self.handle_text(&s).await {
-                        tracing::warn!("处理文本消息失败: {e}");
-                    }
-                }
-                IncomingFrame::Binary(b) => {
-                    self.handle_binary(&b).await;
-                }
-                // 承载关闭/读取错误：会话结束（recv 内已记日志）
-                IncomingFrame::Closed => break,
-            }
-            // 指令闸门命中（[command]）：告别语已下发，主动断开本次会话
-            if self.close_requested {
-                tracing::info!("session {} 按指令断开本次会话", self.session_id);
+        // MCP 能力发现（仅 hello 声明 `features.mcp` 的**设备**会话）：必须在进入主循环**之前**做
+        // ——设备建连后立刻开始上行音频，主循环一旦开跑就没有"插队发 MCP 请求"的时机。
+        // 期间到达的上行帧由发现逻辑**全部缓冲**，下面按原顺序补派发（一帧不丢）。
+        // 测试台会话（`hello.test=true`，macApp）不探测：它不是设备，不该进设备工具注册表，
+        // 也不该为 `asr_test` 这类即时请求付探测延迟。
+        let prelude = if self.mcp_enabled && !self.is_test {
+            self.discover_mcp_tools().await
+        } else {
+            Vec::new()
+        };
+
+        let mut closed = false;
+        for frame in prelude {
+            if !self.handle_frame(frame).await {
+                closed = true;
                 break;
             }
+        }
+        while !closed && !self.close_requested {
+            let frame = self.transport.recv().await;
+            if !self.handle_frame(frame).await {
+                break;
+            }
+        }
+        // 指令闸门命中（[command]）**且 MCP 未能让设备结束聆听**：降级为断开本次会话。
+        // （正常路径下设备已自己退出聆听，`close_requested` 为 false，会话继续留在通道上。）
+        if self.close_requested {
+            tracing::info!("session {} 按指令降级断开本次会话", self.session_id);
         }
 
         // 会话结束：flush VAD 残留语音段（真实音频模式），尽力把最后一句话送完流水线。
@@ -134,7 +174,30 @@ impl<'a, T: Transport> Session<'a, T> {
             tokio::time::sleep(std::time::Duration::from_millis(drain_ms)).await;
             self.transport.close().await;
         }
+        // 会话结束：把该设备标为离线（管理界面「MCP 工具」据此区分"在线 / 上次探测结果"）。
+        // ⚠️ 放在最末：VAD flush 与告别语排空期间设备仍在线上。
+        self.engines
+            .mcp
+            .mark_offline(&self.device_id, &self.session_id);
         Ok(())
+    }
+
+    /// 派发一条上行帧；返回 `false` 表示承载已断开（会话应结束）。
+    ///
+    /// 主循环与 MCP 探测后的**补派发**共用这一处：两条路径对"文本 / 二进制 / 断开"的处置
+    /// 必须完全一致，否则被缓冲过的帧会走出与正常流程不同的分支（例如音频绕过 VAD）。
+    async fn handle_frame(&mut self, frame: IncomingFrame) -> bool {
+        match frame {
+            IncomingFrame::Text(s) => {
+                if let Err(e) = self.handle_text(&s).await {
+                    tracing::warn!("处理文本消息失败: {e}");
+                }
+            }
+            IncomingFrame::Binary(b) => self.handle_binary(&b).await,
+            // 承载关闭/读取错误：会话结束（recv 内已记日志）
+            IncomingFrame::Closed => return false,
+        }
+        true
     }
 
     /// 在 `spawn_blocking` 中执行同步阻塞的 ASR 识别，统一处理任务取消/panic 与内部错误。
@@ -177,7 +240,8 @@ impl<'a, T: Transport> Session<'a, T> {
                 t0.elapsed().as_millis(),
                 user_text.chars().count()
             );
-            // 指令闸门（ASR → LLM **之间**）：命中即说告别语并断开会话，**一次 LLM 都不调用**。
+            // 指令闸门（ASR → LLM **之间**）：命中即说告别语 + 用 MCP 让设备结束聆听，
+            // **一次 LLM 都不调用**。
             // 本批剩余语音段一并丢弃（用户已经要求退下）。
             if self.handle_command_gate(&user_text).await {
                 return;
@@ -231,7 +295,11 @@ impl<'a, T: Transport> Session<'a, T> {
         }
     }
 
-    /// AIUI 轮次结果下发：stt 文本 + tts start → 音频流 → tts stop → 会话历史。
+    /// AIUI 轮次结果下发：stt 文本 → 水库（重采样 + Opus 分帧）→ 按实时节拍下发 → `tts stop`。
+    ///
+    /// 与级联流水线（`reply::drain_prepared`）走**同一条**下行链路：同一节拍器、同一水库
+    /// （服务器内存缓冲 + 起跑闸）、同一 `tts start` 起跑缓冲语义——只在"音频从哪来"
+    /// 上不同（云端一次性回传的 PCM，而不是逐句流式合成）。
     async fn aiui_downlink(&mut self, turn: &FullChainTurn) -> anyhow::Result<()> {
         self.pacer.reset(); // 新一轮回复：节拍器时间表重置
         send_text(
@@ -242,34 +310,70 @@ impl<'a, T: Transport> Session<'a, T> {
             },
         )
         .await?;
-        send_tts_state(self.transport, &self.session_id, "start").await?;
-        // i16 LE 字节 → f32 分片进既有下行通道（3200 字节 = 1600 样本 = 100ms @16k）
-        let (tx, chunk_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<f32>>();
-        for chunk in turn.audio.chunks(3200) {
-            let samples: Vec<f32> = chunk
-                .chunks_exact(2)
-                .map(|c| i16::from_le_bytes([c[0], c[1]]) as f32 / 32768.0)
-                .collect();
-            let _ = tx.send(samples);
-        }
-        drop(tx);
-        send_sentence_audio_stream(
+        // i16 LE 字节 → f32 分片（3200 字节 = 1600 样本 = 100ms @16k）
+        let chunks: Vec<Vec<f32>> = turn
+            .audio
+            .chunks(3200)
+            .map(|chunk| {
+                chunk
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|c| i16::from_le_bytes(*c) as f32 / 32768.0)
+                    .collect()
+            })
+            .collect();
+        // 有界分片通道（容量与内存口径同 `prefetch` 的一次性回传路径）：用后台任务喂，
+        // 避免在水库还没被消费时把会话任务阻塞在 `send` 上。
+        // ⚠️ AIUI 是**一次性回传**（整段音频已在 `turn.audio` 里），没有"流式下载"可限速，
+        // 故分片不占下载缓冲（`PcmChunk::unbudgeted`）——下载缓冲只服务逐句流式合成。
+        let (tx, chunk_rx) = tokio::sync::mpsc::channel::<crate::app::prefetch::PcmChunk>(
+            crate::app::prefetch::PREFETCH_PCM_CHUNKS,
+        );
+        tokio::spawn(async move {
+            for c in chunks {
+                if tx
+                    .send(crate::app::prefetch::PcmChunk::unbudgeted(c))
+                    .await
+                    .is_err()
+                {
+                    break; // 水库读端已放弃（打断/本轮结束）
+                }
+            }
+        });
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel::<bool>();
+        let _ = done_tx.send(true); // 云端音频已完整在手：视为"合成正常结束"
+        let (sink, source) =
+            new_reservoir(self.params.downlink_buffer_ms, self.params.downlink_frame_ms);
+        let filler = spawn_single_sentence_filler(
+            self.abort.clone(),
+            self.engines.tts_cache.clone(),
+            self.params,
+            sink,
+            turn.stt.clone(),
+            PreparedAudio::Stream { sr: 16000, chunks: chunk_rx, done: done_rx },
+            0, // AIUI 全链路回传音频不入缓存（音频由云端给定，同句不保证可复现）
+        );
+        let mut first_frame_at = None;
+        let t0 = std::time::Instant::now();
+        let drain = drain_reservoir(
             self.transport,
             &self.params,
-            &mut self.downlink_ts,
-            &self.abort,
             &self.session_id,
-            &turn.stt,
-            16000,
-            chunk_rx,
+            &self.abort,
+            &mut self.downlink_ts,
             &mut self.pacer,
-            None, // AIUI 全链路回传音频不入缓存（音频由云端给定，同句不保证可复现）
-            &mut None,
+            source,
+            t0,
+            &mut first_frame_at,
         )
         .await?;
-        send_tts_state(self.transport, &self.session_id, "stop").await?;
+        filler.abort();
+        if drain.tts_started {
+            send_tts_state(self.transport, &self.session_id, "stop").await?;
+        }
         // 历史语义与级联流水线一致：被打断（下行早停）不入历史，避免脏上下文
-        if !self.abort.load(Ordering::Relaxed) && !turn.reply.trim().is_empty() {
+        if !drain.interrupted && !turn.reply.trim().is_empty() {
             self.history.push(("user".to_string(), turn.stt.clone()));
             self.history
                 .push(("assistant".to_string(), turn.reply.clone()));
@@ -304,14 +408,14 @@ impl<'a, T: Transport> Session<'a, T> {
                 self.abort.store(true, Ordering::Relaxed);
             }
             ClientMessage::Mcp { payload, .. } => {
-                send_text(
-                    self.transport,
-                    &ServerMessage::Mcp {
-                        session_id: Some(session_id),
-                        payload,
-                    },
-                )
-                .await?;
+                // 设备侧 MCP 响应/通知。**不再回显**（旧实现把设备发来的 payload 原样发回去，
+                // 设备因缺 `method` 直接丢弃——纯占位逻辑，见 docs/esp-compat-and-latency-plan.md §3.3）。
+                // 走到这里说明这条消息**没有等待方**：迟到的响应（超时后才回）或设备主动通知。
+                // 只记日志、不回包——回显会让设备日志刷 "Missing method"，掩盖真正的问题。
+                tracing::info!(
+                    "session {session_id} 收到设备 MCP 消息（无等待方，仅记录）: {}",
+                    crate::app::mcp::summarize(&payload)
+                );
             }
             ClientMessage::AsrTest { action, .. } => {
                 // 测试台专用端点（仅 hello.test=true 受理）；实现见 session/bench.rs
@@ -377,6 +481,10 @@ impl<'a, T: Transport> Session<'a, T> {
 
 /// 会话主循环：收发消息、驱动流水线。`is_test` 来自 hello 的 `test` 参数，
 /// 只有测试台会话能发起 asr_test/tts_test/llm_test（设备正式流程不经过测试端点）。
+///
+/// `mcp` 来自 hello 的 `features.mcp`：决定本会话是否可以用 MCP 指挥设备。
+/// 两个用途：① 会话开始时**能力发现**（`initialize` + `tools/list` → 管理界面，见 [`mcp`]）；
+/// ② 指令闸门的「结束聆听」（[`command`]）。设备未声明 MCP 时两者都不发生（老固件向后兼容）。
 pub async fn run_session<T: Transport>(
     transport: &mut T,
     engines: Arc<Engines>,
@@ -384,6 +492,7 @@ pub async fn run_session<T: Transport>(
     session_id: String,
     device_id: String,
     is_test: bool,
+    mcp: bool,
 ) -> anyhow::Result<()> {
     // 会话开始时按磁盘最新配置热刷新引擎（管理页保存后**新会话即生效**，无需重启）。
     // ⚠️ 必须在 spawn_blocking 内：sherpa 重建引擎可能加载模型数秒，直接调用会独占
@@ -442,6 +551,8 @@ pub async fn run_session<T: Transport>(
         pacer: DownlinkPacer::new(params.downlink_lead_ms as u64),
         commands,
         close_requested: false,
+        mcp_enabled: mcp,
+        mcp_next_id: 1,
     };
     session.run().await
 }

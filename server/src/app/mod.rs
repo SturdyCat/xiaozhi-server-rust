@@ -4,6 +4,8 @@
 pub mod audio;
 pub mod downlink;
 pub mod firmware;
+pub mod mcp;
+pub mod prefetch;
 pub mod protocol;
 pub mod session;
 pub mod sse;

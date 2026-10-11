@@ -239,7 +239,11 @@ fn merge_patch_explicit_null_clears_to_default() {
         saved.llm.api_key, "",
         "显式 null = 清除 → 回落 serde 默认值"
     );
-    assert_eq!(saved.audio.downlink_lead_ms, 240);
+    // 显式 null → 回落 serde 默认值 (1000ms)，再被 `AudioConfig::normalize` 收敛到该配置的
+    // **设备解码队列**安全上限：样例是 40ms 帧（`full_test_config`）→ 队列 20 包 × 40ms
+    // = 800ms → 上限 (20−2)×40 = 720ms。这也锁住了"上限随帧长变"这条护栏。
+    assert_eq!(saved.audio.downlink_lead_ms, 720);
+    assert_eq!(saved.audio.downlink_queue_packets, 20);
     // 同段其它字段不受影响
     assert_eq!(saved.llm.model, "m1");
     assert_eq!(saved.audio.downlink_sample_rate, 22050);

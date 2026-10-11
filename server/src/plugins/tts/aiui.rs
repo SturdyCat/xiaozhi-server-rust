@@ -29,10 +29,49 @@ const HOST: &str = "aiui.xf-yun.com";
 const PATH: &str = "/v3/aiint/sos";
 /// 文本主动合成的固定情景模式（官方文档：普通/超拟人合成均取此值）。
 const SCENE_TTS: &str = "IFLYTEK.tts";
-/// 单次合成总超时（连接 + 收完整段音频）。
+/// 单次合成**活跃**超时（连接 + 收完整段音频）。
+///
+/// ⚠️ 这是"**上游不给数据**"的预算，**不含**服务端**故意**等待的时间：
+/// 下载缓冲（`app::prefetch::DownloadBudget`）到预算后会在回调里把下载暂停，
+/// 那是我们主动的流控，不是上游慢。若把它算进总超时，**缓冲越深越容易"合成超时"**
+/// ——表现是长回复中间整句丢失（比断续更难排查）。故用 [`ActiveDeadline`] 记账。
 const TOTAL_TIMEOUT: Duration = Duration::from_secs(30);
 /// 分帧间隔读取超时。
 const READ_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// "活跃耗时"预算：`tick` 把**非等待**时间从预算里扣掉，`after_wait` 把"刚发生的
+/// 故意等待"排除在外（调用方在回调返回后立刻调它）。
+///
+/// 语义 = "上游 30s 内不给够数据就放弃"，而不是"墙上时钟 30s"。
+#[derive(Debug)]
+struct ActiveDeadline {
+    /// 剩余活跃预算
+    left: Duration,
+    /// 上次记账时刻
+    last: Instant,
+}
+
+impl ActiveDeadline {
+    fn new(total: Duration) -> Self {
+        Self { left: total, last: Instant::now() }
+    }
+
+    /// 推进到"现在"，把 `last` 以来的时长从预算里扣掉（在非等待点调用）。
+    fn tick(&mut self) {
+        let now = Instant::now();
+        self.left = self.left.saturating_sub(now.saturating_duration_since(self.last));
+        self.last = now;
+    }
+
+    /// 刚发生过一次**故意等待**（回调里的下载限速/背压）：不计入活跃预算。
+    fn after_wait(&mut self) {
+        self.last = Instant::now();
+    }
+
+    fn expired(&self) -> bool {
+        self.left.is_zero()
+    }
+}
 
 /// AIUI 主动合成引擎（无本地状态；每次合成一次短连接）。
 pub struct AiuiTts {
@@ -176,10 +215,14 @@ fn synthesize_frames(
     .to_string();
     ws.send(Message::text(request)).context("发送 AIUI 合成请求失败")?;
 
-    let deadline = Instant::now() + TOTAL_TIMEOUT;
+    let mut deadline = ActiveDeadline::new(TOTAL_TIMEOUT);
     loop {
-        if Instant::now() > deadline {
-            bail!("AIUI 合成超时（{}s 内未完成）", TOTAL_TIMEOUT.as_secs());
+        deadline.tick();
+        if deadline.expired() {
+            bail!(
+                "AIUI 合成超时（上游 {}s 内未给够数据；服务端主动限速的等待不计入）",
+                TOTAL_TIMEOUT.as_secs()
+            );
         }
         let msg = ws.read().context("读取 AIUI 合成响应失败（网络或读超时）")?;
         let text = match &msg {
@@ -213,6 +256,9 @@ fn synthesize_frames(
                         let _ = ws.close(None);
                         return Ok(()); // 调用方取消：正常返回
                     }
+                    // 回调里可能因**下载缓冲预算**而故意等待（下载限速）：不计入活跃预算，
+                    // 否则"缓冲越深越容易合成超时"（见 `ActiveDeadline` 文档）。
+                    deadline.after_wait();
                 }
             }
         }

@@ -8,9 +8,10 @@ import com.tencent.kuikly.core.views.Text
  * 「指令」配置卡（`[command]`）：**ASR → LLM 之间**的指令闸门。
  *
  * 打开后，识别文本在送进大模型之前先过**长度闸门**（归一化后超过 max_chars 个字的长句一律放行，
- * 避免「帮我关闭卧室的灯」被误判），再按词表匹配；命中即先说一句告别语，随后
- * **断开本次 WebSocket 会话**（一次大模型调用都不发生）。默认关闭时行为与没有这个
- * 插件完全一致。
+ * 避免「帮我关闭卧室的灯」被误判），再按词表匹配；命中即先说一句告别语，随后**用 MCP 让设备
+ * 结束聆听**（服务器是 MCP Client，发 `tools/call` 调设备工具 `self.audio_listener.stop`：
+ * 设备回到待唤醒、音频通道保留，下次唤醒不重连）；设备未声明 MCP 或调用失败时降级为断开本次
+ * WebSocket 会话（一次大模型调用都不发生）。默认关闭时行为与没有这个插件完全一致。
  *
  * 独立文件的原因：`AGENTS.md` §5.10 文件规模约定（`ConfigCards.kt` 已接近上限），
  * 且这张卡的字段/文案自成一组（与 `ConfigSoulMemoryCards.kt` 同思路）。
@@ -22,7 +23,7 @@ fun ViewContainer<*, *>.commandConfigCard(form: ConfigFormState) {
         vif({ form.schema.sectionNote("command").isNotEmpty() }) {
             textNote(form.schema.sectionNote("command"), micro = true)
         }
-        switchRow("enabled（识别到指令就断开会话）", cmd.enabled == "true") {
+        switchRow("enabled（识别到指令就让设备结束聆听）", cmd.enabled == "true") {
             cmd.enabled = if (cmd.enabled == "true") "false" else "true"
             form.dirty = true
         }
@@ -30,7 +31,7 @@ fun ViewContainer<*, *>.commandConfigCard(form: ConfigFormState) {
             attr {
                 fontSize(AdminType.caption)
                 color(AdminColors.textTertiary)
-                text("命中后先说告别语再断开本次会话，不会再调用大模型；默认关闭。")
+                text("命中后先说告别语，再让设备结束聆听（音频通道保留、下次唤醒不重连）；设备不支持 MCP 时降级为断开本次会话。不会再调用大模型；默认关闭。")
             }
         }
         vif({ cmd.enabled == "true" }) {
@@ -89,7 +90,7 @@ fun ViewContainer<*, *>.commandConfigCard(form: ConfigFormState) {
                     attr {
                         fontSize(AdminType.caption)
                         color(AdminColors.warningTintText)
-                        text("⚠️ max_chars = 0 表示不限制长度：任何长度、只要匹配上指令词就会断开会话，请确认这符合预期。")
+                        text("⚠️ max_chars = 0 表示不限制长度：任何长度、只要匹配上指令词就会让设备结束聆听（MCP 不可用时断开本次会话），请确认这符合预期。")
                     }
                 }
             }
@@ -99,7 +100,7 @@ fun ViewContainer<*, *>.commandConfigCard(form: ConfigFormState) {
                     attr {
                         fontSize(AdminType.caption)
                         color(AdminColors.warningTintText)
-                        text("⚠️ contains 会让「关闭闹钟」「把灯关闭」这类短请求也断开会话（长度闸门只挡 6 个字以上的长句）；不确定就用 exact。")
+                        text("⚠️ contains 会让「关闭闹钟」「把灯关闭」这类短请求也触发结束聆听/断开（长度闸门只挡 6 个字以上的长句）；不确定就用 exact。")
                     }
                 }
             }

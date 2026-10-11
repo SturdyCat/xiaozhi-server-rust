@@ -28,7 +28,11 @@ internal fun ConfigFormState.fill(obj: JSONObject) {
         downlinkFrameMs = a.optInt("downlink_frame_duration_ms", downlinkFrameMs.toIntOrNull() ?: 60).toString()
         channels = a.optInt("channels", channels.toIntOrNull() ?: 1).toString()
         binaryProtocolVersion = a.optInt("binary_protocol_version", binaryProtocolVersion.toIntOrNull() ?: 1).toString()
-        downlinkLeadMs = a.optInt("downlink_lead_ms", downlinkLeadMs.toIntOrNull() ?: 240).toString()
+        downlinkLeadMs = a.optInt("downlink_lead_ms", downlinkLeadMs.toIntOrNull() ?: 1000).toString()
+        downlinkQueuePackets = a.optInt("downlink_queue_packets", downlinkQueuePackets.toIntOrNull() ?: 20).toString()
+        downlinkBufferMs = a.optInt("downlink_buffer_ms", downlinkBufferMs.toIntOrNull() ?: 30000).toString()
+        downlinkBufferStartMs = a.optInt("downlink_buffer_start_ms", downlinkBufferStartMs.toIntOrNull() ?: 1500).toString()
+        downlinkBufferStartMaxMs = a.optInt("downlink_buffer_start_max_ms", downlinkBufferStartMaxMs.toIntOrNull() ?: 4000).toString()
     }
     obj.optJSONObject("asr")?.let { a ->
         asrModel = a.optString("model", asrModel)

@@ -24,6 +24,12 @@ class ConfigPage : Pager() {
     /** 能力总览的数据源（`GET /api/plugins`，只读，不随表单回传）。 */
     val plugins = PluginMetaState(this)
 
+    /** 「MCP 工具」的数据源（`GET /api/mcp/tools`，只读，不随表单回传）。 */
+    val mcpTools = McpToolsState(this)
+
+    /** 「OTA 固件」的数据源（`GET /api/ota/firmware` + 上传/删除；与 `/api/config` 无关）。 */
+    val ota = OtaState(this)
+
     /** 顶部 toast（跨端统一实现：状态 + 渲染见 commonMain 的 ToastState / ToastHost）。 */
     val toast = ToastState(this)
 
@@ -33,6 +39,10 @@ class ConfigPage : Pager() {
         super.pageDidAppear()
         form.load(this)
         plugins.load(this)
+        mcpTools.load(this)
+        // web 端由 server 同域托管，基址留空（相对路径）；鉴权 token 由 URL 参数带进来
+        //（`?token=xxx&page_name=config`，与 /api/ws 的浏览器兜底口径一致）
+        ota.load(this, "", pagerData.params.optString("token", ""))
     }
 
     override fun body(): ViewBuilder {
@@ -80,6 +90,9 @@ class ConfigPage : Pager() {
             renderForm(
                 ctx.form,
                 ctx.plugins,
+                ctx.mcpTools,
+                ctx.ota,
+                ctx.toast,
                 ctx,
                 pageWidth = pageWidth,
                 pageHeight = pageHeight,

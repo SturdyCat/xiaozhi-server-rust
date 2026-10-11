@@ -18,7 +18,8 @@ import com.tencent.kuikly.core.reactive.handler.observableList
  * 语义（服务端为唯一权威，见 `server/src/plugins/command/mod.rs`）：
  * ASR 识别文本在送进 LLM **之前**先过两道闸：① **长度闸门**——归一化后超过 `maxChars`
  * 个字（默认 5，0 = 不限制）的长句携带信息，一律放行给大模型；② 按 `keywords` 匹配
- * （`matchMode`：exact/contains）。两者都通过才命中，命中则先说 `reply` 再把本次会话断开。
+ * （`matchMode`：exact/contains）。两者都通过才命中，命中则先说 `reply`，再用 MCP 让设备结束
+ * 聆听（音频通道保留、下次唤醒不重连）；MCP 不可用时降级为断开本次会话。
  * `enabled = false`（默认）时行为与没有这段完全一致。
  *
  * ⚠️ `keywords` 是数组字段，在表单里是**多行文本**（每行一个词），读写时统一转换
@@ -33,7 +34,7 @@ class CommandSectionState(private val scope: PagerScope) {
     var matchMode by scope.observable("exact")
     /// 长度闸门：归一化后超过这么多字就不做指令判断（0 = 不限制）；留空/非法按默认 5 处理。
     var maxChars by scope.observable("5")
-    /// 命中后先说的告别语；留空 = 直接断开、不出声。
+    /// 命中后先说的告别语；留空 = 不说告别语（仍执行结束聆听）。
     var reply by scope.observable("好的，我先退下了。")
 
     /// 匹配方式下拉选项（官方 AlertDialog 要求 ObservableList）。

@@ -15,8 +15,9 @@ pub(super) const COMMAND_FIELDS: &[FieldSchema] = &[
         label: "启用指令闸门",
         kind: FieldKind::Bool,
         default_hint: "false",
-        help: "打开后，识别到指令词（默认「退下/闭嘴/关闭」）会先说告别语再断开本次会话，\
-               不再调用大模型；关闭时行为与没有这个插件完全一致。",
+        help: "打开后，识别到指令词（默认「退下/闭嘴/关闭」）会先说告别语，再用 MCP 让设备\
+               结束聆听（设备回到待唤醒、音频通道保留，下次唤醒不重连）；设备不支持 MCP 或\
+               调用失败时降级为断开本次会话。全程不再调用大模型；关闭时行为与没有这个插件完全一致。",
         hot: HotReload::NextSession,
         required: true,
     },
@@ -57,7 +58,8 @@ pub(super) const COMMAND_FIELDS: &[FieldSchema] = &[
         label: "告别语",
         kind: FieldKind::Str,
         default_hint: "好的，我先退下了。",
-        help: "命中后先说这句再断开（走本地 TTS，一次性合成）；留空 = 直接断开、不出声。",
+        help: "命中后先说这句（走本地 TTS，一次性合成），随后再让设备结束聆听；\
+               留空 = 不说告别语（仍执行结束聆听）。",
         hot: HotReload::NextSession,
         required: false,
     },

@@ -1,4 +1,6 @@
 #import "XiaoZhiModule+Internal.h"
+#import <OpenKuiklyIOSRender/KRConvertUtil.h>            // keyWindow（取 rootViewController 弹文件选择器）
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h> // UTTypeData（固件包类型）
 
 // ⚠️ 参数/回调 key 不能自定义：KR_PARAM_KEY/KR_CALLBACK_KEY 是 OpenKuiklyIOSRender
 //    KRBaseModule.h 声明的 extern 常量（实际值为 @"param"/@"callback"）。
@@ -9,6 +11,46 @@
 const uint32_t kUplinkSampleRate = 16000;   // 上行（麦克风）采样率，与 server 协商一致
 const uint32_t kDownlinkSampleRate = 24000; // 下行（TTS）默认采样率，实际以 server hello 为准
 const uint32_t kFrameDurationMs = 60;       // 上下行帧长，与 server 一致
+
+#pragma mark - 固件包选择（OTA 上传）
+
+// 独立小代理类（而不是让 XiaoZhiModule 自己实现 UIDocumentPickerDelegate）：
+// ObjC 类别不能声明 ivar、也不能在类别里补协议一致性，代理塞进主类会让"文件选择"这条
+// 支线与音频/WS 混在同一个类里；独立类 + 文件级强引用即可（同一时刻只会弹一个选择器）。
+@interface XZFilePickerDelegate : NSObject <UIDocumentPickerDelegate>
+@property (nonatomic, copy, nullable) void (^completion)(NSString *_Nullable name, NSData *_Nullable data);
+@end
+
+@implementation XZFilePickerDelegate
+
+- (void)documentPicker:(UIDocumentPickerViewController *)controller
+    didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
+    NSURL *url = urls.firstObject;
+    void (^cb)(NSString *, NSData *) = self.completion;
+    self.completion = nil;
+    if (!cb) return;
+    if (!url) {
+        cb(nil, nil);
+        return;
+    }
+    // asCopy:YES 下 URL 指向 App 沙箱内的临时副本，直接读即可（无需 security-scoped access）。
+    // 读失败（磁盘/权限）→ data 为 nil，由调用方按"未选择"处理并给出提示。
+    NSError *err = nil;
+    NSData *data = [NSData dataWithContentsOfURL:url options:0 error:&err];
+    if (!data) NSLog(@"[XiaoZhi] 读取固件包失败: %@", err);
+    cb(url.lastPathComponent ?: @"", data);
+}
+
+- (void)documentPickerWasCancelled:(UIDocumentPickerViewController *)controller {
+    void (^cb)(NSString *, NSData *) = self.completion;
+    self.completion = nil;
+    if (cb) cb(nil, nil);
+}
+
+@end
+
+// 文件级强引用保住代理生命周期（ARC 下 static 不会被提前回收；下次选择覆盖上一个）。
+static XZFilePickerDelegate *gFilePickerDelegate = nil;
 
 @implementation XiaoZhiModule
 
@@ -419,6 +461,40 @@ const uint32_t kFrameDurationMs = 60;       // 上下行帧长，与 server 一�
     if (!self.ttsPcm) self.ttsPcm = [NSMutableData data];
     [self.ttsPcm appendData:pcm];
     [self playPcm:pcm];
+}
+
+#pragma mark - 固件包选择（OTA 上传）
+
+// pickFirmwareFile()：弹系统文件选择器选 .bin，读成 NSData 后经**原子桥**回传 Kotlin。
+// 回参形状对齐 KRNetworkModule 的二进制通道：@[infoJsonString, NSData] —— Kotlin 侧
+// asyncToNativeMethod 的回调拿到 Array（[0]=JSON 字符串、[1]=ByteArray）。
+// 几 MB 的包不走 JSON/base64：那会白白多两次编解码拷贝。
+- (void)pickFirmwareFile:(NSDictionary *)args {
+    id callback = args[KR_CALLBACK_KEY];
+    void (^finish)(NSString *, NSData *) = ^(NSString *name, NSData *data) {
+        if (!callback) return;
+        NSDictionary *info = @{@"name": name ?: @"", @"size": @(data.length)};
+        ((KuiklyRenderCallback)callback)(@[[info hr_dictionaryToString], data ?: [NSData data]]);
+    };
+    // 弹窗与回调都必须在主线程（Kuikly 桥回调要求主线程）
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIViewController *host = [KRConvertUtil keyWindow].rootViewController;
+        if (!host) {
+            NSLog(@"[XiaoZhi] 文件选择器无法弹出：取不到 rootViewController");
+            finish(@"", nil);
+            return;
+        }
+        XZFilePickerDelegate *delegate = [XZFilePickerDelegate new];
+        delegate.completion = finish;
+        gFilePickerDelegate = delegate;
+        // asCopy:YES：由系统把用户选的文件复制进沙箱（免 security-scoped bookmark 那套）
+        UIDocumentPickerViewController *picker =
+            [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[ UTTypeData ]
+                                                                       asCopy:YES];
+        picker.delegate = delegate;
+        picker.allowsMultipleSelection = NO;
+        [host presentViewController:picker animated:YES completion:nil];
+    });
 }
 
 #pragma mark - 回调

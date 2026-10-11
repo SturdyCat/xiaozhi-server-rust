@@ -309,7 +309,7 @@ find server/src -name tests.rs | wc -l                                     # => 
 | LLM | `plugins/llm/mod.rs:114` `LlmProvider` | `build_llm` `llm/mod.rs:130` | `[llm]` `llm/mod.rs:13` | OpenAI 兼容 Responses API |
 | 全链路 | `plugins/aiui/mod.rs:138` `FullChainEngine` | **无工厂**，会话内直接 `AiuiSession::new(...)`（`app/session.rs:590-603`） | `[aiui]` `aiui/mod.rs:25` | AIUI 云闭环 |
 | 发音人目录 | — | — | — | `app/voices.rs`（148 条候选池探测 + `/data/voices.json` 缓存），路由 `ws/mod.rs:69` |
-| 固件托管 | — | — | — | `app/firmware.rs`（上传/下载/版本），路由 `ws/mod.rs:68` |
+| 固件托管 | — | — | — | `app/firmware.rs`（多目标存储/匹配/版本比较：`<dir>/<功能>/<型号>/<板型\|_>/`）+ `app/firmware/http.rs`（上传/清单/下载/删除四个端点），路由 `ws/mod.rs:68` |
 
 **观察**：`voices` 与 `firmware` 是"有 UI、有状态、有动作"的完整能力，却**不在 `plugins/` 目录、不进 `Config` 结构、不进装配器**——它们是"体制外能力"。统一插件化的第一个收益就是把它们纳入同一套描述与状态上报。
 

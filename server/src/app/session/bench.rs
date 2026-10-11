@@ -5,7 +5,10 @@
 //! 本文件作为 [`super::Session`] 的子模块 impl 扩展拆分自 `session.rs`（可访问会话私有字段）。
 //! 服务端每次都按**磁盘最新配置**工作（读盘热切换），因此测试台改配置保存后无需重启。
 
-use crate::app::downlink::{send_sentence_audio_stream, send_tts_state};
+use crate::app::downlink::{
+    drain_reservoir, new_reservoir, send_tts_state, spawn_single_sentence_filler,
+};
+use crate::app::prefetch::PreparedAudio;
 use crate::app::protocol::ServerMessage;
 use crate::app::session::{send_text, Session};
 use crate::app::transport::Transport;
@@ -183,32 +186,58 @@ impl<'a, T: Transport> Session<'a, T> {
         let t0 = std::time::Instant::now();
         // 流式合成：spawn_blocking 跑引擎，分片经 channel 边收边下发（首片即出声）。
         // 失败经 tts_test 结果回报测试台（不再静默）。
-        let (tx, chunk_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<f32>>();
+        // 与正常会话走**同一个下载缓冲**（按预算控制下载流速，见 `app::prefetch`）。
+        let download = crate::app::prefetch::DownloadBudget::new(self.params.download_buffer_ms);
+        let (tx, chunk_rx) =
+            tokio::sync::mpsc::channel::<crate::app::prefetch::PcmChunk>(
+                crate::app::prefetch::PREFETCH_PCM_SLOTS,
+            );
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel::<bool>();
         let text_c = text.clone();
+        let abort_c = self.abort.clone();
+        let budget_c = download.clone();
         let producer = tokio::task::spawn_blocking(move || {
-            tts.synthesize_stream(
+            let r = tts.synthesize_stream(
                 &text_c,
                 speed,
                 speaker,
-                Box::new(move |_sr, chunk| tx.send(chunk.to_vec()).is_ok()),
-            )
+                Box::new(move |sr, chunk| {
+                    // 下载缓冲按预算限速 + 打断感知（见 `prefetch::push_pcm` 文档）
+                    crate::app::prefetch::push_pcm(&budget_c, &tx, chunk.to_vec(), sr, &abort_c)
+                }),
+            );
+            // 合成是否正常结束：水库填充任务据此决定该句能否写结果缓存
+            let _ = done_tx.send(r.is_ok());
+            r
         });
-        // 测试台单次合成也按实时节奏下发（同一节拍器实现；保护 ESP/一致行为）
+        // 测试台单次合成也走**同一条**下行链路（水库 + 节拍器；保护 ESP/一致行为）
         self.pacer.reset();
-        let frames = send_sentence_audio_stream(
+        let (sink, source) =
+            new_reservoir(self.params.downlink_buffer_ms, self.params.downlink_frame_ms);
+        let filler = spawn_single_sentence_filler(
+            self.abort.clone(),
+            self.engines.tts_cache.clone(),
+            self.params,
+            sink,
+            text.clone(),
+            PreparedAudio::Stream { sr: tts_sr, chunks: chunk_rx, done: done_rx },
+            0, // 测试台测的是真实合成，不走缓存
+        );
+        let mut first_frame_at = None;
+        let drain = drain_reservoir(
             self.transport,
             &self.params,
-            &mut self.downlink_ts,
-            &self.abort,
             &self.session_id,
-            &text,
-            tts_sr,
-            chunk_rx,
+            &self.abort,
+            &mut self.downlink_ts,
             &mut self.pacer,
-            None, // 测试台测的是真实合成，不走缓存
-            &mut None,
+            source,
+            t0,
+            &mut first_frame_at,
         )
         .await?;
+        filler.abort();
+        let frames = drain.frames;
         match producer.await {
             Ok(Ok(())) => {
                 tracing::info!(

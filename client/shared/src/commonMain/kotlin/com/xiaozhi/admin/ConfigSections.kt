@@ -24,6 +24,8 @@ object ConfigSections {
     val all: List<SectionDescriptor> = listOf(
         // order 以 10 为步长：留出插入空间，避免每次新增都要重排既有值
         SectionDescriptor("overview", 0, "总览"),
+        // 设备工具：会话开始时服务器通过 MCP 拉到的工具清单（只读投影，与「总览」同性质）
+        SectionDescriptor("mcp", 5, "MCP 工具"),
         SectionDescriptor("server", 10, "Server"),
         SectionDescriptor("audio", 20, "Audio"),
         SectionDescriptor("asr", 30, "ASR"),
@@ -35,6 +37,8 @@ object ConfigSections {
         SectionDescriptor("aiui", 70, "AIUI"),
         SectionDescriptor("soul", 80, "灵魂"),
         SectionDescriptor("memory", 90, "记忆"),
+        // 固件 OTA：按「功能 + 型号」托管 app bin，设备 OTA 时按同功能同型号匹配
+        SectionDescriptor("ota", 100, "OTA"),
     )
 
     init {

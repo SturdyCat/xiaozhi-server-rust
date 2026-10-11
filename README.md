@@ -21,7 +21,7 @@
 - **Feature 门控**：`default`（无真实引擎，仅供 `cargo check/test` 编译；运行必须 `--features sherpa`）；`sherpa`（引入 `sherpa-onnx` / `audiopus` / `rubato`，真实引擎）。
 - **无 mock**：ASR 恒为 SenseVoice、TTS 恒为 Kokoro、LLM 恒为 OpenAI 兼容 HTTP、VAD 恒为 Silero——ESP 接入走完整正式流水线；macApp 测试台连接带 `hello.test=true`，走 `asr_test`/`tts_test`/`llm_test` 三个独立服务请求-响应端点。
 - 可选 Bearer Token 鉴权（配置 `server.expected_token`）。
-- **语音指令闸门**（可选，`[command]`）：ASR 识别结果在送进 LLM **之前**按指令词匹配（默认「退下 / 闭嘴 / 关闭」），命中即先说一句可配置的告别语，随后**断开本次会话**——不调用大模型、不产生回复开销。只对短话生效（默认 ≤ 5 个字，`max_chars` 可调）：长句携带信息，直接交给大模型。默认关闭。
+- **语音指令闸门**（可选，`[command]`）：ASR 识别结果在送进 LLM **之前**按指令词匹配（默认「退下 / 闭嘴 / 关闭」），命中即先说一句可配置的告别语，随后**用 MCP 让设备自己结束聆听**（服务器是 MCP Client，发 `tools/call` 调设备工具 `self.audio_listener.stop`：设备回到待唤醒、**音频通道保留**，下次唤醒复用同一条连接、不再重连）；设备未声明 MCP 或调用失败时自动降级为断开本次会话。全程不调用大模型、不产生回复开销。只对短话生效（默认 ≤ 5 个字，`max_chars` 可调）：长句携带信息，直接交给大模型。默认关闭。
 
 ---
 
@@ -71,7 +71,7 @@ cd server && ~/.cargo/bin/cargo run -- --config config.toml
 - `audio.binary_protocol_version`：下行二进制协议版本（1/2/3）。**建议先用 1 真机验证，再切 2/3。**
 - `llm.api_base` / `api_key` / `model` / `system_prompt`：OpenAI 兼容 Responses API（LLM 恒为真实 HTTP，无 mock）。
 - `tts.backend`：`sherpa`（本地 Kokoro INT8，默认）或 `xfyun`（科大讯飞在线合成，需在 `[tts.xfyun]` 填 app_id/api_key/api_secret/voice）。
-- `command.enabled` / `keywords` / `match_mode` / `max_chars` / `reply`：语音指令闸门（ASR → LLM 之间）。开启后识别到指令词（默认「退下 / 闭嘴 / 关闭」）会先说 `reply` 再断开本次会话，跳过 LLM。
+- `command.enabled` / `keywords` / `match_mode` / `max_chars` / `reply`：语音指令闸门（ASR → LLM 之间）。开启后识别到指令词（默认「退下 / 闭嘴 / 关闭」）会先说 `reply`，再**用 MCP 让设备结束聆听**（`tools/call` → `self.audio_listener.stop`；设备回到待唤醒、音频通道保留，下次唤醒不重连），跳过 LLM。设备不支持 MCP（老固件）或调用失败（固件未含该工具 / 超时）时自动降级为**断开本次会话**——两条路径日志都会写明原因。
   `match_mode = "exact"`（默认）要求整句相等——识别文本会先去标点并剥掉句末语气词（「退下吧。」≡「退下」），因此**不会**把「关闭闹钟」误判为关机；改成 `"contains"` 才是"句中出现即命中"。
   `max_chars = 5`（默认）是**长度闸门**：归一化后超过这么多字的识别文本一律不做指令判断、直接交给大模型——「帮我关闭卧室的灯」含「关闭」但不会被断线；`0` = 不限制。注意指令词本身长于 `max_chars` 时会永远命中不了，保存时会被拦下提示。保存后**新会话**生效。
 
@@ -195,6 +195,35 @@ cd client && ./gradlew :apps:h5App:build
 cd server && ~/.cargo/bin/cargo run -- --config config.toml
 # 浏览器访问 http://127.0.0.1:8000/?page_name=config
 ```
+
+### 固件 OTA 托管（多型号 / 多功能）
+
+设备开机 POST `/api/ota` 检查版本，服务端按设备上报的 **功能 + 型号** 匹配托管固件，命中且版本更新才下发下载地址（设备自升级）。管理页「OTA」tab 即这套托管的上传/清单/删除界面。
+
+- **寻址维度**：`功能(project) × 型号(model)`，可选 `板型(board)` 收窄。功能 = 固件 `esp_app_desc_t.project_name`（设备上报 `application.name`），型号 = 芯片（设备上报 `chip_model_name`，与 `CONFIG_IDF_TARGET` 同名，如 `esp32c3` / `esp32s3`），板型 = 设备 `board.type`（如 `bread-compact-wifi`）。
+- **匹配规则**：功能与型号**必须完全相同**；同型号下优先"板型精确匹配"，否则回落到"该型号通用"（上传时不填 board）。**不同型号/不同功能的包绝不互发**——发错包等于变砖；没有匹配就不下发升级地址。
+- **元数据自动识别**：ESP-IDF app 镜像自带元数据（镜像头 `chip_id` + `esp_app_desc_t`），上传时服务端自动解析出 型号/功能/版本/IDF 版本/编译时间，**无需手填**；非 ESP-IDF 镜像或字段为空时用查询参数覆盖。
+- **存储布局**：`<XIAOZHI_FIRMWARE_DIR>/<project>/<model>/<board|_>/firmware.bin + meta.json`（默认 `/data/firmware`，随 compose 的 `/data` 卷持久化）。同一 key 上传即覆盖，不留历史版本。
+
+| 端点 | 语义 |
+|---|---|
+| `POST /api/ota/firmware` | 上传 app bin（body = 裸二进制；`expected_token` 非空时需 `Authorization: Bearer`）。可选覆盖：`?project=&model=&board=&version=`。返回解析后的元数据 + `metadata_from`（`package`/`query`） |
+| `GET /api/ota/firmware` | 托管清单（管理页数据源）：`{dir, count, entries[]}` |
+| `GET /api/ota/firmware/latest?project=&model=&board=` | 设备下载（**不鉴权**，设备无法带 Authorization 头）：裸 bin 流，`Content-Length` 完整 |
+| `POST /api/ota/firmware/delete` / `DELETE /api/ota/firmware` | 删除条目（管理动作，需鉴权）：`?project=&model=&board=` |
+
+```bash
+# 上传（型号/版本自动识别，无需参数）
+curl -H "Authorization: Bearer <expected_token>" \
+     --data-binary @build/xiaozhi-esp32.bin \
+     "http://<host>:8000/api/ota/firmware"
+# 查看清单 / 删除
+curl "http://<host>:8000/api/ota/firmware"
+curl -X POST -H "Authorization: Bearer <expected_token>" \
+     "http://<host>:8000/api/ota/firmware/delete?project=xiaozhi&model=esp32s3&board="
+```
+
+> 旧版（只保留一个根目录固件）的 `firmware.bin` + `latest.json` 会被列为 `_legacy` 条目：可删除、可查看，但**不参与匹配**（没有型号信息，继续下发等于把不确定的包发给任何设备）——请按 功能+型号 重新上传。
 
 ### ASR/TTS 测试台（macOS App）
 

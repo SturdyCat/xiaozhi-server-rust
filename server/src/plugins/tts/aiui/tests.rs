@@ -58,3 +58,30 @@ fn aiui_tts_live() {
         println!("== 探测[{vcn}]: {:?}（{}ms）", probe_voice(&cfg, vcn).map(|b| format!("OK {b}B")).map_err(|e| format!("{e:#}")), t1.elapsed().as_millis());
     }
 }
+
+// ---- ActiveDeadline：合成总超时不得把"服务端主动限速的等待"算进去 ----
+
+/// 非等待时间照常扣预算（上游真不给数据时仍然会超时）。
+#[test]
+fn active_deadline_charges_non_waiting_time() {
+    let mut d = ActiveDeadline::new(Duration::from_millis(80));
+    assert!(!d.expired());
+    std::thread::sleep(Duration::from_millis(120));
+    d.tick();
+    assert!(d.expired(), "纯等待上游（无回调）必须计入超时");
+}
+
+/// 回调里的**故意等待**（下载缓冲限速）不计入：否则缓冲越深越容易"合成超时"，
+/// 表现是长回复中间整句丢失。
+#[test]
+fn active_deadline_ignores_deliberate_backpressure_wait() {
+    let mut d = ActiveDeadline::new(Duration::from_millis(80));
+    for _ in 0..5 {
+        d.tick();
+        assert!(!d.expired(), "服务端主动限速的等待不得消耗活跃预算");
+        std::thread::sleep(Duration::from_millis(60)); // 模拟回调里被下载缓冲摁住
+        d.after_wait(); // 回调返回：这段等待排除在外
+    }
+    // 累计墙上时钟已 300ms+，但活跃预算几乎没动
+    assert!(!d.expired(), "5×60ms 的限速等待不得判超时");
+}

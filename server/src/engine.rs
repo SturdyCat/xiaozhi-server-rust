@@ -59,9 +59,14 @@ pub struct Engines {
     /// 装配与前置校验都经它（见 [`crate::plugins::registry`]）。
     pub host: Arc<PluginHost>,
     /// TTS 结果缓存（跨会话共享；`[tts].cache_entries`，0=关闭）。
-    pub tts_cache: crate::app::tts_cache::TtsCache,
+    ///
+    /// `Arc`：预取 worker（独立 task）也要读写它，见 [`crate::app::prefetch`]。
+    pub tts_cache: Arc<crate::app::tts_cache::TtsCache>,
     /// 令牌用量计量（全局 + 按会话；`GET /api/usage`）。回答"记忆注入让 prompt 长了多少"。
     pub usage: crate::app::usage::UsageMeter,
+    /// 设备 MCP 工具注册表（按 `device_id` 存最近一次能力发现的结果；`GET /api/mcp/tools`）。
+    /// 工具清单只存在于固件里且**只有设备连着时才问得到**，故必须落下来给管理界面看。
+    pub mcp: crate::app::mcp::registry::McpRegistry,
     pub config: Arc<Config>,
     /// server 启动时实际加载的配置文件路径；为 `None` 表示用的是内置默认配置，
     /// 此时 `PUT /api/config` 无法持久化（需以 `--config` 指定文件后重启）。
@@ -79,7 +84,7 @@ impl Engines {
         let tts_sig = capability_signature(config, Capability::Tts);
         let llm_sig = capability_signature(config, Capability::Llm);
         let memory_sig = capability_signature(config, Capability::Memory);
-        let tts_cache = crate::app::tts_cache::TtsCache::new(config.tts.cache_entries);
+        let tts_cache = Arc::new(crate::app::tts_cache::TtsCache::new(config.tts.cache_entries));
         Ok(Arc::new(Self {
             asr: booted.asr,
             tts: RwLock::new(booted.tts),
@@ -92,6 +97,7 @@ impl Engines {
             host,
             tts_cache,
             usage: crate::app::usage::UsageMeter::new(),
+            mcp: crate::app::mcp::registry::McpRegistry::new(),
             config: Arc::new(config.clone()),
             config_path,
         }))

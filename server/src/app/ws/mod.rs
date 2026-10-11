@@ -8,6 +8,8 @@
 //! - `GET /api/plugins`：能力清单 + 实际状态（`enabled`/`phase`/`last_error`）。
 //! - `GET /api/config/schema`：各能力/实现的字段元数据（类型/默认值提示/热生效语义/密钥标记）。
 //! - `GET /api/usage` / `GET /api/session/{id}/usage`：令牌用量（成本与上下文膨胀观测）。
+//! - `GET /api/mcp/tools`：按设备列出会话开始时通过 MCP 探测到的工具清单
+//!   （"这台 ESP 支持哪些工具、每个能干什么"——数据源见 [`mcp`]）。
 //! - `GET /api/memory/status` + `POST /api/memory/{recall,maintain,clear}`：图记忆的状态、
 //!   当场试召回（"记忆到底有没有在工作"的反馈）、立即维护与清空。
 //! - `GET/POST /api/ota(/)`：小智固件 OTA 引导（返回 websocket 接入信息 + 校时 + 版本，
@@ -50,12 +52,14 @@ use crate::app::session::{run_session, send_text, SessionParams};
 use crate::app::transport::{IncomingFrame, Transport, WsTransport};
 
 mod config;
+mod mcp;
 mod memory;
 mod ota;
 mod plugins;
 mod soul;
 mod usage;
 use config::{config_meta, get_config, put_config};
+use mcp::mcp_tools;
 use memory::{memory_clear, memory_maintain, memory_recall, memory_status};
 // 插件维护
 pub(crate) use config::config_is_persistent;
@@ -90,6 +94,8 @@ pub fn router(engines: Arc<Engines>) -> Router {
         // 令牌用量：全局 + 单会话（回答"成本"与"上下文膨胀"）
         .route("/api/usage", get(usage))
         .route("/api/session/{id}/usage", get(session_usage))
+        // 设备 MCP 工具：按设备列出会话开始时探测到的工具清单（回答"这台设备能被 AI 指挥做什么"）
+        .route("/api/mcp/tools", get(mcp_tools))
         // 小智固件的 OTA 引导端点（带/不带尾斜杠都注册：固件配置的 URL 以 / 结尾）。
         // ⚠️ 所有接口必须在 /api 之下（接口规范），固件 OTA_URL 指到 /api/ota/ 即可——
         // 该地址完全可配置，无需对齐官方服务器的 /xiaozhi/ota/ 路径。
@@ -226,16 +232,27 @@ async fn handle_handshake(
         downlink_sr,
         downlink_frame_ms,
         downlink_lead_ms: engines.config.audio.downlink_lead_ms,
+        // 服务器侧水库（内存换流畅）：容量 + 起跑闸，见 [audio].downlink_buffer_*
+        downlink_buffer_ms: engines.config.audio.downlink_buffer_ms,
+        // 下载缓冲（PCM，秒级预算）：由水库容量派生，控制 TTS 流的下载流速
+        download_buffer_ms: engines.config.audio.download_budget_ms(),
+        downlink_buffer_start_ms: engines.config.audio.downlink_buffer_start_ms,
+        downlink_buffer_start_max_ms: engines.config.audio.downlink_buffer_start_max_ms,
     };
+    // 设备是否支持 MCP（**设备是 MCP Server，服务器是 MCP Client**）。
+    // 最新固件 `GetHelloMessage()` 硬编码 `features.mcp: true`；极老固件不带该字段 → false，
+    // 本会话一个 MCP 报文都不发，指令闸门退回「断开本次会话」（向后兼容，见 app/session.rs）。
+    let mcp = hello.features.as_ref().is_some_and(|f| f.mcp);
     if hello.test {
         tracing::info!("session {session_id} 测试台连接（hello.test=true，受理 asr_test/tts_test/llm_test）");
     } else {
         // 设备正式会话（ASR/TTS 走这条 WS；按需建立——唤醒/按键触发对话时才连接，开机只走 OTA）
         tracing::info!(
             "session {session_id} 设备接入：device={device_id} client={client_id} \
-             上行={uplink_sr}Hz 下行={downlink_sr}Hz/{downlink_frame_ms}ms 上行二进制协议=v{} 下行协议=v{}",
+             上行={uplink_sr}Hz 下行={downlink_sr}Hz/{downlink_frame_ms}ms 上行二进制协议=v{} 下行协议=v{} mcp={}",
             hello.version,
             engines.config.audio.binary_protocol_version,
+            if mcp { "on" } else { "off" },
         );
     }
     run_session(
@@ -245,6 +262,7 @@ async fn handle_handshake(
         session_id,
         device_id.to_string(),
         hello.test,
+        mcp,
     )
     .await
 }
