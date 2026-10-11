@@ -22,6 +22,7 @@
 - **无 mock**：ASR 恒为 SenseVoice、TTS 恒为 Kokoro、LLM 恒为 OpenAI 兼容 HTTP、VAD 恒为 Silero——ESP 接入走完整正式流水线；macApp 测试台连接带 `hello.test=true`，走 `asr_test`/`tts_test`/`llm_test` 三个独立服务请求-响应端点。
 - 可选 Bearer Token 鉴权（配置 `server.expected_token`）。
 - **语音指令闸门**（可选，`[command]`）：ASR 识别结果在送进 LLM **之前**按指令词匹配（默认「退下 / 闭嘴 / 关闭」），命中即先说一句可配置的告别语，随后**用 MCP 让设备自己结束聆听**（服务器是 MCP Client，发 `tools/call` 调设备工具 `self.audio_listener.stop`：设备回到待唤醒、**音频通道保留**，下次唤醒复用同一条连接、不再重连）；设备未声明 MCP 或调用失败时自动降级为断开本次会话。全程不调用大模型、不产生回复开销。只对短话生效（默认 ≤ 5 个字，`max_chars` 可调）：长句携带信息，直接交给大模型。默认关闭。
+- **唤醒问候语**（可选，`[wakeup]`）：固件唤醒词命中后**立刻**上报 `listen state=detect`，服务器据此马上说一句预制话术（默认「我在」），**跳过 LLM 与正常回复**——唤醒是全系统最高频的动作，为一句固定的话付一次大模型调用没有道理。成品音频（已编码的下行 Opus 帧）按**音色**三级复用：内存缓存（跨会话）→ 磁盘 `<配置文件目录>/hot-audio/`（跨重启）→ 真合成一次后自动落盘，稳态下每次唤醒**零 LLM、零 TTS**；换音色因缓存键含引擎签名/speaker/speed/采样率/帧长而自动重新合成。默认关闭。
 
 ---
 
@@ -74,6 +75,7 @@ cd server && ~/.cargo/bin/cargo run -- --config config.toml
 - `command.enabled` / `keywords` / `match_mode` / `max_chars` / `reply`：语音指令闸门（ASR → LLM 之间）。开启后识别到指令词（默认「退下 / 闭嘴 / 关闭」）会先说 `reply`，再**用 MCP 让设备结束聆听**（`tools/call` → `self.audio_listener.stop`；设备回到待唤醒、音频通道保留，下次唤醒不重连），跳过 LLM。设备不支持 MCP（老固件）或调用失败（固件未含该工具 / 超时）时自动降级为**断开本次会话**——两条路径日志都会写明原因。
   `match_mode = "exact"`（默认）要求整句相等——识别文本会先去标点并剥掉句末语气词（「退下吧。」≡「退下」），因此**不会**把「关闭闹钟」误判为关机；改成 `"contains"` 才是"句中出现即命中"。
   `max_chars = 5`（默认）是**长度闸门**：归一化后超过这么多字的识别文本一律不做指令判断、直接交给大模型——「帮我关闭卧室的灯」含「关闭」但不会被断线；`0` = 不限制。注意指令词本身长于 `max_chars` 时会永远命中不了，保存时会被拦下提示。保存后**新会话**生效。
+- `wakeup.enabled` / `greeting` / `persist`：唤醒问候语（唤醒 → LLM 之间）。设备唤醒词命中后固件**立刻**上报 `listen state=detect`（`CONFIG_SEND_WAKE_WORD_DATA=y`），服务器收到即说 `greeting`（默认「我在」），**不调用 LLM、不进入正常回复**。音频三级复用：内存 TTS 缓存 → 磁盘 `<配置文件目录>/hot-audio/`（`persist`）→ 真合成一次后落盘；因此稳态下每次唤醒零 LLM、零 TTS。缓存键含引擎签名/speaker/speed/下行采样率/帧长/文本，**换音色会自动重新合成并另存一份**，不会串用旧音色。`persist` 需要 `[tts].cache_entries > 0`，否则配置校验会拦下并说明怎么改。建议问候语 ≤ 10 字：它播放期间上行音频在缓冲区排队，太长会推迟用户第一句话。保存后**新会话**生效。
 
 
 ---
@@ -175,25 +177,46 @@ python3 server/tests/mock_client.py
 
 可用参数：`--host 127.0.0.1 --port 8000 --token <bearer>`（当 `expected_token` 非空时传 `--token`）。
 
-### 管理后台（Web 配置页）
+### 管理后台（Web 管理台）
 
-管理后台是一个 **Kuikly 多端工程**（`client/`），配置页（`@Page("config")`）位于 `client/shared` 公共层，跨端复用（web / Android / iOS / OHOS）。
-其 web 构建产物由 server 在 `/` 静态托管。它通过 `GET` / `POST`（或 `PUT`）`/api/config` 读写 `config.toml` 的**全部参数**，无需手改文件；auth 沿用 `server.expected_token` 语义，不另造简化鉴权。
+管理后台是一个 **Kuikly 多端工程**（`client/`），位于 `client/shared` 公共层，跨端复用（web / Android / iOS / OHOS）。
+其 web 构建产物由 server 在 `/` 静态托管。
 
-- **访问**：启动 server（带 `--config config.toml`）后浏览器打开 `http://<host>/?page_name=config`，
-  页面自动拉取当前配置并渲染表单；修改后点「保存配置」写回 `config.toml`（原 TOML 注释会被覆盖）。
+默认落地页是 **管理台**（`@Page("admin")`）：左侧边栏 + 六个 section，与参考项目 `xiaozhi-esp32-server` 的
+`manager-web` 同一信息架构（那边是「首页看板 + 设备管理 + 模型配置 + …」，本项目按自身能力裁剪）：
+
+| Section | 数据源 | 回答什么问题 |
+|---|---|---|
+| 概览 | `GET /api/stats` + `/api/plugins` | 现在有几台设备在线、活会话多少、能力有没有异常 |
+| 设备 | `GET /api/devices` | 哪些设备连过、最后活跃、协商参数、上次会话为什么断 |
+| 会话 | `GET /api/sessions` | **此刻**哪些连接活着、各自在聆听/思考/说话 |
+| 对话记录 | `GET /api/conversations` | 最近聊了什么（内存环形，非持久化） |
+| 用量 | `GET /api/usage` | 令牌花在哪、上下文被记忆/人格撑大了多少 |
+| 配置 | `GET/POST /api/config` | 读写 `config.toml` 全部参数 |
+
+> ⚠️ **设备/会话/对话记录是进程内内存态**（口径写在每个页面与每个响应里）：重启清零、
+> `online` 由会话生命周期派生而非心跳、对话只保留最近若干轮。要长期留存请开启 `[memory]`。
+>
+> 单页模式仍可用 `?page_name=config` 单独打开配置页（`@Page("config")`，适合嵌入式/调试场景）。
+
+配置读写沿用 `GET` / `POST`（或 `PUT`）`/api/config`，**部分更新**语义（缺失字段保持原值、显式 `null` 清除、
+密钥空串保留），无需手改文件；auth 沿用 `server.expected_token` 语义，不另造简化鉴权。
+
+- **访问**：启动 server（带 `--config config.toml`）后浏览器打开 `http://<host>/`（默认即管理台）；
+  修改配置后点「保存配置」写回 `config.toml`（原 TOML 注释会被覆盖）。
 - **API**：
   - `GET /api/config` → 返回当前配置 JSON（启动时指定了文件则实时读盘）。
-  - `POST /api/config`（亦接受 `PUT`）→ 接收完整配置 JSON 并写回启动加载的配置文件；**引擎相关参数（ASR/TTS/LLM）需重启 server 才生效**，`[server]` 部分下次启动生效。
+  - `POST /api/config`（亦接受 `PUT`）→ 接收配置 JSON 并写回启动加载的配置文件（部分更新）；
+    **引擎相关参数（ASR/TTS/LLM）对新会话生效**，`[server]`/`[audio]` 部分需重启。
 - **注意**：以内置默认配置启动（未指定文件）时保存无目标文件，会返回 400；请用 `--config` 指定 `config.toml` 后重启再保存。
 
 ```bash
 # 构建 web 管理页（产物目录含 index.html 与 nativevue2.js，由 [server].admin_dir 指向）
-cd client && ./gradlew :apps:h5App:build
+cd client && ./gradlew :apps:h5App:publishWeb
 
-# 启动 server（admin_dir 默认 ../client/apps/h5App/dist，按实际构建输出调整）
+# 启动 server（admin_dir 默认 ../client/apps/h5App/web，按实际构建输出调整）
 cd server && ~/.cargo/bin/cargo run -- --config config.toml
-# 浏览器访问 http://127.0.0.1:8000/?page_name=config
+# 浏览器访问 http://127.0.0.1:8000/（管理台）；单页配置页：?page_name=config
 ```
 
 ### 固件 OTA 托管（多型号 / 多功能）

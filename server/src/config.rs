@@ -44,6 +44,7 @@ pub use crate::plugins::tts::TtsConfig;
 #[allow(unused_imports)]
 pub use crate::plugins::tts::XfyunTtsConfig;
 pub use crate::plugins::vad::VadConfig;
+pub use crate::plugins::wakeup::WakeConfig;
 
 /// 一个能力**可选实现**的声明（配置层权威，不是注册表）。
 ///
@@ -111,6 +112,11 @@ pub struct Config {
     /// 跳过 LLM 与正常回复。默认关闭。
     #[serde(default)]
     pub command: CommandConfig,
+    /// 唤醒问候语（`[wakeup]`）：设备唤醒（固件上报 `listen state=detect`）时**立刻**说一句
+    /// 预制话术（默认「我在」），跳过 LLM 与正常回复；成品音频按音色持久化复用，
+    /// 稳态下每次唤醒零 LLM、零 TTS。默认关闭。
+    #[serde(default)]
+    pub wakeup: WakeConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -361,6 +367,7 @@ impl Default for Config {
             soul: SoulConfig::default(),
             memory: MemoryConfig::default(),
             command: CommandConfig::default(),
+            wakeup: WakeConfig::default(),
         };
         c.normalize();
         c
@@ -394,6 +401,7 @@ impl Config {
         self.memory.normalize();
         self.soul.normalize();
         self.command.normalize();
+        self.wakeup.normalize();
     }
 
     /// 是否处于「真实音频模式」：`sherpa` feature（唯一路径，无 mock）。

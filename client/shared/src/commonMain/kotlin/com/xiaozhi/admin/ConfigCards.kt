@@ -53,6 +53,7 @@ fun ViewContainer<*, *>.renderForm(
                     "tts" -> ttsConfigCard(form, ctx)
                     "llm" -> llmConfigCard(form)
                     "command" -> commandConfigCard(form)
+                    "wakeup" -> wakeupConfigCard(form)
                     "aiui" -> aiuiConfigCard(form)
                     "soul" -> soulConfigCard(form, ctx)
                     "memory" -> memoryConfigCard(form, ctx)

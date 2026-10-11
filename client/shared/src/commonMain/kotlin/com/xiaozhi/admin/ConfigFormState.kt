@@ -183,6 +183,10 @@ class ConfigFormState(private val scope: PagerScope) {
     /// 拆到 `ConfigCommandState`（同上：`AGENTS.md` §5.10 文件规模约定）。
     val cmd = CommandSectionState(scope)
 
+    // ===== [wakeup]：唤醒问候语（唤醒 → LLM 之间；唤醒即回「我在」，跳过 LLM/TTS）=====
+    /// 拆到 `ConfigWakeupState`（同上：`AGENTS.md` §5.10 文件规模约定）。
+    val wake = WakeupSectionState(scope)
+
     /// 字段元数据（`GET /api/config/schema`）：目前用于「这个字段多久生效」提示（见 FormSchemaState）。
     val schema = FormSchemaState(scope)
 
@@ -557,6 +561,8 @@ class ConfigFormState(private val scope: PagerScope) {
             sm.putJson(this)
             // [command]：指令闸门（ASR → LLM 之间）——同样整段回传，否则保存一次就把它关掉。
             cmd.putJson(this)
+            // [wakeup]：唤醒问候语（唤醒 → LLM 之间）——同样整段回传。
+            wake.putJson(this)
             // [aiui]：此前管理页**完全没有这个段**，保存一次就把它静默关掉（后端已改为部分更新
             // 兜底；这里补齐前端，使全链路模式可在 UI 里配置与保留）。
             put("aiui", JSONObject().apply {

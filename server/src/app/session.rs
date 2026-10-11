@@ -34,11 +34,18 @@ use crate::plugins::aiui::{AiuiSession, FullChainEngine, FullChainTurn};
 use crate::plugins::asr::AsrEngine;
 use crate::plugins::command::CommandGate;
 use crate::plugins::vad::VadEngine;
+use crate::plugins::wakeup::WakeGreeting;
 
 mod bench;
 mod command;
 mod mcp;
+mod observe;
 mod reply;
+mod start;
+mod wakeup;
+
+// 会话入口对 `app::ws` 可见（网关把升级后的连接交给会话状态机）。
+pub use start::run_session;
 
 /// 在 `spawn_blocking` 中执行同步阻塞的 CPU 密集调用（ASR/TTS 推理），
 /// 统一处理任务取消/panic 与内部错误，返回 `Err(String)`（含可读错误信息）。
@@ -122,6 +129,20 @@ pub struct Session<'a, T: Transport> {
     mcp_enabled: bool,
     /// 下一个 MCP JSON-RPC `id`（自增；响应靠它配对，见 [`mcp`] 子模块）。
     mcp_next_id: u64,
+    /// 唤醒问候语（`[wakeup]`）：设备唤醒（`listen state=detect`）时立刻说的预制话术。
+    /// 会话开始时按配置快照构造一次 = 注册表声明的 `next_session` 语义。
+    ///
+    /// ⚠️ **没有"每会话只问候一次"的标志**：一次会话可以包含**多次唤醒**——指令闸门命中后
+    /// 我们用 MCP 让设备结束聆听，**音频通道刻意保留**（见 [`command`] 子模块），
+    /// 设备回到 idle 而会话还活着；用户再次唤醒时固件在同一条连接上再发一条 `detect`，
+    /// 那次也必须问候。用一次性标志会让"保活通道上的第二次唤醒静默无声"，
+    /// 正好废掉保活的意义。
+    ///
+    /// 不需要防重复：固件的 `detect` 只从 `ContinueWakeWordInvoke` 发出，而它只在
+    /// **idle/notifying** 状态下被调用（`HandleWakeWordDetectedEvent` 在 speaking/listening
+    /// 时走 `SendStartListening`）——因此每条 `detect` 都是一次真实唤醒；且本函数在会话
+    /// 主循环里被 `await`，天然不会重入。
+    wake: WakeGreeting,
 }
 
 impl<'a, T: Transport> Session<'a, T> {
@@ -240,6 +261,9 @@ impl<'a, T: Transport> Session<'a, T> {
                 t0.elapsed().as_millis(),
                 user_text.chars().count()
             );
+            // 观测：记下这轮"它听到了什么"（管理页「会话 / 对话记录」）。放在指令闸门**之前**
+            // ——命中「退下」也是一句真实的话，不该在记录里凭空消失。
+            self.note_user_turn(&user_text);
             // 指令闸门（ASR → LLM **之间**）：命中即说告别语 + 用 MCP 让设备结束聆听，
             // **一次 LLM 都不调用**。
             // 本批剩余语音段一并丢弃（用户已经要求退下）。
@@ -399,6 +423,19 @@ impl<'a, T: Transport> Session<'a, T> {
                 // ESP 正式流程：listening 状态由设备侧 VAD 上报触发，语音段经二进制帧上行，
                 // 服务端 VAD 切句后走 ASR → LLM → TTS 流水线（见 handle_binary）。
                 tracing::info!("session {session_id} 进入 listening");
+                // 观测：管理页「会话」里能看到"这台设备正在聆听"（只记录，不影响流水线）
+                self.note_phase(crate::app::registry::Phase::Listening);
+            }
+            ClientMessage::Listen { state, text, .. } if state == "detect" => {
+                // **设备唤醒**（固件 `Protocol::SendWakeWordDetected`，由
+                // `CONFIG_SEND_WAKE_WORD_DATA=y` 启用）：这是"用户刚叫醒我"最早、最可靠的
+                // 信号——比任何 ASR 结果都早。在加 `[wakeup]` 之前这条消息只打一行日志，
+                // 用户唤醒后面对的是完全静默的等待。处置见 [`wakeup`] 子模块。
+                tracing::info!(
+                    "session {session_id} 收到唤醒上报（唤醒词 {:?}）",
+                    text.as_deref().unwrap_or("")
+                );
+                self.handle_wake_greeting().await;
             }
             ClientMessage::Listen { state, .. } => {
                 tracing::info!("listen state={state}");
@@ -479,83 +516,6 @@ impl<'a, T: Transport> Session<'a, T> {
     }
 }
 
-/// 会话主循环：收发消息、驱动流水线。`is_test` 来自 hello 的 `test` 参数，
-/// 只有测试台会话能发起 asr_test/tts_test/llm_test（设备正式流程不经过测试端点）。
-///
-/// `mcp` 来自 hello 的 `features.mcp`：决定本会话是否可以用 MCP 指挥设备。
-/// 两个用途：① 会话开始时**能力发现**（`initialize` + `tools/list` → 管理界面，见 [`mcp`]）；
-/// ② 指令闸门的「结束聆听」（[`command`]）。设备未声明 MCP 时两者都不发生（老固件向后兼容）。
-pub async fn run_session<T: Transport>(
-    transport: &mut T,
-    engines: Arc<Engines>,
-    params: SessionParams,
-    session_id: String,
-    device_id: String,
-    is_test: bool,
-    mcp: bool,
-) -> anyhow::Result<()> {
-    // 会话开始时按磁盘最新配置热刷新引擎（管理页保存后**新会话即生效**，无需重启）。
-    // ⚠️ 必须在 spawn_blocking 内：sherpa 重建引擎可能加载模型数秒，直接调用会独占
-    // tokio worker（见 engine.rs 模块注释的 CPU 预算）。刷新失败保持旧引擎，不致命。
-    {
-        let engines = engines.clone();
-        let sid = session_id.clone();
-        match tokio::task::spawn_blocking(move || engines.refresh_from_disk()).await {
-            Ok(notes) => {
-                for n in notes {
-                    tracing::warn!("session {sid} 引擎热刷新：{n}");
-                }
-            }
-            Err(e) => tracing::warn!("session {sid} 引擎热刷新任务异常: {e}"),
-        }
-    }
-    let vad = engines.new_vad()?;
-    let uplink_decoder = OpusFrameDecoder::new(params.uplink_sr)?;
-    let real_audio = engines.config.real_audio();
-    // AIUI 全链路会话：sn = 前缀 + 会话短 id（云端个性化/上下文绑定，≤32 字符）
-    // ⚠️ AIUI 全链路刻意用**启动快照**（注册表里是 RestartOnly）：它决定整条流水线的
-    // 走向，且启用时凭据缺失是致命错误（boot 即失败）；热启用会带来"半配置切换链路"的风险。
-    let aiui = if engines.config.aiui.enabled {
-        let sn = format!(
-            "{}-{}",
-            engines.config.aiui.sn_prefix,
-            session_id.get(..8).unwrap_or(&session_id)
-        );
-        let engine: Arc<Mutex<dyn FullChainEngine>> = Arc::new(Mutex::new(AiuiSession::new(
-            engines.config.aiui.clone(),
-            sn,
-        )));
-        Some(engine)
-    } else {
-        None
-    };
-    // 指令闸门快照：会话开始时取一次（= 注册表声明的 next_session 语义）。
-    // 未启用时是恒不命中的空闸门，零开销、零行为变化。
-    let commands = CommandGate::new(&engines.live_config().command);
-    let session = Session {
-        transport,
-        engines,
-        params,
-        session_id,
-        device_id,
-        history: Vec::new(),
-        downlink_ts: 0,
-        test_recording: false,
-        test_buf: Vec::new(),
-        vad,
-        uplink_decoder,
-        real_audio,
-        is_test,
-        abort: Arc::new(AtomicBool::new(false)),
-        aiui,
-        pacer: DownlinkPacer::new(params.downlink_lead_ms as u64),
-        commands,
-        close_requested: false,
-        mcp_enabled: mcp,
-        mcp_next_id: 1,
-    };
-    session.run().await
-}
 
 /// 上行 f32 PCM → 16k i16（AIUI 仅收 16k；设备默认上行 16k，非 16k 走线性插值重采样）。
 fn f32_to_i16_16k(pcm: &[f32], uplink_sr: u32) -> Vec<i16> {

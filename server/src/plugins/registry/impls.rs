@@ -12,6 +12,7 @@ use crate::plugins::tts::{build_kokoro, build_xfyun};
 use super::fields::*;
 use super::fields_command::COMMAND_FIELDS;
 use super::fields_context::{MEMORY_FIELDS, SOUL_FIELDS};
+use super::fields_wake::WAKE_FIELDS;
 use super::{Built, Capability, HotReload, PluginDescriptor, Requirement};
 
 // ---- 选中判定（P4：统一按 `engine` 键 = 描述符 id 去掉 "<cap>." 前缀）----
@@ -45,6 +46,9 @@ fn sel_soul(cfg: &Config) -> bool {
 }
 fn sel_command(cfg: &Config) -> bool {
     cfg.command.enabled
+}
+fn sel_wake(cfg: &Config) -> bool {
+    cfg.wakeup.enabled
 }
 
 // ---- 未知 engine 校验（P4 约定：静默回退默认是最糟的失败模式，必须报错并给可选值）----
@@ -114,6 +118,10 @@ fn sig_soul(cfg: &Config) -> String {
 /// 指令闸门无共享实例（每会话按快照构造 `CommandGate`），签名只用于状态上报。
 fn sig_command(cfg: &Config) -> String {
     cfg.command.signature()
+}
+
+fn sig_wake(cfg: &Config) -> String {
+    cfg.wakeup.signature()
 }
 
 // ---- 校验（错误文案必须含「怎么修」）----
@@ -244,6 +252,24 @@ fn validate_soul(cfg: &Config) -> Result<()> {
 /// 否则用户会得到"配了没用"的静默失败。）
 fn validate_command(cfg: &Config) -> Result<()> {
     cfg.command.validate()
+}
+
+/// `[wakeup]` 校验：段内自洽（[`crate::plugins::wakeup::WakeConfig::validate`]）
+/// **加上**一处跨段矛盾检查。
+///
+/// 跨段那条是刻意的：持久化复用靠"内存 TTS 缓存承载成品帧"实现（合成完 → 从缓存取出 → 落盘），
+/// 所以 `[tts].cache_entries = 0` 时**落盘会静默失效**（写不进去、下次还得重新合成）。
+/// 静默失效是本仓库最忌讳的失败模式，因此在这里直接拦下并说清修法。
+fn validate_wake(cfg: &Config) -> Result<()> {
+    cfg.wakeup.validate()?;
+    if cfg.wakeup.active() && cfg.wakeup.persist && cfg.tts.cache_entries == 0 {
+        anyhow::bail!(
+            "[wakeup].persist = true 但 [tts].cache_entries = 0：持久化复用依赖内存缓存承载\
+             成品帧，缓存被关掉时音频**无法落盘**（每次唤醒都会重新合成）。\
+             请把 [tts].cache_entries 设为大于 0（推荐 256），或把 [wakeup].persist 改为 false。"
+        );
+    }
+    Ok(())
 }
 
 // ---- 构建入口 ----
@@ -466,4 +492,26 @@ pub const COMMAND_GATE: PluginDescriptor = PluginDescriptor {
     build: None,
     warn_if: None,
     selected: sel_command,
+};
+
+/// 唤醒问候语（`[wakeup]`）：设备唤醒 → LLM **之前**的拦截。
+///
+/// **可选能力**：默认 `enabled=false` 时不选中、零开销、行为与加它之前完全一致；
+/// 坏配置（启用但问候语为空 / 过长 / 与 `[tts].cache_entries=0` 矛盾）只降级（`Degraded`），
+/// 绝不阻止启动——语音服务照常。
+/// 无共享实例：每会话按配置快照构造 `WakeGreeting`（与 `[command]` 同为"每会话有状态对象"模式）。
+pub const WAKE_GREETING: PluginDescriptor = PluginDescriptor {
+    id: "wakeup.greeting",
+    capability: Capability::Wake,
+    display: "唤醒问候语（唤醒即回「我在」，跳过 LLM/TTS）",
+    local: true,
+    hot: HotReload::NextSession,
+    requires: &[],
+    fields_path: &["wakeup"],
+    fields: WAKE_FIELDS,
+    signature: sig_wake,
+    validate: validate_wake,
+    build: None,
+    warn_if: None,
+    selected: sel_wake,
 };

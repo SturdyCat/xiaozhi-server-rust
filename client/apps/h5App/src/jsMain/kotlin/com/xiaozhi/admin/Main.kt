@@ -8,7 +8,8 @@ import utils.URL
 
 /**
  * Web(H5) 入口：用渲染代理初始化并创建 RenderView。
- * 访问 http://<host>/?page_name=router 打开对应页面。
+ * 访问 `http://<host>/?page_name=admin` 打开管理台（默认页）；
+ * `?page_name=config` 仍可单独打开配置页（[com.xiaozhi.admin.ConfigPage]）。
  */
 fun main() {
     console.log("##### Kuikly Web Render")
@@ -19,8 +20,9 @@ fun main() {
 
     // 解析 URL 参数
     val urlParams = URL.parseParams(window.location.href)
-    // 页面名，默认 config（管理后台配置页）
-    val pageName = urlParams["page_name"] ?: "config"
+    // 页面名，默认 admin（管理台：侧边栏 + 概览/设备/会话/对话记录/用量/配置）。
+    // 单页模式仍可用 `?page_name=config` 单独打开配置页（ConfigPage）。
+    val pageName = urlParams["page_name"] ?: "admin"
 
     val containerWidth = window.innerWidth
     val containerHeight = window.innerHeight

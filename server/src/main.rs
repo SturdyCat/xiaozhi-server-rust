@@ -80,6 +80,17 @@ async fn run(config: Config, config_path: Option<String>) -> Result<()> {
     // 发音人目录：读盘缓存/离线兜底 + 配置了控制台会话时后台刷新一次（失败非致命）
     crate::app::voices::init();
     crate::app::voices::spawn_startup_probe(engines.clone());
+    // 唤醒问候语的音频复用是否可用（"为什么重启后又要重新合成"的第一现场）：
+    // 只有加载了配置文件才有落盘目录（与 PUT /api/config 的持久化前提同源）。
+    match (engines.hot_audio.is_persistent(), engines.hot_audio.dir()) {
+        (true, Some(dir)) => tracing::info!(
+            "热句音频（唤醒问候语）落盘目录：{}（重启后仍免合成 ✓）",
+            dir.display()
+        ),
+        _ => tracing::warn!(
+            "未加载配置文件：唤醒问候语（[wakeup]）只能在进程内复用音频，重启后需重新合成"
+        ),
+    }
     let app = router(engines);
 
     // 监听：永远 0.0.0.0，唯一可配的是端口（[server].port，默认 8000）——

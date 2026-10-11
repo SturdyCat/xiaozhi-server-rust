@@ -333,3 +333,68 @@ fn command_gate_is_optional_and_hot_reloadable() {
         "{keys:?}"
     );
 }
+
+/// 唤醒问候语（`[wakeup]`）的注册表语义护栏。
+///
+/// 与指令闸门同构，但多一条**跨段矛盾**：`persist` 复用经内存 TTS 缓存承载成品帧，
+/// 因此 `[tts].cache_entries = 0` 时落盘会**静默失效**（写不进去、下次还得重新合成）。
+/// 这条必须被拦下并说清修法——静默失效是本仓库最忌讳的失败模式。
+#[test]
+fn wake_greeting_is_optional_hot_reloadable_and_flags_cache_conflict() {
+    let mut cfg = Config::default();
+    assert!(!cfg.wakeup.enabled, "唤醒问候语默认必须关闭");
+    assert_eq!(active_impl(&cfg, Capability::Wake), None);
+    assert!(
+        !Capability::Wake.required() && !Capability::Wake.fatal_if_enabled(),
+        "可选能力：坏配置只降级，不阻止启动"
+    );
+
+    cfg.wakeup.enabled = true;
+    assert_eq!(active_impl(&cfg, Capability::Wake), Some("wakeup.greeting"));
+    let d = find("wakeup.greeting").expect("应注册 wakeup.greeting");
+    (d.validate)(&cfg).unwrap_or_else(|e| panic!("默认问候语应通过校验: {e:#}"));
+    assert_eq!(d.hot, HotReload::NextSession);
+    // 字段级档位：三个字段都改变行为，都必须是"新会话生效"
+    for k in ["enabled", "greeting", "persist"] {
+        assert_eq!(
+            field_hot(&["wakeup", k]),
+            Some(HotReload::NextSession),
+            "[wakeup].{k} 的档位必须有出处（否则管理页永远显示「需重启」）"
+        );
+    }
+    assert_eq!(section_hot("wakeup"), HotReload::NextSession);
+
+    // 启用但问候语为空 = 不问候：必须能被说成"配置问题"（而不是静默不出声）
+    cfg.wakeup.greeting = "   ".to_string();
+    let err = (d.validate)(&cfg).unwrap_err().to_string();
+    assert!(err.contains("greeting"), "{err}");
+
+    // 跨段矛盾：persist 依赖内存缓存承载成品帧，缓存关掉时落盘静默失效 → 必须拦下并给修法
+    cfg.wakeup.greeting = "我在".to_string();
+    cfg.tts.cache_entries = 0;
+    let err = (d.validate)(&cfg).unwrap_err().to_string();
+    assert!(err.contains("cache_entries"), "要指出真正的矛盾源: {err}");
+    assert!(err.contains("persist"), "要给出修法（关掉 persist）: {err}");
+    // 关掉 persist 或恢复缓存后即可通过（两者任一都能修好，不能只认一种）
+    cfg.wakeup.persist = false;
+    (d.validate)(&cfg).unwrap_or_else(|e| panic!("关掉 persist 后应通过: {e:#}"));
+    cfg.wakeup.persist = true;
+    cfg.tts.cache_entries = 256;
+    (d.validate)(&cfg).unwrap_or_else(|e| panic!("恢复缓存后应通过: {e:#}"));
+
+    // schema 必须把这张卡的字段暴露出去（管理页「唤醒」页签的数据源）
+    let v = schema_json();
+    let wake = v["capabilities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["id"] == "wakeup")
+        .expect("schema 应包含 wakeup 能力");
+    let keys: Vec<&str> = wake["implementations"][0]["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|f| f["key"].as_str())
+        .collect();
+    assert_eq!(keys, vec!["enabled", "greeting", "persist"], "{keys:?}");
+}

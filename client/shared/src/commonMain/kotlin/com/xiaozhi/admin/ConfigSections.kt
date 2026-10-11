@@ -34,6 +34,8 @@ object ConfigSections {
         SectionDescriptor("llm", 60, "LLM"),
         // 指令闸门：ASR → LLM 之间的拦截（退下/闭嘴/关闭 → 断开会话）
         SectionDescriptor("command", 65, "指令"),
+        // 唤醒问候语：唤醒 → LLM 之间的拦截（唤醒即回「我在」，跳过 LLM/TTS）
+        SectionDescriptor("wakeup", 66, "唤醒"),
         SectionDescriptor("aiui", 70, "AIUI"),
         SectionDescriptor("soul", 80, "灵魂"),
         SectionDescriptor("memory", 90, "记忆"),

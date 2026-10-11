@@ -8,6 +8,11 @@
 //! - `GET /api/plugins`：能力清单 + 实际状态（`enabled`/`phase`/`last_error`）。
 //! - `GET /api/config/schema`：各能力/实现的字段元数据（类型/默认值提示/热生效语义/密钥标记）。
 //! - `GET /api/usage` / `GET /api/session/{id}/usage`：令牌用量（成本与上下文膨胀观测）。
+//! - `GET /api/devices` / `GET /api/devices/{id}`：设备清单与单台详情（在线态、最后活跃、
+//!   协商参数、板型/固件版本）——数据源 [`registry`]（进程内注册表）。
+//! - `GET /api/sessions`：**此刻**活着的连接及其阶段（聆听/思考/说话）。
+//! - `GET /api/conversations`：内存里保留的最近对话（环形，非完整历史；可按设备过滤）。
+//! - `GET /api/stats`：看板聚合（在线数 / 轮次 / 令牌 / 能力状态徽标）。
 //! - `GET /api/mcp/tools`：按设备列出会话开始时通过 MCP 探测到的工具清单
 //!   （"这台 ESP 支持哪些工具、每个能干什么"——数据源见 [`mcp`]）。
 //! - `GET /api/memory/status` + `POST /api/memory/{recall,maintain,clear}`：图记忆的状态、
@@ -56,6 +61,7 @@ mod mcp;
 mod memory;
 mod ota;
 mod plugins;
+mod registry;
 mod soul;
 mod usage;
 use config::{config_meta, get_config, put_config};
@@ -65,6 +71,7 @@ use memory::{memory_clear, memory_maintain, memory_recall, memory_status};
 pub(crate) use config::config_is_persistent;
 use ota::ota;
 use plugins::{config_schema, list_plugins};
+use registry::{conversations, device_detail, devices, sessions, stats};
 use soul::{soul_presets, soul_preview};
 use usage::{session_usage, usage};
 
@@ -94,6 +101,13 @@ pub fn router(engines: Arc<Engines>) -> Router {
         // 令牌用量：全局 + 单会话（回答"成本"与"上下文膨胀"）
         .route("/api/usage", get(usage))
         .route("/api/session/{id}/usage", get(session_usage))
+        // 设备 / 会话 / 对话记录 / 看板：数据源是进程内注册表（`app/registry`），
+        // 全是**只读投影**（`GET /api/devices`、`/api/sessions`、`/api/conversations`、`/api/stats`）
+        .route("/api/devices", get(devices))
+        .route("/api/devices/{device_id}", get(device_detail))
+        .route("/api/sessions", get(sessions))
+        .route("/api/conversations", get(conversations))
+        .route("/api/stats", get(stats))
         // 设备 MCP 工具：按设备列出会话开始时探测到的工具清单（回答"这台设备能被 AI 指挥做什么"）
         .route("/api/mcp/tools", get(mcp_tools))
         // 小智固件的 OTA 引导端点（带/不带尾斜杠都注册：固件配置的 URL 以 / 结尾）。
@@ -261,6 +275,7 @@ async fn handle_handshake(
         params,
         session_id,
         device_id.to_string(),
+        client_id.to_string(),
         hello.test,
         mcp,
     )

@@ -41,6 +41,7 @@ use crate::plugins::tts::TtsEngine;
 mod fields;
 mod fields_command;
 mod fields_context;
+mod fields_wake;
 mod impls;
 use fields::CAPABILITY_COMMON_FIELDS;
 use fields_context::CONTEXT_COMMON_FIELDS;
@@ -85,6 +86,10 @@ pub enum Capability {
     /// 并用 MCP 让设备结束聆听（设备不支持 MCP 时断开本次会话）。
     /// 不是引擎（不产出共享实例、无 `engine` 选择器），只按 `[command].enabled` 开关。
     Command,
+    /// 唤醒问候语（`[wakeup]`）：设备唤醒（固件上报 `listen state=detect`）时立刻说一句
+    /// 预制话术（默认「我在」），跳过 LLM 与正常回复；成品音频按音色持久化复用。
+    /// 同样不是引擎，只按 `[wakeup].enabled` 开关。
+    Wake,
 }
 
 /// 全部能力（顺序即 UI 展示顺序）。
@@ -99,6 +104,7 @@ pub const ALL_CAPABILITIES: &[Capability] = &[
     Capability::Memory,
     Capability::Soul,
     Capability::Command,
+    Capability::Wake,
 ];
 
 impl Capability {
@@ -115,6 +121,7 @@ impl Capability {
             Capability::Memory => "memory",
             Capability::Soul => "soul",
             Capability::Command => "command",
+            Capability::Wake => "wakeup",
         }
     }
 
@@ -130,6 +137,7 @@ impl Capability {
             Capability::Memory => "记忆（图记忆）",
             Capability::Soul => "灵魂（人格档案）",
             Capability::Command => "指令闸门（ASR→LLM）",
+            Capability::Wake => "唤醒问候语",
         }
     }
 
@@ -429,6 +437,7 @@ pub static REGISTRY: &[PluginDescriptor] = &[
     MEMORY_GRAPH,
     SOUL_PROFILE,
     COMMAND_GATE,
+    WAKE_GREETING,
 ];
 
 /// 按 id 查描述符。
@@ -463,7 +472,7 @@ pub fn configured_engine(cfg: &Config, cap: Capability) -> Option<String> {
         Capability::Llm => Some(cfg.llm.engine_id()),
         Capability::Memory => Some(cfg.memory.engine_id().to_string()),
         Capability::FullChain | Capability::Voices | Capability::Firmware | Capability::Soul
-        | Capability::Command => None,
+        | Capability::Command | Capability::Wake => None,
     }
 }
 

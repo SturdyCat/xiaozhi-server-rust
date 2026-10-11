@@ -438,6 +438,52 @@ LLM 只有 OpenAI 兼容 Responses API 一条路径；联调失败先检查 `[ll
 - **降级纪律**：任何 MCP 失败都必须能退回"旧行为"且**日志写明原因**（未声明 MCP / 设备拒绝 /
   超时 / 承载断开四档），不允许静默失败，也不允许把失败升级成致命错误。
 
+### 5.2h 唤醒问候语（`[wakeup]`）接入要点（2026-10 新增）
+
+设备唤醒词命中后，固件**立刻**发 `{"type":"listen","state":"detect","text":"<唤醒词>"}`
+（`Protocol::SendWakeWordDetected`，由 `CONFIG_SEND_WAKE_WORD_DATA=y` 启用；`=n` 时走本地
+`popup.ogg` 音效、**不发这条消息**）。这是"用户刚叫醒我"最早、最可靠的信号——比任何 ASR
+结果都早。`[wakeup]` 就是挂在这条消息上的拦截。
+
+- **落点**：`session.rs::handle_text` 的 `ClientMessage::Listen{state=="detect"}` 分支 →
+  `session/wakeup.rs::handle_wake_greeting`。**不要**改挂到 `listen start` 或 ASR 结果上：
+  `start` 在"已聆听时再次唤醒"也会发，会导致重复问候；ASR 结果已经太晚（用户说完了）。
+- **跳过 LLM 是重点**：走 `speak_canned`（与指令闸门告别语、LLM 失败兜底同一条下行链路：
+  预取 → 水库 → 节拍器 → `tts start`/`stop`），**一次 LLM 都不调**。
+- **音频三级复用**（`session/wakeup.rs::resolve_greeting_audio`，纯函数、可单测）：
+  ① 内存 `TtsCache`（跨会话）→ ② 磁盘 `app/hot_audio.rs`（跨进程重启）→ ③ 真合成一次并落盘。
+  稳态下每次唤醒**零 LLM、零 TTS**。
+  - **命中磁盘时必须暖进内存缓存**：这样随后的 `speak_canned` 会在既有预取路径上直接命中，
+    零合成地走完整条下行链路。**不要**为"缓存音频"另写一套下发——那会绕过节拍器与起跑闸。
+  - 落盘目录 = **配置文件所在目录**的 `hot-audio/`（跟挂载卷走，容器重建不丢）；
+    没有配置文件路径时禁用落盘（与 `PUT /api/config` 的持久化前提同源）。
+- **缓存键口径只有一个权威**：`app/hot_audio.rs::HotAudioKey::from_session`。
+  预取合成路径（`session/reply.rs::spawn_prefetch` 的 `resolve` 闭包）与唤醒路径**共用**它。
+  ⚠️ 曾经两处各拼一次 `TtsCache::make_key`，参数顺序一旦漂移就是"缓存永远不命中"——不报错、
+  只是白合成，最难查。新增任何"要复用某句话音频"的功能都请复用这个构造入口。
+  - 键含：引擎签名（**含凭据，只在内存流转**）+ speaker + speed + 下行采样率 + 帧长 + 文本。
+    因此**换音色自动重新合成并另存一份**，不需要任何显式失效逻辑。
+  - 落盘文件名用 **FNV-1a 64**（`HotAudioKey::file_id`）而不是内存键：`DefaultHasher`
+    **不保证跨 Rust 版本稳定**，用它当文件名会在工具链升级后留下一堆读不到的垃圾文件。
+  - 文件自带**全参数头部**，读出时逐项比对，任何一项不同即作废（删除）——绝不"凑合播一段
+    可能是别的音色的音频"。
+- **`persist` 依赖 `[tts].cache_entries > 0`**（复用经内存缓存承载成品帧）：这个组合由
+  `registry/impls.rs::validate_wake` 拦下并给出修法。运行期若取不到成品帧（缓存被关/被中断）
+  会留一行 warn——**绝不静默失效**。
+- **问候语要短**（建议 ≤10 字，`GREETING_SOFT_LIMIT` 会在超长时拦下并说明代价）：问候语是
+  下行音频，播放期间会话主循环停在这个 `await` 里，上行帧（用户第一句话）在承载缓冲区排队。
+- **每条 `detect` 都问候**（**没有**"每会话只问候一次"的标志）：一次会话可以包含多次唤醒——
+  指令闸门命中后用 MCP 让设备结束聆听时**音频通道刻意保留**，设备回到 idle 而会话还活着，
+  用户再次唤醒时固件在同一条连接上再发一条 `detect`，那次也必须问候。用一次性标志会让
+  "保活通道上的第二次唤醒静默无声"，正好废掉保活的意义。
+  不需要防重复：固件 `detect` 只从 `ContinueWakeWordInvoke` 发出，而它只在 idle/notifying
+  状态被调用（speaking/listening 时说唤醒词走 `SendStartListening`）。
+- **配置与语义**：`[wakeup]`（`enabled` 默认 **false** / `greeting` 默认「我在」/ `persist`
+  默认 true），`HotReload::NextSession`，会话开始时快照一次（`WakeGreeting::new`，与
+  `CommandGate` 同语义）。
+- **改配置段必须同步注册表字段元数据**（`registry/fields_wake.rs`），否则
+  `registry/tests.rs::field_keys_exist_in_config` 会失败。
+
 ### 5.3 二进制协议版本 = 设备 hello 的 `version`
 
 - `version` 字段 = **二进制协议版本（1/2/3）**，不是握手协议号。
@@ -545,13 +591,25 @@ server/                        # Rust 服务端
     config/tests.rs  规范化与 engine 约定护栏（engine id ↔ 注册表一致、样例可解析）
     engine.rs     Engines 装配器：共享引擎池（ASR/TTS/LLM）+ 每会话 VAD 工厂 + TTS/LLM 热切换
     app/          应用层（与具体引擎无关）：
-      ws/           网关与 HTTP 端点组：mod.rs（路由）/ config.rs（+ tests/secrets.rs）/ memory.rs（记忆端点）/ soul.rs（灵魂预设与预览端点，+ soul/tests.rs）/ plugins.rs / usage.rs / ota.rs
-      ws.rs         WebSocket 网关：握手 / 协商 / 鉴权 + 静态托管管理页（/）+ OTA 端点
+      ws/mod.rs     WebSocket 网关：握手 / 协商 / 鉴权 + 静态托管管理页（/）+ 路由表（HTTP 端点唯一入口）
+      ws/           网关与 HTTP 端点组：config.rs（+ tests/）/ memory.rs（记忆端点）/
+                    soul.rs（灵魂预设与预览端点，+ soul/tests.rs）/ plugins.rs / usage.rs / ota.rs /
+                    registry.rs（设备/会话/对话记录/看板端点，+ registry/tests.rs）
+      registry/     设备 / 会话 / 最近对话的**进程内**注册表（`GET /api/devices|sessions|conversations|stats` 数据源）：
+        mod.rs        门面（begin_session/close_session/record_turn/读快照）+ Inner + SessionGuard(RAII)
+        types.rs      数据模型（Phase/DeviceRecord/LiveSession/TurnRecord/ConversationRecord/Counts）
+        tests.rs      16 条回归测试（在线翻转、重连竞态、上界淘汰、环形截断、同毫秒排序确定性）
       session.rs    每连接会话状态机 + 语音流水线（支持 abort；AIUI 全链路分支）
+      session/start.rs  会话建立（run_session：热刷新引擎 → 构造依赖 → **登记注册表** → 进主循环）
+      session/observe.rs 观测埋点（note_user_turn / note_assistant_turn / note_phase / note_error）
       protocol.rs   消息枚举 + 二进制版本封装（v1/v2/v3）—— 改这里必看 §5.1
       session/reply.rs  回复生成与下发（LLM→分句→TTS→下行；含人格/记忆组装与后台写入）
       session/command.rs 指令闸门落点（ASR→LLM 之间：命中即说告别语 + 用 MCP 让设备结束聆听，
                          失败降级为断开会话，见 §5.2f）
+      session/wakeup.rs  唤醒问候语落点（listen detect → 立刻说预制话术，跳过 LLM；音频三级复用，
+                         + wakeup/tests.rs；见 §5.2h）
+      hot_audio.rs   持久化热句音频库（已编码 Opus 帧落盘，跨进程重启复用；+ hot_audio/tests.rs）
+      tts_cache.rs   TTS 结果内存缓存（按句缓存已编码下行帧，LRU）
       mcp.rs        MCP 客户端协议原语（设备是 Server，见 §5.2g）；session/mcp.rs 请求-响应关联
       transport.rs  承载抽象（WS/未来 MQTT+UDP；`close()` = 本端主动断开）；splitter/sse
       downlink.rs   下行节拍器（`DownlinkPacer`，ESP 队列保护）+ 协议原语（tts 状态/sentence_start）
@@ -565,6 +623,7 @@ server/                        # Rust 服务端
         fields.rs     字段元数据表（能力公共字段 + 各实现私有字段）
         fields_context.rs  soul/memory 的字段元数据表（与 fields.rs 合并投影）
         fields_command.rs  指令闸门（[command]）字段元数据表
+        fields_wake.rs     唤醒问候语（[wakeup]）字段元数据表（见 §5.2h）
         impls.rs      选择/签名/校验/构建 + 11 个描述符常量
         tests.rs      回归测试（id 唯一性、字段漂移护栏、schema 形状）
       host.rs       装配与校验前移、enabled/phase 分离的状态快照（/api/plugins 数据源）
@@ -586,6 +645,9 @@ server/                        # Rust 服务端
                                  长度闸门（max_chars，默认 5）+ 词表匹配，命中即由会话层
                                  说告别语并用 MCP 让设备结束聆听（MCP 不可用则断开会话；
                                  默认关闭；见 §5.2f / §5.2g）
+      wakeup/{mod,tests}.rs     唤醒问候语（[wakeup]）：listen detect → 立刻说预制话术，
+                                 跳过 LLM；成品音频三级复用（内存→磁盘→合成一次落盘），
+                                 换音色自动重新获取（默认关闭；见 §5.2h）
   config.toml / config.example.toml
   scripts/download_models.sh
   tests/mock_client.py         零依赖 WebSocket 联调客户端
@@ -595,11 +657,17 @@ client/                        # Kuikly 多端工程（管理后台 web + macOS 
   build.gradle.kts            Kuikly 插件经 buildscript classpath 引入 + 插件版本锁定（含 KSP）
   kotlin-js-store/yarn.lock   Kotlin/JS npm 依赖锁（⚠️ 必须入库，缺失则 yarn 解析漂移）
   shared/
-    commonMain/               公共代码：@Page("config") 管理后台（跨端）+ 配置表单 + NetworkModule
+    commonMain/               公共代码：**管理台壳 + 各页**（跨端）+ 配置表单 + NetworkModule
+                              （@Page("admin") 管理台：AdminPage.kt 侧边栏壳 / AdminNav.kt 导航表 +
+                               sidebarItem 原语 / OpsState.kt 五个只读数据源（stats/devices/sessions/
+                               conversations/usage）/ OpsPages.kt 五个页面的渲染；@Page("config")
+                               配置页仍在，可用 ?page_name=config 单独打开）
                               （P5 新文件：ConfigSections.kt 页签常量表 / PluginMetaState.kt 能力总览
                                / ConfigOverviewCard.kt 总览渲染 / FormSchemaState.kt 字段热生效提示）
                               （[command] 指令卡：ConfigCommandState.kt 表单状态 + ConfigCommandCard.kt 渲染）
     macosArm64Main/           仅 macOS(arm64) 编译：@Page("test") ASR/TTS 测试台 + XiaoZhiModule
+                              （@Page("router") AdminShell.kt 是 macOS 专有壳：测试台 + 配置 +
+                               切换服务器；与 web 的 AdminPage 共用 AdminNav/sidebarItem 原语）
     （js(IR) 目标在此模块：@Page 注册靠 KSP(core-ksp)，业务包由 Kuikly 插件打包）
   apps/
     h5App/                    Web(H5) 壳：渲染器(core-render-web:h5) + Main.kt；publishWeb 汇聚 web/
@@ -640,6 +708,10 @@ client/                        # Kuikly 多端工程（管理后台 web + macOS 
 | `GET /api/plugins` | 能力清单 + 实际状态（`enabled` 与 `phase` 分离，带 `last_error`）；`config.path/persistent` 一并返回。**管理页「总览」tab 的唯一数据源**（`PluginMetaState.kt`）：必需/可选两组 + 计数摘要 + **降级/异常原因行内显示** |
 | `GET /api/config/schema` | 字段元数据（标签/类型/默认值提示/`hot` 热生效语义/`secret` 密钥标记）+ `app_sections`（`[server]`/`[audio]` 这类**非能力段**的档位）；**只做元数据，不做自动表单**。客户端 `FormSchemaState.kt` 用它渲染「这个字段多久生效」（`live` 不标注） |
 | `GET /api/usage`、`GET /api/session/{id}/usage` | 令牌用量（全局 + 按会话；`pressure` = 输入侧总量，回答"记忆注入让 prompt 长了多少"） |
+| `GET /api/stats` | **看板聚合**：设备总数/在线数、活会话数、缓冲内轮次（用户/助手）、令牌、能力状态徽标 + `uptime_ms`/`scope`。数据源 `app/registry/`（**进程内**，重启清零）——因此响应自带 `scope_note` 说清口径，管理页直接展示。管理台「概览」页数据源 |
+| `GET /api/devices`、`GET /api/devices/{id}` | **设备清单/详情**：在线态、`first/last_seen_ms` + `age_ms`、累计 `session_count`/`turn_count`、最近一次会话异常 `last_error`、协商参数（上行/下行采样率、帧长、二进制协议版本）、`board`/`firmware_version`（与 `McpRegistry` 做一次 join，不重复存储）。⚠️ `online` 由会话生命周期派生、**不是心跳**，进程被强杀不会翻转，须结合 `age_ms` 看。管理台「设备」页数据源 |
+| `GET /api/sessions` | **此刻活着的连接**及各自阶段（`phase`: idle/listening/thinking/speaking + `phase_display`）、连接时长、空闲时长、最近识别文本、会话级异常。管理台「会话」页数据源 |
+| `GET /api/conversations` | **内存里保留的最近对话**（每会话最多 40 条、最多 32 个会话，先进先出）；`?device_id=` 过滤、`?limit=`（默认 20 / 上限 200）。`truncated`/`dropped` 如实标注被挤掉的条数。**不是完整历史**——要长期留存需开启 `[memory]`（走 `gm_messages`）。管理台「对话记录」页数据源 |
 | `GET /api/mcp/tools` | **设备 MCP 工具清单**（按 `device_id`：工具名/描述/参数投影 `params` + 一行 `signature`/`user_only`/板型/固件版本/探测时间 `age_ms`/在线）。数据来自**会话开始时的 MCP 能力发现**（§5.2g），设备空闲时显示上次结果——因此**刚部署、或设备长期未唤醒时是空的**（响应里的 `note` 已说明）。管理页「MCP 工具」tab（`McpToolsState.kt`/`McpToolsCard.kt`）的唯一数据源；`user_only=true` 的工具不暴露给大模型 |
 | `POST/GET /api/ota/firmware`、`GET /api/ota/firmware/latest`、`POST /api/ota/firmware/delete` | **固件 OTA 托管（多型号 × 多功能）**：按 `功能(project) × 型号(model)`（可选 `板型(board)`）分目录存 `<dir>/<project>/<model>/<board|_>/firmware.bin + meta.json`；上传时从 ESP-IDF app 镜像**自动解析** `chip_id → 型号` 与 `esp_app_desc_t` 的 功能/版本/IDF/编译时间（非 ESP-IDF 镜像才要 `?project=&model=&version=` 覆盖）。`/api/ota` 只对**同功能 + 同型号**（板型精确优先，否则该型号通用）**且版本更新**的设备下发下载地址——不同型号/功能的包绝不互发（发错包 = 变砖）。旧版根目录单固件列为 `_legacy`（可删除、不参与匹配）。实现 `app/firmware.rs`，匹配/版本比较在 `app/ws/ota.rs`；管理页「OTA」tab（`OtaState.kt`/`OtaCard.kt` + 平台选包桥 `OtaFilePicker.kt`） |
 | `GET/POST /api/config` | **部分更新**（缺失字段保持不变、显式 `null` 清除）；GET **密钥打码**（明文永不回传，只给 `has_<field>` presence）并带 `revision`，POST 回传 `expected_revision` → 不一致 **409**（客户端顶栏出现「重新加载」，草稿保留）；密钥空串/缺失 = 保留原值。**POST 响应带 `hot`/`hot_hint`/`changed_sections`**：本次保存**实际**的生效档位（取变更字段里最严格的一个，判定在 `app/ws/config/impact.rs`），客户端据此显示三档文案 |

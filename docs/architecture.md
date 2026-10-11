@@ -56,18 +56,25 @@ flowchart LR
 xiaozhi-server-rust/
 ├── server/                      # Rust 服务端（见下述 src/ 各模块）
 │   └── src/
-│       ├── main.rs          # 入口：配置加载优先级（XIAOZHI_CONFIG > --config > 内置 mock 默认）
-│       ├── ws.rs            # HTTP 路由、握手协商、鉴权、/api/config 读写、管理页静态托管
-│       ├── session.rs       # 单 WS 连接的会话状态机与语音流水线（含 abort、spawn_blocking）
-│       ├── protocol.rs      # 文本 JSON 消息（serde 小写 tag）+ 二进制封装 v1/v2/v3
-│       ├── engine.rs        # 进程级共享引擎集合 + 每会话 VAD 工厂 + TTS 语言池
-│       ├── asr.rs / tts.rs / vad.rs / llm.rs  # 四大引擎 trait 与 mock/sherpa 实现
-│       ├── audio/           # opus 编解码（audiopus）、线性重采样（rubato）
-│       └── config.rs        # TOML 配置结构与加载（serde）
-├── client/                      # Kuikly 多端工程（管理后台 web + macOS 测试台）
+│       ├── main.rs          # 入口：配置加载优先级（XIAOZHI_CONFIG > --config > 内置默认）
+│       ├── config.rs        # TOML 配置聚合（[server]/[audio] + 各插件段 re-export）
+│       ├── engine.rs        # Engines 装配器：共享引擎池 + 每会话 VAD 工厂 + 热切换
+│       ├── app/             # 应用层（与具体引擎无关）
+│       │   ├── ws/          # HTTP 路由 + 握手协商 + 鉴权 + 静态托管管理页
+│       │   │                #   （config/memory/soul/plugins/usage/ota/registry 各端点组）
+│       │   ├── registry/    # 设备 / 会话 / 最近对话（**进程内**；devices/sessions/
+│       │   │                #   conversations/stats 四个只读端点的数据源）
+│       │   ├── session.rs   # 单 WS 连接的会话状态机与语音流水线（含 abort、spawn_blocking）
+│       │   │                #   （+ session/{start,observe,reply,bench,command,mcp,wakeup}.rs）
+│       │   ├── protocol.rs  # 文本 JSON 消息（serde 小写 tag）+ 二进制封装 v1/v2/v3
+│       │   ├── audio/ …     # opus 编解码（audiopus）、线性重采样（rubato）、下行节拍器水库
+│       │   └── firmware.rs / voices.rs  # 固件 OTA 托管 / 发音人目录
+│       └── plugins/         # 引擎插件层（asr/vad/tts/llm/aiui/prompt/soul/memory/wakeup/
+│                            #   command + registry 描述符表 + host 装配与状态上报）
+├── client/                      # Kuikly 多端工程（web 管理台 + macOS 测试台）
 ├── docker-entrypoint.sh         # 容器入口：模型自检 + 自动下载（GitHub Release 整包 + GITHUB_PROXY）
 ├── scripts/download_models.sh    # 宿主机预置模型（与入口同源 URL）
-├── config.example.toml          # 配置样例（[server]/[audio]/[asr]/[vad]/[tts]/[llm]）
+├── server/config.example.toml    # 配置样例（[server]/[audio]/[asr]/[vad]/[tts]/[llm]/[soul]/[memory]…）
 ├── Dockerfile                   # rust:1.90 多阶段构建，RUSTFLAGS=-C target-cpu=x86-64-v2
 └── docker-compose.yml           # xiaozhi + xiaozhi-mock（profile）两个服务
 ```
@@ -149,6 +156,14 @@ sequenceDiagram
 | `GET /api/config/schema` | 字段元数据（类型/默认值/热生效语义/密钥标记） |
 | `GET /api/plugins` | 能力清单 + 状态（`enabled`/`phase`/`last_error`） |
 | `GET /api/usage`、`GET /api/session/{id}/usage` | 令牌用量（成本 / 上下文膨胀观测） |
+| `GET /api/stats` | 看板聚合（在线设备/活会话/轮次/令牌/能力徽标），数据源 `../server/src/app/registry/` |
+| `GET /api/devices`、`GET /api/devices/{id}` | 设备清单与单台详情（在线态、最后活跃、协商参数、板型/固件版本） |
+| `GET /api/sessions` | **此刻**活着的连接及其阶段（聆听/思考/说话） |
+| `GET /api/conversations` | 内存里保留的最近对话（环形，非完整历史；`?device_id=` 过滤、`?limit=` 上限 200） |
+
+> ⚠️ **设备 / 会话 / 对话记录是进程内内存态**（`app/registry/`）：进程重启即清空，`online` 由会话
+> 生命周期派生而非心跳，对话只保留最近 32 个会话 × 40 条。每个响应都自带口径说明（`note` / `scope_note`），
+> 管理页直接展示，避免把"自本次启动以来"误读成"今日统计"。要长期留存对话请开启 `[memory]`（走 `gm_messages`）。
 
 > 全部 HTTP 端点、鉴权（`?token=` 兜底）与 `/api/config` 读写语义，见 `../server/src/app/ws.rs` 模块注释（权威说明）。
 

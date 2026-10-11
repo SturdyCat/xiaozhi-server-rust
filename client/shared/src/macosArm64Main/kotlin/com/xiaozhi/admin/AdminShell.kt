@@ -2,7 +2,6 @@ package com.xiaozhi.admin
 
 import com.tencent.kuikly.core.annotations.Page
 import com.tencent.kuikly.core.base.ViewBuilder
-import com.tencent.kuikly.core.base.ViewContainer
 import com.tencent.kuikly.core.directives.velse
 import com.tencent.kuikly.core.directives.vif
 import com.tencent.kuikly.core.module.Module
@@ -209,89 +208,6 @@ class AdminShell : Pager() {
             // ⚠️ 必须放在**页面根容器**的最后：绝对定位脱离布局（不占高度、不推挤内容），
             // 且相对整个窗口水平居中、盖在标题栏与内容之上；3 秒自动消失。
             ToastHost(ctx.toast)
-        }
-    }
-}
-
-// ============================================================
-// 文件级：连接状态文案 / 侧边栏项
-// ============================================================
-
-fun connectionLabel(state: String): String = when (state) {
-    "connected" -> "已连接"
-    "connecting" -> "连接中"
-    "error" -> "连接错误"
-    else -> "未连接"
-}
-
-/**
- * 侧边栏项：高 44（iPad 触摸目标 ≥44）、左右内距 12、左右外距 8。
- * 选中 = 亮灰胶囊 sidebarSelectedBg + 文字 accentTintText（品牌绿）+ 左侧 3px accent 竖条；
- * 普通 = 透明底 textPrimary(body 17/500)；disabled 置灰 textTertiary 且无点击；
- * showDot() 为 true 时右侧显示小橙点（warning 色，用于「配置」项 dirty 提示）。
- *
- * ⚠️ selected/showDot 必须是 lambda 且只在 attr/vif 闭包内求值：
- * Kuikly 仅对闭包内的 observable 读取做响应式跟踪；构建期传入的一次性 Boolean
- * 在 selectedSection 变化后不会重算（这就是此前「点击菜单无选中效果」的根因）。
- */
-fun ViewContainer<*, *>.sidebarItem(
-    label: String,
-    isSelected: () -> Boolean,
-    enabled: Boolean = true,
-    showDot: () -> Boolean = { false },
-    onClick: () -> Unit,
-) {
-    View {
-        attr {
-            height(44f)
-            flexDirectionRow()
-            alignItemsCenter()
-            marginLeft(AdminSpace.sm)
-            marginRight(AdminSpace.sm)
-            paddingLeft(AdminSpace.md)
-            paddingRight(AdminSpace.md)
-            borderRadius(AdminShape.radiusMd)
-            backgroundColor(if (isSelected()) AdminColors.sidebarSelectedBg else AdminColors.transparent)
-        }
-        event { click { if (enabled) onClick() } }
-        // 左侧选中指示条（3px 品牌绿竖条，vif 响应式）
-        vif({ isSelected() }) {
-            View {
-                attr {
-                    width(3f)
-                    height(20f)
-                    borderRadius(AdminShape.radiusPill)
-                    backgroundColor(AdminColors.accent)
-                    marginRight(AdminSpace.sm)
-                }
-            }
-        }
-        Text {
-            attr {
-                flex(1f)
-                fontSize(AdminType.body)
-                fontWeightMedium()
-                color(
-                    if (!enabled) {
-                        AdminColors.textTertiary
-                    } else if (isSelected()) {
-                        AdminColors.accentTintText
-                    } else {
-                        AdminColors.textPrimary
-                    },
-                )
-                text(label)
-            }
-        }
-        vif({ showDot() }) {
-            View {
-                attr {
-                    width(8f)
-                    height(8f)
-                    borderRadius(AdminShape.radiusPill)
-                    backgroundColor(AdminColors.warning)
-                }
-            }
         }
     }
 }

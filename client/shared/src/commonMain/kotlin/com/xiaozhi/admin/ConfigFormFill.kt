@@ -123,6 +123,8 @@ internal fun ConfigFormState.fill(obj: JSONObject) {
     sm.fill(obj)
     // [command]（指令闸门）：映射同样集中在 ConfigCommandState
     cmd.fill(obj)
+    // [wakeup]（唤醒问候语）：映射集中在 ConfigWakeupState
+    wake.fill(obj)
 }
 
 /**

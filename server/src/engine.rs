@@ -62,8 +62,19 @@ pub struct Engines {
     ///
     /// `Arc`：预取 worker（独立 task）也要读写它，见 [`crate::app::prefetch`]。
     pub tts_cache: Arc<crate::app::tts_cache::TtsCache>,
+    /// 持久化**热句**音频库（唤醒问候语这类高频固定句的成品音频，跨进程复用）。
+    ///
+    /// 与 `tts_cache` 的分工见 [`crate::app::hot_audio`]：内存缓存"什么都能装"，
+    /// 这里只存**显式点名**的热句，因此有界、可预期、且能在容器重建后仍然命中。
+    pub hot_audio: Arc<crate::app::hot_audio::HotAudioStore>,
     /// 令牌用量计量（全局 + 按会话；`GET /api/usage`）。回答"记忆注入让 prompt 长了多少"。
     pub usage: crate::app::usage::UsageMeter,
+    /// 设备 / 会话 / 最近对话的进程内注册表
+    /// （`GET /api/devices`、`/api/sessions`、`/api/conversations`、`/api/stats`）。
+    ///
+    /// 与 [`Self::usage`]、[`Self::mcp`] 同性质：**只读观测面**，不参与任何流水线决策。
+    /// 全部内存态，进程重启即清空（设备重连后自动回填）——理由见 `app/registry` 模块注释。
+    pub registry: crate::app::registry::Registry,
     /// 设备 MCP 工具注册表（按 `device_id` 存最近一次能力发现的结果；`GET /api/mcp/tools`）。
     /// 工具清单只存在于固件里且**只有设备连着时才问得到**，故必须落下来给管理界面看。
     pub mcp: crate::app::mcp::registry::McpRegistry,
@@ -85,6 +96,19 @@ impl Engines {
         let llm_sig = capability_signature(config, Capability::Llm);
         let memory_sig = capability_signature(config, Capability::Memory);
         let tts_cache = Arc::new(crate::app::tts_cache::TtsCache::new(config.tts.cache_entries));
+        // 持久化热句音频库的落盘目录：**配置文件所在目录**的 `hot-audio/`。
+        //
+        // 为什么挂在配置目录下而不是固定路径：生产部署把配置放在挂载卷上
+        //（docker-compose 的 `./server-data:/data` + `XIAOZHI_CONFIG=/data/config.toml`），
+        // 跟着它走就自动落在持久卷里，容器重建不丢；而"配置没有文件路径"（内置默认配置、
+        // 保存也不持久化）时落盘同样没有意义，此时直接禁用（与 `PUT /api/config` 返回 400 同源）。
+        let hot_audio_dir = config_path.as_deref().map(|p| {
+            std::path::Path::new(p)
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .join("hot-audio")
+        });
+        let hot_audio = Arc::new(crate::app::hot_audio::HotAudioStore::new(hot_audio_dir));
         Ok(Arc::new(Self {
             asr: booted.asr,
             tts: RwLock::new(booted.tts),
@@ -96,7 +120,9 @@ impl Engines {
             memory_sig: RwLock::new(memory_sig),
             host,
             tts_cache,
+            hot_audio,
             usage: crate::app::usage::UsageMeter::new(),
+            registry: crate::app::registry::Registry::new(),
             mcp: crate::app::mcp::registry::McpRegistry::new(),
             config: Arc::new(config.clone()),
             config_path,

@@ -291,6 +291,34 @@ fn client_patch_without_command_max_chars_preserves_it() {
     assert_eq!(saved2.command.reply, "好的，我先退下了。");
 }
 
+/// `[wakeup]` 是新增段：**旧管理页**完全没有它，补丁里就没有这个键——
+/// 盘上（或手写）的值必须保持不变，而不是被静默重置回默认（`enabled` 会被关掉、
+/// `persist` 会被重置），这是 bug-1 的同一类故障。
+#[test]
+fn client_patch_without_wakeup_section_preserves_it() {
+    let mut base = full_test_config();
+    base.wakeup.enabled = true;
+    base.wakeup.greeting = "在呢".to_string();
+    base.wakeup.persist = false;
+
+    // 旧客户端只发它认识的那些段（完全不含 wakeup）
+    let saved = simulate_put(
+        &base,
+        serde_json::json!({"tts": {"speed": 1.0}, "command": {"enabled": false}}),
+    );
+    assert!(saved.wakeup.enabled, "旧客户端未发送 wakeup 时不得被关掉");
+    assert_eq!(saved.wakeup.greeting, "在呢");
+    assert!(!saved.wakeup.persist, "未发送的字段不得被重置回默认 true");
+
+    // 新客户端发送时照常生效
+    let saved2 = simulate_put(
+        &base,
+        serde_json::json!({"wakeup": {"enabled": true, "greeting": "我在", "persist": true}}),
+    );
+    assert_eq!(saved2.wakeup.greeting, "我在");
+    assert!(saved2.wakeup.persist);
+}
+
 // ---------- bug-1 回归：旧客户端表单形状不再重置配置 ----------
 
 /// 旧版管理页 `ConfigFormState.save()` 只 `put` 六个段，且

@@ -13,7 +13,6 @@ use crate::app::prefetch::{PreparedSentence, SentenceSource};
 use crate::app::protocol::ServerMessage;
 use crate::app::splitter::SentenceSplitter;
 use crate::app::transport::Transport;
-use crate::app::tts_cache::TtsCache;
 use crate::plugins::llm::LlmEvent;
 use crate::plugins::prompt::TurnPrompt;
 
@@ -195,6 +194,9 @@ impl<'a, T: Transport> Session<'a, T> {
         // 预取：句子 → 成品（下一句的合成跑在**本句播放期间**，消除句间合成气泡——
         // 在线合成每次调用都是一条短连接，旧串行实现每句边界都要重付一次握手延迟）
         let (prepared, download) = self.spawn_prefetch(rx);
+        // 观测：进入"说话中"（管理页「会话」的实时阶段）。整轮只置一次——
+        // 本轮结束（成功或兜底）会由 `note_assistant_turn` 翻回"空闲"。
+        self.note_phase(crate::app::registry::Phase::Speaking);
         // 消费者：水库按实时节拍抽取下发（`tts start` 在首项到达时才发）→ 整轮结束 `tts stop`
         // 新一轮回复：节拍器时间表重置（本回复内各句共享同一时间表 → 句间无缝）
         self.pacer.reset();
@@ -221,21 +223,30 @@ impl<'a, T: Transport> Session<'a, T> {
                 // ⚠️ 语音场景**绝不能静默**：用户听不到任何声音 = "AI 没反应"（最差体验，
                 // 也是此前运行期失败全部只 warn! 的老问题）。一个字都还没下发时，用一句
                 // 兜底话术回应；已经出过声就不再补充（避免"说完半句又道歉"）。
+                self.note_error(format!("LLM 调用失败（{}）", failure.category()));
                 if !interrupted && frames_total == 0 {
                     self.speak_fallback(FALLBACK_REPLY).await?;
                 }
+                // 兜底话术也是"说过的一句"：记进对话，避免界面出现"用户问了却没有任何回复"
+                self.note_assistant_turn(FALLBACK_REPLY, t0.elapsed().as_millis() as u64);
                 return Ok(());
             }
             Err(e) => {
                 tracing::warn!("session {session_id} LLM 任务异常: {e}");
+                self.note_error(format!("LLM 任务异常: {e}"));
                 if !interrupted && frames_total == 0 {
                     self.speak_fallback(FALLBACK_REPLY).await?;
                 }
+                self.note_assistant_turn(FALLBACK_REPLY, t0.elapsed().as_millis() as u64);
                 return Ok(());
             }
         };
         // 令牌计量：回答"成本多少 / 记忆与灵魂让上下文长了多少"
         self.engines.usage.record(&session_id, llm_out.usage);
+        // 观测：这一轮"问了什么、答了什么、整轮多久"（管理页「对话记录」）。
+        // 刻意**不**受 `interrupted` 影响：被打断的这轮同样是发生过的一轮，
+        // 记录里丢掉它会让界面上的对话与用户记忆对不上。
+        self.note_assistant_turn(&llm_out.text, t0.elapsed().as_millis() as u64);
         // ⚠️ 这里打印的是**整轮耗时**（t0 → 最后一帧下发完成），不是"LLM 流耗时"：
         // 旧文案写"LLM 流 Xms"会让人误读成 LLM 吞吐（曾据此误判上游速度）。
         // 与"音频 Xms"对比才是判断节流的正确口径：两者接近 = 全程实时无缝；
@@ -328,21 +339,24 @@ impl<'a, T: Transport> Session<'a, T> {
             download.clone(),
             move |sentence: &str| {
                 let live = engines.live_config();
-                let speed = live.tts.speed;
-                let speaker = live.tts.speaker;
-                // 引擎签名口径的唯一权威在注册表（含密钥字段，仅内存比较、不打日志）
-                let cache_key = TtsCache::make_key(
-                    &crate::plugins::registry::signature_of(
-                        &live,
-                        crate::plugins::registry::Capability::Tts,
-                    ),
-                    speaker,
-                    speed,
+                // 缓存键口径的**唯一权威**在 `HotAudioKey::from_session`。
+                //
+                // 为什么不让本处自己拼 `TtsCache::make_key`：唤醒问候语路径要把**同一个键**
+                // 的成品音频暖进本缓存（读盘复用），两处各写一遍参数顺序，一旦漂移就是
+                // "缓存永远不命中"——不报错、只是白合成，是最难查的一类 bug。所以合成路径
+                // 与问候路径共用这一个构造入口。
+                let key = crate::app::hot_audio::HotAudioKey::from_session(
+                    &live,
                     params.downlink_sr,
                     params.downlink_frame_ms,
                     sentence,
                 );
-                SentenceSource { tts: engines.tts(), cache_key, speed, speaker }
+                SentenceSource {
+                    tts: engines.tts(),
+                    cache_key: key.mem_key(),
+                    speed: key.speed,
+                    speaker: key.speaker,
+                }
             },
             sentences,
         );

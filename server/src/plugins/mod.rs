@@ -49,3 +49,4 @@ pub mod registry;
 pub mod soul;
 pub mod tts;
 pub mod vad;
+pub mod wakeup;
