@@ -1,7 +1,6 @@
 package com.xiaozhi.admin
 
 import com.tencent.kuikly.core.base.PagerScope
-import com.tencent.kuikly.core.module.NetworkModule
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.pager.Pager
 import com.tencent.kuikly.core.reactive.collection.ObservableList
@@ -40,8 +39,6 @@ class PluginMetaState(private val scope: PagerScope) {
 
     var loading by scope.observable(false)
     var loaded by scope.observable(false)
-
-    private fun network(ctx: Pager): NetworkModule = ctx.acquireModule(NetworkModule.MODULE_NAME)
 
     /** 上次使用的服务端基址：`refresh` 复用（web 同域为空串，macApp 连接流程传绝对地址）。 */
     private var base = ""

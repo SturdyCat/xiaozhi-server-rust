@@ -2,26 +2,12 @@ package com.xiaozhi.admin
 
 import com.tencent.kuikly.core.base.Border
 import com.tencent.kuikly.core.base.BorderStyle
-import com.tencent.kuikly.core.base.Color
-import com.tencent.kuikly.core.base.PagerScope
 import com.tencent.kuikly.core.base.ViewBuilder
 import com.tencent.kuikly.core.base.ViewContainer
-import com.tencent.kuikly.core.base.ViewRef
-import com.tencent.kuikly.core.directives.vfor
-import com.tencent.kuikly.core.directives.velse
 import com.tencent.kuikly.core.directives.vif
-import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
-import com.tencent.kuikly.core.reactive.collection.ObservableList
 import com.tencent.kuikly.core.reactive.handler.observable
-import com.tencent.kuikly.core.views.AlertDialog
 import com.tencent.kuikly.core.views.Input
-import com.tencent.kuikly.core.views.PageList
-import com.tencent.kuikly.core.views.PageListView
-import com.tencent.kuikly.core.views.Scroller
-import com.tencent.kuikly.core.views.ScrollParams
 import com.tencent.kuikly.core.views.Switch
-import com.tencent.kuikly.core.views.TabItem
-import com.tencent.kuikly.core.views.Tabs
 import com.tencent.kuikly.core.views.Text
 import com.tencent.kuikly.core.views.TextArea
 import com.tencent.kuikly.core.views.View

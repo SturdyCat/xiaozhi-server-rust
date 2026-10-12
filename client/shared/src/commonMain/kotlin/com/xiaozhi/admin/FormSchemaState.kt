@@ -1,8 +1,6 @@
 package com.xiaozhi.admin
 
 import com.tencent.kuikly.core.base.PagerScope
-import com.tencent.kuikly.core.module.NetworkModule
-import com.tencent.kuikly.core.nvi.serialization.json.JSONArray
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.pager.Pager
 import com.tencent.kuikly.core.reactive.handler.observable
@@ -44,8 +42,6 @@ class FormSchemaState(private val scope: PagerScope) {
      * **闭包内读到的 observable** 做响应式跟踪，普通 Map 的写入不会触发任何重建。
      */
     var version by scope.observable(0)
-
-    private fun network(ctx: Pager): NetworkModule = ctx.acquireModule(NetworkModule.MODULE_NAME)
 
     /** 拉取并展开 schema；失败静默保留旧缓存（服务端不可达时表单仍可用）。 */
     fun load(ctx: Pager, baseUrl: String = "") {

@@ -1,7 +1,6 @@
 package com.xiaozhi.admin
 
 import com.tencent.kuikly.core.base.PagerScope
-import com.tencent.kuikly.core.module.NetworkModule
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.pager.Pager
 import com.tencent.kuikly.core.reactive.collection.ObservableList
@@ -82,8 +81,6 @@ class OtaState(private val scope: PagerScope) {
 
     /** 操作序号：迟到的回调按序号丢弃（防"切换服务器/重新上传后被拽回旧结果"）。 */
     private var seq = 0
-
-    private fun network(ctx: Pager): NetworkModule = ctx.acquireModule(NetworkModule.MODULE_NAME)
 
     /** 鉴权查询串（token 为空 → 空串；服务端 expected_token 为空时不校验）。
      *  `first` = 该 URL 还没有任何查询参数（决定分隔符用 `?` 还是 `&`）。 */

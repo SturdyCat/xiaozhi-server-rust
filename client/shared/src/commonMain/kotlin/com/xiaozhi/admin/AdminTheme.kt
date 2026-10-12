@@ -2,9 +2,6 @@ package com.xiaozhi.admin
 
 import com.tencent.kuikly.core.base.Color
 import com.tencent.kuikly.core.views.Text
-import com.tencent.kuikly.core.views.TextArea
-import com.tencent.kuikly.core.views.View
-import com.tencent.kuikly.core.views.compose.Button
 
 /**
  * 小智管理后台 · 设计 Token 与可复用组件（纯 UI，无平台依赖）。

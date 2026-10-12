@@ -2,15 +2,12 @@ package com.xiaozhi.admin
 
 import com.tencent.kuikly.core.base.PagerScope
 import com.tencent.kuikly.core.base.ViewContainer
-import com.tencent.kuikly.core.directives.vif
-import com.tencent.kuikly.core.module.NetworkModule
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.pager.Pager
 import com.tencent.kuikly.core.reactive.collection.ObservableList
 import com.tencent.kuikly.core.reactive.handler.observable
 import com.tencent.kuikly.core.reactive.handler.observableList
 import com.tencent.kuikly.core.timer.setTimeout
-import com.tencent.kuikly.core.views.Text
 import com.tencent.kuikly.core.views.View
 
 /**
@@ -465,8 +462,6 @@ class ConfigFormState(private val scope: PagerScope) {
     // ============================================================
     // 网络：load / save
     // ============================================================
-
-    private fun network(ctx: Pager): NetworkModule = ctx.acquireModule(NetworkModule.MODULE_NAME)
 
     fun load(ctx: Pager, baseUrl: String = "") {
         serverBase = baseUrl

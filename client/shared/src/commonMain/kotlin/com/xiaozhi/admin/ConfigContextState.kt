@@ -1,7 +1,6 @@
 package com.xiaozhi.admin
 
 import com.tencent.kuikly.core.base.PagerScope
-import com.tencent.kuikly.core.module.NetworkModule
 import com.tencent.kuikly.core.nvi.serialization.json.JSONArray
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.pager.Pager
@@ -131,8 +130,6 @@ class ContextSectionState(private val scope: PagerScope) {
             ),
         )
     }
-
-    private fun network(ctx: Pager): NetworkModule = ctx.acquireModule(NetworkModule.MODULE_NAME)
 
     private fun jsonHeaders(): JSONObject = JSONObject().apply { put("Content-Type", "application/json") }
 

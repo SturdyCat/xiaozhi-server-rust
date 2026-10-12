@@ -33,7 +33,12 @@ import com.tencent.kuikly.core.reactive.handler.observableList
 // 公共：网络、JSON 取值、人话格式化
 // ============================================================
 
-private fun network(ctx: Pager): NetworkModule = ctx.acquireModule(NetworkModule.MODULE_NAME)
+/**
+ * 全 admin 包共用的 Module 获取入口（原为 OpsState.kt 文件级 private，因 7 个 State 类各持
+ * 一份逐字相同的实现而统一至此）：`network(ctx).requestGet(...)` 即可发起请求。
+ * 各文件同包免 import；OtaState 的 token/authQuery 逻辑与 [getJson] 不同型，仍在类内自持。
+ */
+internal fun network(ctx: Pager): NetworkModule = ctx.acquireModule(NetworkModule.MODULE_NAME)
 
 /**
  * 只读端点的通用 GET：成功回调 `onDone(true, data, "")`，失败回调 `onDone(false, data, 原因)`。
