@@ -19,6 +19,74 @@ import com.tencent.kuikly.core.views.Text
 import com.tencent.kuikly.core.views.View
 
 /**
+ * section id → 对应能力 capability id（`GET /api/plugins` 的 `capabilities[].id`，见
+ * `server/src/plugins/registry/mod.rs` 的 `Capability::id`）。除 AIUI 段在注册表里叫
+ * `fullchain` 外，多数 section 与其能力 id 同名。server / audio / ota / mcp / overview
+ * 无单一能力对应（不在表中 → 查询返回 null，不显示就绪点）。
+ */
+private val SECTION_TO_CAPABILITY: Map<String, String> = mapOf(
+    "asr" to "asr",
+    "vad" to "vad",
+    "tts" to "tts",
+    "llm" to "llm",
+    "soul" to "soul",
+    "memory" to "memory",
+    "command" to "command",
+    "wakeup" to "wakeup",
+    "aiui" to "fullchain",
+)
+
+/**
+ * 取某 section 对应的能力行（来自 [PluginMetaState]，即 `GET /api/plugins` 的权威就绪态）。
+ * 无对应能力返回 null。
+ *
+ * ⚠️ 在闭包内读 `meta` 的 observable 列表 → meta 加载/刷新后自动重算（Kuikly 响应式铁律：
+ * 闭包内读取才被跟踪）。[CapabilityRow] 本身是不可变快照，meta 整表替换（clear + add）时
+ * 列表被观察、触发重渲染。
+ */
+private fun sectionCapability(meta: PluginMetaState, sectionId: String): CapabilityRow? {
+    val capId = SECTION_TO_CAPABILITY[sectionId] ?: return null
+    for (r in meta.requiredRows) if (r.id == capId) return r
+    for (r in meta.optionalRows) if (r.id == capId) return r
+    return null
+}
+
+/**
+ * section 头部「就绪度」横幅：仅当对应能力 phase 偏离（`failed` / `degraded`）时显示
+ * 状态徽标 + 原因（复用总览页同款 [statusBadge]，不另造样式）。
+ * 正常（`active` / 未加载 / 无对应能力）不打扰。
+ */
+private fun ViewContainer<*, *>.sectionReadinessBanner(meta: PluginMetaState, sectionId: String) {
+    vif({ sectionCapability(meta, sectionId)?.phase in setOf("failed", "degraded") }) {
+        val row = sectionCapability(meta, sectionId)!!
+        val (badgeState, badgeText) = when (row.phase) {
+            "failed" -> "error" to "异常"
+            "degraded" -> "busy" to "降级"
+            else -> "idle" to row.phase
+        }
+        View {
+            attr {
+                flexDirectionRow()
+                alignItemsCenter()
+                marginBottom(AdminSpace.sm)
+            }
+            statusBadge(state = { badgeState }, text = { badgeText })
+            vif({ row.reason.isNotEmpty() }) {
+                View { attr { width(AdminSpace.sm) } }
+                Text {
+                    attr {
+                        flex(1f)
+                        fontSize(AdminType.micro)
+                        color(if (row.phase == "failed") AdminColors.dangerTintText else AdminColors.warningTintText)
+                        text(row.reason)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
  * 配置页主体（P5 → 重组为「左侧分组导航 + 右侧单 section」两栏布局，替代原先 14 个平铺 tab）。
  *
  * ## 为什么从 tab 改成两栏导航
@@ -75,6 +143,7 @@ fun ViewContainer<*, *>.renderConfigLayout(
                             sidebarItem(
                                 d.label,
                                 isSelected = { form.configSection == d.id },
+                                showDot = { sectionCapability(meta, d.id)?.phase in setOf("failed", "degraded") },
                                 onClick = { form.configSection = d.id },
                             )
                         }
@@ -86,6 +155,7 @@ fun ViewContainer<*, *>.renderConfigLayout(
                         sidebarItem(
                             d.label,
                             isSelected = { form.configSection == d.id },
+                            showDot = { sectionCapability(meta, d.id)?.phase in setOf("failed", "degraded") },
                             onClick = { form.configSection = d.id },
                         )
                     }
@@ -95,6 +165,7 @@ fun ViewContainer<*, *>.renderConfigLayout(
                             sidebarItem(
                                 d.label,
                                 isSelected = { form.configSection == d.id },
+                                showDot = { sectionCapability(meta, d.id)?.phase in setOf("failed", "degraded") },
                                 onClick = { form.configSection = d.id },
                             )
                         }
@@ -143,6 +214,13 @@ fun ViewContainer<*, *>.renderConfigSection(
     ctx: Pager,
     id: String,
 ) {
+    // 改动影响高亮：上次保存的 hot 投影到当前 section 头部（仅确有非即时影响时显示）
+    vif({ form.saveImpactNote.isNotEmpty() }) {
+        textNote(form.saveImpactNote, tone = "warn", micro = true)
+        View { attr { height(AdminSpace.sm) } }
+    }
+    // 就绪度徽标：对应能力 phase 偏离（degraded/failed）时显示状态 + 原因（位于 section 卡片上方）
+    sectionReadinessBanner(meta, id)
     when (id) {
         "overview" -> overviewCard(meta, ctx)
         "mcp" -> mcpToolsCard(mcp, ctx)

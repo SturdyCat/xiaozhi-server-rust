@@ -197,6 +197,13 @@ impl<'a, T: Transport> Session<'a, T> {
         }
         // 会话结束：把该设备标为离线（管理界面「MCP 工具」据此区分"在线 / 上次探测结果"）。
         // ⚠️ 放在最末：VAD flush 与告别语排空期间设备仍在线上。
+        // 事件总线（P0-5 叠加层）：会话结束。刻意**不**塞进 registry 的 SessionGuard::Drop
+        // ——观测面（registry）不反向依赖事件层，两者解耦（见 `app/events` 模块注释）。
+        self.engines.event_bus.emit(crate::app::events::ServerEvent::SessionEnd {
+            session_id: self.session_id.clone(),
+            device_id: self.device_id.clone(),
+            reason: if self.close_requested { "command".to_string() } else { "closed".to_string() },
+        });
         self.engines
             .mcp
             .mark_offline(&self.device_id, &self.session_id);
@@ -264,6 +271,14 @@ impl<'a, T: Transport> Session<'a, T> {
             // 观测：记下这轮"它听到了什么"（管理页「会话 / 对话记录」）。放在指令闸门**之前**
             // ——命中「退下」也是一句真实的话，不该在记录里凭空消失。
             self.note_user_turn(&user_text);
+            // 事件总线（P0-5 叠加层）：用户消息入对话（与 note_user_turn 并列，互不影响）。
+            self.engines.event_bus.emit(crate::app::events::ServerEvent::MessageAdded {
+                session_id: self.session_id.clone(),
+                device_id: self.device_id.clone(),
+                role: "user".to_string(),
+                text: user_text.clone(),
+                elapsed_ms: None,
+            });
             // 指令闸门（ASR → LLM **之间**）：命中即说告别语 + 用 MCP 让设备结束聆听，
             // **一次 LLM 都不调用**。
             // 本批剩余语音段一并丢弃（用户已经要求退下）。
@@ -301,6 +316,15 @@ impl<'a, T: Transport> Session<'a, T> {
             if turn.stt.trim().is_empty() {
                 continue; // 静音轮（云端 Silence 事件），同空识别结果处理
             }
+            // 事件总线（P0-5 叠加层）：AIUI 路径的用户消息——级联流水线在 `note_user_turn`
+            // 处 emit，此路径此前缺位，这里补齐（仍是纯观测，不改 AIUI 业务）。
+            self.engines.event_bus.emit(crate::app::events::ServerEvent::MessageAdded {
+                session_id: self.session_id.clone(),
+                device_id: self.device_id.clone(),
+                role: "user".to_string(),
+                text: turn.stt.clone(),
+                elapsed_ms: None,
+            });
             tracing::info!(
                 "session {session_id} AIUI 轮次完成：耗时 {}ms（识别 {} 字 / 回复 {} 字 / 音频 {} 字节）",
                 t0.elapsed().as_millis(),

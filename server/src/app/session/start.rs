@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::app::audio::opus::OpusFrameDecoder;
 use crate::app::downlink::DownlinkPacer;
+use crate::app::events::ServerEvent;
 use crate::app::transport::Transport;
 use crate::engine::Engines;
 use crate::plugins::aiui::{AiuiSession, FullChainEngine};
@@ -82,6 +83,14 @@ pub async fn run_session<T: Transport>(
     // 会话根本没跑起来，不该在管理页留下一条"在线"的假连接。
     // 守卫类型是 RAII：`run_session` 返回（正常、`?` 提前返回、panic 展开）都会自动摘除活会话，
     // 因此这里**不需要**（也不该有）任何成对的清理代码。
+    // 事件总线（P0-5 叠加层）：会话建立即 emit（begin_session 之前，此时 client_id 尚未被
+    // 下面的 begin_session 按值消费）——与 registry 的 note_* 并存，不影响任何流水线决策。
+    engines.event_bus.emit(ServerEvent::SessionStart {
+        session_id: session_id.clone(),
+        device_id: device_id.clone(),
+        client_id: client_id.clone(),
+        is_test,
+    });
     let _registry_guard = engines
         .registry
         .begin_session(crate::app::registry::SessionStart {

@@ -75,6 +75,10 @@ pub struct Engines {
     /// 与 [`Self::usage`]、[`Self::mcp`] 同性质：**只读观测面**，不参与任何流水线决策。
     /// 全部内存态，进程重启即清空（设备重连后自动回填）——理由见 `app/registry` 模块注释。
     pub registry: crate::app::registry::Registry,
+    /// 轻量事件总线（P0-5）：会话在关键节点 `emit` 进程级事件（会话生命周期 / 消息入对话 /
+    /// TTS 轮次 / 异常）。**叠加观测层**，与 `registry` 的 `note_*` 埋点并存，不是替换；
+    /// 订阅者（大盘 / 审计，属 P1）独立消费，会话发布时**完全不感知**谁在听。
+    pub event_bus: crate::app::events::EventBus,
     /// 设备 MCP 工具注册表（按 `device_id` 存最近一次能力发现的结果；`GET /api/mcp/tools`）。
     /// 工具清单只存在于固件里且**只有设备连着时才问得到**，故必须落下来给管理界面看。
     pub mcp: crate::app::mcp::registry::McpRegistry,
@@ -123,6 +127,7 @@ impl Engines {
             hot_audio,
             usage: crate::app::usage::UsageMeter::new(),
             registry: crate::app::registry::Registry::new(),
+            event_bus: crate::app::events::EventBus::new(1024),
             mcp: crate::app::mcp::registry::McpRegistry::new(),
             config: Arc::new(config.clone()),
             config_path,

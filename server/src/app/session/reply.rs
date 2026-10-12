@@ -224,20 +224,44 @@ impl<'a, T: Transport> Session<'a, T> {
                 // 也是此前运行期失败全部只 warn! 的老问题）。一个字都还没下发时，用一句
                 // 兜底话术回应；已经出过声就不再补充（避免"说完半句又道歉"）。
                 self.note_error(format!("LLM 调用失败（{}）", failure.category()));
+                self.engines.event_bus.emit(crate::app::events::ServerEvent::Error {
+                    session_id: self.session_id.clone(),
+                    device_id: self.device_id.clone(),
+                    message: format!("LLM 调用失败（{}）", failure.category()),
+                });
                 if !interrupted && frames_total == 0 {
                     self.speak_fallback(FALLBACK_REPLY).await?;
                 }
                 // 兜底话术也是"说过的一句"：记进对话，避免界面出现"用户问了却没有任何回复"
                 self.note_assistant_turn(FALLBACK_REPLY, t0.elapsed().as_millis() as u64);
+                self.engines.event_bus.emit(crate::app::events::ServerEvent::MessageAdded {
+                    session_id: self.session_id.clone(),
+                    device_id: self.device_id.clone(),
+                    role: "assistant".to_string(),
+                    text: FALLBACK_REPLY.to_string(),
+                    elapsed_ms: Some(t0.elapsed().as_millis() as u64),
+                });
                 return Ok(());
             }
             Err(e) => {
                 tracing::warn!("session {session_id} LLM 任务异常: {e}");
                 self.note_error(format!("LLM 任务异常: {e}"));
+                self.engines.event_bus.emit(crate::app::events::ServerEvent::Error {
+                    session_id: self.session_id.clone(),
+                    device_id: self.device_id.clone(),
+                    message: format!("LLM 任务异常: {e}"),
+                });
                 if !interrupted && frames_total == 0 {
                     self.speak_fallback(FALLBACK_REPLY).await?;
                 }
                 self.note_assistant_turn(FALLBACK_REPLY, t0.elapsed().as_millis() as u64);
+                self.engines.event_bus.emit(crate::app::events::ServerEvent::MessageAdded {
+                    session_id: self.session_id.clone(),
+                    device_id: self.device_id.clone(),
+                    role: "assistant".to_string(),
+                    text: FALLBACK_REPLY.to_string(),
+                    elapsed_ms: Some(t0.elapsed().as_millis() as u64),
+                });
                 return Ok(());
             }
         };
@@ -247,11 +271,28 @@ impl<'a, T: Transport> Session<'a, T> {
         // 刻意**不**受 `interrupted` 影响：被打断的这轮同样是发生过的一轮，
         // 记录里丢掉它会让界面上的对话与用户记忆对不上。
         self.note_assistant_turn(&llm_out.text, t0.elapsed().as_millis() as u64);
+        // 事件总线（P0-5 叠加层）：助手整轮回复入对话（与 note_assistant_turn 并列）。
+        self.engines.event_bus.emit(crate::app::events::ServerEvent::MessageAdded {
+            session_id: self.session_id.clone(),
+            device_id: self.device_id.clone(),
+            role: "assistant".to_string(),
+            text: llm_out.text.clone(),
+            elapsed_ms: Some(t0.elapsed().as_millis() as u64),
+        });
         // ⚠️ 这里打印的是**整轮耗时**（t0 → 最后一帧下发完成），不是"LLM 流耗时"：
         // 旧文案写"LLM 流 Xms"会让人误读成 LLM 吞吐（曾据此误判上游速度）。
         // 与"音频 Xms"对比才是判断节流的正确口径：两者接近 = 全程实时无缝；
         // 耗时远大于音频 = 中间被供数拖住了（结合下面的队列余量日志定位是谁慢）。
         let audio_ms = frames_total as u64 * self.params.downlink_frame_ms.max(1) as u64;
+        // 事件总线（P0-5 叠加层）：一轮 TTS 下行完成（句数/帧数/是否打断/音频时长，供大盘聚合）。
+        self.engines.event_bus.emit(crate::app::events::ServerEvent::TtsRound {
+            session_id: self.session_id.clone(),
+            device_id: self.device_id.clone(),
+            sentences: sentences_done as u32,
+            frames: frames_total as u32,
+            interrupted,
+            audio_ms,
+        });
         tracing::info!(
             "session {session_id} 本轮完成：耗时 {}ms / 音频 {audio_ms}ms（{frames_total} 帧）/ LLM 输出 {} 字 / {} 个工具调用，下发 {sentences_done} 句{}",
             t0.elapsed().as_millis(),

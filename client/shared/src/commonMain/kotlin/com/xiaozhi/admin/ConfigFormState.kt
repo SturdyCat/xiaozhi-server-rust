@@ -201,6 +201,10 @@ class ConfigFormState(private val scope: PagerScope) {
     var lastSavedAt by scope.observable("")
     /// 上次保存因**过期写入（409）**被拒：顶栏显示「重新加载」入口（草稿保留）。
     var conflict by scope.observable(false)
+    /// 上次保存的「改动影响」文案（基于服务端 `hot`）：非空时在配置 section 头部提示
+    /// "本次改动需：新会话生效 / 重启 server 生效"。live（立即生效）或空串则不显示。
+    /// 由 save 成功时写入、load/reload 或保存失败时清空。
+    var saveImpactNote by scope.observable("")
 
     /**
      * 「保存配置」按钮的**完成态**（三态按钮的第三态）："" 正常 / "ok" 保存成功 / "error" 保存失败。
@@ -474,6 +478,7 @@ class ConfigFormState(private val scope: PagerScope) {
                 // 字段热生效元数据（用于"这个字段多久生效"提示；失败静默）
                 schema.load(ctx, baseUrl)
                 conflict = false
+                saveImpactNote = ""
                 statusMsg = "已加载配置"
                 statusLevel = "ok"
             } else {
@@ -627,6 +632,12 @@ class ConfigFormState(private val scope: PagerScope) {
                     "restart_only" -> "已保存，下次启动生效"
                     else -> ""
                 }
+                // 改动影响高亮：把全局 hot 投影到配置 section 头部（仅确有非即时影响时才提示）
+                saveImpactNote = when (data?.optString("hot", "") ?: "") {
+                    "next_session" -> "本次改动需：新会话生效"
+                    "restart_only" -> "本次改动需：重启 server 生效"
+                    else -> ""
+                }
                 statusMsg = if (hotText.isEmpty()) {
                     serverMsg.ifEmpty { "保存成功（新会话生效）" }
                 } else {
@@ -641,9 +652,11 @@ class ConfigFormState(private val scope: PagerScope) {
                 // 过期写入：**保留草稿**（dirty 不动），顶栏出现「重新加载」入口
                 dirty = true
                 conflict = true
+                saveImpactNote = ""
                 statusMsg = serverMsg.ifEmpty { "配置已被其他窗口修改，请重新加载后再保存" }
                 statusLevel = "error"
             } else {
+                saveImpactNote = ""
                 statusMsg = "保存失败: ${serverMsg.ifEmpty { if (errorMsg.isNotEmpty()) errorMsg else "HTTP $code" }}"
                 statusLevel = "error"
             }

@@ -11,6 +11,10 @@
   4. asr_test start → stop（不上行音频）→ 断言 stt 回包（空缓冲占位文案）
   5. tts_test（"你好"）→ 断言 tts start → sentence_start → 二进制帧 → tts stop
   6. llm_test → 断言 llm_test 回包到达（state=ok|error 均可，取决于 [llm] 配置）
+  7. 场景化联调（P0-6）：
+     - abort 打断（协议层，**fatal**）：发 abort 后用 asr_test 做存活探针，验证连接可用
+     - wakeup 唤醒问候（**容忍型**）：listen detect → 收到 tts 序列即通过；
+       未收到（[wakeup] 未启用 / TTS 不可用）只记 warning，不算失败
 
 用法：
   python3 tests/mock_client.py [--host 127.0.0.1] [--port 8000] [--token <bearer>]
@@ -122,6 +126,58 @@ def recv_text_until(sock: socket.socket, mtype: str, max_frames: int = 2000) -> 
     return None
 
 
+def scenario_abort(sock: socket.socket, errors: list[str]) -> None:
+    """abort 打断（协议层，**fatal**）：发 abort 帧后连接必须仍然可用。
+
+    服务端对 abort 的处置是置位打断标志（session.rs），绝不应崩溃或断连。
+    以 asr_test start/stop → stt 作为**存活探针**（无需模型/凭据即可回包）：
+    若 abort 把会话/连接带坏，这里收不到 stt。
+    """
+    print("[>] 场景：abort 打断（协议层）")
+    ws_send_text(sock, json.dumps({"type": "abort"}))
+    ws_send_text(sock, json.dumps({"type": "asr_test", "action": "start"}))
+    ws_send_text(sock, json.dumps({"type": "asr_test", "action": "stop"}))
+    msg = recv_text_until(sock, "stt")
+    if msg is None:
+        errors.append("abort 后未收到 stt 存活探针回包（连接可能被 abort 帧破坏）")
+    else:
+        print("[+] abort 后连接仍可用（stt 存活探针正常回包）")
+
+
+def scenario_wakeup(sock: socket.socket, warnings: list[str]) -> None:
+    """wakeup 唤醒问候（**容忍型**）：listen state=detect → 期望唤醒问候语下行。
+
+    依赖 [wakeup] 配置与 TTS 可用性，故不做 fatal 断言：
+    收到 tts 序列 = 通过；error 帧或无回包（[wakeup] 默认关闭属预期）只记 warning。
+    """
+    print("[>] 场景：wakeup 唤醒问候（容忍型）")
+    ws_send_text(sock, json.dumps({"type": "listen", "state": "detect", "text": "小智"}))
+    old_timeout = sock.gettimeout()
+    sock.settimeout(3)
+    got: list[str] = []
+    try:
+        for _ in range(200):
+            opcode, payload = ws_recv(sock)
+            if opcode != 0x1:
+                continue
+            msg = json.loads(payload.decode())
+            mtype = msg.get("type")
+            got.append(mtype if mtype != "tts" else f"tts:{msg.get('state')}")
+            if mtype == "tts" and msg.get("state") == "stop":
+                break
+    except (socket.timeout, TimeoutError):
+        pass
+    finally:
+        sock.settimeout(old_timeout)
+    if any(g.startswith("tts:start") for g in got):
+        print(f"[+] wakeup 问候下行：{got}")
+    else:
+        warnings.append(
+            "wakeup 场景未收到 tts 序列（[wakeup] 未启用或 TTS 不可用属预期）："
+            + (", ".join(got) if got else "无回包")
+        )
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="xiaozhi-server-rust 协议联调客户端")
     ap.add_argument("--host", default="127.0.0.1")
@@ -217,15 +273,22 @@ def main() -> int:
     else:
         print(f"[<] llm_test：state={msg.get('state')} text={str(msg.get('text'))[:60]!r}")
 
+    # 6) 场景化联调（P0-6）：abort 打断（fatal）+ wakeup 唤醒问候（容忍型）
+    warnings: list[str] = []
+    scenario_abort(sock, errors)
+    scenario_wakeup(sock, warnings)
+
     try:
         sock.sendall(bytes([0x88, 0x00]))  # 发送 close
     except OSError:
         pass
 
+    for w in warnings:
+        print(f"[~] WARN: {w}")
     if errors:
         print("[!] FAIL: " + "; ".join(errors))
         return 1
-    print("[+] PASS: 握手/协商 + asr_test/tts_test/llm_test 三个独立服务端点均符合预期")
+    print("[+] PASS: 握手/协商 + 三个独立服务端点 + abort/wakeup 场景均符合预期")
     return 0
 
 

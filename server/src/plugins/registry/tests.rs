@@ -34,6 +34,41 @@ fn every_implemented_capability_has_an_impl() {
     }
 }
 
+/// 能力清单 ↔ 枚举变体 ↔ 注册表 三者一致（P0-6 漂移护栏）。
+///
+/// 现有测试只做**前向**遍历 `ALL_CAPABILITIES`，兜不住两类漂移：
+/// 1. 新增 `Capability` 变体却忘了加进 `ALL_CAPABILITIES`（Rust 枚举不可运行时枚举，
+///    用"变体数硬约束"兜底——加变体必须同步改这里的数字，否则测试红）；
+/// 2. `REGISTRY` 里某描述符指向一个不在清单里的能力（反向缺失）。
+#[test]
+fn capability_registry_is_complete_and_consistent() {
+    // (1) 变体数硬约束：当前 Capability 共 11 个变体。
+    assert_eq!(
+        ALL_CAPABILITIES.len(),
+        11,
+        "新增 Capability 变体须同步加入 ALL_CAPABILITIES 并改此断言"
+    );
+    // (2) 清单无重复。
+    let mut seen = std::collections::HashSet::new();
+    for &cap in ALL_CAPABILITIES {
+        assert!(seen.insert(cap.id()), "ALL_CAPABILITIES 重复能力: {}", cap.id());
+    }
+    // (3) 反向：注册表每条描述符的能力都必须在清单内，且已实现能力必须有实现。
+    for d in REGISTRY {
+        assert!(
+            ALL_CAPABILITIES.contains(&d.capability),
+            "{} 的 capability {:?} 未出现在 ALL_CAPABILITIES",
+            d.id,
+            d.capability
+        );
+        assert!(
+            d.capability.implemented() || impls_of(d.capability).count() > 0,
+            "能力 {} 既未声明 implemented 又无描述符",
+            d.capability.id()
+        );
+    }
+}
+
 /// 必需能力必须有**可选中的**实现（否则启动必然失败且无从下手）。
 #[test]
 fn required_capabilities_have_selectable_impl() {

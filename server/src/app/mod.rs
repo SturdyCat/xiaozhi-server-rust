@@ -3,7 +3,9 @@
 //! 引擎实现见 [`crate::plugins`]。
 
 pub mod audio;
+pub mod bench_api;
 pub mod downlink;
+pub mod events;
 pub mod firmware;
 pub mod hot_audio;
 pub mod mcp;

@@ -56,6 +56,7 @@ use crate::app::protocol::{AudioParams, BinVersion, ClientHello, ClientMessage, 
 use crate::app::session::{run_session, send_text, SessionParams};
 use crate::app::transport::{IncomingFrame, Transport, WsTransport};
 
+mod bench_api;
 mod config;
 mod mcp;
 mod memory;
@@ -90,6 +91,11 @@ pub fn router(engines: Arc<Engines>) -> Router {
         // 能力清单 + 状态（enabled/phase/last_error）与字段元数据（配置页据此校验/提示）
         .route("/api/plugins", get(list_plugins))
         .route("/api/config/schema", get(config_schema))
+        // 内联配置测试（P0-2）：LLM/TTS/VAD 延迟测量（HTTP 直调，按磁盘最新配置 ad-hoc
+        // 构建引擎，不要求 is_test WS 会话；与 WS 测试台并存，测量核心见 app::bench_api）
+        .route("/api/test/llm", axum::routing::post(bench_api::test_llm))
+        .route("/api/test/tts", axum::routing::post(bench_api::test_tts))
+        .route("/api/test/vad", axum::routing::post(bench_api::test_vad))
         // 记忆：状态 / 测试召回 / 立即维护 / 清空（"记忆开了没用"的当场验证入口）
         .route("/api/memory/status", get(memory_status))
         .route("/api/memory/recall", axum::routing::post(memory_recall))
