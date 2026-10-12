@@ -102,6 +102,19 @@ private fun ViewContainer<*, *>.deviceBlock(row: DeviceToolsRow) {
             if (!row.online) {
                 statusBadge(state = { "idle" }, text = { "已断开" })
             }
+            // P1-10 指令闸门兼容标记：偏离态才占视觉（兼容 = 正常态不显示）
+            if (row.commandGate == "will_degrade") {
+                statusBadge(state = { "busy" }, text = { row.commandGateLabel })
+            }
+        }
+        if (row.commandGate == "compatible") {
+            Text {
+                attr {
+                    fontSize(AdminType.caption)
+                    color(AdminColors.textSecondary)
+                    text("✓ ${row.commandGateLabel}（说「退下」会保持连接）")
+                }
+            }
         }
         Text {
             attr {

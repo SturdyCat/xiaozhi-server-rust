@@ -144,3 +144,55 @@ fn to_json_orders_most_recently_probed_first() {
     assert!(McpRegistry::new().to_json()["devices"].as_array().unwrap().is_empty());
     assert!(v["note"].as_str().unwrap().contains("会话开始时"));
 }
+
+/// P1-10：`has_tool` 三态——None=清单未知（未登记/探测失败），Some=清单在手（有/没有）。
+#[test]
+fn has_tool_distinguishes_unknown_from_absent() {
+    let reg = McpRegistry::new();
+    // 未登记 → 未知
+    assert_eq!(reg.has_tool("no-device", "self.audio_listener.stop"), None);
+
+    // 探测成功且含 stop → Some(true)
+    reg.record(probe("dev-ok", "s1", 1_000, vec![tool("self.audio_listener.stop", true)]));
+    assert_eq!(reg.has_tool("dev-ok", "self.audio_listener.stop"), Some(true));
+    assert_eq!(reg.has_tool("dev-ok", "self.reboot"), Some(false), "清单在手但无此工具");
+
+    // 探测失败（零工具 + error）→ 清单未知（保持试探路径，不误判为"没有"）
+    let mut bad = probe("dev-bad", "s2", 2_000, vec![]);
+    bad.error = Some("第 2 页超时".into());
+    reg.record(bad);
+    assert_eq!(
+        reg.has_tool("dev-bad", "self.audio_listener.stop"),
+        None,
+        "探测失败 = 没问出来，不是没有"
+    );
+
+    // 探测成功但清单为空 → 设备明确没有工具 → Some(false)（不是 None）
+    reg.record(probe("dev-empty", "s3", 3_000, vec![]));
+    assert_eq!(reg.has_tool("dev-empty", "self.audio_listener.stop"), Some(false));
+}
+
+/// P1-10：`command_gate` 三态标记（管理台「指令闸门兼容」列的数据源）。
+#[test]
+fn command_gate_json_marks_compatibility() {
+    let reg = McpRegistry::new();
+    reg.record(probe("dev-ok", "s1", 1_000, vec![tool("self.audio_listener.stop", true)]));
+    reg.record(probe("dev-old", "s2", 1_000, vec![tool("self.reboot", true)]));
+    let mut bad = probe("dev-bad", "s3", 1_000, vec![]);
+    bad.error = Some("超时".into());
+    reg.record(bad);
+
+    let v = reg.to_json();
+    let find = |id: &str| {
+        v["devices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["device_id"] == id)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(find("dev-ok")["command_gate"], "compatible");
+    assert_eq!(find("dev-old")["command_gate"], "will_degrade");
+    assert_eq!(find("dev-bad")["command_gate"], "unknown", "探测失败 = 未知");
+}

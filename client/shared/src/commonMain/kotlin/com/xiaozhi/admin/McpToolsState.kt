@@ -61,6 +61,7 @@ class McpToolsState(scope: PagerScope) : LoadableState(scope) {
                 toolCount = d.optInt("tool_count", 0),
                 aiToolCount = d.optInt("ai_tool_count", 0),
                 userToolCount = d.optInt("user_tool_count", 0),
+                commandGate = d.optString("command_gate", ""),
                 error = d.optString("error", ""),
                 tools = toolRows(d.optJSONArray("tools")),
             )
@@ -129,6 +130,12 @@ class DeviceToolsRow(
     val aiToolCount: Int,
     /** 其中 `user_only`（不暴露给大模型，只给管理端/服务器按名字调用）的数量。 */
     val userToolCount: Int,
+    /**
+     * 指令闸门兼容性三态（P1-10，服务端给）：
+     * `compatible` = 清单含 stop 工具；`will_degrade` = 清单在手但不含（说「退下」将断开）；
+     * `unknown`/空 = 清单未知（探测失败）。派生属性 [commandGateLabel] 供展示。
+     */
+    val commandGate: String,
     /** 探测未完成的原因（空串 = 完整成功）。 */
     val error: String,
     val tools: List<McpToolRow>,
@@ -147,6 +154,14 @@ class DeviceToolsRow(
         get() = buildString {
             append("$toolCount 个工具")
             if (userToolCount > 0) append("（$aiToolCount 个可被 AI 调用 · $userToolCount 个仅管理员）")
+        }
+
+    /** 指令闸门兼容标记文案（空串 = 无需展示）。 */
+    val commandGateLabel: String
+        get() = when (commandGate) {
+            "compatible" -> "指令闸门兼容"
+            "will_degrade" -> "说「退下」将断开"
+            else -> ""
         }
 }
 

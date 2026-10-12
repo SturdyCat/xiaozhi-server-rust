@@ -80,6 +80,24 @@ impl DeviceTools {
         (self.tools.len(), user)
     }
 
+    /// 工具清单是否含某工具（纯内存遍历，零 I/O）。
+    fn has_tool(&self, name: &str) -> bool {
+        self.tools.iter().any(|t| t.name == name)
+    }
+
+    /// 指令闸门兼容性三态（`GET /api/mcp/tools` 的 `command_gate` 字段）：
+    /// 清单在手且含 stop 工具 = 兼容；清单在手但不含 = 说「退下」将降级断开；
+    /// 探测失败且零工具（清单未知）= 未知。
+    fn command_gate(&self) -> &'static str {
+        if self.error.is_some() && self.tools.is_empty() {
+            "unknown"
+        } else if self.has_tool(super::STOP_LISTENING_TOOL) {
+            "compatible"
+        } else {
+            "will_degrade"
+        }
+    }
+
     /// `GET /api/mcp/tools` 的一行。
     ///
     /// `age_ms` 在**序列化时**算（而不是存起来）：注册表里的时间戳是事实，距今多久随请求变化。
@@ -97,6 +115,7 @@ impl DeviceTools {
             "tool_count": total,
             "user_tool_count": user,
             "ai_tool_count": total - user,
+            "command_gate": self.command_gate(),
             "error": self.error,
             "tools": self.tools.iter().map(McpToolInfo::to_json).collect::<Vec<_>>(),
         })
@@ -164,6 +183,24 @@ impl McpRegistry {
             let oldest = inner.order.remove(0);
             inner.devices.remove(&oldest);
         }
+    }
+
+    /// 指令闸门决策查询（P1-10，三态）：调用前先查该设备**已发现**的工具清单。
+    ///
+    /// - `None` = 清单**未知**（未登记，或最近一次探测失败且一个工具都没拿到）→
+    ///   调用方保持现有"试探调用 + `-32602` 降级"路径，不劣化；
+    /// - `Some(false)` = 清单在手且**明确没有**该工具 → 调用方跳过调用直接降级
+    ///   （省一次注定失败的 2s 超时 / `-32602` 往返）；
+    /// - `Some(true)` = 清单在手且含该工具 → 正常调用。
+    ///
+    /// 注意区分"清单为空但探测成功"（设备明确没有工具，`Some`）与
+    /// "探测失败"（`error` 非空且零工具，`None`）——后者是"没问出来"，不是"没有"。
+    pub fn has_tool(&self, device_id: &str, tool: &str) -> Option<bool> {
+        let dt = self.get(device_id)?;
+        if dt.error.is_some() && dt.tools.is_empty() {
+            return None;
+        }
+        Some(dt.has_tool(tool))
     }
 
     /// 会话结束：把该设备标为离线。

@@ -14,12 +14,13 @@
 //! （握手 → 服务器 hello → 会话状态重建），现场表现就是"退下之后它又重连了一次"。
 //! 让设备自己结束聆听则**音频通道保留**，下次唤醒直接复用——这是本次改动的全部目的。
 //!
-//! ## 三条降级路径（都必须保留）
+//! ## 四条降级路径（都必须保留）
 //!
 //! | 情形 | 表现 | 处置 |
 //! |---|---|---|
 //! | 设备未声明 `features.mcp`（极老固件） | [`crate::app::session::mcp::McpCallError::Unsupported`]，**一个报文都不发** | 断开 |
-//! | 固件没刷上 `self.audio_listener.stop` | 设备回 `-32602 Unknown tool`（正常响应，不算传输错误） | 断开 |
+//! | 清单明确不含 stop 工具（P1-10：探测成功但 `tools/list` 里没有） | **零次 `tools/call`**，直接跳过 | 断开 |
+//! | 固件没刷上 `self.audio_listener.stop` 且清单未知 | 设备回 `-32602 Unknown tool`（正常响应，不算传输错误） | 断开 |
 //! | 设备不回包 / 等待期间断开 | 超时 / `Closed` | 断开 |
 //!
 //! 降级 = 旧行为（`close_requested`），所以"服务器先上线、固件后烧录"不会让功能变差，
@@ -84,7 +85,21 @@ impl<'a, T: Transport> Session<'a, T> {
     ///
     /// 独立成函数的原因：它是本模块唯一的副作用出口，降级判定集中在一处，
     /// 将来接「LLM 工具调用闭环」（`docs/esp-compat-and-latency-plan.md` §3.3）时可复用同一口径。
+    ///
+    /// P1-10：调用前先查会话开始时**已发现**的工具清单（内存读，零 I/O）——
+    /// 清单明确不含 stop 工具时直接降级，省一次注定失败的调用（2s 超时或 `-32602` 往返）；
+    /// 清单未知（未登记 / 探测失败）时保持既有试探路径，行为不劣化。
     async fn stand_down_via_mcp(&mut self) {
+        if self.engines.mcp.has_tool(&self.device_id, STOP_LISTENING_TOOL) == Some(false) {
+            tracing::warn!(
+                "session {} 设备 {} 的工具清单不含 {}（会话开始时已发现），跳过调用直接降级为断开本次会话",
+                self.session_id,
+                self.device_id,
+                STOP_LISTENING_TOOL
+            );
+            self.close_requested = true;
+            return;
+        }
         match self
             .mcp_call_tool(STOP_LISTENING_TOOL, serde_json::json!({}))
             .await
