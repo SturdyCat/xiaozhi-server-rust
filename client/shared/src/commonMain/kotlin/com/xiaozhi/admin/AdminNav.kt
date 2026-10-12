@@ -21,20 +21,24 @@ import com.tencent.kuikly.core.views.View
  * 集中定义 id/order/label，构建期校验 id 唯一与 order 升序。收益是新增一个页面从
  * "改 `renderXxx` 里的一行 + 记住顺序 + 别漏文案"收敛为"表加一行 + `when` 加一条分支"。
  */
-class NavDescriptor(val id: String, val order: Int, val label: String)
+class NavDescriptor(val id: String, val order: Int, val label: String, val group: String)
 
 /** 管理台一级导航（order 升序即展示顺序）。 */
 object AdminNav {
 
+    /** 侧边栏分组标题（P1-4）：项数多了以后按"观测 / 配置"两段分区，渲染时 group 变化处插标题。 */
+    const val GROUP_OBSERVE = "观测"
+    const val GROUP_CONFIG = "配置"
+
     val all: List<NavDescriptor> = listOf(
         // order 以 10 为步长：留出插入空间，避免每次新增都要重排既有值
-        NavDescriptor("overview", 0, "概览"),
-        NavDescriptor("devices", 10, "设备"),
-        NavDescriptor("sessions", 20, "会话"),
-        NavDescriptor("conversations", 30, "对话记录"),
-        NavDescriptor("usage", 40, "用量"),
-        NavDescriptor("metrics", 45, "延迟"),
-        NavDescriptor("config", 50, "配置"),
+        NavDescriptor("overview", 0, "概览", GROUP_OBSERVE),
+        NavDescriptor("devices", 10, "设备", GROUP_OBSERVE),
+        NavDescriptor("sessions", 20, "会话", GROUP_OBSERVE),
+        NavDescriptor("conversations", 30, "对话记录", GROUP_OBSERVE),
+        NavDescriptor("usage", 40, "用量", GROUP_OBSERVE),
+        NavDescriptor("metrics", 45, "延迟", GROUP_OBSERVE),
+        NavDescriptor("config", 50, "配置", GROUP_CONFIG),
     )
 
     /** 默认落地页：概览（打开管理台先看"现在什么状态"，而不是先看一堆配置字段）。 */
@@ -45,10 +49,15 @@ object AdminNav {
         require(ids.distinct().size == ids.size) { "导航 id 必须唯一：$ids" }
         val orders = all.map { it.order }
         require(orders == orders.sorted()) { "导航必须按 order 升序声明：$orders" }
-        require(ids.all { it.isNotBlank() } && all.all { it.label.isNotBlank() }) {
-            "导航的 id/label 不得为空"
+        require(ids.all { it.isNotBlank() } && all.all { it.label.isNotBlank() && it.group.isNotBlank() }) {
+            "导航的 id/label/group 不得为空"
         }
         require(ids.contains(DEFAULT)) { "默认落地页 $DEFAULT 必须在导航表里" }
+        // 分组相邻性：同 group 的项在 order 升序下必须连续，否则渲染时同组会被拆成多段
+        val segments = all.zipWithNext().count { it.first.group != it.second.group } + 1
+        require(segments == all.map { it.group }.distinct().size) {
+            "同分组的导航项必须相邻声明：${all.map { "${it.id}:${it.group}" }}"
+        }
     }
 
     /** id → 文案（找不到时回退 id 本身，避免标题变成空白）。 */

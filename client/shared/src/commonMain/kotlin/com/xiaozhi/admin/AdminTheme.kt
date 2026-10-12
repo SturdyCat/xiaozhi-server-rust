@@ -75,6 +75,9 @@ object AdminColors {
     val shadowSm = Color(0x40000000L)
     val focusRing = Color(0x3307C160L)
 
+    /** 抽屉遮罩（P1-4 窄屏侧边栏）：40% 黑，盖在内容上让抽屉浮起。 */
+    val overlay = Color(0x66000000L)
+
     /** 完全透明（分段控件未选中段 / 容器化 Input 背景用） */
     val transparent = Color(0x00000000L)
 }

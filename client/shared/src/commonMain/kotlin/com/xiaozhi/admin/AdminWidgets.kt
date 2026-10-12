@@ -327,12 +327,17 @@ fun ViewContainer<*, *>.pluginStatusBadge(phase: String, enabled: Boolean) {
 
 /**
  * 大标题栏：高 64、flexRow 居中、左右内距 xl(24)、bg windowBg、底部 1px divider。
- * 左 largeTitle(display=34)/500 textPrimary；右可选按钮/徽标（trailing ViewBuilder）。
+ * 左可选 leading（P1-4 窄屏汉堡按钮位，宽屏不传）、largeTitle(display=34)/500 textPrimary、
+ * 右可选按钮/徽标（trailing ViewBuilder）。
  * ⚠️ title 是 lambda，须在 Text 的 attr 闭包内读取（如 `{ "配置" }` 或依赖 observable 的
  * `{ when (ctx.selectedSection) ... }`），切 section 时标题才会响应式更新。
  * ⚠️ 顶部避让区（macOS 红黄绿窗口按钮）由 AdminShell 的内容区/侧边栏 paddingTop 控制。
  */
-fun ViewContainer<*, *>.largeTitleBar(title: () -> String, trailing: ViewBuilder? = null) {
+fun ViewContainer<*, *>.largeTitleBar(
+    title: () -> String,
+    leading: ViewBuilder? = null,
+    trailing: ViewBuilder? = null,
+) {
     View {
         attr {
             flexDirectionRow()
@@ -341,6 +346,9 @@ fun ViewContainer<*, *>.largeTitleBar(title: () -> String, trailing: ViewBuilder
             paddingLeft(AdminSpace.xl)
             paddingRight(AdminSpace.xl)
             backgroundColor(AdminColors.windowBg)
+        }
+        if (leading != null) {
+            leading()
         }
         Text {
             attr {

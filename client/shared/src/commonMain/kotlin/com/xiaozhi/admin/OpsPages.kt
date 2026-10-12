@@ -69,6 +69,16 @@ private fun ViewContainer<*, *>.opsError(message: String) {
     }
 }
 
+/**
+ * 首次加载中的骨架占位（P1-4）：两张骨架卡模拟"指标卡"的节奏。
+ * 只在 `loading && !loaded` 时显示——已有数据的刷新**不**回到骨架（避免整页闪烁），
+ * 刷新反馈由头部「刷新中…」按钮态承担。
+ */
+private fun ViewContainer<*, *>.opsSkeleton() {
+    skeletonCard(rows = 3)
+    skeletonCard(rows = 4)
+}
+
 // ============================================================
 // 概览
 // ============================================================
@@ -87,6 +97,7 @@ fun ViewContainer<*, *>.renderOpsOverview(stats: StatsState, meta: PluginMetaSta
         stats.refresh(ctx)
     }
     opsError(stats.loadError)
+    vif({ stats.loading && !stats.loaded }) { opsSkeleton() }
 
     groupedCard("实时") {
         metricRow("在线设备", "${stats.devicesOnline} / ${stats.devicesTotal}", "见过的设备总数在括号内")
@@ -166,6 +177,7 @@ fun ViewContainer<*, *>.renderOpsDevices(devices: DevicesState, ctx: Pager) {
         devices.refresh(ctx)
     }
     opsError(devices.loadError)
+    vif({ devices.loading && !devices.loaded }) { opsSkeleton() }
 
     vif({ devices.loaded && devices.devices.size == 0 }) {
         textNote(
@@ -263,6 +275,7 @@ fun ViewContainer<*, *>.renderOpsSessions(sessions: SessionsState, ctx: Pager) {
         sessions.refresh(ctx)
     }
     opsError(sessions.loadError)
+    vif({ sessions.loading && !sessions.loaded }) { opsSkeleton() }
 
     vif({ sessions.loaded && sessions.sessions.size == 0 }) {
         textNote(
@@ -326,6 +339,7 @@ fun ViewContainer<*, *>.renderOpsConversations(conversations: ConversationsState
         conversations.refresh(ctx)
     }
     opsError(conversations.loadError)
+    vif({ conversations.loading && !conversations.loaded }) { opsSkeleton() }
 
     groupedCard("按设备筛选") {
         labeledField(
@@ -433,6 +447,7 @@ fun ViewContainer<*, *>.renderOpsUsage(usage: UsageState, ctx: Pager) {
         usage.refresh(ctx)
     }
     opsError(usage.loadError)
+    vif({ usage.loading && !usage.loaded }) { opsSkeleton() }
 
     groupedCard("累计（自本次启动）") {
         metricRow("已计量轮次", "${usage.globalTurns}", "只有上游返回 usage 的轮次才计入")
@@ -508,6 +523,7 @@ fun ViewContainer<*, *>.renderOpsMetrics(metrics: MetricsState, ctx: Pager) {
         metrics.refresh(ctx)
     }
     opsError(metrics.loadError)
+    vif({ metrics.loading && !metrics.loaded }) { opsSkeleton() }
 
     groupedCard("整轮延迟（最近 200 轮）") {
         val hasSamples = metrics.turnSamples > 0L

@@ -93,6 +93,40 @@ fun ViewContainer<*, *>.groupedCard(title: String, withDivider: Boolean = true, 
     }
 }
 
+/**
+ * 骨架卡片（P1-4 加载态）：[groupedCard] 同外观，内容为 `rows` 条灰条占位
+ * （宽度从满到窄，模拟"标题 + 指标行"的视觉节奏）。
+ *
+ * 刻意**不做 shimmer 动画**：跨端动画实现成本高（各端渲染管线不同），静态灰条已能
+ * 明确表达"内容在路上"——与 [groupedCard] 同宽高节奏，数据到达后切换无跳动。
+ * 用法：运维页在 `loading && !loaded` 时先渲染 1~2 张骨架（见 OpsPages 的 opsSkeleton）。
+ */
+fun ViewContainer<*, *>.skeletonCard(rows: Int = 3) {
+    View {
+        attr {
+            flexDirectionColumn()
+            backgroundColor(AdminColors.cardBg)
+            borderRadius(AdminShape.radiusLg)
+            border(Border(1f, BorderStyle.SOLID, AdminColors.divider))
+            padding(AdminSpace.cardPadding)
+            marginBottom(AdminSpace.gutter)
+        }
+        // 骨架条：高 12 圆角灰条，Column 子项默认 stretch 满宽（同 dividerH），
+        // 用 marginRight 递减视觉宽度（0/24/48…），模拟"标题 + 指标行"的层次
+        for (i in 0 until rows) {
+            View {
+                attr {
+                    height(12f)
+                    borderRadius(AdminShape.radiusPill)
+                    backgroundColor(AdminColors.divider)
+                    marginRight(i * AdminSpace.xl)
+                    marginTop(if (i == 0) 0f else AdminSpace.xs)
+                }
+            }
+        }
+    }
+}
+
 // ===================== 卡片行 =====================
 
 /**

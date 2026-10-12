@@ -2,6 +2,7 @@ package com.xiaozhi.admin
 
 import com.tencent.kuikly.core.annotations.Page
 import com.tencent.kuikly.core.base.ViewBuilder
+import com.tencent.kuikly.core.base.ViewContainer
 import com.tencent.kuikly.core.directives.vif
 import com.tencent.kuikly.core.pager.Pager
 import com.tencent.kuikly.core.reactive.handler.observable
@@ -35,6 +36,13 @@ import com.tencent.kuikly.core.views.View
  *
  * 「配置」沿用既有的 `renderForm`（14 个 tab 的 Tabs+PageList），因此本页**没有**取代
  * [ConfigPage]：`page_name=config` 仍可单独打开（单页模式，便于嵌入式/调试场景）。
+ *
+ * ## 响应式布局（P1-4）
+ *
+ * 侧边栏按 `pagerData.pageViewWidth`（响应式）二态：宽屏（≥768）常驻左列；
+ * 窄屏隐藏常驻列，顶栏汉堡按钮开**抽屉**（绝对定位浮层：遮罩 + 面板，复用 ToastHost
+ * 范式；点遮罩/选中导航后收起）。两态共用 [adminSidebar]，视觉不漂移。
+ * 运维页首次加载显示骨架卡（`skeletonCard`，见 OpsPages）。
  *
  * ## 与 macOS `AdminShell` 的关系
  *
@@ -82,6 +90,12 @@ class AdminPage : Pager() {
     /** 当前选中的导航项（[AdminNav] 的 id）。 */
     var selectedSection by observable(AdminNav.DEFAULT)
 
+    /**
+     * 窄屏抽屉开关（P1-4）：`pagerData.pageViewWidth < [NARROW_BREAKPOINT]` 时侧边栏
+     * 常驻列隐藏，改由顶栏汉堡按钮展开抽屉（绝对定位浮层，点遮罩/选中导航后收起）。
+     */
+    var drawerOpen by observable(false)
+
     /** 顶部弹出一条提示（成功=ok / 失败=error / 提示=info），3 秒后自动消失。 */
     fun showToast(message: String, level: String = "info") = toast.show(message, level)
 
@@ -109,6 +123,10 @@ class AdminPage : Pager() {
         // 若 macOS 直接打开本页（`?page_name=admin`），保留 36pt 避开窗口按钮。
         val isH5 = pagerData.params.optString("is_H5", "").isNotEmpty()
         val topInset = if (isH5) 0f else 36f
+        // 窄屏判定（P1-4）：pageViewWidth 是响应式字段，但**直接访问只在 body 顶层合法**
+        // （@DslMarker 屏蔽嵌套 builder 闭包对 pagerData 的访问），故收敛成顶层 lambda，
+        // 嵌套 vif 里一律经 isNarrow() 求值——窗口 resize 跨过断点时自动 常驻 ⇄ 抽屉 切换。
+        val isNarrow = { pagerData.pageViewWidth < NARROW_BREAKPOINT }
         return {
             attr {
                 flex(1f)
@@ -122,44 +140,16 @@ class AdminPage : Pager() {
                     flexDirectionRow()
                 }
 
-                // ===== 侧边栏 =====
-                View {
-                    attr {
-                        width(240f)
-                        flexDirectionColumn()
-                        backgroundColor(AdminColors.sidebarBg)
-                        paddingTop(topInset)
-                    }
-                    // ⚠️ 非限定调用：接收者必须是侧边栏 View，导航项才会挂进侧边栏
-                    // ⚠️ 选中态传 lambda（在 attr/vif 闭包内读取 observable），点击后高亮才响应式
-                    // 导航表是编译期常量、不会变，用普通 for 即可（`vfor` 是给 ObservableList 的）
-                    for (item in AdminNav.all) {
-                        sidebarItem(
-                            item.label,
-                            { ctx.selectedSection == item.id },
-                            showDot = { item.id == "config" && ctx.form.dirty },
-                        ) {
-                            ctx.selectedSection = item.id
-                        }
-                    }
-                    // 底部弹性占位 + 版本信息
-                    View { attr { flex(1f) } }
-                    Text {
+                // ===== 侧边栏：宽屏常驻；窄屏隐藏（改顶栏汉堡 + 抽屉浮层，见文件末尾）=====
+                vif({ !isNarrow() }) {
+                    // ⚠️ 非限定调用：接收者必须是本容器，侧边栏节点才会挂进主行
+                    adminSidebar(ctx, topInset)
+                    // 侧边栏右侧 1px 分隔
+                    View {
                         attr {
-                            fontSize(AdminType.micro)
-                            color(AdminColors.textTertiary)
-                            marginLeft(AdminSpace.md)
-                            marginBottom(AdminSpace.md)
-                            text("小智服务端 · 管理台")
+                            width(1f)
+                            backgroundColor(AdminColors.divider)
                         }
-                    }
-                }
-
-                // 侧边栏右侧 1px 分隔
-                View {
-                    attr {
-                        width(1f)
-                        backgroundColor(AdminColors.divider)
                     }
                 }
 
@@ -173,6 +163,12 @@ class AdminPage : Pager() {
 
                     largeTitleBar(
                         title = { AdminNav.label(ctx.selectedSection) },
+                        // 窄屏：汉堡按钮开抽屉（宽屏 vif 不渲染，常驻侧边栏承担导航）
+                        leading = {
+                            vif({ isNarrow() }) {
+                                hamburgerButton { ctx.drawerOpen = true }
+                            }
+                        },
                         trailing = {
                             vif({ ctx.selectedSection == "config" && ctx.form.conflict }) {
                                 // 过期写入（409）：草稿仍在本地，给一个「重新加载」出口
@@ -229,8 +225,121 @@ class AdminPage : Pager() {
                 }
             }
 
+            // ===== 窄屏抽屉浮层（P1-4，复用 ToastHost 的绝对定位范式）=====
+            // zIndex 8/9 < ToastHost 的 10：toast 永远盖在抽屉之上。v1 直接出现/消失
+            // 不做位移动画——跨端动画成本高，"能用、可关"优先。
+            vif({ isNarrow() && ctx.drawerOpen }) {
+                // 遮罩：点击任意处关闭
+                View {
+                    attr {
+                        absolutePosition(top = 0f, left = 0f, right = 0f, bottom = 0f)
+                        backgroundColor(AdminColors.overlay)
+                        zIndex(8)
+                    }
+                    event { click { ctx.drawerOpen = false } }
+                }
+                // 抽屉面板：左侧滑出位（内部 adminSidebar 自带顶部避让 paddingTop）
+                View {
+                    attr {
+                        absolutePosition(top = 0f, left = 0f, bottom = 0f)
+                        width(240f)
+                        backgroundColor(AdminColors.sidebarBg)
+                        zIndex(9)
+                    }
+                    adminSidebar(ctx, topInset)
+                }
+            }
+
             // 顶部浮动 toast：必须放在**页面根容器**最后（绝对定位，不占高度、盖在内容之上）
             ToastHost(ctx.toast)
+        }
+    }
+}
+
+/** 窄屏断点（P1-4）：低于此宽度侧边栏改抽屉。与 twoPane 的 900 双列断点各自独立。 */
+private const val NARROW_BREAKPOINT = 768f
+
+/**
+ * 侧边栏（宽屏常驻列与窄屏抽屉**共用**）：分组标题 + 导航项 + 底部版本行。
+ * 从 body 内联代码抽出（P1-4）：抽屉与常驻列必须是同一个组件，视觉才不会漂移。
+ *
+ * ⚠️ 非限定调用（接收者 = 目标容器）；导航表是编译期常量用普通 for；
+ * ⚠️ 选中态传 lambda（在闭包内读取 observable），点击后高亮才响应式。
+ */
+private fun ViewContainer<*, *>.adminSidebar(ctx: AdminPage, topInset: Float) {
+    View {
+        attr {
+            width(240f)
+            flexDirectionColumn()
+            backgroundColor(AdminColors.sidebarBg)
+            paddingTop(topInset)
+        }
+        // 分组标题在 group 变化处插入（AdminNav.init 已护栏：同组必须相邻声明）
+        var lastGroup = ""
+        for (item in AdminNav.all) {
+            if (item.group != lastGroup) {
+                lastGroup = item.group
+                navGroupHeader(item.group)
+            }
+            sidebarItem(
+                item.label,
+                { ctx.selectedSection == item.id },
+                showDot = { item.id == "config" && ctx.form.dirty },
+            ) {
+                ctx.selectedSection = item.id
+                // 窄屏抽屉：选中导航后收起（宽屏 drawerOpen 恒为 false，无副作用）
+                ctx.drawerOpen = false
+            }
+        }
+        // 底部弹性占位 + 版本信息
+        View { attr { flex(1f) } }
+        Text {
+            attr {
+                fontSize(AdminType.micro)
+                color(AdminColors.textTertiary)
+                marginLeft(AdminSpace.md + AdminSpace.sm)
+                marginBottom(AdminSpace.md)
+                text("小智服务端 · 管理台")
+            }
+        }
+    }
+}
+
+/** 侧边栏分组小标题（P1-4）：micro 灰字，左缘对齐导航项文字（sm 外距 + md 内距 = 28）。 */
+private fun ViewContainer<*, *>.navGroupHeader(title: String) {
+    Text {
+        attr {
+            fontSize(AdminType.micro)
+            color(AdminColors.textTertiary)
+            marginLeft(AdminSpace.md + AdminSpace.sm)
+            marginTop(AdminSpace.md)
+            marginBottom(AdminSpace.xs)
+            text(title)
+        }
+    }
+}
+
+/** 汉堡按钮（窄屏开抽屉）：44x44 触控目标内画三条 2px 横线，右留 sm 与标题隔开。 */
+private fun ViewContainer<*, *>.hamburgerButton(onClick: () -> Unit) {
+    View {
+        attr {
+            width(44f)
+            height(44f)
+            alignItemsCenter()
+            justifyContentCenter()
+            marginRight(AdminSpace.sm)
+        }
+        event { click { onClick() } }
+        for (i in 0 until 3) {
+            View {
+                attr {
+                    width(18f)
+                    height(2f)
+                    borderRadius(AdminShape.radiusPill)
+                    backgroundColor(AdminColors.textPrimary)
+                    marginTop(if (i == 0) 0f else 4f)
+                }
+            }
         }
     }
 }
