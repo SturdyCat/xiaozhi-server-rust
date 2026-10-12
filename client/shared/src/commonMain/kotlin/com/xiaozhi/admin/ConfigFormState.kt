@@ -23,7 +23,7 @@ import com.tencent.kuikly.core.views.View
  * - baseUrl：请求基址前缀。web（h5App）由 server 同域托管，保持默认 "" → 相对路径 /api/config；
  *   macOS 测试台跨机访问时由 ConnectState 传入已连接服务器的绝对基址（如 http://192.168.1.10:8000）。
  * - 任意字段变更时 dirty=true（在 onChange 里设）。
- * - 渲染见文件底部的 ViewContainer.renderForm(form) 扩展。
+ * - 渲染见文件底部的 ViewContainer.renderConfigLayout(form) 扩展。
  *
  * ⚠️ Kuikly DSL 父子绑定机制：View{} 等组件是 ViewContainer 的扩展函数，静态绑定到
  * 「词法作用域最近的接收者」。因此渲染函数必须是 ViewContainer 扩展、并在目标容器
@@ -212,11 +212,26 @@ class ConfigFormState(private val scope: PagerScope) {
     /// 完成态回落的代际号：连续多次保存时，只允许**最后一次**安排的定时器清状态。
     private var saveResultSeq = 0
 
-    /** 配置页标签页 UI 状态（Server/Audio/ASR/VAD/TTS/LLM/指令/AIUI/灵魂/记忆 十个 tab，见 renderForm）。 */
-    val tabUi = TabUiState(scope)
-
     /** 当前展开的下拉（TTS engine 选择等，"" = 全部收起）；放状态类避免 Pager body 重建丢失展开态。 */
     var openDropdown by scope.observable("")
+
+    /** 配置子导航当前选中的 section（替代 tabbedPanel 的 tabIndex；默认落到 Server）。 */
+    private var _configSection by scope.observable("server")
+    /** 与 [_configSection] 同步的单元素 ObservableList，供右侧内容 `vfor` 响应式重建。 */
+    val configSectionList: ObservableList<String> by scope.observableList()
+    init { configSectionList.add(_configSection) }
+    var configSection: String
+        get() = _configSection
+        set(v) {
+            if (_configSection != v) {
+                _configSection = v
+                configSectionList.clear()
+                configSectionList.add(v)
+            }
+        }
+
+    /** 配置搜索框内容（为空 = 不筛选，按分组展示；非空 = 平铺命中项）。 */
+    var configSearch by scope.observable("")
 
     // ============================================================
     // TTS 引擎注册表（本地 / 远程两组；未来新增引擎/供应商只改这里 + 服务端）
@@ -642,7 +657,7 @@ class ConfigFormState(private val scope: PagerScope) {
     }
 
     // ============================================================
-    // 渲染：见文件底部 ViewContainer.renderForm(form) 扩展
+    // 渲染：见文件底部 ViewContainer.renderConfigLayout(form) 扩展
     // ============================================================
 }
 

@@ -49,11 +49,7 @@ class ConfigPage : Pager() {
         // Kuikly DSL 约定：嵌套容器闭包内无法隐式访问 Pager 成员（@DslMarker），
         // 用局部 val ctx 捕获 Pager 取状态；组件扩展则在目标容器闭包内非限定调用。
         val ctx = this
-        // pageItem 尺寸（官方 PageList 要求显式设置，见 tabbedPanel 注释）：
-        // 宽 = 窗口宽；高 = 窗口高 - 标题栏(64) - 分隔(1) - tab栏(44)。
-        // ⚠️ lambda 定义在 body 顶层：DslMarker 会屏蔽 return 块内嵌套闭包对 Pager 成员的隐式访问。
-        val pageWidth = { pagerData.pageViewWidth }
-        val pageHeight = { pagerData.pageViewHeight - 109f }
+        // ⚠️ 配置布局内部自管尺寸（DslMarker 仅屏蔽嵌套闭包对 Pager 成员的隐式访问，不影响此处）。
         return {
             attr {
                 flex(1f)
@@ -86,16 +82,14 @@ class ConfigPage : Pager() {
                 }
             })
 
-            // 配置标签页（tabbedPanel：官方 Tabs+PageList；页签由 ConfigSections 常量表驱动）
-            renderForm(
+            // 配置改为「左侧分组导航 + 右侧单 section」两栏布局（替代 14 个平铺 tab）
+            renderConfigLayout(
                 ctx.form,
                 ctx.plugins,
                 ctx.mcpTools,
                 ctx.ota,
                 ctx.toast,
                 ctx,
-                pageWidth = pageWidth,
-                pageHeight = pageHeight,
             )
 
             // 顶部浮动 toast（跨端统一，3 秒自动消失）：必须放在**页面根容器**最后——

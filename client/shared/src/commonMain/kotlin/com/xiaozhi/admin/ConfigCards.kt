@@ -2,6 +2,7 @@ package com.xiaozhi.admin
 
 import com.tencent.kuikly.core.base.PagerScope
 import com.tencent.kuikly.core.base.ViewContainer
+import com.tencent.kuikly.core.directives.vfor
 import com.tencent.kuikly.core.directives.vif
 import com.tencent.kuikly.core.module.NetworkModule
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
@@ -10,61 +11,205 @@ import com.tencent.kuikly.core.reactive.collection.ObservableList
 import com.tencent.kuikly.core.reactive.handler.observable
 import com.tencent.kuikly.core.reactive.handler.observableList
 import com.tencent.kuikly.core.timer.setTimeout
+import com.tencent.kuikly.core.base.Border
+import com.tencent.kuikly.core.base.BorderStyle
+import com.tencent.kuikly.core.views.Input
+import com.tencent.kuikly.core.views.Scroller
 import com.tencent.kuikly.core.views.Text
 import com.tencent.kuikly.core.views.View
 
 /**
- * 配置页主体：官方 Tabs + PageList，页签**由 [ConfigSections] 常量表驱动**（P5，§5.9）。
+ * 配置页主体（P5 → 重组为「左侧分组导航 + 右侧单 section」两栏布局，替代原先 14 个平铺 tab）。
  *
- * 新增/调整一个 tab：改 `ConfigSections.all` + 在下面的 `when` 里加一条分支。
- * `meta` 是总览页的数据源（`GET /api/plugins`，只读，不参与表单回传）；
- * `mcp` 是「MCP 工具」页的数据源（`GET /api/mcp/tools`，同样只读）；
- * `ota` 是「OTA」页的数据源（固件托管清单 + 上传/删除，**不写 `/api/config`**）；
- * `toast` 只用来弹上传/删除结果（顶部浮动 toast 由页面根部渲染）。
+ * ## 为什么从 tab 改成两栏导航
  *
- * ⚠️ 内容写在传给 `TabPage` 的 lambda 里（而不是先装进 `when` 再返回 ViewBuilder）：
- * Kuikly 的 `ViewBuilder` 接收者由调用点的期望类型推断，绕一层会丢失（实测编译报
- * "receiver type mismatch"），届时 `serverConfigCard(...)` 这类 ViewContainer 扩展全都调不动。
+ * 14 个平铺 tab 既挤占横向空间、又无法体现"这些配置属于哪条链路"的层次，用户反映"无从下手"。
+ * 改为 macOS 系统设置式的**左侧分组导航**（服务与接入 / 语音与对话 / 智能体）+ 顶部**搜索框**，
+ * 右侧只渲染当前选中的单个 section——既压缩了导航密度，又让"Server 属于服务接入、TTS 属于语音链路"
+ * 一目了然。所有 `*ConfigCard` / `overviewCard` / `mcpToolsCard` / `otaCard` 内容函数原样复用，
+ * 只是从"全部塞进 PageList"变为"按选中按需渲染"。
+ *
+ * 数据源语义不变：`meta` 总览只读、`mcp` 工具只读、`ota` 固件（不写 `/api/config`）、`toast` 弹结果。
+ *
+ * ⚠️ Kuikly DSL 约束（与渲染扩展同源）：`ViewBuilder` 接收者由调用点推断，渲染扩展必须在
+ * 目标容器闭包内**非限定**调用，否则节点会逃逸到根容器导致布局错乱。
  */
-fun ViewContainer<*, *>.renderForm(
+fun ViewContainer<*, *>.renderConfigLayout(
     form: ConfigFormState,
     meta: PluginMetaState,
     mcp: McpToolsState,
     ota: OtaState,
     toast: ToastState,
     ctx: Pager,
-    pageWidth: () -> Float,
-    pageHeight: () -> Float,
 ) {
-    tabbedPanel(
-        ui = form.tabUi,
-        pageWidth = pageWidth,
-        pageHeight = pageHeight,
-        pages = ConfigSections.all.map { d ->
-            TabPage(d.label) {
-                when (d.id) {
-                    "overview" -> overviewCard(meta, ctx)
-                    "mcp" -> mcpToolsCard(mcp, ctx)
-                    "ota" -> otaCard(ota, toast, ctx)
-                    "server" -> serverConfigCard(form)
-                    "audio" -> audioConfigCard(form)
-                    "asr" -> asrConfigCard(form)
-                    "vad" -> vadConfigCard(form)
-                    "tts" -> ttsConfigCard(form, ctx)
-                    "llm" -> llmConfigCard(form)
-                    "command" -> commandConfigCard(form)
-                    "wakeup" -> wakeupConfigCard(form)
-                    "aiui" -> aiuiConfigCard(form)
-                    "soul" -> soulConfigCard(form, ctx)
-                    "memory" -> memoryConfigCard(form, ctx)
-                    // 未注册内容不要静默留白（"新加了 section 却忘了写内容"会表现成点进去什么都没有）
-                    else -> groupedCard("未知配置页") {
-                        textNote("管理页没有为 section「${d.id}」注册内容（请检查 ConfigSections.all）。")
+    View {
+        attr {
+            flex(1f)
+            flexDirectionRow()
+        }
+
+        // ===== 左侧：搜索 + 分组导航 =====
+        View {
+            attr {
+                width(220f)
+                flexDirectionColumn()
+                backgroundColor(AdminColors.sidebarBg)
+                paddingTop(AdminSpace.md)
+            }
+            // 搜索框（绑定 form.configSearch：空 = 分组展示 / 非空 = 平铺命中项）
+            configSearchField(form)
+            Scroller {
+                attr {
+                    flex(1f)
+                    paddingLeft(AdminSpace.sm)
+                    paddingRight(AdminSpace.sm)
+                    paddingBottom(AdminSpace.lg)
+                }
+                // 搜索态：平铺命中项（无分组标题）
+                vif({ form.configSearch.isNotBlank() }) {
+                    val hits = ConfigSections.search(form.configSearch)
+                    if (hits.isEmpty()) {
+                        textNote("没有匹配「${form.configSearch}」的配置项", micro = true)
+                    } else {
+                        for (d in hits) {
+                            sidebarItem(
+                                d.label,
+                                isSelected = { form.configSection == d.id },
+                                onClick = { form.configSection = d.id },
+                            )
+                        }
+                    }
+                }
+                // 分组态：置顶项 + 三个分组
+                vif({ form.configSearch.isBlank() }) {
+                    for (d in ConfigSections.pinned) {
+                        sidebarItem(
+                            d.label,
+                            isSelected = { form.configSection == d.id },
+                            onClick = { form.configSection = d.id },
+                        )
+                    }
+                    for ((gid, glabel) in ConfigSections.groups) {
+                        configGroupHeader(glabel)
+                        for (d in ConfigSections.sectionsIn(gid)) {
+                            sidebarItem(
+                                d.label,
+                                isSelected = { form.configSection == d.id },
+                                onClick = { form.configSection = d.id },
+                            )
+                        }
                     }
                 }
             }
-        },
-    )
+        }
+
+        // 左栏右侧 1px 分隔
+        View {
+            attr {
+                width(1f)
+                backgroundColor(AdminColors.divider)
+            }
+        }
+
+        // ===== 右侧：当前选中的单个 section =====
+        View {
+            attr {
+                flex(1f)
+                flexDirectionColumn()
+                backgroundColor(AdminColors.windowBg)
+            }
+            opsScroller {
+                // ⚠️ 用 vfor 包一层：configSection 是多选一（boolean 不会翻转），普通闭包不会随它重渲染；
+                // vfor 监测到列表元素变化会重建该唯一项，从而切到对应 section 内容（否则点击导航不刷新右侧）。
+                vfor({ form.configSectionList }) { sectionId ->
+                    renderConfigSection(form, meta, mcp, ota, toast, ctx, sectionId)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 渲染单个配置 section（按 id 分发到既有卡片函数）。
+ * 把 renderForm 里"全部 14 页塞进 PageList"的 `when` 收敛为"按需渲染一个"，
+ * 卡片函数本身零改动、零重复。
+ */
+fun ViewContainer<*, *>.renderConfigSection(
+    form: ConfigFormState,
+    meta: PluginMetaState,
+    mcp: McpToolsState,
+    ota: OtaState,
+    toast: ToastState,
+    ctx: Pager,
+    id: String,
+) {
+    when (id) {
+        "overview" -> overviewCard(meta, ctx)
+        "mcp" -> mcpToolsCard(mcp, ctx)
+        "ota" -> otaCard(ota, toast, ctx)
+        "server" -> serverConfigCard(form)
+        "audio" -> audioConfigCard(form)
+        "asr" -> asrConfigCard(form)
+        "vad" -> vadConfigCard(form)
+        "tts" -> ttsConfigCard(form, ctx)
+        "llm" -> llmConfigCard(form)
+        "command" -> commandConfigCard(form)
+        "wakeup" -> wakeupConfigCard(form)
+        "aiui" -> aiuiConfigCard(form)
+        "soul" -> soulConfigCard(form, ctx)
+        "memory" -> memoryConfigCard(form, ctx)
+        // 未注册内容不要静默留白（"新加了 section 却忘了写内容"会表现成点进去什么都没有）
+        else -> groupedCard("未知配置页") {
+            textNote("管理页没有为 section「$id」注册内容（请检查 ConfigSections.all）。")
+        }
+    }
+}
+
+/** 配置左侧导航的搜索框（绑定 form.configSearch，输入即筛选）。 */
+fun ViewContainer<*, *>.configSearchField(form: ConfigFormState) {
+    View {
+        attr {
+            height(40f)
+            flexDirectionRow()
+            alignItemsCenter()
+            backgroundColor(AdminColors.fieldBg)
+            border(Border(1f, BorderStyle.SOLID, AdminColors.divider))
+            borderRadius(AdminShape.radiusSm)
+            marginLeft(AdminSpace.sm)
+            marginRight(AdminSpace.sm)
+            marginBottom(AdminSpace.sm)
+            paddingLeft(AdminSpace.sm)
+            paddingRight(AdminSpace.sm)
+        }
+        Input {
+            attr {
+                flex(1f)
+                height(40f)
+                backgroundColor(AdminColors.transparent)
+                fontSize(AdminType.body)
+                color(AdminColors.textPrimary)
+                text(form.configSearch)
+                placeholder("搜索配置项…")
+            }
+            event { textDidChange { params -> form.configSearch = params.text } }
+        }
+    }
+}
+
+/** 配置左侧导航的分组标题（如「语音与对话」）。 */
+fun ViewContainer<*, *>.configGroupHeader(label: String) {
+    Text {
+        attr {
+            fontSize(AdminType.micro)
+            fontWeightMedium()
+            color(AdminColors.textTertiary)
+            text(label)
+            marginLeft(AdminSpace.sm)
+            marginRight(AdminSpace.sm)
+            marginTop(AdminSpace.md)
+            marginBottom(AdminSpace.xs)
+        }
+    }
 }
 
 // ============================================================

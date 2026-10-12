@@ -189,15 +189,14 @@ class AdminShell : Pager() {
                             )
                         }
                         vif({ ctx.selectedSection == "config" }) {
-                            renderForm(
+                            // 配置改为「左侧分组导航 + 右侧单 section」两栏布局（替代 14 个平铺 tab）
+                            renderConfigLayout(
                                 ctx.form,
                                 ctx.plugins,
                                 ctx.mcpTools,
                                 ctx.ota,
                                 ctx.toast,
                                 ctx,
-                                pageWidth = contentPageWidth,
-                                pageHeight = contentPageHeight,
                             )
                         }
                     }

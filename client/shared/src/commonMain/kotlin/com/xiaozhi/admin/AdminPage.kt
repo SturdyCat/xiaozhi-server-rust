@@ -104,9 +104,6 @@ class AdminPage : Pager() {
         // 若 macOS 直接打开本页（`?page_name=admin`），保留 36pt 避开窗口按钮。
         val isH5 = pagerData.params.optString("is_H5", "").isNotEmpty()
         val topInset = if (isH5) 0f else 36f
-        // 内容区尺寸：宽 = 窗口宽 - 侧边栏(240) - 分隔(1)；高 = 窗口高 - 顶部避让 - 标题栏(64) - 分隔(1)
-        val contentPageWidth = { pagerData.pageViewWidth - 241f }
-        val contentPageHeight = { pagerData.pageViewHeight - 65f - topInset }
         return {
             attr {
                 flex(1f)
@@ -211,16 +208,14 @@ class AdminPage : Pager() {
                         opsScroller { renderOpsUsage(ctx.usage, ctx) }
                     }
                     vif({ ctx.selectedSection == "config" }) {
-                        // 配置用 tabbedPanel（Tabs + PageList），自带页内 Scroller，不再套 opsScroller
-                        renderForm(
+                        // 配置改为「左侧分组导航 + 右侧单 section」两栏布局（替代 14 个平铺 tab）
+                        renderConfigLayout(
                             ctx.form,
                             ctx.plugins,
                             ctx.mcpTools,
                             ctx.ota,
                             ctx.toast,
                             ctx,
-                            pageWidth = contentPageWidth,
-                            pageHeight = contentPageHeight,
                         )
                     }
                 }
