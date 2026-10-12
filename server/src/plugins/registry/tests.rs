@@ -69,6 +69,29 @@ fn capability_registry_is_complete_and_consistent() {
     }
 }
 
+/// ADVANCED_KEYS（P0-1 高级字段折叠）对账护栏：清单里的每个完整 key 都必须真实存在于
+/// 注册表字段（描述符私有字段 + 能力公共字段）。字段改名/删除时必须同步清单，
+/// 否则管理页折叠了一个不存在的字段（对账口径见 `full_field_key`）。
+#[test]
+fn advanced_keys_exist_in_registry() {
+    let mut all_keys = std::collections::HashSet::new();
+    for d in REGISTRY {
+        for f in d.fields {
+            all_keys.insert(full_field_key(d.fields_path, f.key));
+        }
+    }
+    for &cap in ALL_CAPABILITIES {
+        for (path, fields) in capability_common_fields(cap) {
+            for f in fields {
+                all_keys.insert(full_field_key(path, f.key));
+            }
+        }
+    }
+    for k in ADVANCED_KEYS {
+        assert!(all_keys.contains(*k), "ADVANCED_KEYS 中 {k} 不存在于注册表字段");
+    }
+}
+
 /// 必需能力必须有**可选中的**实现（否则启动必然失败且无从下手）。
 #[test]
 fn required_capabilities_have_selectable_impl() {

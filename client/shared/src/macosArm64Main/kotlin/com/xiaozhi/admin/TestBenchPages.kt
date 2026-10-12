@@ -228,7 +228,7 @@ private fun ViewContainer<*, *>.benchAsrPage(
         },
         right = {
             asrConfigCard(form)
-            vadConfigCard(form)
+            vadConfigCard(form, ctx)
         },
     )
 }
@@ -558,7 +558,7 @@ private fun ViewContainer<*, *>.benchLlmPage(
             }
         },
         right = {
-            llmConfigCard(form)
+            llmConfigCard(form, ctx)
         },
     )
 }

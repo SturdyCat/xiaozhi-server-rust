@@ -222,9 +222,9 @@ fun ViewContainer<*, *>.renderConfigSection(
         "server" -> serverConfigCard(form)
         "audio" -> audioConfigCard(form)
         "asr" -> asrConfigCard(form)
-        "vad" -> vadConfigCard(form)
+        "vad" -> vadConfigCard(form, ctx)
         "tts" -> ttsConfigCard(form, ctx)
-        "llm" -> llmConfigCard(form)
+        "llm" -> llmConfigCard(form, ctx)
         "command" -> commandConfigCard(form)
         "wakeup" -> wakeupConfigCard(form)
         "aiui" -> aiuiConfigCard(form)
@@ -269,6 +269,14 @@ fun ViewContainer<*, *>.configSearchField(form: ConfigFormState) {
 }
 
 /** 配置左侧导航的分组标题（如「语音与对话」）。 */
+/**
+ * 「高级选项」开关行（P0-1）：放在卡片基础字段之后，其后的 `vif({ form.showAdvanced })`
+ * 块即高级字段区。开关状态全局共享（同一时刻只看一个 section，无歧义）。
+ */
+fun ViewContainer<*, *>.advancedToggleRow(form: ConfigFormState) {
+    switchRow("显示高级选项", form.showAdvanced) { form.showAdvanced = !form.showAdvanced }
+}
+
 fun ViewContainer<*, *>.configGroupHeader(label: String) {
     Text {
         attr {
@@ -354,20 +362,36 @@ fun ViewContainer<*, *>.asrConfigCard(form: ConfigFormState) {
         labeledField("model", { form.asrModel }, { form.asrModel = it; form.markDirty() })
         labeledField("tokens", { form.asrTokens }, { form.asrTokens = it; form.markDirty() })
         labeledField("language", { form.asrLanguage }, { form.asrLanguage = it; form.markDirty() }, "auto/zh/en/ja/ko/yue")
-        switchRow("use_itn", form.asrUseItn == "true") {
-            form.toggleStringBool(form::asrUseItn)
-        }
-        labeledField("num_threads", { form.asrNumThreads }, { form.asrNumThreads = it; form.markDirty() })
         labeledField("provider", { form.asrProvider }, { form.asrProvider = it; form.markDirty() })
+        // ===== 高级（识别调优，默认折叠；P0-1）=====
+        advancedToggleRow(form)
+        vif({ form.showAdvanced }) {
+            switchRow("use_itn", form.asrUseItn == "true") {
+                form.toggleStringBool(form::asrUseItn)
+            }
+            labeledField("num_threads", { form.asrNumThreads }, { form.asrNumThreads = it; form.markDirty() })
+        }
     }
 }
 
-fun ViewContainer<*, *>.vadConfigCard(form: ConfigFormState) {
+fun ViewContainer<*, *>.vadConfigCard(form: ConfigFormState, ctx: Pager) {
     groupedCard("VAD") {
         labeledField("model", { form.vadModel }, { form.vadModel = it; form.markDirty() })
         labeledField("threshold", { form.vadThreshold }, { form.vadThreshold = it; form.markDirty() })
-        labeledField("min_silence_duration", { form.vadMinSilence }, { form.vadMinSilence = it; form.markDirty() })
-        labeledField("min_speech_duration", { form.vadMinSpeech }, { form.vadMinSpeech = it; form.markDirty() })
+        // ===== 高级（切句时序微调，默认折叠；P0-1）=====
+        advancedToggleRow(form)
+        vif({ form.showAdvanced }) {
+            labeledField("min_silence_duration", { form.vadMinSilence }, { form.vadMinSilence = it; form.markDirty() })
+            labeledField("min_speech_duration", { form.vadMinSpeech }, { form.vadMinSpeech = it; form.markDirty() })
+        }
+        dividerH()
+        // ===== 内联测试（P0-2）：构建引擎 + 首次检测延迟（真实 Silero 冷启动可达数秒）=====
+        actionRow {
+            secondaryButton("测试", loading = { form.testBusyVad }) { form.runInlineTest(ctx, "vad") }
+        }
+        vif({ form.testMsgVad.isNotEmpty() }) {
+            textNote(form.testMsgVad, tone = if (form.testMsgVad.startsWith("✓")) "tertiary" else "warn", micro = true)
+        }
     }
 }
 
@@ -395,20 +419,24 @@ fun ViewContainer<*, *>.ttsConfigCard(form: ConfigFormState, ctx: Pager) {
             },
         )
         // ===== 缓存（本地/远程通用）：按句缓存已编码下行 Opus 帧，命中时零合成延迟 =====
-        labeledField(
-            "cache_entries",
-            { form.ttsCacheEntries },
-            { form.ttsCacheEntries = it; form.markDirty() },
-            "256",
-            // 同段内档位不一致的例外：`[tts].engine` 是新会话生效，但缓存大小只能重启生效。
-            // 这类"例外字段"必须用 fieldNote（段级提示会把整段说成需重启）。
-            note = { form.schema.fieldNote("tts", "cache_entries") },
-        )
-        Text {
-            attr {
-                fontSize(AdminType.caption)
-                color(AdminColors.textTertiary)
-                text("缓存已合成句子的下行音频（跨会话共享），命中即免合成延迟；0 = 关闭。")
+        // 高级（缓存容量调优，默认折叠；P0-1）
+        advancedToggleRow(form)
+        vif({ form.showAdvanced }) {
+            labeledField(
+                "cache_entries",
+                { form.ttsCacheEntries },
+                { form.ttsCacheEntries = it; form.markDirty() },
+                "256",
+                // 同段内档位不一致的例外：`[tts].engine` 是新会话生效，但缓存大小只能重启生效。
+                // 这类"例外字段"必须用 fieldNote（段级提示会把整段说成需重启）。
+                note = { form.schema.fieldNote("tts", "cache_entries") },
+            )
+            Text {
+                attr {
+                    fontSize(AdminType.caption)
+                    color(AdminColors.textTertiary)
+                    text("缓存已合成句子的下行音频（跨会话共享），命中即免合成延迟；0 = 关闭。")
+                }
             }
         }
         // ===== 第二级：引擎 / 服务商（随方式联动）+ 各自字段 =====
@@ -582,7 +610,7 @@ fun ViewContainer<*, *>.ttsConfigCard(form: ConfigFormState, ctx: Pager) {
 }
 
 
-fun ViewContainer<*, *>.llmConfigCard(form: ConfigFormState) {
+fun ViewContainer<*, *>.llmConfigCard(form: ConfigFormState, ctx: Pager) {
     groupedCard("LLM") {
         // 无 backend 选择：LLM 恒为 OpenAI 兼容 HTTP（Responses API），mock 已移除
         labeledField("api_base", { form.llmApiBase }, { form.llmApiBase = it; form.markDirty() })
@@ -591,10 +619,22 @@ fun ViewContainer<*, *>.llmConfigCard(form: ConfigFormState) {
         labeledField("model", { form.llmModel }, { form.llmModel = it; form.markDirty() })
         // 系统提示词是散文输入：官方 TextArea 多行（此前用单行 Input 输不了换行）
         labeledTextArea("system_prompt", { form.llmSystemPrompt }, { form.llmSystemPrompt = it; form.markDirty() }, height = 100f)
-        labeledField("max_history", { form.llmMaxHistory }, { form.llmMaxHistory = it; form.markDirty() })
         labeledField("temperature", { form.llmTemperature }, { form.llmTemperature = it; form.markDirty() })
         switchRow("stream（SSE 流式）", form.llmStream == "true") {
             form.toggleStringBool(form::llmStream)
+        }
+        // ===== 高级（上下文长度调优，默认折叠；P0-1）=====
+        advancedToggleRow(form)
+        vif({ form.showAdvanced }) {
+            labeledField("max_history", { form.llmMaxHistory }, { form.llmMaxHistory = it; form.markDirty() })
+        }
+        dividerH()
+        // ===== 内联测试（P0-2）：按磁盘最新配置测连通性 + 首 token 延迟（测的是已保存值）=====
+        actionRow {
+            secondaryButton("测试", loading = { form.testBusyLlm }) { form.runInlineTest(ctx, "llm") }
+        }
+        vif({ form.testMsgLlm.isNotEmpty() }) {
+            textNote(form.testMsgLlm, tone = if (form.testMsgLlm.startsWith("✓")) "tertiary" else "warn", micro = true)
         }
     }
 }

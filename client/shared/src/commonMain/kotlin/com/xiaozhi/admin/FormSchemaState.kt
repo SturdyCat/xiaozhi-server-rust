@@ -29,6 +29,9 @@ class FormSchemaState(private val scope: PagerScope) {
     /** `"<段.子段.字段>" -> 提示文案`（只收 `hot != live` 的字段）。 */
     private val hots = mutableMapOf<String, String>()
 
+    /** 「高级字段」完整 key 集合（服务端 `ADVANCED_KEYS` 投影，管理页默认折叠）。 */
+    private val advancedKeys = mutableSetOf<String>()
+
     /** `"<段>" -> 该段整体档位提示`（段内字段取最严格）。 */
     private val sectionHints = mutableMapOf<String, String>()
 
@@ -50,6 +53,7 @@ class FormSchemaState(private val scope: PagerScope) {
             val nextHots = mutableMapOf<String, String>()
             val nextSections = mutableMapOf<String, String>()
             val nextRanks = mutableMapOf<String, Int>()
+            val nextAdvanced = mutableSetOf<String>()
             // ① 非能力段（[server] / [audio]）：服务端 `APP_SECTION_HOT` 的投影，无字段表
             val appSections = data.optJSONArray("app_sections")
             if (appSections != null) {
@@ -71,14 +75,14 @@ class FormSchemaState(private val scope: PagerScope) {
                     if (common != null) {
                         for (j in 0 until common.length()) {
                             val seg = common.optJSONObject(j) ?: continue
-                            collect(nextHots, nextSections, nextRanks, seg)
+                            collect(nextHots, nextSections, nextRanks, nextAdvanced, seg)
                         }
                     }
                     val impls = cap.optJSONArray("implementations")
                     if (impls != null) {
                         for (j in 0 until impls.length()) {
                             val im = impls.optJSONObject(j) ?: continue
-                            collect(nextHots, nextSections, nextRanks, im)
+                            collect(nextHots, nextSections, nextRanks, nextAdvanced, im)
                         }
                     }
                 }
@@ -87,6 +91,7 @@ class FormSchemaState(private val scope: PagerScope) {
             hots.clear(); hots.putAll(nextHots)
             sectionHints.clear(); sectionHints.putAll(nextSections)
             sectionRanks.clear(); sectionRanks.putAll(nextRanks)
+            advancedKeys.clear(); advancedKeys.addAll(nextAdvanced)
             version++
         }
     }
@@ -96,6 +101,7 @@ class FormSchemaState(private val scope: PagerScope) {
         into: MutableMap<String, String>,
         sectionHints: MutableMap<String, String>,
         sectionRanks: MutableMap<String, Int>,
+        advanced: MutableSet<String>,
         seg: JSONObject,
     ) {
         val path = seg.optJSONArray("fields_path") ?: return
@@ -106,13 +112,17 @@ class FormSchemaState(private val scope: PagerScope) {
             val f = fields.optJSONObject(i) ?: continue
             val key = f.optString("key", "")
             if (key.isEmpty()) continue
+            val fullKey = if (prefix.isEmpty()) key else "$prefix.$key"
             val hot = f.optString("hot", "")
             val strict = rank(hot)
             if (strict == 0) continue // live 不标注
-            into[if (prefix.isEmpty()) key else "$prefix.$key"] = f.optString("hot_hint", hot)
+            into[fullKey] = f.optString("hot_hint", hot)
             if (section.isNotEmpty() && strict > (sectionRanks[section] ?: -1)) {
                 sectionRanks[section] = strict
                 sectionHints[section] = f.optString("hot_hint", hot)
+            }
+            if (f.optBoolean("advanced", false)) {
+                advanced.add(fullKey)
             }
         }
     }
@@ -135,6 +145,15 @@ class FormSchemaState(private val scope: PagerScope) {
     fun fieldNote(path: String, key: String): String {
         val stamp = version // 建立响应式依赖（勿删，见上方注释）
         return if (stamp >= 0) hots["$path.$key"] ?: "" else ""
+    }
+
+    /**
+     * 字段是否为「高级字段」（服务端 `ADVANCED_KEYS` 投影；管理页默认折叠进高级区）。
+     * [path] / [key] 口径同 [fieldNote]；同样必须在闭包内调用（读 [version] 建立响应式依赖）。
+     */
+    fun fieldAdvanced(path: String, key: String): Boolean {
+        val stamp = version // 建立响应式依赖
+        return stamp >= 0 && advancedKeys.contains("$path.$key")
     }
 
     /**

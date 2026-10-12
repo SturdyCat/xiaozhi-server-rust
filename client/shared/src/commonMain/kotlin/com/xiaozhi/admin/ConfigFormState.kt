@@ -261,6 +261,54 @@ class ConfigFormState(private val scope: PagerScope) {
     /** 配置搜索框内容（为空 = 不筛选，按分组展示；非空 = 平铺命中项）。 */
     var configSearch by scope.observable("")
 
+    /** 「高级选项」展开开关（P0-1 折叠高级字段；跨 section 共享，同一时刻只看一个 section）。 */
+    var showAdvanced by scope.observable(false)
+
+    // ============================================================
+    // 内联配置测试（P0-2：POST /api/test/{llm,tts,vad}，行内延迟/错误反馈）
+    // ============================================================
+    var testBusyLlm by scope.observable(false)
+    var testBusyTts by scope.observable(false)
+    var testBusyVad by scope.observable(false)
+    var testMsgLlm by scope.observable("")
+    var testMsgTts by scope.observable("")
+    var testMsgVad by scope.observable("")
+
+    /**
+     * 内联配置测试：服务端按**磁盘最新配置** ad-hoc 构建引擎测量（不依赖 is_test WS 会话），
+     * Web 也可直接测 LLM 连通性 / TTS 与 VAD 延迟。结果行内展示首包延迟与总耗时。
+     */
+    fun runInlineTest(ctx: Pager, kind: String) {
+        when (kind) {
+            "llm" -> { if (testBusyLlm) return; testBusyLlm = true; testMsgLlm = "" }
+            "tts" -> { if (testBusyTts) return; testBusyTts = true; testMsgTts = "" }
+            else -> { if (testBusyVad) return; testBusyVad = true; testMsgVad = "" }
+        }
+        val body = JSONObject().apply { put("text", "你好") }
+        val headers = JSONObject().apply { put("Content-Type", "application/json") }
+        network(ctx).httpRequest("$serverBase/api/test/$kind", true, body, headers) { data, success, errorMsg, resp ->
+            val ok = success && (resp.statusCode == null || resp.statusCode in 200..299)
+            val state = data?.optString("state", "") ?: ""
+            val first = data?.optLong("first_packet_ms", -1) ?: -1
+            val elapsed = data?.optLong("elapsed_ms", -1) ?: -1
+            val err = data?.optString("error", "")?.takeIf { it.isNotEmpty() } ?: (errorMsg ?: "")
+            val line = when {
+                !ok -> "测试失败：${err.ifEmpty { "HTTP ${resp.statusCode}" }}"
+                state == "ok" -> buildString {
+                    append("✓ 通过")
+                    if (first >= 0) append(" · 首包 ${first}ms")
+                    if (elapsed >= 0) append(" · 总耗时 ${elapsed}ms")
+                }
+                else -> "不可用：$err"
+            }
+            when (kind) {
+                "llm" -> { testBusyLlm = false; testMsgLlm = line }
+                "tts" -> { testBusyTts = false; testMsgTts = line }
+                else -> { testBusyVad = false; testMsgVad = line }
+            }
+        }
+    }
+
     // ============================================================
     // TTS 引擎注册表（本地 / 远程两组；未来新增引擎/供应商只改这里 + 服务端）
     // ============================================================

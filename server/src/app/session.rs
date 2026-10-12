@@ -30,11 +30,20 @@ use crate::app::prefetch::PreparedAudio;
 use crate::app::protocol::{unwrap_uplink, BinVersion, ClientMessage, ServerMessage};
 use crate::app::transport::{IncomingFrame, Transport};
 use crate::engine::Engines;
-use crate::plugins::aiui::{AiuiSession, FullChainEngine, FullChainTurn};
+use crate::plugins::aiui::{FullChainEngine, FullChainTurn};
 use crate::plugins::asr::AsrEngine;
 use crate::plugins::command::CommandGate;
-use crate::plugins::vad::VadEngine;
 use crate::plugins::wakeup::WakeGreeting;
+
+/// 一条用户话语在进入 LLM 前的决策结果（文本侧管线 P0-4 的 Stop 信号，见
+/// `Session::decide_user_text`）。
+enum UtteranceDecision {
+    /// 继续 Stage 3（LLM 流水线 / AIUI 下行）。
+    Respond,
+    /// 指令闸门命中：副作用（告别语 + MCP 退下）**已在 Stage 2 内执行完**，
+    /// 外层段循环应终止——本批剩余语音段一并丢弃（用户已要求退下）。
+    CommandStop,
+}
 
 mod bench;
 mod command;
@@ -104,7 +113,7 @@ pub struct Session<'a, T: Transport> {
     downlink_ts: u32,
     test_recording: bool,
     test_buf: Vec<f32>,
-    vad: Box<dyn VadEngine>,
+    vad: crate::plugins::vad::pool::VadGuard,
     uplink_decoder: OpusFrameDecoder,
     real_audio: bool,
     /// hello.test=true 的测试台会话：唯一能发起 asr_test/tts_test/llm_test 的连接。
@@ -268,27 +277,51 @@ impl<'a, T: Transport> Session<'a, T> {
                 t0.elapsed().as_millis(),
                 user_text.chars().count()
             );
-            // 观测：记下这轮"它听到了什么"（管理页「会话 / 对话记录」）。放在指令闸门**之前**
-            // ——命中「退下」也是一句真实的话，不该在记录里凭空消失。
-            self.note_user_turn(&user_text);
-            // 事件总线（P0-5 叠加层）：用户消息入对话（与 note_user_turn 并列，互不影响）。
-            self.engines.event_bus.emit(crate::app::events::ServerEvent::MessageAdded {
-                session_id: self.session_id.clone(),
-                device_id: self.device_id.clone(),
-                role: "user".to_string(),
-                text: user_text.clone(),
-                elapsed_ms: None,
-            });
-            // 指令闸门（ASR → LLM **之间**）：命中即说告别语 + 用 MCP 让设备结束聆听，
-            // **一次 LLM 都不调用**。
-            // 本批剩余语音段一并丢弃（用户已经要求退下）。
-            if self.handle_command_gate(&user_text).await {
-                return;
-            }
-            if let Err(e) = self.stream_response(&user_text).await {
-                tracing::warn!("流水处理失败: {e}");
+            // 文本侧优先级管线（P0-4）：记录 → 指令闸门 → LLM（统一入口，见 decide_user_text）
+            match self.decide_user_text(&user_text).await {
+                UtteranceDecision::CommandStop => return, // 本批剩余语音段一并丢弃
+                UtteranceDecision::Respond => {
+                    if let Err(e) = self.stream_response(&user_text).await {
+                        tracing::warn!("流水处理失败: {e}");
+                    }
+                }
             }
         }
+    }
+
+    /// 一条用户话语在进入 LLM 前的决策结果（文本侧管线 P0-4 的 Stop 信号）。
+    /// 文本/控制侧优先级管线（P0-4）：一条用户话语的**有序**处理入口，
+    /// 级联流水线（`recognize_segments`）与 AIUI 全链路（`aiui_segments`）共用。
+    ///
+    /// Stage 顺序与语义（新增文本侧变换——记忆注入/敏感词/指令扩展——在此序列中按需
+    /// 插入，勿破坏相对顺序与 Stop 语义）：
+    ///
+    /// 1. **记录**（`note_user_turn` + MessageAdded 事件）：优先级最低但**必须先做**——
+    ///    被闸掉的话也是真实听到的话，记录不能丢；
+    /// 2. **指令闸门**（`[command]`，最高优先级，先于 LLM）：命中即**先执行副作用**
+    ///    （告别语 + MCP 让设备结束聆听）**再返回 Stop**，一次 LLM 都不调用；
+    /// 3. **响应**（调用方执行）：级联走 `stream_response`，AIUI 走 `aiui_downlink`。
+    ///
+    /// wakeup（`listen state=detect`）是独立消息类型（非 ASR 文本），优先级同样最高，
+    /// 在 `handle_text` 分支即拦截（早于任何 ASR/LLM），不进本管线。
+    ///
+    /// ⚠️ AIUI 路径此前**缺用户话语记录**（管理页对话记录看不见 AIUI 听到什么），
+    /// 统一入口后一并补齐（与级联流水线同一口径）。
+    async fn decide_user_text(&mut self, user_text: &str) -> UtteranceDecision {
+        // Stage 1：记录（注册表观测 + 事件总线叠加层，见 observe.rs / events.rs）
+        self.note_user_turn(user_text);
+        self.engines.event_bus.emit(crate::app::events::ServerEvent::MessageAdded {
+            session_id: self.session_id.clone(),
+            device_id: self.device_id.clone(),
+            role: "user".to_string(),
+            text: user_text.to_string(),
+            elapsed_ms: None,
+        });
+        // Stage 2：指令闸门（ASR → LLM **之间**）：命中即告别语 + MCP 退下，零 LLM 调用
+        if self.handle_command_gate(user_text).await {
+            return UtteranceDecision::CommandStop;
+        }
+        UtteranceDecision::Respond
     }
 
     /// AIUI 全链路：每段 = 一轮 oneshot 交互（识别 + 大模型 + 合成在 AIUI 云端闭环）。
@@ -316,15 +349,6 @@ impl<'a, T: Transport> Session<'a, T> {
             if turn.stt.trim().is_empty() {
                 continue; // 静音轮（云端 Silence 事件），同空识别结果处理
             }
-            // 事件总线（P0-5 叠加层）：AIUI 路径的用户消息——级联流水线在 `note_user_turn`
-            // 处 emit，此路径此前缺位，这里补齐（仍是纯观测，不改 AIUI 业务）。
-            self.engines.event_bus.emit(crate::app::events::ServerEvent::MessageAdded {
-                session_id: self.session_id.clone(),
-                device_id: self.device_id.clone(),
-                role: "user".to_string(),
-                text: turn.stt.clone(),
-                elapsed_ms: None,
-            });
             tracing::info!(
                 "session {session_id} AIUI 轮次完成：耗时 {}ms（识别 {} 字 / 回复 {} 字 / 音频 {} 字节）",
                 t0.elapsed().as_millis(),
@@ -332,13 +356,16 @@ impl<'a, T: Transport> Session<'a, T> {
                 turn.reply.chars().count(),
                 turn.audio.len()
             );
-            // 指令闸门同样适用于全链路：识别文本要等云端闭环回来才可见（本地没有 ASR 可拦），
-            // 因此这里只能"丢弃本轮云端回复"—但会话照样按指令断开（语义与级联流水线一致）。
-            if self.handle_command_gate(&turn.stt).await {
-                return;
-            }
-            if let Err(e) = self.aiui_downlink(&turn).await {
-                tracing::warn!("session {session_id} AIUI 下行失败: {e}");
+            // 文本侧优先级管线（P0-4）：与级联流水线共用统一入口（记录 + 指令闸门）。
+            // 识别文本要等云端闭环回来才可见（本地没有 ASR 可拦），因此命中指令时只能
+            // "丢弃本轮云端回复"—但会话照样按指令断开（语义与级联流水线一致）。
+            match self.decide_user_text(&turn.stt).await {
+                UtteranceDecision::CommandStop => return,
+                UtteranceDecision::Respond => {
+                    if let Err(e) = self.aiui_downlink(&turn).await {
+                        tracing::warn!("session {session_id} AIUI 下行失败: {e}");
+                    }
+                }
             }
         }
     }

@@ -268,11 +268,15 @@ fun ViewContainer<*, *>.memoryConfigCard(form: ConfigFormState, ctx: Pager) {
             labeledField("db_path（库文件，须在挂载卷内）", { sm.memoryDbPath }, { sm.memoryDbPath = it; form.markDirty() }, "/data/memory.db")
             labeledField("scope_prefix（作用域前缀）", { sm.memoryScopePrefix }, { sm.memoryScopePrefix = it; form.markDirty() }, "xiaozhi")
             labeledField("fresh_turn_count（近况轮数）", { sm.memoryFreshTurnCount }, { sm.memoryFreshTurnCount = it; form.markDirty() }, "5")
-            labeledField("recall_max_nodes（最多召回条数）", { sm.memoryRecallMaxNodes }, { sm.memoryRecallMaxNodes = it; form.markDirty() }, "6")
-            labeledField("recall_max_tokens（注入 token 预算）", { sm.memoryRecallMaxTokens }, { sm.memoryRecallMaxTokens = it; form.markDirty() }, "400")
-            labeledField("recall_budget_ms（召回耗时预算）", { sm.memoryRecallBudgetMs }, { sm.memoryRecallBudgetMs = it; form.markDirty() }, "300")
-            labeledField("maintenance_interval（维护间隔/轮）", { sm.memoryMaintenanceInterval }, { sm.memoryMaintenanceInterval = it; form.markDirty() }, "6")
-            labeledField("quarantine_max_attempts（抽取最大尝试）", { sm.memoryQuarantineMaxAttempts }, { sm.memoryQuarantineMaxAttempts = it; form.markDirty() }, "3")
+            // ===== 高级（检索预算与库运维调优，默认折叠；P0-1）=====
+            advancedToggleRow(form)
+            vif({ form.showAdvanced }) {
+                labeledField("recall_max_nodes（最多召回条数）", { sm.memoryRecallMaxNodes }, { sm.memoryRecallMaxNodes = it; form.markDirty() }, "6")
+                labeledField("recall_max_tokens（注入 token 预算）", { sm.memoryRecallMaxTokens }, { sm.memoryRecallMaxTokens = it; form.markDirty() }, "400")
+                labeledField("recall_budget_ms（召回耗时预算）", { sm.memoryRecallBudgetMs }, { sm.memoryRecallBudgetMs = it; form.markDirty() }, "300")
+                labeledField("maintenance_interval（维护间隔/轮）", { sm.memoryMaintenanceInterval }, { sm.memoryMaintenanceInterval = it; form.markDirty() }, "6")
+                labeledField("quarantine_max_attempts（抽取最大尝试）", { sm.memoryQuarantineMaxAttempts }, { sm.memoryQuarantineMaxAttempts = it; form.markDirty() }, "3")
+            }
             dropdownField(
                 label = "engine（引擎）",
                 currentLabel = {

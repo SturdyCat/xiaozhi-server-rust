@@ -9,6 +9,8 @@
 //! 但每帧都跑，调用方（[`crate::app::session`]）在解码后的音频循环里直接同步调用即可
 //! （不似 ASR/TTS 那样单次耗时数秒，无需 `spawn_blocking`）。
 
+pub mod pool;
+
 use serde::{Deserialize, Serialize};
 
 use crate::config::{canonical_engine, EngineSpec};

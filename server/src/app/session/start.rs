@@ -52,7 +52,7 @@ pub async fn run_session<T: Transport>(
             Err(e) => tracing::warn!("session {sid} 引擎热刷新任务异常: {e}"),
         }
     }
-    let vad = engines.new_vad()?;
+    let vad = engines.acquire_vad().await?;
     let uplink_decoder = OpusFrameDecoder::new(params.uplink_sr)?;
     let real_audio = engines.config.real_audio();
     // AIUI 全链路会话：sn = 前缀 + 会话短 id（云端个性化/上下文绑定，≤32 字符）

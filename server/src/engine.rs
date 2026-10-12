@@ -79,6 +79,9 @@ pub struct Engines {
     /// TTS 轮次 / 异常）。**叠加观测层**，与 `registry` 的 `note_*` 埋点并存，不是替换；
     /// 订阅者（大盘 / 审计，属 P1）独立消费，会话发布时**完全不感知**谁在听。
     pub event_bus: crate::app::events::EventBus,
+    /// VAD 实例池（P0-3）：复用昂贵的 Silero ONNX 实例（每会话借还，`acquire_vad`）。
+    /// 配置签名变了自动失效；详情见 `plugins/vad/pool` 模块注释。
+    pub vad_pool: crate::plugins::vad::pool::VadPool,
     /// 设备 MCP 工具注册表（按 `device_id` 存最近一次能力发现的结果；`GET /api/mcp/tools`）。
     /// 工具清单只存在于固件里且**只有设备连着时才问得到**，故必须落下来给管理界面看。
     pub mcp: crate::app::mcp::registry::McpRegistry,
@@ -128,6 +131,7 @@ impl Engines {
             usage: crate::app::usage::UsageMeter::new(),
             registry: crate::app::registry::Registry::new(),
             event_bus: crate::app::events::EventBus::new(1024),
+            vad_pool: crate::plugins::vad::pool::VadPool::new(),
             mcp: crate::app::mcp::registry::McpRegistry::new(),
             config: Arc::new(config.clone()),
             config_path,
@@ -405,6 +409,9 @@ impl Engines {
     ///
     /// sherpa 构建恒为 Silero VAD（`[vad].model` 已在启动期校验非空）；
     /// 未启用 feature 的编译返回占位实现（仅供检查/测试编译，生产不含）。
+    ///
+    /// ⚠️ 生产路径请用 [`Self::acquire_vad`]（P0-3 池化复用）；本方法保留给**刻意测冷启动**
+    /// 的场景（内联测试 `bench_vad` 度量的就是无池冷启动成本）。
     pub fn new_vad(&self) -> Result<Box<dyn VadEngine>> {
         // 会话级最新快照：改 [vad] 阈值/时长后，新会话即生效（当前会话保持旧参数）
         let cfg = self.live_config();
@@ -418,6 +425,32 @@ impl Engines {
         {
             Ok(Box::new(MockVad::new(cfg.vad.threshold)))
         }
+    }
+
+    /// 从 VAD 池借出实例（P0-3）：空闲复用 / 池满等待 / `[vad]` 配置变更自动失效。
+    /// [`plugins/vad/pool`] 的 `VadGuard` Drop 时归还（RAII，含提前返回与 panic 展开）。
+    pub async fn acquire_vad(&self) -> Result<crate::plugins::vad::pool::VadGuard> {
+        let cfg = self.live_config();
+        // 配置签名：参与 `SherpaVad::new` 的全部字段（变了即池内旧实例失效）。
+        let sig = format!(
+            "{}|{}|{}|{}|{}",
+            cfg.vad.engine,
+            cfg.vad.model,
+            cfg.vad.threshold,
+            cfg.vad.min_silence_duration,
+            cfg.vad.min_speech_duration,
+        );
+        #[cfg(feature = "sherpa")]
+        let factory = || -> Result<Box<dyn VadEngine>> {
+            Ok(Box::new(
+                SherpaVad::new(&cfg.vad).context("创建 Silero VAD 失败")?,
+            ))
+        };
+        #[cfg(not(feature = "sherpa"))]
+        let factory = || -> Result<Box<dyn VadEngine>> {
+            Ok(Box::new(MockVad::new(cfg.vad.threshold)))
+        };
+        self.vad_pool.acquire(sig, factory).await
     }
 }
 
