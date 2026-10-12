@@ -62,6 +62,12 @@ async fn run(config: Config, config_path: Option<String>) -> Result<()> {
     );
 
     let engines = Engines::new(&config, config_path)?;
+    // 延迟/事件聚合（P1-1）：进程最早的订阅者——spawn 越早，broadcast 环形缓冲越不丢
+    // 早期事件（LAGGED 只告警；聚合口径是近似值，见 app/metrics 模块注释）。
+    tokio::spawn(crate::app::metrics::subscriber(
+        engines.metrics.clone(),
+        engines.event_bus.subscribe(),
+    ));
     // 配置来源可见性：把实际加载的文件路径打到启动日志（"改配置不生效"类问题第一现场）
     match &engines.config_path {
         Some(p) => {

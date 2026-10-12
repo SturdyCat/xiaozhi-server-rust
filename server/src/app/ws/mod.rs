@@ -13,6 +13,8 @@
 //! - `GET /api/sessions`：**此刻**活着的连接及其阶段（聆听/思考/说话）。
 //! - `GET /api/conversations`：内存里保留的最近对话（环形，非完整历史；可按设备过滤）。
 //! - `GET /api/stats`：看板聚合（在线数 / 轮次 / 令牌 / 能力状态徽标）。
+//! - `GET /api/metrics`：延迟/事件聚合大盘（整轮延迟 p50/p95、会话、TTS 下行、异常；
+//!   数据源 [`metrics`]——事件总线常驻订阅者写入的内存态，重启清零）。
 //! - `GET /api/mcp/tools`：按设备列出会话开始时通过 MCP 探测到的工具清单
 //!   （"这台 ESP 支持哪些工具、每个能干什么"——数据源见 [`mcp`]）。
 //! - `GET /api/memory/status` + `POST /api/memory/{recall,maintain,clear}`：图记忆的状态、
@@ -60,6 +62,8 @@ mod bench_api;
 mod config;
 mod mcp;
 mod memory;
+// 延迟/事件聚合（P1-1）：只读投影，数据源 app::metrics（事件总线订阅者）
+mod metrics;
 mod ota;
 mod plugins;
 mod registry;
@@ -68,6 +72,7 @@ mod usage;
 use config::{config_meta, get_config, put_config};
 use mcp::mcp_tools;
 use memory::{memory_clear, memory_maintain, memory_recall, memory_status};
+use metrics::metrics_snapshot;
 // 插件维护
 pub(crate) use config::config_is_persistent;
 use ota::ota;
@@ -137,6 +142,8 @@ pub fn router(engines: Arc<Engines>) -> Router {
         .route("/api/sessions", get(sessions))
         .route("/api/conversations", get(conversations))
         .route("/api/stats", get(stats))
+        // 延迟/事件聚合大盘（P1-1）：整轮延迟 p50/p95、会话、TTS、异常（内存态，重启清零）
+        .route("/api/metrics", get(metrics_snapshot))
         // 设备 MCP 工具：按设备列出会话开始时探测到的工具清单（回答"这台设备能被 AI 指挥做什么"）
         .route("/api/mcp/tools", get(mcp_tools))
         // 小智固件的 OTA 引导端点（带/不带尾斜杠都注册：固件配置的 URL 以 / 结尾）。

@@ -33,6 +33,7 @@ object AdminNav {
         NavDescriptor("sessions", 20, "会话"),
         NavDescriptor("conversations", 30, "对话记录"),
         NavDescriptor("usage", 40, "用量"),
+        NavDescriptor("metrics", 45, "延迟"),
         NavDescriptor("config", 50, "配置"),
     )
 

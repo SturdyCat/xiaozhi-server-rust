@@ -9,6 +9,7 @@ pub mod events;
 pub mod firmware;
 pub mod hot_audio;
 pub mod mcp;
+pub mod metrics;
 pub mod prefetch;
 pub mod protocol;
 pub mod registry;

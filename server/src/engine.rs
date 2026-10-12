@@ -82,6 +82,9 @@ pub struct Engines {
     /// VAD 实例池（P0-3）：复用昂贵的 Silero ONNX 实例（每会话借还，`acquire_vad`）。
     /// 配置签名变了自动失效；详情见 `plugins/vad/pool` 模块注释。
     pub vad_pool: crate::plugins::vad::pool::VadPool,
+    /// 延迟/事件聚合（P1-1）：事件总线的常驻订阅者写入，`GET /api/metrics` 只读投影。
+    /// 全内存态、重启清零；见 `app/metrics` 模块注释。
+    pub metrics: crate::app::metrics::Metrics,
     /// 设备 MCP 工具注册表（按 `device_id` 存最近一次能力发现的结果；`GET /api/mcp/tools`）。
     /// 工具清单只存在于固件里且**只有设备连着时才问得到**，故必须落下来给管理界面看。
     pub mcp: crate::app::mcp::registry::McpRegistry,
@@ -132,6 +135,7 @@ impl Engines {
             registry: crate::app::registry::Registry::new(),
             event_bus: crate::app::events::EventBus::new(1024),
             vad_pool: crate::plugins::vad::pool::VadPool::new(),
+            metrics: crate::app::metrics::Metrics::new(),
             mcp: crate::app::mcp::registry::McpRegistry::new(),
             config: Arc::new(config.clone()),
             config_path,

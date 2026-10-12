@@ -28,6 +28,7 @@ import com.tencent.kuikly.core.views.View
  * │ 会话        │                                 │
  * │ 对话记录    │                                 │
  * │ 用量        │                                 │
+ * │ 延迟        │                                 │
  * │ 配置  ●     │                                 │
  * └─────────────┴─────────────────────────────────┘
  * ```
@@ -75,6 +76,9 @@ class AdminPage : Pager() {
     val conversations = ConversationsState(this)
     val usage = UsageState(this)
 
+    /** 「延迟」大盘（`GET /api/metrics`，P0-5 事件总线订阅者的只读投影）。 */
+    val metrics = MetricsState(this)
+
     /** 当前选中的导航项（[AdminNav] 的 id）。 */
     var selectedSection by observable(AdminNav.DEFAULT)
 
@@ -90,12 +94,13 @@ class AdminPage : Pager() {
         plugins.load(this)
         mcpTools.load(this)
         ota.load(this, "", token)
-        // 运维面五路数据：并行发出，各自的 loading/loadError 独立（一个端点挂了不影响其他页面）
+        // 运维面六路数据：并行发出，各自的 loading/loadError 独立（一个端点挂了不影响其他页面）
         stats.load(this)
         devices.load(this)
         sessions.load(this)
         conversations.load(this)
         usage.load(this)
+        metrics.load(this)
     }
 
     override fun body(): ViewBuilder {
@@ -206,6 +211,9 @@ class AdminPage : Pager() {
                     }
                     vif({ ctx.selectedSection == "usage" }) {
                         opsScroller { renderOpsUsage(ctx.usage, ctx) }
+                    }
+                    vif({ ctx.selectedSection == "metrics" }) {
+                        opsScroller { renderOpsMetrics(ctx.metrics, ctx) }
                     }
                     vif({ ctx.selectedSection == "config" }) {
                         // 配置改为「左侧分组导航 + 右侧单 section」两栏布局（替代 14 个平铺 tab）

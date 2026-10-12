@@ -10,7 +10,7 @@ import com.tencent.kuikly.core.views.Text
 import com.tencent.kuikly.core.views.View
 
 /**
- * 管理台「概览 / 设备 / 会话 / 对话记录 / 用量」五个页面的渲染。
+ * 管理台「概览 / 设备 / 会话 / 对话记录 / 用量 / 延迟」六个页面的渲染。
  *
  * 与 `OpsState.kt`（数据）分开：这里是**纯展示**，不含任何取数逻辑，便于把"数据对不对"
  * 与"显示得对不对"分开排查。文件拆分的直接原因是 `AGENTS.md` §5.10（单文件 ≤ 600 行）。
@@ -458,5 +458,53 @@ fun ViewContainer<*, *>.renderOpsUsage(usage: UsageState, ctx: Pager) {
 
     vif({ usage.note.isNotEmpty() }) {
         textNote(usage.note, micro = true)
+    }
+}
+
+// ============================================================
+// 延迟
+// ============================================================
+
+/**
+ * 延迟页：`GET /api/metrics` 的投影（P0-5 事件总线订阅者写入的聚合）。
+ *
+ * 回答"整轮对话到底多快"：从用户说完到助手回复完成的 p50/p95/max——这是用户体感最直接的
+ * 数字。分模块首包延迟（VAD/ASR/LLM/TTS 各自的第一响应）目前只在测试台与内联测试里测，
+ * 正常会话的被动采集未纳入（见服务端 `app/metrics.rs` 模块注释）。
+ */
+fun ViewContainer<*, *>.renderOpsMetrics(metrics: MetricsState, ctx: Pager) {
+    opsHeader({ metrics.summary.ifEmpty { if (metrics.loading) "加载中…" else "—" } }, { metrics.loading }) {
+        metrics.refresh(ctx)
+    }
+    opsError(metrics.loadError)
+
+    groupedCard("整轮延迟（最近 200 轮）") {
+        val hasSamples = metrics.turnSamples > 0L
+        metricRow("p50", if (hasSamples) "${metrics.turnP50Ms} ms" else "—", "一半的轮次快于这个值")
+        metricRow("p95", if (hasSamples) "${metrics.turnP95Ms} ms" else "—", "95% 的轮次快于这个值；与 p50 差距大说明偶发慢")
+        metricRow("最慢一轮", if (hasSamples) "${metrics.turnMaxMs} ms" else "—", "窗口内最大值")
+        metricRow("样本数", "${metrics.turnSamples}", "窗口覆盖 ${metrics.turnsTotal} 轮（早于窗口的轮次已滚出）")
+    }
+
+    groupedCard("会话（自本次启动）") {
+        metricRow("建立", "${metrics.sessionsStarted}", "每次唤醒/按键通常新建一条连接")
+        metricRow("结束", "${metrics.sessionsEnded}", "两者之差 ≈ 此刻活着的连接数")
+    }
+
+    groupedCard("TTS 下行（自本次启动）") {
+        metricRow("轮次", "${metrics.ttsRounds}", if (metrics.ttsInterrupted > 0L) "其中 ${metrics.ttsInterrupted} 轮被打断（barge-in）" else "0 表示还没有语音回复")
+        metricRow("音频帧", "${metrics.ttsFrames}", "下发的 Opus 帧累计")
+        metricRow("音频时长", humanDuration(metrics.ttsAudioMs), "合成并下发的语音总时长")
+    }
+
+    groupedCard("异常（自本次启动）") {
+        metricRow("次数", "${metrics.errorCount}", if (metrics.errorCount == 0L) "正常" else "详见下方最近一条")
+        vif({ metrics.lastError.isNotEmpty() }) {
+            textNote("最近异常：${metrics.lastError}", tone = "error", micro = true)
+        }
+    }
+
+    vif({ metrics.note.isNotEmpty() }) {
+        textNote(metrics.note, micro = true)
     }
 }
