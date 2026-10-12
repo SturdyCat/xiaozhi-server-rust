@@ -91,6 +91,46 @@ fn insert_turn_and_search_roundtrip_with_evidence() {
     assert!(hits[0].sources[0].1.contains("杭州出差"));
 }
 
+/// 回归：主查询应一次性返回 summary/outcome/turn_index，且与写入值逐字一致
+/// （折叠 per-hit 摘要 query_row 后的字段等价性）。
+#[test]
+fn search_returns_summary_fields_matching_written_values() {
+    let st = open(&cfg(":memory:")).unwrap();
+    let ids = st
+        .insert_turn(
+            "xiaozhi:dev1",
+            "sess-1",
+            3,
+            "我下周三要去杭州出差",
+            "好的，记得带上充电器",
+            3_000,
+        )
+        .expect("写入原文");
+    let m = NewMemory {
+        scope: "xiaozhi:dev1".into(),
+        session_id: "sess-1".into(),
+        turn_index: 3,
+        summary: "用户计划下周三去杭州出差，需带充电器".into(),
+        outcome: "rescheduled".into(),
+        keywords: vec![],
+    };
+    let memory_id = st.upsert_memory(&m, &ids, 3_000).expect("写入记忆");
+    let hits = st
+        .search(
+            &crate::plugins::memory::terms::query_terms("杭州出差"),
+            Some("xiaozhi:dev1"),
+            0,
+            6,
+        )
+        .expect("召回");
+    assert_eq!(hits.len(), 1, "应命中 1 条: {hits:?}");
+    let h = &hits[0];
+    assert_eq!(h.memory_id, memory_id);
+    assert_eq!(h.summary, "用户计划下周三去杭州出差，需带充电器");
+    assert_eq!(h.outcome, "rescheduled");
+    assert_eq!(h.turn_index, 3);
+}
+
 #[test]
 fn search_without_scope_spans_all_devices() {
     let st = open(&cfg(":memory:")).unwrap();

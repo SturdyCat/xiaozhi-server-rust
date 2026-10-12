@@ -30,6 +30,18 @@ use super::{
     MemoryProvider, MemoryStats, RecallResult,
 };
 
+/// SQLite 是同步阻塞 API，统一经 `spawn_blocking` 隔离（避免独占 tokio worker）；
+/// `label` 仅用于 JoinError（如 worker panic）时在错误信息中定位调用点。
+async fn run_blocking<T, F>(label: &str, f: F) -> Result<T>
+where
+    F: FnOnce() -> Result<T> + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| anyhow!("{label}任务异常: {e}"))?
+}
+
 /// 单次抽取的模型输出上限（字符）：正常只有几十字，超过即视为跑偏。
 const MAX_EXTRACT_CHARS: usize = 2000;
 
@@ -103,18 +115,15 @@ impl GraphMemory {
     /// `Ok(Some(false))` = 抽取失败（已按上限决定重试/隔离）。
     async fn extract_one(&self) -> Result<Option<bool>> {
         let store = self.store.clone();
-        let pending =
-            match tokio::task::spawn_blocking(move || store.pending_turn(schema::now_ms())).await {
-                Ok(Ok(Some(p))) => p,
-                Ok(Ok(None)) => return Ok(None),
-                Ok(Err(e)) => return Err(e),
-                Err(e) => return Err(anyhow!("查询抽取队列任务异常: {e}")),
-            };
+        let pending = match run_blocking("查询抽取队列", move || store.pending_turn(schema::now_ms()))
+            .await?
+        {
+            Some(p) => p,
+            None => return Ok(None),
+        };
         let store = self.store.clone();
         let key = pending.clone();
-        let msgs = tokio::task::spawn_blocking(move || store.turn_messages(&key))
-            .await
-            .map_err(|e| anyhow!("读取原文任务异常: {e}"))??;
+        let msgs = run_blocking("读取原文", move || store.turn_messages(&key)).await?;
         let user_text = msgs
             .iter()
             .find(|m| m.role == "user")
@@ -143,13 +152,14 @@ impl GraphMemory {
                     };
                     let now = schema::now_ms();
                     let key = pending.clone();
-                    let written = tokio::task::spawn_blocking(move || -> Result<()> {
-                        store.upsert_memory(&m, &ids, now)?;
-                        store.mark_turn(&key, "succeeded", None, None, now)
-                    })
-                    .await
-                    .map_err(|e| anyhow!("写入记忆任务异常: {e}"))?;
-                    written?;
+                    run_blocking(
+                        "写入记忆",
+                        move || -> Result<()> {
+                            store.upsert_memory(&m, &ids, now)?;
+                            store.mark_turn(&key, "succeeded", None, None, now)
+                        },
+                    )
+                    .await?;
                     tracing::info!(
                         "记忆抽取成功：scope={} turn={} outcome={} summary={}",
                         pending.scope,
@@ -180,11 +190,10 @@ impl GraphMemory {
         let max_attempts = self.cfg.quarantine_max_attempts;
         let now = schema::now_ms();
         let err = error.to_string();
-        let (state, attempts) = tokio::task::spawn_blocking(move || {
+        let (state, attempts) = run_blocking("标记抽取失败", move || {
             store.mark_turn_failed(&key, &err, max_attempts, now)
         })
-        .await
-        .map_err(|e| anyhow!("标记抽取失败任务异常: {e}"))??;
+        .await?;
         tracing::warn!(
             "记忆抽取失败（第 {attempts} 次，状态={state}，scope={} turn={}）: {error}",
             pending.scope,
@@ -241,10 +250,15 @@ impl MemoryProvider for GraphMemory {
             let fresh = self.cfg.fresh_turn_count;
             let limit = self.cfg.recall_max_nodes;
             let budget = Duration::from_millis(self.cfg.recall_budget_ms.max(1));
-            let task = tokio::task::spawn_blocking(move || {
-                store.search(&terms, scope_owned.as_deref(), fresh, limit)
-            });
-            let hits = match tokio::time::timeout(budget, task).await {
+            let hits = match tokio::time::timeout(
+                budget,
+                run_blocking(
+                    "召回",
+                    move || store.search(&terms, scope_owned.as_deref(), fresh, limit),
+                ),
+            )
+            .await
+            {
                 // 硬预算：超时即"无记忆"继续。⚠️ 后台任务无法取消（SQLite 是同步的），
                 // 但它不会再影响本轮 TTFA。
                 Err(_) => {
@@ -258,21 +272,15 @@ impl MemoryProvider for GraphMemory {
                         ..RecallResult::none()
                     };
                 }
+                // JoinError 已由 run_blocking 包装为"召回任务异常: …"，与原两臂文案一致
                 Ok(Err(e)) => {
-                    return RecallResult {
-                        elapsed_ms: t0.elapsed().as_millis(),
-                        error: Some(format!("召回任务异常: {e}")),
-                        ..RecallResult::none()
-                    }
-                }
-                Ok(Ok(Err(e))) => {
                     return RecallResult {
                         elapsed_ms: t0.elapsed().as_millis(),
                         error: Some(format!("{e:#}")),
                         ..RecallResult::none()
                     }
                 }
-                Ok(Ok(Ok(h))) => h,
+                Ok(Ok(h)) => h,
             };
             let matched = hits.iter().map(|h| h.hits).sum::<i64>() as usize;
             if hits.is_empty() {
@@ -306,21 +314,22 @@ impl MemoryProvider for GraphMemory {
             self.since_maintain.fetch_add(1, Ordering::Relaxed);
             let store = self.store.clone();
             let now = schema::now_ms();
-            let store2 = store.clone();
-            tokio::task::spawn_blocking(move || -> Result<()> {
-                let idx = store2.next_turn_index(&turn.scope)?;
-                store2.insert_turn(
-                    &turn.scope,
-                    &turn.session_id,
-                    idx,
-                    &turn.user_text,
-                    &turn.assistant_text,
-                    now,
-                )?;
-                Ok(())
-            })
+            run_blocking(
+                "记忆写入",
+                move || -> Result<()> {
+                    let idx = store.next_turn_index(&turn.scope)?;
+                    store.insert_turn(
+                        &turn.scope,
+                        &turn.session_id,
+                        idx,
+                        &turn.user_text,
+                        &turn.assistant_text,
+                        now,
+                    )?;
+                    Ok(())
+                },
+            )
             .await
-            .map_err(|e| anyhow!("记忆写入任务异常: {e}"))?
         })
     }
 
@@ -398,9 +407,8 @@ impl MemoryProvider for GraphMemory {
     fn clear(&self, scope: Option<String>) -> BoxFut<'_, Result<u64>> {
         Box::pin(async move {
             let store = self.store.clone();
-            tokio::task::spawn_blocking(move || store.clear(scope.as_deref()))
+            run_blocking("清空记忆", move || store.clear(scope.as_deref()))
                 .await
-                .map_err(|e| anyhow!("清空记忆任务异常: {e}"))?
                 .context("清空记忆失败")
         })
     }

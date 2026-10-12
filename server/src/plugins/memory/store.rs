@@ -360,7 +360,8 @@ impl Store {
             None => None,
         };
         let mut sql = String::from(
-            "SELECT t.memory_id, COUNT(DISTINCT t.term) AS hits
+            "SELECT t.memory_id, m.summary, m.outcome, m.turn_index,
+                    COUNT(DISTINCT t.term) AS hits
              FROM gm_summary_terms t
              JOIN gm_turn_memories m ON m.id = t.memory_id
              WHERE t.term IN (",
@@ -388,23 +389,26 @@ impl Store {
         let rows = stmt
             .query_map(
                 rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())),
-                |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)),
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, i64>(3)?,
+                        r.get::<_, i64>(4)?,
+                    ))
+                },
             )
             .context("执行召回查询失败")?;
-        let ranked: Vec<(String, i64)> = rows
+        // m.id = t.memory_id 是主键等值连接：同一 memory_id 下 summary/outcome/turn_index
+        // 在所有聚合行中取值确定（SQLite 允许聚合查询中的裸列）。
+        let ranked: Vec<(String, String, String, i64, i64)> = rows
             .collect::<rusqlite::Result<Vec<_>>>()
             .context("读取召回结果失败")?;
         drop(stmt);
 
         let mut hits = Vec::with_capacity(ranked.len());
-        for (memory_id, count) in ranked {
-            let (summary, outcome, turn_index): (String, String, i64) = conn
-                .query_row(
-                    "SELECT summary, outcome, turn_index FROM gm_turn_memories WHERE id = ?1",
-                    rusqlite::params![memory_id],
-                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-                )
-                .context("读取记忆摘要失败")?;
+        for (memory_id, summary, outcome, turn_index, count) in ranked {
             let mut stmt = conn
                 .prepare(
                     "SELECT m.role, m.content FROM gm_messages m
