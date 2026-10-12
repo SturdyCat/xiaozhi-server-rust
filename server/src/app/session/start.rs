@@ -104,6 +104,16 @@ pub async fn run_session<T: Transport>(
             mcp,
             is_test,
         });
+    // 注入通道（P1-2，见 `app/inject`）：仅**设备 + 级联流水线**会话注册——
+    // 测试台走独立请求-响应（asr_test 等）、AIUI 全链路输入是 PCM（识别在云端闭环），
+    // "文本进 LLM"对两者语义不通，不注册（HTTP 侧查无通道即报"该会话不支持注入"）。
+    // guard 与 `_registry_guard` 同一 RAII 模式：`run_session` 返回即自动摘除。
+    let (inject_tx, inject_rx) = tokio::sync::mpsc::channel(crate::app::inject::CHANNEL_CAPACITY);
+    let _inject_guard = if !is_test && aiui.is_none() {
+        Some(engines.inject.register(&session_id, inject_tx))
+    } else {
+        None
+    };
     let session = Session {
         transport,
         engines,
@@ -126,6 +136,7 @@ pub async fn run_session<T: Transport>(
         mcp_enabled: mcp,
         mcp_next_id: 1,
         wake,
+        inject_rx: if _inject_guard.is_some() { Some(inject_rx) } else { None },
     };
     session.run().await
 }

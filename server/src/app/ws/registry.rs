@@ -110,6 +110,92 @@ pub(super) async fn device_detail(
     json_response(StatusCode::OK, body)
 }
 
+/// `POST /api/devices/{device_id}/inject`：向该设备的活跃会话注入一段文本（P1-2）。
+///
+/// 注入文本**作为用户话语**走与语音完全相同的管线（记录 → 指令闸门 → LLM → TTS → 下行），
+/// 用于不经 ASR 直接验证 LLM/TTS 链路（联调利器）。会话侧通道见 `app/inject`：
+/// 仅"设备 + 级联流水线"会话注册——测试台（独立请求-响应）与 AIUI 全链路（输入是 PCM）
+/// 查无通道，报 409。
+///
+/// 状态码口径：400 文本非法；404 设备不在线；409 会话不支持/刚结束/忙；200 成功。
+#[derive(serde::Deserialize)]
+pub(super) struct InjectBody {
+    /// 要注入的文本（trim 后非空，≤2000 字符）。
+    pub text: String,
+}
+
+pub(super) async fn device_inject(
+    State(engines): State<Arc<Engines>>,
+    Path(device_id): Path<String>,
+    axum::Json(body): axum::Json<InjectBody>,
+) -> Response {
+    let text = body.text.trim().to_string();
+    if text.is_empty() {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            json!({ "ok": false, "message": "text 不能为空" }),
+        );
+    }
+    if text.chars().count() > 2_000 {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            json!({ "ok": false, "message": "text 超长（上限 2000 字符）" }),
+        );
+    }
+    // 找该设备的活跃**设备**会话（排除测试台），最近活跃优先——同设备多连接时注入最新的
+    let mut candidates: Vec<_> = engines
+        .registry
+        .sessions_of(&device_id)
+        .into_iter()
+        .filter(|s| !s.is_test)
+        .collect();
+    candidates.sort_by_key(|s| std::cmp::Reverse(s.last_activity_ms));
+    if candidates.is_empty() {
+        return json_response(
+            StatusCode::NOT_FOUND,
+            json!({
+                "ok": false,
+                "device_id": device_id,
+                "message": "设备当前不在线（没有活跃会话）。设备只在唤醒/按键触发对话时才建立连接\
+                            （开机只走 OTA），请先唤醒设备再注入。",
+            }),
+        );
+    }
+    let mut last_err = None;
+    for s in &candidates {
+        match engines.inject.send(&s.session_id, text.clone()) {
+            Ok(()) => {
+                return json_response(
+                    StatusCode::OK,
+                    json!({
+                        "ok": true,
+                        "device_id": device_id,
+                        "session_id": s.session_id,
+                        "note": "文本已作为用户话语注入，走完整 LLM→TTS→下行管线；\
+                                 对话记录与打断语义与正常语音轮次一致。",
+                    }),
+                );
+            }
+            Err(e) => last_err = Some((s.session_id.clone(), e)),
+        }
+    }
+    // 全部候选都失败：按最后一个错误给口径（NoChannel=不支持，Closed=刚结束，Busy=忙）
+    let (session_id, e) = last_err.expect("candidates 非空，循环至少执行一次");
+    let message = match e {
+        crate::app::inject::InjectError::NoChannel => {
+            "该会话不支持文本注入：测试台会话与 AIUI 全链路（识别在云端闭环）没有文本入口。"
+        }
+        crate::app::inject::InjectError::Closed => "会话刚刚结束（通道已关闭），请刷新后重试。",
+        crate::app::inject::InjectError::Busy => {
+            "会话正忙（正在处理上一轮对话，注入队列已满），请稍后重试。"
+        }
+    };
+    json_response(
+        StatusCode::CONFLICT,
+        json!({ "ok": false, "device_id": device_id, "session_id": session_id, "message": message }),
+    )
+}
+
 /// `GET /api/sessions`：此刻活着的连接（最近活跃在前）。
 pub(super) async fn sessions(State(engines): State<Arc<Engines>>) -> Response {
     let now = registry::now_ms();

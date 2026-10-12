@@ -10,6 +10,8 @@
 //! - `GET /api/usage` / `GET /api/session/{id}/usage`：令牌用量（成本与上下文膨胀观测）。
 //! - `GET /api/devices` / `GET /api/devices/{id}`：设备清单与单台详情（在线态、最后活跃、
 //!   协商参数、板型/固件版本）——数据源 [`registry`]（进程内注册表）。
+//! - `POST /api/devices/{id}/inject`：向该设备的活跃会话注入一段文本，作为用户话语走
+//!   完整 LLM→TTS→下行管线（不经 ASR 的联调利器，见 `app/inject`）。
 //! - `GET /api/sessions`：**此刻**活着的连接及其阶段（聆听/思考/说话）。
 //! - `GET /api/conversations`：内存里保留的最近对话（环形，非完整历史；可按设备过滤）。
 //! - `GET /api/stats`：看板聚合（在线数 / 轮次 / 令牌 / 能力状态徽标）。
@@ -77,7 +79,7 @@ use metrics::metrics_snapshot;
 pub(crate) use config::config_is_persistent;
 use ota::ota;
 use plugins::{config_schema, list_plugins};
-use registry::{conversations, device_detail, devices, sessions, stats};
+use registry::{conversations, device_detail, device_inject, devices, sessions, stats};
 use soul::{soul_presets, soul_preview};
 use usage::{session_usage, usage};
 
@@ -139,6 +141,8 @@ pub fn router(engines: Arc<Engines>) -> Router {
         // 全是**只读投影**（`GET /api/devices`、`/api/sessions`、`/api/conversations`、`/api/stats`）
         .route("/api/devices", get(devices))
         .route("/api/devices/{device_id}", get(device_detail))
+        // 设备消息注入（P1-2）：文本作为用户话语走完整管线（会话侧通道见 app/inject）
+        .route("/api/devices/{device_id}/inject", axum::routing::post(device_inject))
         .route("/api/sessions", get(sessions))
         .route("/api/conversations", get(conversations))
         .route("/api/stats", get(stats))

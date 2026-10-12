@@ -10,9 +10,10 @@ import com.tencent.kuikly.core.reactive.handler.observable
 import com.tencent.kuikly.core.reactive.handler.observableList
 
 /**
- * 管理台「概览 / 设备 / 会话 / 对话记录 / 用量」五个页面的数据源。
+ * 管理台「概览 / 设备 / 会话 / 对话记录 / 用量」等页面的数据源。
  *
- * 对应服务端端点：`GET /api/stats`、`/api/devices`、`/api/sessions`、`/api/conversations`、`/api/usage`。
+ * 对应服务端端点：`GET /api/stats`、`/api/devices`、`/api/sessions`、`/api/conversations`、
+ * `/api/usage`，外加设备注入 `POST /api/devices/{id}/inject`（[DevicesState.inject]）。
  * 数据源是**进程内注册表**（`crate::app::registry`）：全部为"自本次服务启动以来"的累计值，
  * 重启清零、在线态由会话生命周期派生。这个口径由服务端随响应下发（`note` / `scope_note`），
  * 页面**直接展示服务端的原话**——客户端不自己编一句"今日统计"，那会与事实不符。
@@ -337,6 +338,65 @@ class DevicesState(scope: PagerScope) : LoadableState(scope) {
         summary = "共 ${devices.size} 台 · $online 台在线"
         loaded = true
         loadError = ""
+    }
+
+    // ============================================================
+    // 设备消息注入（P1-2：POST /api/devices/{id}/inject）
+    // ============================================================
+
+    /** 当前展开注入输入的设备号（空串 = 全部收起；一次只展开一台，避免一排输入框）。 */
+    var injectTarget by scope.observable("")
+
+    /** 注入文本草稿。 */
+    var injectDraft by scope.observable("")
+
+    /** 注入请求进行中。 */
+    var injectBusy by scope.observable(false)
+
+    /** 上次注入的就地结果（成功提示或失败原因；空 = 无）。 */
+    var injectMsg by scope.observable("")
+
+    /** 展开/收起某台设备的注入输入（切换目标时清空草稿与结果）。 */
+    fun toggleInject(deviceId: String) {
+        if (injectTarget == deviceId) {
+            injectTarget = ""
+        } else {
+            injectTarget = deviceId
+            injectDraft = ""
+            injectMsg = ""
+        }
+    }
+
+    /**
+     * 注入一段文本：服务端把它**作为用户话语**走完整 LLM→TTS→下行管线（不经 ASR），
+     * 用于直接验证上游链路。设备必须在线且有可注入会话（测试台/AIUI 会话服务端会拒绝）。
+     */
+    fun inject(ctx: Pager, deviceId: String) {
+        val text = injectDraft.trim()
+        if (text.isEmpty()) {
+            injectMsg = "请先输入要注入的文本"
+            return
+        }
+        if (injectBusy) return
+        injectBusy = true
+        injectMsg = ""
+        val body = JSONObject().apply { put("text", text) }
+        val headers = JSONObject().apply { put("Content-Type", "application/json") }
+        network(ctx).httpRequest("$base/api/devices/$deviceId/inject", true, body, headers) { data, success, errorMsg, resp ->
+            val ok = success && (resp.statusCode == null || resp.statusCode in 200..299)
+            val reason = data?.text("message")?.takeIf { it.isNotEmpty() } ?: (errorMsg ?: "")
+            if (ok) {
+                injectDraft = ""
+                injectMsg = "✓ 已注入，设备正在走完整回复管线"
+            } else {
+                injectMsg = when (resp.statusCode) {
+                    404 -> "设备不在线：请先唤醒设备（建立会话）再注入"
+                    409 -> reason.ifEmpty { "会话不支持注入或正忙，请稍后重试" }
+                    else -> "注入失败：${reason.ifEmpty { "HTTP ${resp.statusCode}" }}"
+                }
+            }
+            injectBusy = false
+        }
     }
 }
 

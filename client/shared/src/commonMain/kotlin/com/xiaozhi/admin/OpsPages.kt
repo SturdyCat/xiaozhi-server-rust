@@ -214,6 +214,37 @@ fun ViewContainer<*, *>.renderOpsDevices(devices: DevicesState, ctx: Pager) {
             if (row.clientId.isNotEmpty() && row.clientId != row.deviceId) {
                 textNote("Client-Id ${row.clientId}", micro = true)
             }
+            // 设备消息注入（P1-2）：在线的设备会话才能注入（文本作为用户话语走完整管线）；
+            // 测试台连接不显示入口（服务端也会拒绝——它走独立请求-响应，语义不通）。
+            if (row.online && !row.isTest) {
+                actionRow {
+                    secondaryButton(
+                        if (devices.injectTarget == row.deviceId) "收起" else "注入消息",
+                    ) { devices.toggleInject(row.deviceId) }
+                }
+                vif({ devices.injectTarget == row.deviceId }) {
+                    labeledField(
+                        "注入文本（作为用户话语走完整 LLM→TTS 管线）",
+                        { devices.injectDraft },
+                        { devices.injectDraft = it },
+                        "例如：现在几点了",
+                    )
+                    actionRow {
+                        primaryButton(
+                            "发送",
+                            loading = { devices.injectBusy },
+                            loadingText = "注入中…",
+                        ) { devices.inject(ctx, row.deviceId) }
+                    }
+                    vif({ devices.injectMsg.isNotEmpty() }) {
+                        textNote(
+                            devices.injectMsg,
+                            tone = if (devices.injectMsg.startsWith("✓")) "tertiary" else "error",
+                            micro = true,
+                        )
+                    }
+                }
+            }
         }
     }
 

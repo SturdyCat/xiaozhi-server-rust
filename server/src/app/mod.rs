@@ -8,6 +8,7 @@ pub mod downlink;
 pub mod events;
 pub mod firmware;
 pub mod hot_audio;
+pub mod inject;
 pub mod mcp;
 pub mod metrics;
 pub mod prefetch;

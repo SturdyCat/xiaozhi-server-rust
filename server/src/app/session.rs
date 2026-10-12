@@ -152,6 +152,18 @@ pub struct Session<'a, T: Transport> {
     /// 时走 `SendStartListening`）——因此每条 `detect` 都是一次真实唤醒；且本函数在会话
     /// 主循环里被 `await`，天然不会重入。
     wake: WakeGreeting,
+    /// 管理台注入通道（P1-2，见 `app/inject`）：`Some` = 本会话可被注入（设备 + 级联流水线），
+    /// `None` = 测试台 / AIUI 全链路（不注册，HTTP 侧报"不支持"）。主循环 `select!` 消费。
+    inject_rx: Option<tokio::sync::mpsc::Receiver<String>>,
+}
+
+/// [`Session::inject_rx`] 为 `None` 时的 select 分支：永不完成的 future（让该分支纯摆设），
+/// 避免在主循环里为"可注入与否"写两套循环。
+async fn inject_next(rx: &mut Option<tokio::sync::mpsc::Receiver<String>>) -> Option<String> {
+    match rx {
+        Some(r) => r.recv().await,
+        None => std::future::pending().await,
+    }
 }
 
 impl<'a, T: Transport> Session<'a, T> {
@@ -176,9 +188,21 @@ impl<'a, T: Transport> Session<'a, T> {
             }
         }
         while !closed && !self.close_requested {
-            let frame = self.transport.recv().await;
-            if !self.handle_frame(frame).await {
-                break;
+            // 双路等待：上行帧（正常语音/协议消息）与管理台注入文本（P1-2，见 `app/inject`）。
+            // `transport.recv()` 基于 `socket.next().await`（取消安全）：select 竞争失败
+            // 只是放弃等待，帧不丢；注入到达时若流水线正忙，会等当前帧处理完才被消费
+            // （mpsc 排队，串行化避免与语音轮次并发写下行）。
+            tokio::select! {
+                frame = self.transport.recv() => {
+                    if !self.handle_frame(frame).await {
+                        break;
+                    }
+                }
+                injected = inject_next(&mut self.inject_rx) => {
+                    if let Some(text) = injected {
+                        self.handle_inject(&text).await;
+                    }
+                }
             }
         }
         // 指令闸门命中（[command]）**且 MCP 未能让设备结束聆听**：降级为断开本次会话。
@@ -235,6 +259,29 @@ impl<'a, T: Transport> Session<'a, T> {
             IncomingFrame::Closed => return false,
         }
         true
+    }
+
+    /// 管理台注入的一轮（P1-2）：文本**作为用户话语**走与语音完全相同的管线入口
+    /// （`decide_user_text` 记录+指令闸门 → `stream_response` LLM→TTS→下行）。
+    ///
+    /// 这让"上游 LLM/TTS 是否正常"可以不经 ASR 直接验证（联调利器），且对话记录、
+    /// 事件总线、打断语义（设备仍可 abort）与正常轮次一一一致。
+    async fn handle_inject(&mut self, text: &str) {
+        tracing::info!(
+            "session {} 管理台注入文本（{} 字），走完整管线",
+            self.session_id,
+            text.chars().count()
+        );
+        match self.decide_user_text(text).await {
+            // 副作用（告别语 + MCP 结束聆听 / close_requested 置位）已在闸门内执行完，
+            // 主循环下一轮即按 close_requested 收尾——语义与语音触发的指令一致。
+            UtteranceDecision::CommandStop => {}
+            UtteranceDecision::Respond => {
+                if let Err(e) = self.stream_response(text).await {
+                    tracing::warn!("session {} 注入轮次流水线失败: {e}", self.session_id);
+                }
+            }
+        }
     }
 
     /// 在 `spawn_blocking` 中执行同步阻塞的 ASR 识别，统一处理任务取消/panic 与内部错误。

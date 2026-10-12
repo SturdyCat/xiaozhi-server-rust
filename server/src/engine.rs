@@ -88,6 +88,9 @@ pub struct Engines {
     /// 设备 MCP 工具注册表（按 `device_id` 存最近一次能力发现的结果；`GET /api/mcp/tools`）。
     /// 工具清单只存在于固件里且**只有设备连着时才问得到**，故必须落下来给管理界面看。
     pub mcp: crate::app::mcp::registry::McpRegistry,
+    /// 会话注入注册表（P1-2）：活跃会话注册 `mpsc::Sender`，HTTP 端点据此投递文本
+    /// （`POST /api/devices/{id}/inject`）；见 `app/inject` 模块注释。
+    pub inject: crate::app::inject::Injector,
     pub config: Arc<Config>,
     /// server 启动时实际加载的配置文件路径；为 `None` 表示用的是内置默认配置，
     /// 此时 `PUT /api/config` 无法持久化（需以 `--config` 指定文件后重启）。
@@ -137,6 +140,7 @@ impl Engines {
             vad_pool: crate::plugins::vad::pool::VadPool::new(),
             metrics: crate::app::metrics::Metrics::new(),
             mcp: crate::app::mcp::registry::McpRegistry::new(),
+            inject: crate::app::inject::Injector::new(),
             config: Arc::new(config.clone()),
             config_path,
         }))
