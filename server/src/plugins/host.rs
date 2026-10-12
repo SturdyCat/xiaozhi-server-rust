@@ -339,7 +339,7 @@ impl PluginHost {
         }
     }
 
-    /// 按能力聚合的状态（`GET /api/plugins` 的 `capabilities[]`）。
+    /// 按能力聚合的状态（`GET /api/plugins` 与 `GET /api/health/engines` 共用的数据源）。
     ///
     /// 能力级 `phase` 取该能力下"最坏"的实现状态：Active < Degraded < Failed；
     /// 全部 Disabled 时为 Disabled。
@@ -348,38 +348,19 @@ impl PluginHost {
         let caps: Vec<serde_json::Value> = ALL_CAPABILITIES
             .iter()
             .map(|&cap| {
-                let impls: Vec<&PluginStatus> =
-                    statuses.iter().filter(|s| s.capability == cap).collect();
-                let phase = impls
-                    .iter()
-                    .map(|s| s.phase)
-                    .fold(None::<Phase>, |acc, p| match (acc, p) {
-                        (None, p) => Some(p),
-                        (Some(Phase::Failed), _) | (_, Phase::Failed) => Some(Phase::Failed),
-                        (Some(Phase::Active), Phase::Degraded)
-                        | (Some(Phase::Degraded), Phase::Active) => Some(Phase::Degraded),
-                        (Some(a), Phase::Disabled) => Some(a),
-                        (Some(_), p) => Some(p),
-                    })
-                    .unwrap_or(Phase::Disabled);
-                let active = impls.iter().find(|s| s.phase == Phase::Active).map(|s| s.id);
-                let enabled = impls.iter().any(|s| s.enabled);
-                let last_error = impls
-                    .iter()
-                    .find_map(|s| s.last_error.as_ref())
-                    .cloned();
+                let s = Self::summarize(&statuses, cap);
                 serde_json::json!({
                     "id": cap.id(),
                     "display": cap.display(),
                     "required": cap.required(),
                     "implemented": cap.implemented(),
-                    "enabled": enabled,
-                    "phase": phase.as_str(),
-                    "deviation": phase.is_deviation(),
-                    "active_impl": active,
-                    "hot": impls.first().map(|s| s.hot.as_str()).unwrap_or("restart_only"),
-                    "last_error": last_error,
-                    "implementations": impls.iter().map(|s| s.to_json()).collect::<Vec<_>>(),
+                    "enabled": s.enabled,
+                    "phase": s.phase.as_str(),
+                    "deviation": s.phase.is_deviation(),
+                    "active_impl": s.active_impl,
+                    "hot": s.impls.first().map(|i| i.hot.as_str()).unwrap_or("restart_only"),
+                    "last_error": s.last_error,
+                    "implementations": s.impls.iter().map(|i| i.to_json()).collect::<Vec<_>>(),
                 })
             })
             .collect();
@@ -401,6 +382,61 @@ impl PluginHost {
             },
         })
     }
+
+    /// 某能力的聚合视图（phase 取最坏 / active_impl / enabled / last_error / 实现明细）。
+    ///
+    /// **同源保证（P1-6 硬要求）**：`GET /api/plugins` 与 `GET /api/health/engines`
+    /// 共用本函数——两处状态绝不分叉，否则管理台会出现"总览页说正常、健康页说降级"
+    /// 的互相矛盾。fold 逻辑与历史实现逐字段一致（`capabilities_json` 的行为不变）。
+    pub fn capability_summary(&self, cap: Capability) -> CapabilitySummary {
+        let statuses = self.snapshot();
+        Self::summarize(&statuses, cap)
+    }
+
+    /// 聚合核心：从实现状态列表折叠出某能力的单行视图（`capabilities_json` 的
+    /// 原有 fold 逻辑原样搬入，供两处调用方共用）。
+    fn summarize(statuses: &[PluginStatus], cap: Capability) -> CapabilitySummary {
+        let impls: Vec<&PluginStatus> = statuses.iter().filter(|s| s.capability == cap).collect();
+        let phase = impls
+            .iter()
+            .map(|s| s.phase)
+            .fold(None::<Phase>, |acc, p| match (acc, p) {
+                (None, p) => Some(p),
+                (Some(Phase::Failed), _) | (_, Phase::Failed) => Some(Phase::Failed),
+                (Some(Phase::Active), Phase::Degraded)
+                | (Some(Phase::Degraded), Phase::Active) => Some(Phase::Degraded),
+                (Some(a), Phase::Disabled) => Some(a),
+                (Some(_), p) => Some(p),
+            })
+            .unwrap_or(Phase::Disabled);
+        let active_impl = impls.iter().find(|s| s.phase == Phase::Active).map(|s| s.id);
+        let enabled = impls.iter().any(|s| s.enabled);
+        let last_error = impls
+            .iter()
+            .find_map(|s| s.last_error.as_ref())
+            .cloned();
+        CapabilitySummary {
+            capability: cap,
+            phase,
+            enabled,
+            active_impl,
+            last_error,
+            impls: impls.into_iter().cloned().collect(),
+        }
+    }
+}
+
+/// 某能力的聚合视图（[`PluginHost::capability_summary`] 的产物）。
+///
+/// `impls` 是实现明细快照（`GET /api/health/engines` 响应里的 `implementations[]`
+/// 与 `/api/plugins` 完全同构——同源不分叉的落地形态）。
+pub struct CapabilitySummary {
+    pub capability: Capability,
+    pub phase: Phase,
+    pub enabled: bool,
+    pub active_impl: Option<&'static str>,
+    pub last_error: Option<String>,
+    pub impls: Vec<PluginStatus>,
 }
 
 /// 「没有可用实现」的可行动报错：列出该能力**全部可用实现 id**（= `engine` 的合法取值）。

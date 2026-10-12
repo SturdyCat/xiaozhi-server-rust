@@ -36,6 +36,9 @@ class AdminShell : Pager() {
     /** 能力总览的数据源（`GET /api/plugins`，只读）。 */
     val plugins = PluginMetaState(this)
 
+    /** 引擎健康自检的数据源（`GET /api/health/engines`，只读，P1-6：配置页总览健康卡）。 */
+    val engineHealth = EngineHealthState(this)
+
     /** 「MCP 工具」的数据源（`GET /api/mcp/tools`，只读）。 */
     val mcpTools = McpToolsState(this)
 
@@ -193,6 +196,7 @@ class AdminShell : Pager() {
                             renderConfigLayout(
                                 ctx.form,
                                 ctx.plugins,
+                                ctx.engineHealth,
                                 ctx.mcpTools,
                                 ctx.ota,
                                 ctx.toast,

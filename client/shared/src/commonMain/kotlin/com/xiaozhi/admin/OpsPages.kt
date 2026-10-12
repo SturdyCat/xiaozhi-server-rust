@@ -91,8 +91,20 @@ private fun ViewContainer<*, *>.opsSkeleton() {
  *
  * 能力清单**不在这里重复投影**：直接复用「配置 → 总览」那张 `overviewCard`（数据源
  * [PluginMetaState]），两处永远一致。本页只加"实时运行数字"这一层。
+ *
+ * P1-6：顶部增插 [healthBanner]（引擎健康横幅，仅偏离时渲染，可点击跳配置 section）——
+ * 部署者不用翻日志就知道"记忆/灵魂/指令/唤醒这些可选能力坏了哪个、怎么修"。
  */
-fun ViewContainer<*, *>.renderOpsOverview(stats: StatsState, meta: PluginMetaState, ctx: Pager) {
+fun ViewContainer<*, *>.renderOpsOverview(
+    stats: StatsState,
+    meta: PluginMetaState,
+    health: EngineHealthState,
+    ctx: Pager,
+    onJumpSection: (section: String) -> Unit,
+) {
+    // 就绪度横幅（P1-6）：页面最顶部、实时卡之上；正常时不占任何视觉
+    healthBanner(health, onJumpSection)
+
     opsHeader({ stats.summary.ifEmpty { if (stats.loading) "加载中…" else "—" } }, { stats.loading }) {
         stats.refresh(ctx)
     }

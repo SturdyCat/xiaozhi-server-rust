@@ -122,6 +122,8 @@ class ConnectState(private val scope: PagerScope) {
                 // 字段热生效元数据 + 能力清单（P5：字段级"多久生效"提示 / 总览页；失败不影响表单）
                 shell.form.schema.load(shell, base)
                 shell.plugins.load(shell, base)
+                // 引擎健康自检（P1-6：配置页总览的健康卡数据源；失败不影响表单与连接流程）
+                shell.engineHealth.load(shell, base)
                 // 设备 MCP 工具清单（会话开始时服务器探测到的；失败不影响表单与连接流程）
                 shell.mcpTools.load(shell, base)
                 // 从配置提取 WS 鉴权 token，派生 WS 地址并自动连接

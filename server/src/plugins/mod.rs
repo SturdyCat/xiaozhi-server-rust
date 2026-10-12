@@ -41,6 +41,7 @@
 pub mod aiui;
 pub mod asr;
 pub mod command;
+pub mod health;
 pub mod host;
 pub mod llm;
 pub mod memory;

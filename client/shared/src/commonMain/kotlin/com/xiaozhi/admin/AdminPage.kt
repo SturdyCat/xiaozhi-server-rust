@@ -68,6 +68,9 @@ class AdminPage : Pager() {
     /** 能力总览的数据源（`GET /api/plugins`，只读）。 */
     val plugins = PluginMetaState(this)
 
+    /** 引擎健康自检的数据源（`GET /api/health/engines`，只读，P1-6）。 */
+    val engineHealth = EngineHealthState(this)
+
     /** 「MCP 工具」（`GET /api/mcp/tools`，只读）。 */
     val mcpTools = McpToolsState(this)
 
@@ -115,6 +118,7 @@ class AdminPage : Pager() {
         conversations.load(this)
         usage.load(this)
         metrics.load(this)
+        engineHealth.load(this)
     }
 
     override fun body(): ViewBuilder {
@@ -194,7 +198,13 @@ class AdminPage : Pager() {
 
                     // ===== section 切换：vif 闭包内读取 selectedSection（observable）=====
                     vif({ ctx.selectedSection == "overview" }) {
-                        opsScroller { renderOpsOverview(ctx.stats, ctx.plugins, ctx) }
+                        opsScroller {
+                            renderOpsOverview(ctx.stats, ctx.plugins, ctx.engineHealth, ctx) { section ->
+                                // 横幅跳转：切到配置页并定位对应 section（P0 导航重组既有链路）
+                                ctx.selectedSection = "config"
+                                ctx.form.configSection = section
+                            }
+                        }
                     }
                     vif({ ctx.selectedSection == "devices" }) {
                         opsScroller { renderOpsDevices(ctx.devices, ctx) }
@@ -216,6 +226,7 @@ class AdminPage : Pager() {
                         renderConfigLayout(
                             ctx.form,
                             ctx.plugins,
+                            ctx.engineHealth,
                             ctx.mcpTools,
                             ctx.ota,
                             ctx.toast,

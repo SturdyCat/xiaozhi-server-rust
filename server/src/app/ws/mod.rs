@@ -3,6 +3,8 @@
 //!
 //! ## 路由
 //! - `GET /api/health`：健康检查，返回 JSON（status/name/version）。
+//! - `GET /api/health/engines`：引擎健康自检（P1-6）——11 个 capability 的能力级
+//!   聚合 + 运行期本地探测（模型文件存在 / 记忆目录可写），与 `/api/plugins` 同源。
 //! - `GET /api/ws`：WebSocket 会话入口（先 [`auth_ok`] 鉴权，再 [`handle_handshake`] 协商）。
 //! - `GET/PUT/POST /api/config`：管理页面读写当前配置（语义见下）。
 //! - `GET /api/plugins`：能力清单 + 实际状态（`enabled`/`phase`/`last_error`）。
@@ -62,6 +64,7 @@ use crate::app::transport::{IncomingFrame, Transport, WsTransport};
 
 mod bench_api;
 mod config;
+mod health;
 mod mcp;
 mod memory;
 // 延迟/事件聚合（P1-1）：只读投影，数据源 app::metrics（事件总线订阅者）
@@ -72,6 +75,7 @@ mod registry;
 mod soul;
 mod usage;
 use config::{config_meta, get_config, put_config};
+use health::engines_health;
 use mcp::mcp_tools;
 use memory::{memory_clear, memory_maintain, memory_recall, memory_status};
 use metrics::metrics_snapshot;
@@ -116,6 +120,9 @@ pub fn router(engines: Arc<Engines>) -> Router {
         .route("/api/health", get(health))
         .route("/api/ws", get(ws_handler))
         .route("/api/config", get(get_config).put(put_config).post(put_config))
+        // 引擎健康自检（P1-6）：11 个 capability × 运行期本地探测的聚合投影，
+        // 能力聚合与 /api/plugins 同源（capability_summary），phase 含探测合并
+        .route("/api/health/engines", get(engines_health))
         // 配置来源元信息（macApp 显示"配置文件路径 + 是否持久化"，排查配置丢失去向）
         .route("/api/config/meta", get(config_meta))
         // 能力清单 + 状态（enabled/phase/last_error）与字段元数据（配置页据此校验/提示）

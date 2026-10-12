@@ -21,6 +21,9 @@ class ConfigPage : Pager() {
     /** 能力总览的数据源（`GET /api/plugins`，只读，不随表单回传）。 */
     val plugins = PluginMetaState(this)
 
+    /** 引擎健康自检的数据源（`GET /api/health/engines`，只读，P1-6：总览 section 健康卡）。 */
+    val engineHealth = EngineHealthState(this)
+
     /** 「MCP 工具」的数据源（`GET /api/mcp/tools`，只读，不随表单回传）。 */
     val mcpTools = McpToolsState(this)
 
@@ -36,6 +39,7 @@ class ConfigPage : Pager() {
         super.pageDidAppear()
         form.load(this)
         plugins.load(this)
+        engineHealth.load(this)
         mcpTools.load(this)
         // web 端由 server 同域托管，基址留空（相对路径）；鉴权 token 由 URL 参数带进来
         //（`?token=xxx&page_name=config`，与 /api/ws 的浏览器兜底口径一致）
@@ -83,6 +87,7 @@ class ConfigPage : Pager() {
             renderConfigLayout(
                 ctx.form,
                 ctx.plugins,
+                ctx.engineHealth,
                 ctx.mcpTools,
                 ctx.ota,
                 ctx.toast,

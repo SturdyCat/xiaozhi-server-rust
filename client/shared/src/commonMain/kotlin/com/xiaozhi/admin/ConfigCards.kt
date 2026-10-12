@@ -99,6 +99,7 @@ private fun ViewContainer<*, *>.sectionReadinessBanner(meta: PluginMetaState, se
 fun ViewContainer<*, *>.renderConfigLayout(
     form: ConfigFormState,
     meta: PluginMetaState,
+    health: EngineHealthState,
     mcp: McpToolsState,
     ota: OtaState,
     toast: ToastState,
@@ -187,7 +188,7 @@ fun ViewContainer<*, *>.renderConfigLayout(
                 // ⚠️ 用 vfor 包一层：configSection 是多选一（boolean 不会翻转），普通闭包不会随它重渲染；
                 // vfor 监测到列表元素变化会重建该唯一项，从而切到对应 section 内容（否则点击导航不刷新右侧）。
                 vfor({ form.configSectionList }) { sectionId ->
-                    renderConfigSection(form, meta, mcp, ota, toast, ctx, sectionId)
+                    renderConfigSection(form, meta, health, mcp, ota, toast, ctx, sectionId)
                 }
             }
         }
@@ -202,6 +203,7 @@ fun ViewContainer<*, *>.renderConfigLayout(
 fun ViewContainer<*, *>.renderConfigSection(
     form: ConfigFormState,
     meta: PluginMetaState,
+    health: EngineHealthState,
     mcp: McpToolsState,
     ota: OtaState,
     toast: ToastState,
@@ -216,7 +218,11 @@ fun ViewContainer<*, *>.renderConfigSection(
     // 就绪度徽标：对应能力 phase 偏离（degraded/failed）时显示状态 + 原因（位于 section 卡片上方）
     sectionReadinessBanner(meta, id)
     when (id) {
-        "overview" -> overviewCard(meta, ctx)
+        // 总览：能力总览卡（配置级状态）之下接能力健康卡（运行期探测合并结论，P1-6）
+        "overview" -> {
+            overviewCard(meta, ctx)
+            engineHealthCard(health, ctx) { section -> form.configSection = section }
+        }
         "mcp" -> mcpToolsCard(mcp, ctx)
         "ota" -> otaCard(ota, toast, ctx)
         "server" -> serverConfigCard(form)
