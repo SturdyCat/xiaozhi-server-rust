@@ -134,7 +134,7 @@ impl Capability {
             Capability::FullChain => "AIUI 全链路",
             Capability::Voices => "发音人目录",
             Capability::Firmware => "固件托管",
-            Capability::Memory => "记忆（图记忆）",
+            Capability::Memory => "记忆",
             Capability::Soul => "灵魂（人格档案）",
             Capability::Command => "指令闸门（ASR→LLM）",
             Capability::Wake => "唤醒问候语",
@@ -435,6 +435,8 @@ pub static REGISTRY: &[PluginDescriptor] = &[
     VOICES_CATALOG,
     FIRMWARE_HOST,
     MEMORY_GRAPH,
+    // P1-7 纯存储后端：与 MEMORY_GRAPH 同 capability 互斥选中（sel 按 engine 拆分）
+    MEMORY_STORE,
     SOUL_PROFILE,
     COMMAND_GATE,
     WAKE_GREETING,

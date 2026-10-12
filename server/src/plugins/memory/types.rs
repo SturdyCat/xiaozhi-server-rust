@@ -103,16 +103,20 @@ impl MaintainOutcome {
 /// 记忆状态快照（`GET /api/memory/status` 与管理页状态卡）。
 #[derive(Debug, Clone, Default)]
 pub struct MemoryStats {
-    /// 引擎 id（`graph` / `none`；P4 起 wire 键也叫 `engine`）。
+    /// 引擎 id（`graph` / `store` / `none`；P4 起 wire 键也叫 `engine`）。
     pub engine: &'static str,
     /// 记忆是否真正生效（启用 + 后端可用）。
     pub active: bool,
     pub db_path: String,
     pub db_bytes: u64,
+    /// 累计轮次数（P1-7：store 后端的核心计数"积累了多少轮"；graph 一并填充，同口径可比）。
+    pub turns: i64,
     pub messages: i64,
     pub memories: i64,
     pub pending: i64,
     pub quarantined: i64,
+    /// `extraction_state='stored'` 的消息条数（store 积累的原文；graph 恒 0）。
+    pub stored: i64,
     /// 各作用域（哪台设备有多少条记忆）。
     pub scopes: Vec<(String, i64)>,
     /// 当前是否为"无 embedding 的词法模式"（UI 据此显示降级原因）。
@@ -129,10 +133,12 @@ impl MemoryStats {
             "active": self.active,
             "db_path": self.db_path,
             "db_bytes": self.db_bytes,
+            "turns": self.turns,
             "messages": self.messages,
             "memories": self.memories,
             "pending": self.pending,
             "quarantined": self.quarantined,
+            "stored": self.stored,
             "scopes": self.scopes.iter().map(|(s, n)| serde_json::json!({"scope": s, "memories": n})).collect::<Vec<_>>(),
             "lexical_only": self.lexical_only,
             "extractor": self.extractor,

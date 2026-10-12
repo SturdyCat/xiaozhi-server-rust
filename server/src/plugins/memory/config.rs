@@ -7,11 +7,24 @@
 use serde::{Deserialize, Serialize};
 
 /// 记忆引擎（`[memory].engine`；P4 前叫 `backend`）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+///
+/// P1-7 起支持三种后端（多后端注册表，见 `docs/p1-round1-design.md` §1.2）：
+/// - `graph`（默认）：内置图记忆，抽取 + 摘要召回；
+/// - `store`：纯存储——只落对话原文（`extraction_state='stored'`），零 LLM、零召回，
+///   语义定位是"先积累再决定"；
+/// - `none`：显式停用（保留配置但不起作用）。
+///
+/// ⚠️ `Deserialize` 是**手写**的（[下面][impl]）：serde derive 对未知变体的报错是英文
+/// （`unknown variant ... expected one of ...`），不满足「怎么修」中文文案口径（NF-3）；
+/// `Serialize` 保持 derive（写出侧无此问题）。宽容度对齐 `canonical_engine`：trim + 小写。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MemoryBackend {
     /// 内置图记忆（SQLite，本地词法召回，零外网依赖）。
     Graph,
+    /// 纯存储（P1-7）：只把对话原文落 SQLite，不抽取（零辅助 LLM 调用）、`recall` 恒空。
+    /// 与 graph 的 `extraction_enabled` 开关**分层**：backend 选引擎，开关管 graph 内部行为。
+    Store,
     /// 显式关闭（保留配置但不起作用，便于临时停用而不丢参数）。
     None,
 }
@@ -19,6 +32,50 @@ pub enum MemoryBackend {
 impl Default for MemoryBackend {
     fn default() -> Self {
         MemoryBackend::Graph
+    }
+}
+
+/// `[memory].engine` 合法取值（中文报错文案与 schema options 的单一出处）。
+pub const MEMORY_ENGINE_VALUES: &[&str] = &["graph", "store", "none"];
+
+impl MemoryBackend {
+    /// 字符串 → 变体（trim + 小写归一；未知值返回 `None` 由调用方报错）。
+    fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "graph" => Some(MemoryBackend::Graph),
+            "store" => Some(MemoryBackend::Store),
+            "none" => Some(MemoryBackend::None),
+            _ => None,
+        }
+    }
+}
+
+/// 手写反序列化：接受字符串（含 TOML 的裸字面量），未知值给出中文「怎么修」报错。
+///
+/// 错误范本（对齐 `registry::unknown_engine_hint` 的口径）：
+/// `[memory].engine = "store2" 不是已知后端：可选 graph / store / none。…`
+/// `Config::load`（启动报错）与 `PUT /api/config`（400）两条路径都在这一层统一拦截。
+impl<'de> Deserialize<'de> for MemoryBackend {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct V;
+        impl serde::de::Visitor<'_> for V {
+            type Value = MemoryBackend;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("[memory].engine 的取值（graph / store / none）")
+            }
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<MemoryBackend, E> {
+                MemoryBackend::parse(v).ok_or_else(|| {
+                    E::custom(format!(
+                        "[memory].engine = \"{v}\" 不是已知后端：可选 graph / store / none。\
+                         请改成一个可选值，或删掉该键使用默认 graph（旧键 backend 仍可读）。"
+                    ))
+                })
+            }
+        }
+        deserializer.deserialize_str(V)
     }
 }
 
@@ -69,8 +126,10 @@ pub struct MemoryConfig {
     #[serde(default)]
     pub enabled: bool,
     /// 引擎 id（P4 约定，见 `docs/plugin-architecture-unification.md` §3.3）：
-    /// `graph`（默认，内置图记忆）| `none`（显式停用，等价 `enabled=false`）。
-    /// 旧键 `backend` 经 serde `alias` 仍可读（保存后写 `engine`）。
+    /// `graph`（默认，内置图记忆）| `store`（纯存储：只落原文，零 LLM 零召回，P1-7）|
+    /// `none`（显式停用，等价 `enabled=false`）。
+    /// 旧键 `backend` 经 serde `alias` 仍可读（保存后写 `engine`）；
+    /// 未知值由 [`MemoryBackend`] 的自定义 `Deserialize` 报中文错误。
     #[serde(default, alias = "backend")]
     pub engine: MemoryBackend,
     /// SQLite 库路径。容器部署请放在挂载卷内（如 /data/memory.db），否则重建容器即丢。
@@ -203,15 +262,21 @@ impl MemoryConfig {
     }
 
     /// 记忆是否真正生效（启用 + 后端非 none）。
+    ///
+    /// P1-7 语义扩展：原为 `enabled && engine == Graph`，多后端后改为**任何非 none 后端
+    /// 都算生效**——store 也要通过 [`crate::app::session::reply`] 的 `spawn_memory_write`
+    /// 门落原文（这正是"纯存储仍要记录"的本意）；召回门是 `recall_enabled`，
+    /// store 后端由 `StoreOnlyMemory::recall` 恒返空兜底，不依赖该开关。
     pub fn active(&self) -> bool {
-        self.enabled && self.engine == MemoryBackend::Graph
+        self.enabled && self.engine != MemoryBackend::None
     }
 
-    /// 规范化后的引擎 id（`graph` / `none`）。
+    /// 规范化后的引擎 id（`graph` / `store` / `none`）。
     /// 取值由 [`MemoryBackend`] 枚举闭死：未知值在**反序列化**阶段即报错（不需运行期校验）。
     pub fn engine_id(&self) -> &'static str {
         match self.engine {
             MemoryBackend::Graph => "graph",
+            MemoryBackend::Store => "store",
             MemoryBackend::None => "none",
         }
     }
@@ -257,7 +322,14 @@ impl MemoryConfig {
     }
 
     /// 面向 UI 的软性提示（`Phase::Degraded` 的原因；`None` = 一切正常）。
+    ///
+    /// ⚠️ 本方法只被 **graph 描述符**的 `warn_if` 调用（store 描述符 `warn_if: None`——
+    /// "不召回"是 store 的设计定位而非能力受限，不构成降级理由）。
     pub fn warning(&self, llm: &crate::config::LlmConfig) -> Option<String> {
+        // 只对 graph 后端给出软性提示（store 的定位说明走配置页文案，不进状态）
+        if self.enabled && self.engine != MemoryBackend::Graph {
+            return None;
+        }
         if !self.active() {
             return None;
         }

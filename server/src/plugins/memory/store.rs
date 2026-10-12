@@ -86,6 +86,9 @@ pub struct Counts {
     pub memories: i64,
     pub pending: i64,
     pub quarantined: i64,
+    /// `extraction_state='stored'` 的消息条数（P1-7：store 后端积累的原文；
+    /// graph 恒 0——切换到 graph 后端后该计数不再增长，但历史存量仍可见）。
+    pub stored: i64,
 }
 
 /// SQLite 记忆库。
@@ -123,6 +126,8 @@ impl Store {
     }
 
     /// 写入一轮原文（user + assistant）并置为待抽取。
+    ///
+    /// graph 后端的既有入口（行为零变化）：委托 [`Self::insert_turn_state`]，state='pending'。
     pub fn insert_turn(
         &self,
         scope: &str,
@@ -130,6 +135,33 @@ impl Store {
         turn_index: i64,
         user_text: &str,
         assistant_text: &str,
+        now: i64,
+    ) -> Result<Vec<String>> {
+        self.insert_turn_state(
+            scope,
+            session_id,
+            turn_index,
+            user_text,
+            assistant_text,
+            "pending",
+            now,
+        )
+    }
+
+    /// 写入一轮原文并指定抽取状态（P1-7 参数化：`'pending'` = graph 队列，`'stored'` = 纯存储）。
+    ///
+    /// ⚠️ `'stored'` 的语义纪律：store 后端写入、**永不进入** graph 抽取队列
+    /// （`pending_turn` 的 `WHERE extraction_state='pending'` 天然看不见它们）。
+    /// 把 'stored' 批量改回 'pending' 属于 P2 的显式管理动作（批量重建图记忆），
+    /// 任何新代码不得自动回填——否则用户从 store 切回 graph 会突发 N 次辅助 LLM 调用。
+    pub fn insert_turn_state(
+        &self,
+        scope: &str,
+        session_id: &str,
+        turn_index: i64,
+        user_text: &str,
+        assistant_text: &str,
+        state: &str,
         now: i64,
     ) -> Result<Vec<String>> {
         let mut conn = self.conn();
@@ -144,8 +176,8 @@ impl Store {
                 "INSERT OR IGNORE INTO gm_messages
                    (id, scope, session_id, turn_index, role, content, created_at,
                     extraction_state, extraction_attempts, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending', 0, ?7)",
-                rusqlite::params![id, scope, session_id, turn_index, role, content, now],
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, ?7)",
+                rusqlite::params![id, scope, session_id, turn_index, role, content, now, state],
             )
             .context("写入原文失败")?;
             ids.push(id);
@@ -450,7 +482,42 @@ impl Store {
             quarantined: one(
                 "SELECT COUNT(*) FROM gm_messages WHERE extraction_state = 'quarantined'",
             )?,
+            stored: one("SELECT COUNT(*) FROM gm_messages WHERE extraction_state = 'stored'")?,
         })
+    }
+
+    /// 累计轮次数（`COUNT(DISTINCT scope, session_id, turn_index)`，P1-7）。
+    ///
+    /// 这是 store 后端状态卡的**核心计数**（"先积累"积累了多少）；graph 一并填充
+    /// （`MemoryStats.turns`）——同一口径下两后端可比。每轮 2 条消息，此处按轮去重。
+    pub fn turn_count(&self) -> Result<i64> {
+        self.conn()
+            .query_row(
+                // ⚠️ SQLite 的 COUNT 只收单参数（`COUNT(DISTINCT a,b,c)` 是 MySQL 语法），
+                // 多列去重计数必须用 DISTINCT 子查询。
+                "SELECT COUNT(*) FROM (SELECT DISTINCT scope, session_id, turn_index FROM gm_messages)",
+                [],
+                |r| r.get(0),
+            )
+            .context("统计轮次数失败")
+    }
+
+    /// 各 scope 的**原文轮次数**（P1-7：store 的 stats 按**原文**列 scope；
+    /// graph 的 [`Self::scopes`] 按**记忆**列——两者口径不同，分开命名防混用）。
+    pub fn message_scope_counts(&self) -> Result<Vec<(String, i64)>> {
+        let conn = self.conn();
+        let mut stmt = conn
+            .prepare(
+                // ⚠️ 同 turn_count：SQLite 多列去重计数用 DISTINCT 子查询。
+                "SELECT scope, COUNT(*) FROM (SELECT DISTINCT scope, session_id, turn_index FROM gm_messages)
+                 GROUP BY scope ORDER BY COUNT(*) DESC",
+            )
+            .context("准备原文 scope 查询失败")?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+            .context("查询原文 scope 失败")?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .context("读取原文 scope 失败")
     }
 
     /// 各 scope 的**原文**条数（保留策略按它迭代：库里可能只有原文、还没有记忆，

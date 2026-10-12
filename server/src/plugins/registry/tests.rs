@@ -392,6 +392,63 @@ fn command_gate_is_optional_and_hot_reloadable() {
     );
 }
 
+/// P1-7 漂移护栏：`[memory].engine` 的合法取值必须与注册表 memory.* 实现一一对应
+/// （外加 "none"）。新增后端变体（如 P1-9 的 rag）若忘了挂注册表或漏改
+/// `MEMORY_ENGINE_VALUES`/schema 字段，本测试直接打红——三处必须同源同步。
+#[test]
+fn memory_backend_values_match_registry_impls() {
+    use crate::plugins::memory::config::MEMORY_ENGINE_VALUES;
+
+    // (1) 硬约束：当前注册表的 memory 实现（动态收集，防止改名后断言失真）。
+    let impl_ids: Vec<String> = impls_of(Capability::Memory)
+        .map(|d| d.id.to_string())
+        .collect();
+    assert_eq!(
+        impl_ids,
+        vec!["memory.graph", "memory.store"],
+        "memory 实现清单漂移：新增后端须挂注册表并同步此断言"
+    );
+
+    // (2) serde 合法取值 = 实现名去能力前缀 + "none"。
+    let from_impls: Vec<String> = impl_ids
+        .iter()
+        .map(|id| id.trim_start_matches("memory.").to_string())
+        .chain(["none".to_string()])
+        .collect();
+    let from_enum: Vec<String> = MEMORY_ENGINE_VALUES.iter().map(|s| s.to_string()).collect();
+    assert_eq!(
+        from_enum, from_impls,
+        "MEMORY_ENGINE_VALUES 与注册表实现漂移"
+    );
+
+    // (3) schema 的 engine Enum 字段取值 = MEMORY_ENGINE_VALUES（单一出处对账）。
+    let d = find("memory.graph").expect("应注册 memory.graph");
+    let engine_field = d
+        .fields
+        .iter()
+        .find(|f| f.key == "engine")
+        .expect("memory.graph 应有 engine 字段");
+    let FieldKind::Enum(values) = engine_field.kind else {
+        panic!("engine 字段应为 Enum");
+    };
+    assert_eq!(
+        values.len(),
+        MEMORY_ENGINE_VALUES.len(),
+        "schema Enum 与常量取值数漂移"
+    );
+    for (a, b) in values.iter().zip(MEMORY_ENGINE_VALUES.iter()) {
+        assert_eq!(*a, *b, "schema Enum 与常量取值漂移");
+    }
+
+    // (4) serde 行为抽查：每个合法值都能反序列化，且序列化值回环一致。
+    for v in MEMORY_ENGINE_VALUES {
+        let cfg: crate::plugins::memory::MemoryConfig =
+            toml::from_str(&format!("engine = \"{v}\"")).expect(v);
+        let serialized = serde_json::to_string(&cfg.engine).unwrap();
+        assert_eq!(serialized.as_str(), format!("\"{v}\""), "engine 序列化应回环: {v}");
+    }
+}
+
 /// 唤醒问候语（`[wakeup]`）的注册表语义护栏。
 ///
 /// 与指令闸门同构，但多一条**跨段矛盾**：`persist` 复用经内存 TTS 缓存承载成品帧，

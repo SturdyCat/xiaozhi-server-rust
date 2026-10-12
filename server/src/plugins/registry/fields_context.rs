@@ -8,6 +8,8 @@
 //! 漂移由 `registry/tests.rs` 的 `field_keys_exist_in_config` 兜底。
 
 use super::{Capability, FieldKind, FieldSchema, HotReload};
+// 引擎合法取值与 serde/中文报错共用同一常量（单一出处，P1-7）。
+use crate::plugins::memory::config::MEMORY_ENGINE_VALUES;
 
 /// `[memory]` 顶层字段（路径 `["memory"]`）。
 pub(super) const MEMORY_FIELDS: &[FieldSchema] = &[
@@ -23,9 +25,10 @@ pub(super) const MEMORY_FIELDS: &[FieldSchema] = &[
     FieldSchema {
         key: "engine",
         label: "引擎",
-        kind: FieldKind::Enum(&["graph", "none"]),
+        kind: FieldKind::Enum(MEMORY_ENGINE_VALUES),
         default_hint: "graph",
-        help: "graph = 内置图记忆（本地词法召回，零外网调用）；none = 保留配置但不生效（旧键 backend 仍可读）。",
+        help: "graph = 内置图记忆（本地词法召回，零外网调用）；store = 纯存储（只存原文、\
+               不抽取不召回，适合先积累再决定）；none = 保留配置但不生效（旧键 backend 仍可读）。",
         hot: HotReload::NextSession,
         required: true,
     },

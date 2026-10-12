@@ -390,10 +390,13 @@ impl MemoryProvider for GraphMemory {
         };
         match self.store.counts() {
             Ok(c) => MemoryStats {
+                // P1-7：turns 一并填充（graph 的轮次计数与 store 同口径可比）
+                turns: self.store.turn_count().unwrap_or_default(),
                 messages: c.messages,
                 memories: c.memories,
                 pending: c.pending,
                 quarantined: c.quarantined,
+                stored: c.stored,
                 scopes: self.store.scopes().unwrap_or_default(),
                 ..base
             },

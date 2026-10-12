@@ -113,6 +113,7 @@ class ContextSectionState(private val scope: PagerScope) {
         memoryBackendOptions.addAll(
             listOf(
                 "graph" to "内置图记忆（本地 SQLite）",
+                "store" to "纯存储（只存原文，先积累再决定）",
                 "none" to "不生效（保留配置）",
             ),
         )

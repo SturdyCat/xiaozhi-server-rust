@@ -292,6 +292,15 @@ fun ViewContainer<*, *>.memoryConfigCard(form: ConfigFormState, ctx: Pager) {
                     form.openDropdown = ""
                 },
             )
+            vif({ sm.memoryBackend == "store" }) {
+                Text {
+                    attr {
+                        fontSize(AdminType.micro)
+                        color(AdminColors.textTertiary)
+                        text("纯存储：只把对话原文落库（零辅助 LLM 成本）、不做抽取与召回。适合先积累、之后切回 graph 再决定是否重建记忆；保留策略仍会按 [memory.retention] 清理原文。")
+                    }
+                }
+            }
             dropdownField(
                 label = "inject_position（记忆注入位置）",
                 currentLabel = {

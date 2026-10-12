@@ -35,15 +35,20 @@ mod graph;
 mod llm_extract;
 mod schema;
 mod store;
+mod store_only;
 mod terms;
 pub use graph::GraphMemory;
+pub use store_only::StoreOnlyMemory;
 // 作为插件对外 API 面保留（bin crate 内暂无直接引用者；抽取链路的单测经 `super::*` 使用）
 #[allow(unused_imports)]
 pub use llm_extract::{Extraction, EXTRACT_INSTRUCTIONS, OUTCOMES};
 
 // 配置与数据类型拆分到子文件，此处 `pub use` 再导出，
 // 保证既有 `crate::plugins::memory::Xxx` 与子模块 `super::Xxx` 引用路径不变。
-pub use config::{ExtractorConfig, MemoryBackend, MemoryConfig, RetentionConfig};
+pub use config::{MemoryBackend, MemoryConfig, RetentionConfig};
+// 抽取路由配置：类型经 `MemoryConfig.extractor` 字段暴露；显式 re-export 仅为单测 `super::*` 可达。
+#[allow(unused_imports)]
+pub use config::ExtractorConfig;
 pub use types::{
     CompletedTurn, ExtractOutcome, MaintainOpts, MaintainOutcome, MemoryStats, RecallResult,
 };
@@ -128,6 +133,11 @@ impl MemoryProvider for NoopMemory {
 /// 依据配置构造记忆引擎（关闭时返回 [`NoopMemory`]）。
 ///
 /// `llm` 是 `[llm]` 配置：抽取路由未单独配置时复用它（同一 trait，不另写 HTTP 客户端）。
+///
+/// ⚠️ **本函数是后端分发的唯一收口点**（P1-7 多后端注册表）：`PluginHost::boot` 与
+/// `Engines::refresh_memory` 热切换都走这里——新增后端只改这一个 match + 注册表描述符，
+/// engine.rs 永远不动。store 分支**不触碰 llm**（零辅助 LLM 成本的结构保证，见
+/// [`StoreOnlyMemory`] 模块注释）。
 pub fn build_memory(
     cfg: &MemoryConfig,
     llm: &crate::config::LlmConfig,
@@ -135,7 +145,12 @@ pub fn build_memory(
     if !cfg.active() {
         return Ok(Arc::new(NoopMemory));
     }
-    Ok(Arc::new(GraphMemory::new(cfg, llm)?))
+    match cfg.engine {
+        MemoryBackend::Graph => Ok(Arc::new(GraphMemory::new(cfg, llm)?)),
+        MemoryBackend::Store => Ok(Arc::new(StoreOnlyMemory::new(cfg)?)),
+        // 不可达（active() 已挡 none），match 穷尽需要
+        MemoryBackend::None => Ok(Arc::new(NoopMemory)),
+    }
 }
 
 #[cfg(test)]

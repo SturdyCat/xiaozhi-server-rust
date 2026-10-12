@@ -165,3 +165,132 @@ fn signature_changes_with_any_field() {
         "改参数必须改变签名（否则热切换不生效）"
     );
 }
+
+// ============================================================
+// P1-7：store 后端（多后端注册表）的配置层护栏
+// ============================================================
+
+/// PRD 验收 4：未知 engine 值 → 反序列化**直接报错**且文案含「怎么修」与合法值清单。
+/// （serde derive 的英文报错不满足 NF-3，本测试守护自定义 Deserialize 的中文口径。）
+///
+/// ⚠️ 直接反序列化 `MemoryConfig` 时 TOML 文档**不带 `[memory]` 表头**（其字段就是文档
+/// 顶层；带表头的话顶层键 "memory" 是未知字段被静默忽略，全部走默认值——测了个寂寞）。
+/// 走完整 `[memory]` 表头的真实加载路径由下方 `unknown_engine_via_full_config` 覆盖。
+#[test]
+fn unknown_engine_reports_chinese_error_with_fix_hint() {
+    let err = toml::from_str::<MemoryConfig>("enabled = true\nengine = \"store2\"\n")
+        .err()
+        .expect("未知 engine 必须报错");
+    let msg = format!("{err}");
+    assert!(msg.contains("store2"), "应回显用户写的值: {msg}");
+    assert!(msg.contains("可选 graph / store / none"), "必须列出合法值: {msg}");
+    assert!(msg.contains("怎么修") || msg.contains("请改"), "必须含修复指引: {msg}");
+    // ⚠️ TOML 裸字面量（engine = mistral，无引号）在 **TOML 解析层**即被拒（invalid string），
+    // 到不了 serde 层——自定义 Deserialize 只需拦截"合法 TOML 字符串但取值未知"的场景。
+}
+
+/// 真实加载路径（`Config::load` 口径）：`[memory].engine` 未知值在**完整 Config** 反序列化
+/// 时同样被拦截（Config::load 启动报错 / PUT /api/config 400 都经此层）。
+#[test]
+fn unknown_engine_via_full_config() {
+    let err = toml::from_str::<Config>("[memory]\nenabled = true\nengine = \"store2\"\n")
+        .err()
+        .expect("完整 Config 路径未知 engine 必须报错");
+    let msg = format!("{err:#}");
+    assert!(msg.contains("不是已知后端"), "{msg}");
+}
+
+/// 合法取值与大小写/空白宽容度（对齐 canonical_engine 的口径）。
+#[test]
+fn engine_parses_graph_store_none_with_leniency() {
+    let parse = |s: &str| toml::from_str::<MemoryConfig>(&format!("engine = \"{s}\"\n")).unwrap().engine;
+    assert_eq!(parse("graph"), MemoryBackend::Graph);
+    assert_eq!(parse("store"), MemoryBackend::Store);
+    assert_eq!(parse("none"), MemoryBackend::None);
+    assert_eq!(parse("  Store "), MemoryBackend::Store, "trim + 大小写宽容");
+    assert_eq!(parse("GRAPH"), MemoryBackend::Graph);
+    // 序列化侧：写出小写（与旧部署的 TOML 形态一致）
+    assert_eq!(
+        toml::to_string(&MemoryConfig {
+            engine: MemoryBackend::Store,
+            ..MemoryConfig::default()
+        })
+        .unwrap()
+        .contains("store"),
+        true
+    );
+}
+
+/// PRD 验收 5（默认回归）：不写 engine → graph；enabled=false → active() 恒 false。
+#[test]
+fn default_zero_cost_contract_survives_store_addition() {
+    let cfg = toml::from_str::<MemoryConfig>("enabled = false\n").unwrap();
+    assert_eq!(cfg.engine, MemoryBackend::Graph, "不写 engine 默认 graph");
+    assert!(!cfg.active(), "enabled=false 时任何 engine 都不生效");
+    // 旧键 backend 仍可读（字段级 alias 与枚举自定义 Deserialize 正交）
+    let legacy = toml::from_str::<MemoryConfig>("enabled = true\nbackend = \"store\"\n").unwrap();
+    assert_eq!(legacy.engine, MemoryBackend::Store, "旧键 backend 别名仍生效");
+}
+
+/// active() 语义扩展（P1-7）：store 也算生效（写入门要放行），none 不生效。
+#[test]
+fn active_covers_store_but_not_none() {
+    let mut cfg = enabled_cfg();
+    assert!(cfg.active(), "graph + enabled 生效");
+    cfg.engine = MemoryBackend::Store;
+    assert!(cfg.active(), "store + enabled 必须生效（spawn_memory_write 门要放行）");
+    cfg.engine = MemoryBackend::None;
+    assert!(!cfg.active(), "none 不生效（显式停用）");
+}
+
+/// engine_id：三个后端的稳定 id（`/api/memory/status` 与注册表对账口径）。
+#[test]
+fn engine_id_maps_all_backends() {
+    assert_eq!(enabled_cfg().engine_id(), "graph");
+    let mut s = enabled_cfg();
+    s.engine = MemoryBackend::Store;
+    assert_eq!(s.engine_id(), "store");
+    let mut n = enabled_cfg();
+    n.engine = MemoryBackend::None;
+    assert_eq!(n.engine_id(), "none");
+}
+
+/// 热切换签名：engine 字段参与签名（serde 全量）→ graph⇄store 切换必触发重建。
+#[test]
+fn signature_covers_engine_switch() {
+    let g = enabled_cfg();
+    let mut s = enabled_cfg();
+    s.engine = MemoryBackend::Store;
+    assert_ne!(
+        g.signature(),
+        s.signature(),
+        "engine 切换必须改变签名，否则热切换不会重建引擎"
+    );
+}
+
+/// store 后端的校验：db_path / scope_prefix 检查同样必需（store 也按 scope 落库），
+/// 但 graph 特有的 recall_max_nodes 范围检查对 store 不设限（无召回语义）。
+#[test]
+fn store_backend_validates_shared_fields() {
+    let mut cfg = enabled_cfg();
+    cfg.engine = MemoryBackend::Store;
+    cfg.db_path = "  ".into();
+    let err = format!("{:#}", cfg.validate().unwrap_err());
+    assert!(err.contains("db_path"), "store 也必须有可写路径: {err}");
+
+    let mut ok = enabled_cfg();
+    ok.engine = MemoryBackend::Store;
+    ok.validate().unwrap();
+}
+
+/// warning()：store 后端不给"无 embedding"类降级提示（那是 graph 的能力受限，
+/// store 的"不召回"是设计定位而非缺陷——显示成降级会让用户误以为坏了）。
+#[test]
+fn store_backend_has_no_warning() {
+    let mut cfg = enabled_cfg();
+    cfg.engine = MemoryBackend::Store;
+    assert!(
+        cfg.warning(&Config::default().llm).is_none(),
+        "store 不应有降级提示"
+    );
+}

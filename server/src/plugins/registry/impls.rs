@@ -38,8 +38,13 @@ fn sel_llm(cfg: &Config) -> bool {
 fn sel_aiui(cfg: &Config) -> bool {
     cfg.aiui.enabled
 }
-fn sel_memory(cfg: &Config) -> bool {
-    cfg.memory.active()
+/// P1-7 多后端：`selected` 按实现拆分（不拆的话 active() 对 graph/store 都为真，
+/// 两条 memory 描述符会同时选中，`active_impl` 无法唯一确定）。
+fn sel_memory_graph(cfg: &Config) -> bool {
+    cfg.memory.enabled && cfg.memory.engine == crate::plugins::memory::MemoryBackend::Graph
+}
+fn sel_memory_store(cfg: &Config) -> bool {
+    cfg.memory.enabled && cfg.memory.engine == crate::plugins::memory::MemoryBackend::Store
 }
 fn sel_soul(cfg: &Config) -> bool {
     cfg.soul.enabled
@@ -435,7 +440,30 @@ pub const MEMORY_GRAPH: PluginDescriptor = PluginDescriptor {
     validate: validate_memory,
     build: Some(build_memory_d),
     warn_if: Some(warn_memory),
-    selected: sel_memory,
+    selected: sel_memory_graph,
+};
+
+/// 纯存储后端（P1-7：`[memory].engine = "store"`）：只落对话原文，零 LLM、零召回。
+///
+/// 与 graph 的关键差异：`requires = &[]`（不依赖 LlmUpstream——构造根本不碰抽取路由）、
+/// `warn_if = None`（"不召回"是设计定位不是能力受限）。validate/signature/build 与 graph
+/// 共用同一组函数：签名含 engine 字段（切换必触发重建）、validate 的 db_path/scope 检查
+/// 对 store 同样必需、build 经 `build_memory` 工厂内部分发（store 分支不构建 LLM）。
+pub const MEMORY_STORE: PluginDescriptor = PluginDescriptor {
+    id: "memory.store",
+    capability: Capability::Memory,
+    display: "纯存储（只存原文 · 不抽取不召回）",
+    local: true,
+    hot: HotReload::NextSession,
+    requires: &[],
+    fields_path: &["memory"],
+    // 无私有字段：[memory] 段的公共字段在 MEMORY_FIELDS 已登记，两个实现共享同一份
+    fields: MEMORY_FIELDS,
+    signature: sig_memory,
+    validate: validate_memory,
+    build: Some(build_memory_d),
+    warn_if: None,
+    selected: sel_memory_store,
 };
 
 /// 人格档案（`[soul]`）：不产出共享实例（纯配置 → prompt 段）。
