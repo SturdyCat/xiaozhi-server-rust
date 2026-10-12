@@ -9,7 +9,6 @@ package com.xiaozhi.admin
 
 import com.tencent.kuikly.core.base.PagerScope
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
-import com.tencent.kuikly.core.pager.Pager
 import com.tencent.kuikly.core.reactive.collection.ObservableList
 import com.tencent.kuikly.core.reactive.handler.observable
 import com.tencent.kuikly.core.reactive.handler.observableList
@@ -29,11 +28,8 @@ class UsageSessionRow(
 )
 
 /** `GET /api/usage` 的数据源（把早已存在、但管理页一直没有入口的接口接出来）。 */
-class UsageState(private val scope: PagerScope) {
+class UsageState(scope: PagerScope) : LoadableState(scope) {
 
-    var loading by scope.observable(false)
-    var loaded by scope.observable(false)
-    var loadError by scope.observable("")
     var note by scope.observable("")
     var summary by scope.observable("")
 
@@ -43,26 +39,11 @@ class UsageState(private val scope: PagerScope) {
 
     val sessions: ObservableList<UsageSessionRow> by scope.observableList()
 
-    private var base = ""
+    override fun endpoint(baseUrl: String): String = "$baseUrl/api/usage"
 
-    fun load(ctx: Pager, baseUrl: String = "") {
-        if (loading) return
-        base = baseUrl
-        loading = true
-        loadError = ""
-        getJson(ctx, "$baseUrl/api/usage") { ok, data, message ->
-            loading = false
-            if (!ok) {
-                loadError = "用量数据加载失败: $message"
-                return@getJson
-            }
-            apply(data)
-        }
-    }
+    override val errorLabel: String = "用量数据加载失败"
 
-    fun refresh(ctx: Pager) = load(ctx, base)
-
-    private fun apply(data: JSONObject) {
+    override fun apply(data: JSONObject) {
         note = data.text("note")
         sessions.clear()
         val global = data.optJSONObject("global")

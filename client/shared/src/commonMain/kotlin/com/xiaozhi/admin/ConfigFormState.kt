@@ -9,6 +9,7 @@ import com.tencent.kuikly.core.reactive.handler.observable
 import com.tencent.kuikly.core.reactive.handler.observableList
 import com.tencent.kuikly.core.timer.setTimeout
 import com.tencent.kuikly.core.views.View
+import kotlin.reflect.KMutableProperty0
 
 /**
  * 配置表单状态（跨端，commonMain，无平台依赖）。
@@ -216,6 +217,32 @@ class ConfigFormState(private val scope: PagerScope) {
     /** 当前展开的下拉（TTS engine 选择等，"" = 全部收起）；放状态类避免 Pager body 重建丢失展开态。 */
     var openDropdown by scope.observable("")
 
+    /** 下拉「是否展开」的判定（收敛各调用点 `openDropdown == id` 三行样板）。 */
+    fun isDropdownOpen(id: String): Boolean = openDropdown == id
+
+    /** 下拉开合切换：已展开则收起，否则只展开这一个（收敛各调用点 `= if (== id) "" else id` 样板）。 */
+    fun toggleDropdown(id: String) {
+        openDropdown = if (openDropdown == id) "" else id
+    }
+
+    /** 置 dirty（任意表单字段变更时调用；与直接赋值 `dirty = true` 语义一致）。 */
+    fun markDirty() {
+        dirty = true
+    }
+
+    /**
+     * 翻转以字符串存储的布尔字段并置 dirty。
+     *
+     * Kuikly Input/Switch 的绑定值为 String，布尔配置项（enabled/stream/use_itn…）在表单里
+     * 以 "true"/"false" 字符串保存，保存时再 `toBooleanStrictOrNull()` 转回——见 [save]。
+     * 接收 `KMutableProperty0`（如 `form.toggleStringBool(form::llmStream)`），对
+     * [sm] / [cmd] / [wake] 子状态字段同样适用（`form.toggleStringBool(sm::soulEnabled)`）。
+     */
+    fun toggleStringBool(field: KMutableProperty0<String>) {
+        field.set(if (field.get() == "true") "false" else "true")
+        markDirty()
+    }
+
     /** 配置子导航当前选中的 section（替代 tabbedPanel 的 tabIndex；默认落到 Server）。 */
     private var _configSection by scope.observable("server")
     /** 与 [_configSection] 同步的单元素 ObservableList，供右侧内容 `vfor` 响应式重建。 */
@@ -302,7 +329,7 @@ class ConfigFormState(private val scope: PagerScope) {
         val ids = xfyunVoiceOptions.map { it.first }
         if (xfyunVoice !in ids) {
             xfyunVoice = ids.firstOrNull() ?: xfyunVoice
-            dirty = true
+            markDirty()
         }
     }
 
@@ -314,7 +341,7 @@ class ConfigFormState(private val scope: PagerScope) {
             val ids = xfyunVoiceOptions.map { it.first }
             if (xfyunVoice !in ids) {
                 xfyunVoice = ids.firstOrNull() ?: xfyunVoice
-                dirty = true
+                markDirty()
             }
         }
     }
@@ -645,7 +672,7 @@ class ConfigFormState(private val scope: PagerScope) {
                 }
             } else if (code == 409) {
                 // 过期写入：**保留草稿**（dirty 不动），顶栏出现「重新加载」入口
-                dirty = true
+                markDirty()
                 conflict = true
                 saveImpactNote = ""
                 statusMsg = serverMsg.ifEmpty { "配置已被其他窗口修改，请重新加载后再保存" }

@@ -2,7 +2,6 @@ package com.xiaozhi.admin
 
 import com.tencent.kuikly.core.base.PagerScope
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
-import com.tencent.kuikly.core.pager.Pager
 import com.tencent.kuikly.core.reactive.collection.ObservableList
 import com.tencent.kuikly.core.reactive.handler.observable
 import com.tencent.kuikly.core.reactive.handler.observableList
@@ -23,7 +22,7 @@ import com.tencent.kuikly.core.reactive.handler.observableList
  * （不参与表单编辑），与 `ConfigFormState`（可写表单）混在一起会让"哪些字段会被回传"
  * 变得难以判断。
  */
-class PluginMetaState(private val scope: PagerScope) {
+class PluginMetaState(scope: PagerScope) : LoadableState(scope) {
 
     /** 必需能力（asr/vad/tts/llm）：坏掉即启动失败，单列一组。 */
     val requiredRows: ObservableList<CapabilityRow> by scope.observableList()
@@ -34,37 +33,12 @@ class PluginMetaState(private val scope: PagerScope) {
     /** 计数摘要（只含非零项）；未加载时为空串。 */
     var summary by scope.observable("")
 
-    /** 加载失败的就地错误文案（首次加载失败 → 就地错误 + 「重试」，不弹 toast）。 */
-    var loadError by scope.observable("")
+    override fun endpoint(baseUrl: String): String = "$baseUrl/api/plugins"
 
-    var loading by scope.observable(false)
-    var loaded by scope.observable(false)
-
-    /** 上次使用的服务端基址：`refresh` 复用（web 同域为空串，macApp 连接流程传绝对地址）。 */
-    private var base = ""
-
-    /** 拉取能力清单（+ 实际状态）。失败只置 `loadError`，不影响配置表单本身。 */
-    fun load(ctx: Pager, baseUrl: String = "") {
-        if (loading) return
-        base = baseUrl
-        loading = true
-        loadError = ""
-        network(ctx).requestGet("${baseUrl}/api/plugins", JSONObject()) { data, success, errorMsg, resp ->
-            loading = false
-            val code = resp.statusCode
-            if (!success || (code != null && code !in 200..299)) {
-                loadError = "能力清单加载失败: ${if (errorMsg.isNotEmpty()) errorMsg else "HTTP $code"}"
-                return@requestGet
-            }
-            apply(data)
-        }
-    }
-
-    /** 按上次的基址重新拉取（总览页「刷新」按钮）。 */
-    fun refresh(ctx: Pager) = load(ctx, base)
+    override val errorLabel: String = "能力清单加载失败"
 
     /** 解析 `capabilities[]` → 两行列表 + 计数摘要。 */
-    private fun apply(data: JSONObject) {
+    override fun apply(data: JSONObject) {
         requiredRows.clear()
         optionalRows.clear()
         val caps = data.optJSONArray("capabilities")

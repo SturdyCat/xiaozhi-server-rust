@@ -59,6 +59,63 @@ internal fun getJson(
 }
 
 /**
+ * 只读数据源的公共加载模板（基类）。
+ *
+ * StatsState / DevicesState / SessionsState / McpToolsState / PluginMetaState /
+ * UsageState / ConversationsState 七个类此前各自持有逐字相同的同构骨架：
+ * `loading/loaded/loadError + base + load(){if(loading)return;…} + refresh`。收敛到本基类后，
+ * 子类只需声明三个差异点：
+ * - [endpoint]：请求 URL（含查询参数）；
+ * - [errorLabel]：失败就地文案前缀（最终展示 `"$errorLabel: $message"`）；
+ * - [apply]：成功回包 → 本类字段的投影（子类在 apply 内置 `loaded = true; loadError = ""`）。
+ *
+ * 语义与收敛前逐字一致：进页先 `if (loading) return` 防重入；失败只置 `loadError`
+ * （就地错误 + 「刷新」按钮，不弹 toast）。
+ *
+ * ⚠️ Kuikly observable 与 PagerScope 绑定：scope 由**每个子类实例**各自持有并传给基类，
+ * 基类不引入任何跨 Pager / 跨页面共享状态。
+ * ⚠️ [OtaState] **不**继承本类：它多 token 鉴权（authQuery）与上传/删除写动作，
+ * load 签名（authToken 参数）与错误口径也不同型——硬套基类会虚增抽象层，保持自持。
+ */
+abstract class LoadableState(private val scope: PagerScope) {
+
+    var loading by scope.observable(false)
+    var loaded by scope.observable(false)
+    var loadError by scope.observable("")
+
+    /** 上次使用的服务端基址：[refresh] 复用（web 同域为空串，macApp 连接流程传绝对地址）。 */
+    protected var base = ""
+
+    /** 请求 URL（相对 baseUrl 的完整路径，含查询参数）。 */
+    protected abstract fun endpoint(baseUrl: String): String
+
+    /** 失败就地文案前缀（如 "设备列表加载失败"；最终展示 `"$errorLabel: $message"`）。 */
+    protected abstract val errorLabel: String
+
+    /** 成功后把回包投影到本类字段（子类各自实现）。 */
+    protected abstract fun apply(data: JSONObject)
+
+    /** 拉取数据。失败只置 `loadError`（就地错误 + 「刷新」按钮，不弹 toast）。 */
+    fun load(ctx: Pager, baseUrl: String = "") {
+        if (loading) return
+        base = baseUrl
+        loading = true
+        loadError = ""
+        getJson(ctx, endpoint(baseUrl)) { ok, data, message ->
+            loading = false
+            if (!ok) {
+                loadError = "$errorLabel: $message"
+                return@getJson
+            }
+            apply(data)
+        }
+    }
+
+    /** 按上次的基址重新拉取（页内「刷新」按钮 / 数据动作成功后）。 */
+    fun refresh(ctx: Pager) = load(ctx, base)
+}
+
+/**
  * 取字符串字段，把 JSON `null` 归一成空串。
  *
  * 服务端会把"设备从未 MCP 连接过"的 `board` / `firmware_version` 显式序列化成 `null`；
@@ -128,11 +185,7 @@ class UsageTotals(
  * 提供，且字段更全（实现展示名 / 生效语义文案 / 降级原因）。同一份事实投影两次，
  * 只会让"能力总览"卡在两个页面上长得不一样——概览页因此直接复用 `overviewCard(meta, ctx)`。
  */
-class StatsState(private val scope: PagerScope) {
-
-    var loading by scope.observable(false)
-    var loaded by scope.observable(false)
-    var loadError by scope.observable("")
+class StatsState(scope: PagerScope) : LoadableState(scope) {
 
     var uptimeText by scope.observable("")
     var devicesTotal by scope.observable(0)
@@ -151,26 +204,11 @@ class StatsState(private val scope: PagerScope) {
     /** 计数摘要（只含非零项）：顶栏一行就能看到"现在什么状态"。 */
     var summary by scope.observable("")
 
-    private var base = ""
+    override fun endpoint(baseUrl: String): String = "$baseUrl/api/stats"
 
-    fun load(ctx: Pager, baseUrl: String = "") {
-        if (loading) return
-        base = baseUrl
-        loading = true
-        loadError = ""
-        getJson(ctx, "$baseUrl/api/stats") { ok, data, message ->
-            loading = false
-            if (!ok) {
-                loadError = "看板数据加载失败: $message"
-                return@getJson
-            }
-            apply(data)
-        }
-    }
+    override val errorLabel: String = "看板数据加载失败"
 
-    fun refresh(ctx: Pager) = load(ctx, base)
-
-    private fun apply(data: JSONObject) {
+    override fun apply(data: JSONObject) {
         version = data.text("version")
         scopeNote = data.text("scope_note")
         uptimeText = humanDuration(data.optLong("uptime_ms") ?: 0L)
@@ -252,36 +290,18 @@ class DeviceRow(
 }
 
 /** `GET /api/devices` 的数据源。 */
-class DevicesState(private val scope: PagerScope) {
+class DevicesState(scope: PagerScope) : LoadableState(scope) {
 
-    var loading by scope.observable(false)
-    var loaded by scope.observable(false)
-    var loadError by scope.observable("")
     var note by scope.observable("")
     var summary by scope.observable("")
 
     val devices: ObservableList<DeviceRow> by scope.observableList()
 
-    private var base = ""
+    override fun endpoint(baseUrl: String): String = "$baseUrl/api/devices"
 
-    fun load(ctx: Pager, baseUrl: String = "") {
-        if (loading) return
-        base = baseUrl
-        loading = true
-        loadError = ""
-        getJson(ctx, "$baseUrl/api/devices") { ok, data, message ->
-            loading = false
-            if (!ok) {
-                loadError = "设备列表加载失败: $message"
-                return@getJson
-            }
-            apply(data)
-        }
-    }
+    override val errorLabel: String = "设备列表加载失败"
 
-    fun refresh(ctx: Pager) = load(ctx, base)
-
-    private fun apply(data: JSONObject) {
+    override fun apply(data: JSONObject) {
         note = data.text("note")
         devices.clear()
         val arr = data.array("devices")
@@ -355,36 +375,18 @@ class SessionRow(
 }
 
 /** `GET /api/sessions` 的数据源。 */
-class SessionsState(private val scope: PagerScope) {
+class SessionsState(scope: PagerScope) : LoadableState(scope) {
 
-    var loading by scope.observable(false)
-    var loaded by scope.observable(false)
-    var loadError by scope.observable("")
     var note by scope.observable("")
     var summary by scope.observable("")
 
     val sessions: ObservableList<SessionRow> by scope.observableList()
 
-    private var base = ""
+    override fun endpoint(baseUrl: String): String = "$baseUrl/api/sessions"
 
-    fun load(ctx: Pager, baseUrl: String = "") {
-        if (loading) return
-        base = baseUrl
-        loading = true
-        loadError = ""
-        getJson(ctx, "$baseUrl/api/sessions") { ok, data, message ->
-            loading = false
-            if (!ok) {
-                loadError = "会话列表加载失败: $message"
-                return@getJson
-            }
-            apply(data)
-        }
-    }
+    override val errorLabel: String = "会话列表加载失败"
 
-    fun refresh(ctx: Pager) = load(ctx, base)
-
-    private fun apply(data: JSONObject) {
+    override fun apply(data: JSONObject) {
         note = data.text("note")
         sessions.clear()
         val arr = data.array("sessions")

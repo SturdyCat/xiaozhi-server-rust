@@ -47,11 +47,8 @@ class ConversationRow(
 }
 
 /** `GET /api/conversations` 的数据源（可按设备过滤）。 */
-class ConversationsState(private val scope: PagerScope) {
+class ConversationsState(scope: PagerScope) : LoadableState(scope) {
 
-    var loading by scope.observable(false)
-    var loaded by scope.observable(false)
-    var loadError by scope.observable("")
     var note by scope.observable("")
     var summary by scope.observable("")
 
@@ -63,32 +60,16 @@ class ConversationsState(private val scope: PagerScope) {
 
     val conversations: ObservableList<ConversationRow> by scope.observableList()
 
-    private var base = ""
-
-    fun load(ctx: Pager, baseUrl: String = "") {
-        if (loading) return
-        base = baseUrl
-        loading = true
-        loadError = ""
-        val url = buildString {
-            append(baseUrl)
-            append("/api/conversations?limit=20")
-            if (deviceFilter.isNotEmpty()) {
-                append("&device_id=")
-                append(deviceFilter)
-            }
-        }
-        getJson(ctx, url) { ok, data, message ->
-            loading = false
-            if (!ok) {
-                loadError = "对话记录加载失败: $message"
-                return@getJson
-            }
-            apply(data)
+    override fun endpoint(baseUrl: String): String = buildString {
+        append(baseUrl)
+        append("/api/conversations?limit=20")
+        if (deviceFilter.isNotEmpty()) {
+            append("&device_id=")
+            append(deviceFilter)
         }
     }
 
-    fun refresh(ctx: Pager) = load(ctx, base)
+    override val errorLabel: String = "对话记录加载失败"
 
     /** 切换设备过滤后立即重拉。 */
     fun filterBy(ctx: Pager, deviceId: String) {
@@ -96,7 +77,7 @@ class ConversationsState(private val scope: PagerScope) {
         load(ctx, base)
     }
 
-    private fun apply(data: JSONObject) {
+    override fun apply(data: JSONObject) {
         note = data.text("note")
         conversations.clear()
         val arr = data.array("conversations")

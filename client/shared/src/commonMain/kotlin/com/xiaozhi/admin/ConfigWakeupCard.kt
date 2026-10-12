@@ -23,8 +23,7 @@ fun ViewContainer<*, *>.wakeupConfigCard(form: ConfigFormState) {
             textNote(form.schema.sectionNote("wakeup"), micro = true)
         }
         switchRow("enabled（唤醒后立刻回一句，跳过 LLM）", wake.enabled == "true") {
-            wake.enabled = if (wake.enabled == "true") "false" else "true"
-            form.dirty = true
+            form.toggleStringBool(wake::enabled)
         }
         Text {
             attr {
@@ -37,7 +36,7 @@ fun ViewContainer<*, *>.wakeupConfigCard(form: ConfigFormState) {
             labeledField(
                 "greeting（问候语）",
                 { wake.greeting },
-                { wake.greeting = it; form.dirty = true },
+                { wake.greeting = it; form.markDirty() },
                 "我在",
             )
             Text {
@@ -58,8 +57,7 @@ fun ViewContainer<*, *>.wakeupConfigCard(form: ConfigFormState) {
                 }
             }
             switchRow("persist（落盘复用，重启后仍免合成）", wake.persist == "true") {
-                wake.persist = if (wake.persist == "true") "false" else "true"
-                form.dirty = true
+                form.toggleStringBool(wake::persist)
             }
             Text {
                 attr {

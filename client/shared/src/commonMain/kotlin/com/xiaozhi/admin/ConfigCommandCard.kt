@@ -24,8 +24,7 @@ fun ViewContainer<*, *>.commandConfigCard(form: ConfigFormState) {
             textNote(form.schema.sectionNote("command"), micro = true)
         }
         switchRow("enabled（识别到指令就让设备结束聆听）", cmd.enabled == "true") {
-            cmd.enabled = if (cmd.enabled == "true") "false" else "true"
-            form.dirty = true
+            form.toggleStringBool(cmd::enabled)
         }
         Text {
             attr {
@@ -38,7 +37,7 @@ fun ViewContainer<*, *>.commandConfigCard(form: ConfigFormState) {
             labeledTextArea(
                 "keywords（每行一个指令词）",
                 { cmd.keywords },
-                { cmd.keywords = it; form.dirty = true },
+                { cmd.keywords = it; form.markDirty() },
                 height = 88f,
             )
             dropdownField(
@@ -48,26 +47,24 @@ fun ViewContainer<*, *>.commandConfigCard(form: ConfigFormState) {
                 },
                 options = { cmd.matchModeOptions },
                 selectedId = { cmd.matchMode },
-                isOpen = { form.openDropdown == "command_match_mode" },
-                onToggle = {
-                    form.openDropdown = if (form.openDropdown == "command_match_mode") "" else "command_match_mode"
-                },
+                isOpen = { form.isDropdownOpen("command_match_mode") },
+                onToggle = { form.toggleDropdown("command_match_mode") },
                 onSelect = {
                     cmd.matchMode = it
-                    form.dirty = true
+                    form.markDirty()
                     form.openDropdown = ""
                 },
             )
             labeledField(
                 "max_chars（最长字数，超过就不做指令判断）",
                 { cmd.maxChars },
-                { cmd.maxChars = it; form.dirty = true },
+                { cmd.maxChars = it; form.markDirty() },
                 "5",
             )
             labeledField(
                 "reply（告别语）",
                 { cmd.reply },
-                { cmd.reply = it; form.dirty = true },
+                { cmd.reply = it; form.markDirty() },
                 "好的，我先退下了。",
             )
             Text {

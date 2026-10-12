@@ -3,7 +3,6 @@ package com.xiaozhi.admin
 import com.tencent.kuikly.core.base.PagerScope
 import com.tencent.kuikly.core.nvi.serialization.json.JSONArray
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
-import com.tencent.kuikly.core.pager.Pager
 import com.tencent.kuikly.core.reactive.collection.ObservableList
 import com.tencent.kuikly.core.reactive.handler.observable
 import com.tencent.kuikly.core.reactive.handler.observableList
@@ -24,7 +23,7 @@ import com.tencent.kuikly.core.reactive.handler.observableList
  * 空列表要给可行动的解释。拆成独立文件的两条理由同 [PluginMetaState]：`AGENTS.md` §5.10
  * 文件规模约定；它是**只读投影**，与可写表单混在一起会让"哪些字段会被回传"难以判断。
  */
-class McpToolsState(private val scope: PagerScope) {
+class McpToolsState(scope: PagerScope) : LoadableState(scope) {
 
     /** 已登记的设备（最近探测的在前，服务端已排序）。 */
     val devices: ObservableList<DeviceToolsRow> by scope.observableList()
@@ -35,37 +34,12 @@ class McpToolsState(private val scope: PagerScope) {
     /** 服务端给的说明（空列表时显示：为什么这里什么都没有）。 */
     var note by scope.observable("")
 
-    /** 加载失败的就地错误文案（首次加载失败 → 就地错误 + 「重试」，不弹 toast）。 */
-    var loadError by scope.observable("")
+    override fun endpoint(baseUrl: String): String = "$baseUrl/api/mcp/tools"
 
-    var loading by scope.observable(false)
-    var loaded by scope.observable(false)
-
-    /** 上次使用的服务端基址：`refresh` 复用（web 同域为空串，macApp 连接流程传绝对地址）。 */
-    private var base = ""
-
-    /** 拉取设备工具清单。失败只置 `loadError`，不影响配置表单本身。 */
-    fun load(ctx: Pager, baseUrl: String = "") {
-        if (loading) return
-        base = baseUrl
-        loading = true
-        loadError = ""
-        network(ctx).requestGet("${baseUrl}/api/mcp/tools", JSONObject()) { data, success, errorMsg, resp ->
-            loading = false
-            val code = resp.statusCode
-            if (!success || (code != null && code !in 200..299)) {
-                loadError = "设备工具清单加载失败: ${if (errorMsg.isNotEmpty()) errorMsg else "HTTP $code"}"
-                return@requestGet
-            }
-            apply(data)
-        }
-    }
-
-    /** 按上次的基址重新拉取（页内「刷新」按钮）。 */
-    fun refresh(ctx: Pager) = load(ctx, base)
+    override val errorLabel: String = "设备工具清单加载失败"
 
     /** 解析 `devices[]` → 行列表 + 计数摘要。 */
-    private fun apply(data: JSONObject) {
+    override fun apply(data: JSONObject) {
         devices.clear()
         note = data.optString("note", "")
         val arr = data.optJSONArray("devices")

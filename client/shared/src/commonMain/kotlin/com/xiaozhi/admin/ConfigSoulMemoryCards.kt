@@ -31,8 +31,7 @@ fun ViewContainer<*, *>.soulConfigCard(form: ConfigFormState, ctx: Pager) {
     val sm = form.sm
     groupedCard("灵魂（人格档案）") {
         switchRow("enabled（启用人格档案）", sm.soulEnabled == "true") {
-            sm.soulEnabled = if (sm.soulEnabled == "true") "false" else "true"
-            form.dirty = true
+            form.toggleStringBool(sm::soulEnabled)
         }
         Text {
             attr {
@@ -57,7 +56,7 @@ fun ViewContainer<*, *>.soulConfigCard(form: ConfigFormState, ctx: Pager) {
                 secondaryButton("用内置默认人格启用") {
                     sm.soulPreset = "xiaozhi"
                     sm.soulEnabled = "true"
-                    form.dirty = true
+                    form.markDirty()
                     sm.soulPresetMsg =
                         "已启用内置默认人格：你没填的字段由预设补，填了的字段覆盖它。" +
                             "点「预览最终提示词」看实际发出去的内容。"
@@ -91,13 +90,11 @@ fun ViewContainer<*, *>.soulConfigCard(form: ConfigFormState, ctx: Pager) {
                 },
                 options = { sm.soulPresetOptions },
                 selectedId = { sm.soulPreset },
-                isOpen = { form.openDropdown == "soul_preset" },
-                onToggle = {
-                    form.openDropdown = if (form.openDropdown == "soul_preset") "" else "soul_preset"
-                },
+                isOpen = { form.isDropdownOpen("soul_preset") },
+                onToggle = { form.toggleDropdown("soul_preset") },
                 onSelect = {
                     sm.soulPreset = it
-                    form.dirty = true
+                    form.markDirty()
                     form.openDropdown = ""
                 },
             )
@@ -105,9 +102,9 @@ fun ViewContainer<*, *>.soulConfigCard(form: ConfigFormState, ctx: Pager) {
                 secondaryButton("载入预设内容到表单") {
                     // 先同步预设清单（服务端新增预设时下拉自动补上），再让服务端合并出完整档案
                     sm.syncSoulPresets(ctx, form.serverBase)
-                    sm.loadDefaultSoul(ctx, form.serverBase) { form.dirty = true }
+                    sm.loadDefaultSoul(ctx, form.serverBase) { form.markDirty() }
                 }
-                secondaryButton("清空人格字段") { sm.clearSoulProfile { form.dirty = true } }
+                secondaryButton("清空人格字段") { sm.clearSoulProfile { form.markDirty() } }
             }
             actionRow {
                 secondaryButton("预览最终提示词") { sm.previewSoul(ctx, form.serverBase) }
@@ -139,56 +136,54 @@ fun ViewContainer<*, *>.soulConfigCard(form: ConfigFormState, ctx: Pager) {
                     text("可在任意字段里引用 {{name}} / {{address_user}} / {{device_id}}；写错变量名会在保存时直接报错（不会把 {{xxx}} 塞给模型）。")
                 }
             }
-            labeledField("name（自称）", { sm.soulName }, { sm.soulName = it; form.dirty = true }, "小智")
+            labeledField("name（自称）", { sm.soulName }, { sm.soulName = it; form.markDirty() }, "小智")
             labeledTextArea(
                 "self_intro（自我定位）",
                 { sm.soulSelfIntro },
-                { sm.soulSelfIntro = it; form.dirty = true },
+                { sm.soulSelfIntro = it; form.markDirty() },
                 height = 70f,
             )
-            labeledField("form（形象/物种）", { sm.soulForm }, { sm.soulForm = it; form.dirty = true }, "如：住在音箱里的小狐狸")
-            labeledField("age_feel（年龄感）", { sm.soulAgeFeel }, { sm.soulAgeFeel = it; form.dirty = true }, "如：十来岁")
-            labeledField("tone（语气）", { sm.soulTone }, { sm.soulTone = it; form.dirty = true }, "如：轻快、温和")
-            labeledField("address_user（称呼用户）", { sm.soulAddressUser }, { sm.soulAddressUser = it; form.dirty = true }, "你")
+            labeledField("form（形象/物种）", { sm.soulForm }, { sm.soulForm = it; form.markDirty() }, "如：住在音箱里的小狐狸")
+            labeledField("age_feel（年龄感）", { sm.soulAgeFeel }, { sm.soulAgeFeel = it; form.markDirty() }, "如：十来岁")
+            labeledField("tone（语气）", { sm.soulTone }, { sm.soulTone = it; form.markDirty() }, "如：轻快、温和")
+            labeledField("address_user（称呼用户）", { sm.soulAddressUser }, { sm.soulAddressUser = it; form.markDirty() }, "你")
             labeledTextArea(
                 "traits（性格：每行「标签：遇到 X 会怎么做」）",
                 { sm.soulTraits },
-                { sm.soulTraits = it; form.dirty = true },
+                { sm.soulTraits = it; form.markDirty() },
                 height = 80f,
             )
-            labeledTextArea("values（价值：每行一条）", { sm.soulValues }, { sm.soulValues = it; form.dirty = true }, height = 70f)
+            labeledTextArea("values（价值：每行一条）", { sm.soulValues }, { sm.soulValues = it; form.markDirty() }, height = 70f)
             labeledTextArea(
                 "boundaries（红线/拒绝清单：每行一条）",
                 { sm.soulBoundaries },
-                { sm.soulBoundaries = it; form.dirty = true },
+                { sm.soulBoundaries = it; form.markDirty() },
                 height = 70f,
             )
-            labeledTextArea("catchphrases（口头禅：每行一条）", { sm.soulCatchphrases }, { sm.soulCatchphrases = it; form.dirty = true }, height = 60f)
-            labeledTextArea("worldview（世界观）", { sm.soulWorldview }, { sm.soulWorldview = it; form.dirty = true }, height = 70f)
-            labeledTextArea("backstory（来历）", { sm.soulBackstory }, { sm.soulBackstory = it; form.dirty = true }, height = 70f)
+            labeledTextArea("catchphrases（口头禅：每行一条）", { sm.soulCatchphrases }, { sm.soulCatchphrases = it; form.markDirty() }, height = 60f)
+            labeledTextArea("worldview（世界观）", { sm.soulWorldview }, { sm.soulWorldview = it; form.markDirty() }, height = 70f)
+            labeledTextArea("backstory（来历）", { sm.soulBackstory }, { sm.soulBackstory = it; form.markDirty() }, height = 70f)
             labeledTextArea(
                 "relationship_origin（与用户的关系起点）",
                 { sm.soulRelationshipOrigin },
-                { sm.soulRelationshipOrigin = it; form.dirty = true },
+                { sm.soulRelationshipOrigin = it; form.markDirty() },
                 height = 70f,
             )
             labeledTextArea(
                 "examples（风格范例：每行一组 Q/A，锁风格最有效）",
                 { sm.soulExamples },
-                { sm.soulExamples = it; form.dirty = true },
+                { sm.soulExamples = it; form.markDirty() },
                 height = 90f,
             )
             dividerH()
             // 语音第一性原则：短。这两个数字会作为**硬约束**写进提示词。
-            labeledField("max_sentences（最多句数 1~8）", { sm.soulMaxSentences }, { sm.soulMaxSentences = it; form.dirty = true }, "2")
-            labeledField("max_chars（最多字数 10~500）", { sm.soulMaxChars }, { sm.soulMaxChars = it; form.dirty = true }, "40")
+            labeledField("max_sentences（最多句数 1~8）", { sm.soulMaxSentences }, { sm.soulMaxSentences = it; form.markDirty() }, "2")
+            labeledField("max_chars（最多字数 10~500）", { sm.soulMaxChars }, { sm.soulMaxChars = it; form.markDirty() }, "40")
             switchRow("colloquial（说人话：短句、可省略主语）", sm.soulColloquial == "true") {
-                sm.soulColloquial = if (sm.soulColloquial == "true") "false" else "true"
-                form.dirty = true
+                form.toggleStringBool(sm::soulColloquial)
             }
             switchRow("emoji（允许 emoji）", sm.soulEmoji == "true") {
-                sm.soulEmoji = if (sm.soulEmoji == "true") "false" else "true"
-                form.dirty = true
+                form.toggleStringBool(sm::soulEmoji)
             }
             Text {
                 attr {
@@ -198,8 +193,8 @@ fun ViewContainer<*, *>.soulConfigCard(form: ConfigFormState, ctx: Pager) {
                 }
             }
             dividerH()
-            labeledTextArea("scenario（当前情境）", { sm.soulScenario }, { sm.soulScenario = it; form.dirty = true }, height = 60f)
-            labeledTextArea("device_hint（设备提示）", { sm.soulDeviceHint }, { sm.soulDeviceHint = it; form.dirty = true }, height = 60f)
+            labeledTextArea("scenario（当前情境）", { sm.soulScenario }, { sm.soulScenario = it; form.markDirty() }, height = 60f)
+            labeledTextArea("device_hint（设备提示）", { sm.soulDeviceHint }, { sm.soulDeviceHint = it; form.markDirty() }, height = 60f)
         }
     }
 }
@@ -215,8 +210,7 @@ fun ViewContainer<*, *>.memoryConfigCard(form: ConfigFormState, ctx: Pager) {
     val sm = form.sm
     groupedCard("记忆（本地图记忆）") {
         switchRow("enabled（启用记忆）", sm.memoryEnabled == "true") {
-            sm.memoryEnabled = if (sm.memoryEnabled == "true") "false" else "true"
-            form.dirty = true
+            form.toggleStringBool(sm::memoryEnabled)
         }
         Text {
             attr {
@@ -264,23 +258,21 @@ fun ViewContainer<*, *>.memoryConfigCard(form: ConfigFormState, ctx: Pager) {
             dividerH()
             // ===== 开关 =====
             switchRow("recall_enabled（启用召回）", sm.memoryRecallEnabled == "true") {
-                sm.memoryRecallEnabled = if (sm.memoryRecallEnabled == "true") "false" else "true"
-                form.dirty = true
+                form.toggleStringBool(sm::memoryRecallEnabled)
             }
             switchRow("extraction_enabled（启用抽取）", sm.memoryExtractionEnabled == "true") {
-                sm.memoryExtractionEnabled = if (sm.memoryExtractionEnabled == "true") "false" else "true"
-                form.dirty = true
+                form.toggleStringBool(sm::memoryExtractionEnabled)
             }
             dividerH()
             // ===== 召回参数 =====
-            labeledField("db_path（库文件，须在挂载卷内）", { sm.memoryDbPath }, { sm.memoryDbPath = it; form.dirty = true }, "/data/memory.db")
-            labeledField("scope_prefix（作用域前缀）", { sm.memoryScopePrefix }, { sm.memoryScopePrefix = it; form.dirty = true }, "xiaozhi")
-            labeledField("fresh_turn_count（近况轮数）", { sm.memoryFreshTurnCount }, { sm.memoryFreshTurnCount = it; form.dirty = true }, "5")
-            labeledField("recall_max_nodes（最多召回条数）", { sm.memoryRecallMaxNodes }, { sm.memoryRecallMaxNodes = it; form.dirty = true }, "6")
-            labeledField("recall_max_tokens（注入 token 预算）", { sm.memoryRecallMaxTokens }, { sm.memoryRecallMaxTokens = it; form.dirty = true }, "400")
-            labeledField("recall_budget_ms（召回耗时预算）", { sm.memoryRecallBudgetMs }, { sm.memoryRecallBudgetMs = it; form.dirty = true }, "300")
-            labeledField("maintenance_interval（维护间隔/轮）", { sm.memoryMaintenanceInterval }, { sm.memoryMaintenanceInterval = it; form.dirty = true }, "6")
-            labeledField("quarantine_max_attempts（抽取最大尝试）", { sm.memoryQuarantineMaxAttempts }, { sm.memoryQuarantineMaxAttempts = it; form.dirty = true }, "3")
+            labeledField("db_path（库文件，须在挂载卷内）", { sm.memoryDbPath }, { sm.memoryDbPath = it; form.markDirty() }, "/data/memory.db")
+            labeledField("scope_prefix（作用域前缀）", { sm.memoryScopePrefix }, { sm.memoryScopePrefix = it; form.markDirty() }, "xiaozhi")
+            labeledField("fresh_turn_count（近况轮数）", { sm.memoryFreshTurnCount }, { sm.memoryFreshTurnCount = it; form.markDirty() }, "5")
+            labeledField("recall_max_nodes（最多召回条数）", { sm.memoryRecallMaxNodes }, { sm.memoryRecallMaxNodes = it; form.markDirty() }, "6")
+            labeledField("recall_max_tokens（注入 token 预算）", { sm.memoryRecallMaxTokens }, { sm.memoryRecallMaxTokens = it; form.markDirty() }, "400")
+            labeledField("recall_budget_ms（召回耗时预算）", { sm.memoryRecallBudgetMs }, { sm.memoryRecallBudgetMs = it; form.markDirty() }, "300")
+            labeledField("maintenance_interval（维护间隔/轮）", { sm.memoryMaintenanceInterval }, { sm.memoryMaintenanceInterval = it; form.markDirty() }, "6")
+            labeledField("quarantine_max_attempts（抽取最大尝试）", { sm.memoryQuarantineMaxAttempts }, { sm.memoryQuarantineMaxAttempts = it; form.markDirty() }, "3")
             dropdownField(
                 label = "engine（引擎）",
                 currentLabel = {
@@ -288,11 +280,11 @@ fun ViewContainer<*, *>.memoryConfigCard(form: ConfigFormState, ctx: Pager) {
                 },
                 options = { sm.memoryBackendOptions },
                 selectedId = { sm.memoryBackend },
-                isOpen = { form.openDropdown == "memory_backend" },
-                onToggle = { form.openDropdown = if (form.openDropdown == "memory_backend") "" else "memory_backend" },
+                isOpen = { form.isDropdownOpen("memory_backend") },
+                onToggle = { form.toggleDropdown("memory_backend") },
                 onSelect = {
                     sm.memoryBackend = it
-                    form.dirty = true
+                    form.markDirty()
                     form.openDropdown = ""
                 },
             )
@@ -304,11 +296,11 @@ fun ViewContainer<*, *>.memoryConfigCard(form: ConfigFormState, ctx: Pager) {
                 },
                 options = { sm.memoryInjectPositionOptions },
                 selectedId = { sm.memoryInjectPosition },
-                isOpen = { form.openDropdown == "memory_inject" },
-                onToggle = { form.openDropdown = if (form.openDropdown == "memory_inject") "" else "memory_inject" },
+                isOpen = { form.isDropdownOpen("memory_inject") },
+                onToggle = { form.toggleDropdown("memory_inject") },
                 onSelect = {
                     sm.memoryInjectPosition = it
-                    form.dirty = true
+                    form.markDirty()
                     form.openDropdown = ""
                 },
             )
@@ -328,15 +320,15 @@ fun ViewContainer<*, *>.memoryConfigCard(form: ConfigFormState, ctx: Pager) {
                     text("抽取模型（留空 = 复用 [llm]；建议指向更便宜的小模型）")
                 }
             }
-            labeledField("extractor.api_base", { sm.memoryExtractorApiBase }, { sm.memoryExtractorApiBase = it; form.dirty = true })
+            labeledField("extractor.api_base", { sm.memoryExtractorApiBase }, { sm.memoryExtractorApiBase = it; form.markDirty() })
             labeledField(
                 "extractor.api_key",
                 { sm.memoryExtractorApiKey },
-                { sm.memoryExtractorApiKey = it; form.dirty = true },
+                { sm.memoryExtractorApiKey = it; form.markDirty() },
                 if (sm.memoryExtractorApiKeyConfigured) "已配置（留空则不修改）" else "未配置",
             )
-            labeledField("extractor.model", { sm.memoryExtractorModel }, { sm.memoryExtractorModel = it; form.dirty = true })
-            labeledField("extractor.temperature", { sm.memoryExtractorTemperature }, { sm.memoryExtractorTemperature = it; form.dirty = true }, "0.1")
+            labeledField("extractor.model", { sm.memoryExtractorModel }, { sm.memoryExtractorModel = it; form.markDirty() })
+            labeledField("extractor.temperature", { sm.memoryExtractorTemperature }, { sm.memoryExtractorTemperature = it; form.markDirty() }, "0.1")
             dividerH()
             // ===== 保留策略 =====
             dropdownField(
@@ -347,11 +339,11 @@ fun ViewContainer<*, *>.memoryConfigCard(form: ConfigFormState, ctx: Pager) {
                 },
                 options = { sm.retentionKeepOptions },
                 selectedId = { sm.memoryRetentionKeep },
-                isOpen = { form.openDropdown == "memory_keep" },
-                onToggle = { form.openDropdown = if (form.openDropdown == "memory_keep") "" else "memory_keep" },
+                isOpen = { form.isDropdownOpen("memory_keep") },
+                onToggle = { form.toggleDropdown("memory_keep") },
                 onSelect = {
                     sm.memoryRetentionKeep = it
-                    form.dirty = true
+                    form.markDirty()
                     form.openDropdown = ""
                 },
             )
@@ -362,11 +354,10 @@ fun ViewContainer<*, *>.memoryConfigCard(form: ConfigFormState, ctx: Pager) {
                     text("被轮次记忆引用的原文**永不删除**（仅清理未被引用的原文）；先点「演练保留策略」看清会处理多少条。")
                 }
             }
-            labeledField("retention.recent_turns", { sm.memoryRetentionRecentTurns }, { sm.memoryRetentionRecentTurns = it; form.dirty = true }, "0")
-            labeledField("retention.retention_days", { sm.memoryRetentionDays }, { sm.memoryRetentionDays = it; form.dirty = true }, "0")
+            labeledField("retention.recent_turns", { sm.memoryRetentionRecentTurns }, { sm.memoryRetentionRecentTurns = it; form.markDirty() }, "0")
+            labeledField("retention.retention_days", { sm.memoryRetentionDays }, { sm.memoryRetentionDays = it; form.markDirty() }, "0")
             switchRow("retention.dry_run（只演练不删除）", sm.memoryRetentionDryRun == "true") {
-                sm.memoryRetentionDryRun = if (sm.memoryRetentionDryRun == "true") "false" else "true"
-                form.dirty = true
+                form.toggleStringBool(sm::memoryRetentionDryRun)
             }
             dividerH()
             // ===== 测试召回（最重要的可用性反馈）=====
