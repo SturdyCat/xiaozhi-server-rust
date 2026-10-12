@@ -77,7 +77,7 @@ mod usage;
 use config::{config_meta, get_config, put_config};
 use health::engines_health;
 use mcp::mcp_tools;
-use memory::{memory_clear, memory_maintain, memory_recall, memory_status};
+use memory::{memory_clear, memory_maintain, memory_rag_reindex, memory_recall, memory_status};
 use metrics::metrics_snapshot;
 // 插件维护
 pub(crate) use config::config_is_persistent;
@@ -138,6 +138,8 @@ pub fn router(engines: Arc<Engines>) -> Router {
         .route("/api/memory/recall", axum::routing::post(memory_recall))
         .route("/api/memory/maintain", axum::routing::post(memory_maintain))
         .route("/api/memory/clear", axum::routing::post(memory_clear))
+        // P1-9：RAG 文档索引后台重建（仅 engine = rag 有效）
+        .route("/api/memory/rag/reindex", axum::routing::post(memory_rag_reindex))
         // 灵魂：内置预设清单 / 最终提示词预览（"人格配了之后到底发了什么"的当场验证入口）
         .route("/api/soul/presets", get(soul_presets))
         .route("/api/soul/preview", axum::routing::post(soul_preview))

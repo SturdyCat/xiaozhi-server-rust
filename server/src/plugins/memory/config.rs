@@ -8,10 +8,13 @@ use serde::{Deserialize, Serialize};
 
 /// 记忆引擎（`[memory].engine`；P4 前叫 `backend`）。
 ///
-/// P1-7 起支持三种后端（多后端注册表，见 `docs/p1-round1-design.md` §1.2）：
+/// P1-7 起支持多后端注册表（见 `docs/p1-round1-design.md` §1.2），P1-9 加 rag：
 /// - `graph`（默认）：内置图记忆，抽取 + 摘要召回；
 /// - `store`：纯存储——只落对话原文（`extraction_state='stored'`），零 LLM、零召回，
 ///   语义定位是"先积累再决定"；
+/// - `rag`（P1-9）：本地文档 RAG——扫描 `docs_dir`（txt/md）建词法倒排索引，
+///   `recall` 检索文档分块注入上下文；对话原文照常落库（与 store 同表语义）。
+///   零 LLM、零外网；
 /// - `none`：显式停用（保留配置但不起作用）。
 ///
 /// ⚠️ `Deserialize` 是**手写**的（[下面][impl]）：serde derive 对未知变体的报错是英文
@@ -25,6 +28,8 @@ pub enum MemoryBackend {
     /// 纯存储（P1-7）：只把对话原文落 SQLite，不抽取（零辅助 LLM 调用）、`recall` 恒空。
     /// 与 graph 的 `extraction_enabled` 开关**分层**：backend 选引擎，开关管 graph 内部行为。
     Store,
+    /// 本地文档 RAG（P1-9）：扫描目录建词法索引，召回文档分块；零 LLM 零外网。
+    Rag,
     /// 显式关闭（保留配置但不起作用，便于临时停用而不丢参数）。
     None,
 }
@@ -36,7 +41,7 @@ impl Default for MemoryBackend {
 }
 
 /// `[memory].engine` 合法取值（中文报错文案与 schema options 的单一出处）。
-pub const MEMORY_ENGINE_VALUES: &[&str] = &["graph", "store", "none"];
+pub const MEMORY_ENGINE_VALUES: &[&str] = &["graph", "store", "rag", "none"];
 
 impl MemoryBackend {
     /// 字符串 → 变体（trim + 小写归一；未知值返回 `None` 由调用方报错）。
@@ -44,6 +49,7 @@ impl MemoryBackend {
         match s.trim().to_ascii_lowercase().as_str() {
             "graph" => Some(MemoryBackend::Graph),
             "store" => Some(MemoryBackend::Store),
+            "rag" => Some(MemoryBackend::Rag),
             "none" => Some(MemoryBackend::None),
             _ => None,
         }
@@ -53,7 +59,7 @@ impl MemoryBackend {
 /// 手写反序列化：接受字符串（含 TOML 的裸字面量），未知值给出中文「怎么修」报错。
 ///
 /// 错误范本（对齐 `registry::unknown_engine_hint` 的口径）：
-/// `[memory].engine = "store2" 不是已知后端：可选 graph / store / none。…`
+/// `[memory].engine = "store2" 不是已知后端：可选 graph / store / rag / none。…`
 /// `Config::load`（启动报错）与 `PUT /api/config`（400）两条路径都在这一层统一拦截。
 impl<'de> Deserialize<'de> for MemoryBackend {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -64,12 +70,12 @@ impl<'de> Deserialize<'de> for MemoryBackend {
         impl serde::de::Visitor<'_> for V {
             type Value = MemoryBackend;
             fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                f.write_str("[memory].engine 的取值（graph / store / none）")
+                f.write_str("[memory].engine 的取值（graph / store / rag / none）")
             }
             fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<MemoryBackend, E> {
                 MemoryBackend::parse(v).ok_or_else(|| {
                     E::custom(format!(
-                        "[memory].engine = \"{v}\" 不是已知后端：可选 graph / store / none。\
+                        "[memory].engine = \"{v}\" 不是已知后端：可选 graph / store / rag / none。\
                          请改成一个可选值，或删掉该键使用默认 graph（旧键 backend 仍可读）。"
                     ))
                 })
@@ -117,6 +123,18 @@ fn default_keep() -> String {
 }
 fn default_extract_temperature() -> f32 {
     0.1
+}
+fn default_rag_docs_dir() -> String {
+    "/data/rag-docs".into()
+}
+fn default_rag_chunk_size() -> u32 {
+    512
+}
+fn default_rag_chunk_overlap() -> u32 {
+    64
+}
+fn default_rag_top_k() -> u32 {
+    4
 }
 
 /// 记忆配置（`[memory]`）。
@@ -173,6 +191,9 @@ pub struct MemoryConfig {
     /// 抽取专用模型路由（字段全空 = 复用 `[llm]`）。
     #[serde(default)]
     pub extractor: ExtractorConfig,
+    /// 本地文档 RAG 参数组（P1-9，`[memory.rag]`；仅 `engine = "rag"` 时生效）。
+    #[serde(default)]
+    pub rag: RagConfig,
 }
 
 impl Default for MemoryConfig {
@@ -194,6 +215,7 @@ impl Default for MemoryConfig {
             scope_prefix: default_scope_prefix(),
             retention: RetentionConfig::default(),
             extractor: ExtractorConfig::default(),
+            rag: RagConfig::default(),
         }
     }
 }
@@ -255,6 +277,38 @@ impl Default for ExtractorConfig {
     }
 }
 
+/// 本地文档 RAG 参数组（P1-9，`[memory.rag]`）；仅 `engine = "rag"` 时生效。
+///
+/// ⚠️ 与 [`ExtractorConfig`] 同理必须手写 `Default`：字段级 serde `default_*` 只在
+/// "表存在但字段缺失"时生效，整段不写走 `impl Default`——两者必须一致。
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RagConfig {
+    /// 文档目录（服务器本地，容器放挂载卷内）。目录不存在/为空 = 零知识、零影响
+    /// （对话完全正常，这是**正常态**不是降级）。仅扫描 `*.txt` / `*.md`。
+    #[serde(default = "default_rag_docs_dir")]
+    pub docs_dir: String,
+    /// 分块目标长度（字符；按空行分段后超长段再按此滑窗）。
+    #[serde(default = "default_rag_chunk_size")]
+    pub chunk_size: u32,
+    /// 相邻分块的重叠字符数（保住跨块边界的语义）。
+    #[serde(default = "default_rag_chunk_overlap")]
+    pub chunk_overlap: u32,
+    /// 每次召回最多注入几个分块。
+    #[serde(default = "default_rag_top_k")]
+    pub top_k: u32,
+}
+
+impl Default for RagConfig {
+    fn default() -> Self {
+        Self {
+            docs_dir: default_rag_docs_dir(),
+            chunk_size: default_rag_chunk_size(),
+            chunk_overlap: default_rag_chunk_overlap(),
+            top_k: default_rag_top_k(),
+        }
+    }
+}
+
 impl MemoryConfig {
     /// 签名（热刷新判定用；含密钥，**绝不打印**）。
     pub fn signature(&self) -> String {
@@ -271,12 +325,13 @@ impl MemoryConfig {
         self.enabled && self.engine != MemoryBackend::None
     }
 
-    /// 规范化后的引擎 id（`graph` / `store` / `none`）。
+    /// 规范化后的引擎 id（`graph` / `store` / `rag` / `none`）。
     /// 取值由 [`MemoryBackend`] 枚举闭死：未知值在**反序列化**阶段即报错（不需运行期校验）。
     pub fn engine_id(&self) -> &'static str {
         match self.engine {
             MemoryBackend::Graph => "graph",
             MemoryBackend::Store => "store",
+            MemoryBackend::Rag => "rag",
             MemoryBackend::None => "none",
         }
     }
@@ -317,6 +372,35 @@ impl MemoryConfig {
                 "[memory].recall_max_nodes = {} 超出范围：请取 1~20（默认 6）。",
                 self.recall_max_nodes
             );
+        }
+        // rag 参数组校验（仅 engine = rag 时生效；docs_dir 不存在/为空是正常态，不校验）
+        if self.engine == MemoryBackend::Rag {
+            if self.rag.docs_dir.trim().is_empty() {
+                anyhow::bail!(
+                    "[memory.rag].docs_dir 为空：请填服务器上放文档的目录\
+                    （如 /data/rag-docs，容器请在 compose 挂载卷内）。"
+                );
+            }
+            if self.rag.chunk_size < 64 {
+                anyhow::bail!(
+                    "[memory.rag].chunk_size = {} 太小：请取 ≥ 64（默认 512）。",
+                    self.rag.chunk_size
+                );
+            }
+            if self.rag.chunk_overlap >= self.rag.chunk_size {
+                anyhow::bail!(
+                    "[memory.rag].chunk_overlap = {} 必须小于 chunk_size = {}：\
+                     请调小 overlap 或调大 chunk_size。",
+                    self.rag.chunk_overlap,
+                    self.rag.chunk_size
+                );
+            }
+            if !(1..=20).contains(&self.rag.top_k) {
+                anyhow::bail!(
+                    "[memory.rag].top_k = {} 超出范围：请取 1~20（默认 4）。",
+                    self.rag.top_k
+                );
+            }
         }
         Ok(())
     }

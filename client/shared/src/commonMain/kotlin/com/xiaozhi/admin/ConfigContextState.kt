@@ -81,6 +81,14 @@ class ContextSectionState(private val scope: PagerScope) {
     var memoryExtractorModel by scope.observable("")
     var memoryExtractorTemperature by scope.observable("0.1")
 
+    // ===== [memory.rag] 本地文档 RAG（P1-9，仅 engine=rag 时生效）=====
+    var memoryRagDocsDir by scope.observable("/data/rag-docs")
+    var memoryRagChunkSize by scope.observable("512")
+    var memoryRagChunkOverlap by scope.observable("64")
+    var memoryRagTopK by scope.observable("4")
+    /// 「重建索引」动作的状态消息（构建中 / 完成提示）。
+    var memoryRagReindexMsg by scope.observable("")
+
     // ===== 记忆动作的 UI 状态（状态卡 / 测试召回 / 维护 / 清空）=====
     var memoryStatusMsg by scope.observable("")
     var memoryTestText by scope.observable("")
@@ -114,6 +122,7 @@ class ContextSectionState(private val scope: PagerScope) {
             listOf(
                 "graph" to "内置图记忆（本地 SQLite）",
                 "store" to "纯存储（只存原文，先积累再决定）",
+                "rag" to "本地文档 RAG（扫描目录建索引）",
                 "none" to "不生效（保留配置）",
             ),
         )
@@ -239,6 +248,15 @@ class ContextSectionState(private val scope: PagerScope) {
                         put("temperature", memoryExtractorTemperature.toDoubleOrNull() ?: 0.1)
                     },
                 )
+                put(
+                    "rag",
+                    JSONObject().apply {
+                        put("docs_dir", memoryRagDocsDir)
+                        put("chunk_size", memoryRagChunkSize.toIntOrNull() ?: 512)
+                        put("chunk_overlap", memoryRagChunkOverlap.toIntOrNull() ?: 64)
+                        put("top_k", memoryRagTopK.toIntOrNull() ?: 4)
+                    },
+                )
             },
         )
     }
@@ -313,6 +331,14 @@ class ContextSectionState(private val scope: PagerScope) {
                 memoryExtractorModel = e.optString("model", memoryExtractorModel)
                 memoryExtractorTemperature =
                     e.optDouble("temperature", memoryExtractorTemperature.toDoubleOrNull() ?: 0.1).toString()
+            }
+            // rag 参数组：旧服务端无该键 → 保留当前值（P1-9）
+            m.optJSONObject("rag")?.let { r ->
+                memoryRagDocsDir = r.optString("docs_dir", memoryRagDocsDir)
+                memoryRagChunkSize = r.optInt("chunk_size", memoryRagChunkSize.toIntOrNull() ?: 512).toString()
+                memoryRagChunkOverlap =
+                    r.optInt("chunk_overlap", memoryRagChunkOverlap.toIntOrNull() ?: 64).toString()
+                memoryRagTopK = r.optInt("top_k", memoryRagTopK.toIntOrNull() ?: 4).toString()
             }
         }
     }
@@ -539,6 +565,21 @@ class ContextSectionState(private val scope: PagerScope) {
             }
             val verb = if (data?.optBoolean("dry_run", false) == true) "演练（未删除）" else "已处理"
             memoryMaintainMsg = "$verb：隔离释放 ${data?.optInt("released", 0) ?: 0} 条，保留策略处理 ${data?.optInt("deleted", 0) ?: 0} 条"
+        }
+    }
+
+    /** `POST /api/memory/rag/reindex`：触发后台重建文档索引（P1-9，仅 engine=rag 有效）。 */
+    fun reindexRag(ctx: Pager, baseUrl: String) {
+        memoryRagReindexMsg = "重建中…"
+        network(ctx).httpRequest("${baseUrl}/api/memory/rag/reindex", true, JSONObject(), jsonHeaders()) { data, success, errorMsg, resp ->
+            val code = resp.statusCode
+            if (!success || (code != null && code !in 200..299)) {
+                memoryRagReindexMsg =
+                    "重建触发失败: ${data?.optString("message", "")?.ifEmpty { null } ?: if (errorMsg.isNotEmpty()) errorMsg else "HTTP $code"}"
+                return@httpRequest
+            }
+            memoryRagReindexMsg =
+                data?.optString("message", "")?.ifEmpty { null } ?: "已开始后台重建（结果查状态卡）"
         }
     }
 

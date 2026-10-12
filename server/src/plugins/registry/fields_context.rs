@@ -28,7 +28,8 @@ pub(super) const MEMORY_FIELDS: &[FieldSchema] = &[
         kind: FieldKind::Enum(MEMORY_ENGINE_VALUES),
         default_hint: "graph",
         help: "graph = 内置图记忆（本地词法召回，零外网调用）；store = 纯存储（只存原文、\
-               不抽取不召回，适合先积累再决定）；none = 保留配置但不生效（旧键 backend 仍可读）。",
+               不抽取不召回，适合先积累再决定）；rag = 本地文档 RAG（扫描 docs_dir 建词法索引、\
+               召回文档分块，零 LLM 零外网）；none = 保留配置但不生效（旧键 backend 仍可读）。",
         hot: HotReload::NextSession,
         required: true,
     },
@@ -177,6 +178,47 @@ pub(super) const MEMORY_RETENTION_FIELDS: &[FieldSchema] = &[
         kind: FieldKind::Bool,
         default_hint: "false",
         help: "先看清会删多少条再真正执行（日志与「立即维护」都会报数量）。",
+        hot: HotReload::NextSession,
+        required: false,
+    },
+];
+
+/// `[memory.rag]`（P1-9，路径 `["memory","rag"]`）——仅 engine = "rag" 时生效。
+pub(super) const MEMORY_RAG_FIELDS: &[FieldSchema] = &[
+    FieldSchema {
+        key: "docs_dir",
+        label: "文档目录",
+        kind: FieldKind::Path,
+        default_hint: "/data/rag-docs",
+        help: "服务器上放 txt/md 文档的目录（容器请在 compose 挂载卷内）。\
+               目录不存在或为空 = 零知识、零影响（对话完全正常）；改完目录后点「重建索引」生效。",
+        hot: HotReload::NextSession,
+        required: false,
+    },
+    FieldSchema {
+        key: "chunk_size",
+        label: "分块长度（字符）",
+        kind: FieldKind::Int,
+        default_hint: "512",
+        help: "按空行分段后，超长段再按此长度滑窗切分；太小语义碎、太大命中率低。",
+        hot: HotReload::NextSession,
+        required: false,
+    },
+    FieldSchema {
+        key: "chunk_overlap",
+        label: "分块重叠（字符）",
+        kind: FieldKind::Int,
+        default_hint: "64",
+        help: "相邻分块的重叠长度，保住跨块边界的语义；必须小于分块长度。",
+        hot: HotReload::NextSession,
+        required: false,
+    },
+    FieldSchema {
+        key: "top_k",
+        label: "每次召回条数",
+        kind: FieldKind::Int,
+        default_hint: "4",
+        help: "每次召回最多注入几个分块（1~20）；注入总预算仍受 recall_max_tokens 约束。",
         hot: HotReload::NextSession,
         required: false,
     },
@@ -442,5 +484,10 @@ pub(super) const CONTEXT_COMMON_FIELDS: &[(
         Capability::Memory,
         &["memory", "extractor"],
         MEMORY_EXTRACTOR_FIELDS,
+    ),
+    (
+        Capability::Memory,
+        &["memory", "rag"],
+        MEMORY_RAG_FIELDS,
     ),
 ];

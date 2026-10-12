@@ -437,6 +437,8 @@ pub static REGISTRY: &[PluginDescriptor] = &[
     MEMORY_GRAPH,
     // P1-7 纯存储后端：与 MEMORY_GRAPH 同 capability 互斥选中（sel 按 engine 拆分）
     MEMORY_STORE,
+    // P1-9 本地文档 RAG：同 capability 互斥选中
+    MEMORY_RAG,
     SOUL_PROFILE,
     COMMAND_GATE,
     WAKE_GREETING,

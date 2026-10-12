@@ -123,12 +123,44 @@ pub struct MemoryStats {
     pub lexical_only: bool,
     /// 抽取用的模型路由（**不含密钥**），如 `https://… · gpt-4o-mini`。
     pub extractor: String,
+    /// RAG 专属状态（P1-9；仅 rag 后端填充，其他后端 None → JSON 里省略）。
+    pub rag: Option<RagStats>,
     pub error: Option<String>,
+}
+
+/// RAG 文档索引状态（`/api/memory/status` 的 `rag` 段；管理台「文档索引」卡数据源）。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RagStats {
+    /// 当前索引内的文档数 / 分块数（重建中显示旧值 + building 标记）。
+    pub docs: i64,
+    pub chunks: i64,
+    /// 是否正在后台重建。
+    pub building: bool,
+    /// 最近一次成功重建。
+    pub last_build_at_ms: Option<i64>,
+    pub last_build_docs: Option<u32>,
+    pub last_build_chunks: Option<u32>,
+    /// 最近一次重建失败原因。
+    pub last_error: Option<String>,
+}
+
+impl RagStats {
+    fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "docs": self.docs,
+            "chunks": self.chunks,
+            "building": self.building,
+            "last_build_at_ms": self.last_build_at_ms,
+            "last_build_docs": self.last_build_docs,
+            "last_build_chunks": self.last_build_chunks,
+            "last_error": self.last_error,
+        })
+    }
 }
 
 impl MemoryStats {
     pub fn to_json(&self) -> serde_json::Value {
-        serde_json::json!({
+        let mut v = serde_json::json!({
             "engine": self.engine,
             "active": self.active,
             "db_path": self.db_path,
@@ -143,6 +175,11 @@ impl MemoryStats {
             "lexical_only": self.lexical_only,
             "extractor": self.extractor,
             "error": self.error,
-        })
+        });
+        // rag 段只在 rag 后端时出现（graph/store 的 JSON 保持原形，前端按存在性判断）
+        if let Some(rag) = &self.rag {
+            v["rag"] = rag.to_json();
+        }
+        v
     }
 }

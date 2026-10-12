@@ -301,6 +301,33 @@ fun ViewContainer<*, *>.memoryConfigCard(form: ConfigFormState, ctx: Pager) {
                     }
                 }
             }
+            vif({ sm.memoryBackend == "rag" }) {
+                Text {
+                    attr {
+                        fontSize(AdminType.micro)
+                        color(AdminColors.textTertiary)
+                        text("本地文档 RAG：扫描下方目录里的 txt/md 建词法索引（零 LLM、零外网），提问时检索分块注入上下文；对话原文仍照常落库。目录为空 = 零知识、对话完全正常。")
+                    }
+                }
+                // ===== rag 参数组（P1-9，仅 rag 选中时展示）=====
+                labeledField("rag.docs_dir（文档目录，放 txt/md）", { sm.memoryRagDocsDir }, { sm.memoryRagDocsDir = it; form.markDirty() }, "/data/rag-docs")
+                labeledField("rag.chunk_size（分块长度）", { sm.memoryRagChunkSize }, { sm.memoryRagChunkSize = it; form.markDirty() }, "512")
+                labeledField("rag.chunk_overlap（分块重叠）", { sm.memoryRagChunkOverlap }, { sm.memoryRagChunkOverlap = it; form.markDirty() }, "64")
+                labeledField("rag.top_k（每次召回条数）", { sm.memoryRagTopK }, { sm.memoryRagTopK = it; form.markDirty() }, "4")
+                // ===== 文档索引操作（后台重建，对话零阻塞）=====
+                actionRow {
+                    secondaryButton("重建索引") { sm.reindexRag(ctx, form.serverBase) }
+                }
+                vif({ sm.memoryRagReindexMsg.isNotEmpty() }) {
+                    Text {
+                        attr {
+                            fontSize(AdminType.micro)
+                            color(AdminColors.textSecondary)
+                            text(sm.memoryRagReindexMsg)
+                        }
+                    }
+                }
+            }
             dropdownField(
                 label = "inject_position（记忆注入位置）",
                 currentLabel = {

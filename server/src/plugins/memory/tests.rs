@@ -183,7 +183,7 @@ fn unknown_engine_reports_chinese_error_with_fix_hint() {
         .expect("未知 engine 必须报错");
     let msg = format!("{err}");
     assert!(msg.contains("store2"), "应回显用户写的值: {msg}");
-    assert!(msg.contains("可选 graph / store / none"), "必须列出合法值: {msg}");
+    assert!(msg.contains("可选 graph / store / rag / none"), "必须列出合法值: {msg}");
     assert!(msg.contains("怎么修") || msg.contains("请改"), "必须含修复指引: {msg}");
     // ⚠️ TOML 裸字面量（engine = mistral，无引号）在 **TOML 解析层**即被拒（invalid string），
     // 到不了 serde 层——自定义 Deserialize 只需拦截"合法 TOML 字符串但取值未知"的场景。

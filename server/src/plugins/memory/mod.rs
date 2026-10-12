@@ -33,11 +33,13 @@ pub mod config;
 pub mod types;
 mod graph;
 mod llm_extract;
+mod rag;
 mod schema;
 mod store;
 mod store_only;
 mod terms;
 pub use graph::GraphMemory;
+pub use rag::RagMemory;
 pub use store_only::StoreOnlyMemory;
 // 作为插件对外 API 面保留（bin crate 内暂无直接引用者；抽取链路的单测经 `super::*` 使用）
 #[allow(unused_imports)]
@@ -45,7 +47,7 @@ pub use llm_extract::{Extraction, EXTRACT_INSTRUCTIONS, OUTCOMES};
 
 // 配置与数据类型拆分到子文件，此处 `pub use` 再导出，
 // 保证既有 `crate::plugins::memory::Xxx` 与子模块 `super::Xxx` 引用路径不变。
-pub use config::{MemoryBackend, MemoryConfig, RetentionConfig};
+pub use config::{MemoryBackend, MemoryConfig, RagConfig, RetentionConfig};
 // 抽取路由配置：类型经 `MemoryConfig.extractor` 字段暴露；显式 re-export 仅为单测 `super::*` 可达。
 #[allow(unused_imports)]
 pub use config::ExtractorConfig;
@@ -87,6 +89,14 @@ pub trait MemoryProvider: Send + Sync {
 
     /// 清空记忆（`scope = None` = 全部）；返回删除的轮次记忆条数。
     fn clear(&self, scope: Option<String>) -> BoxFut<'_, anyhow::Result<u64>>;
+
+    /// 触发一次后台索引重建（P1-9，仅 rag 后端实现）。
+    ///
+    /// 返回 `false` = 未触发（后端不支持，或已在构建中防重入）。
+    /// 管理台「重建索引」按钮经此入口；结果查 `/api/memory/status` 的 `rag` 段。
+    fn reindex(&self) -> bool {
+        false
+    }
 }
 
 /// 默认实现：什么都不做（`[memory].enabled = false`）。
@@ -148,6 +158,8 @@ pub fn build_memory(
     match cfg.engine {
         MemoryBackend::Graph => Ok(Arc::new(GraphMemory::new(cfg, llm)?)),
         MemoryBackend::Store => Ok(Arc::new(StoreOnlyMemory::new(cfg)?)),
+        // rag 与 store 同为零 LLM 后端：不触碰 llm（P1-9）
+        MemoryBackend::Rag => Ok(Arc::new(RagMemory::new(cfg)?)),
         // 不可达（active() 已挡 none），match 穷尽需要
         MemoryBackend::None => Ok(Arc::new(NoopMemory)),
     }

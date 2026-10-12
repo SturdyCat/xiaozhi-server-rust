@@ -405,7 +405,7 @@ fn memory_backend_values_match_registry_impls() {
         .collect();
     assert_eq!(
         impl_ids,
-        vec!["memory.graph", "memory.store"],
+        vec!["memory.graph", "memory.store", "memory.rag"],
         "memory 实现清单漂移：新增后端须挂注册表并同步此断言"
     );
 

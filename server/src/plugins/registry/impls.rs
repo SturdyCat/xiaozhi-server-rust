@@ -46,6 +46,10 @@ fn sel_memory_graph(cfg: &Config) -> bool {
 fn sel_memory_store(cfg: &Config) -> bool {
     cfg.memory.enabled && cfg.memory.engine == crate::plugins::memory::MemoryBackend::Store
 }
+
+fn sel_memory_rag(cfg: &Config) -> bool {
+    cfg.memory.enabled && cfg.memory.engine == crate::plugins::memory::MemoryBackend::Rag
+}
 fn sel_soul(cfg: &Config) -> bool {
     cfg.soul.enabled
 }
@@ -464,6 +468,27 @@ pub const MEMORY_STORE: PluginDescriptor = PluginDescriptor {
     build: Some(build_memory_d),
     warn_if: None,
     selected: sel_memory_store,
+};
+
+/// 本地文档 RAG（P1-9：`[memory].engine = "rag"`）：扫描目录建词法索引，召回文档分块。
+///
+/// 与 store 同款的注册表形状：`requires = &[]`（构造不碰 LLM）、`warn_if = None`
+/// （docs_dir 为空 = 零知识零影响，是正常态不是降级）。validate/signature/build 与
+/// graph/store 共用同一组函数；rag 参数组（`[memory.rag]`）在 MEMORY_RAG_FIELDS 单独登记。
+pub const MEMORY_RAG: PluginDescriptor = PluginDescriptor {
+    id: "memory.rag",
+    capability: Capability::Memory,
+    display: "本地文档 RAG（扫描目录 · 词法检索）",
+    local: true,
+    hot: HotReload::NextSession,
+    requires: &[],
+    fields_path: &["memory"],
+    fields: MEMORY_FIELDS,
+    signature: sig_memory,
+    validate: validate_memory,
+    build: Some(build_memory_d),
+    warn_if: None,
+    selected: sel_memory_rag,
 };
 
 /// 人格档案（`[soul]`）：不产出共享实例（纯配置 → prompt 段）。

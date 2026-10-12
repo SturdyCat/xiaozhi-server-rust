@@ -114,6 +114,32 @@ pub(super) async fn memory_maintain(
     }
 }
 
+/// `POST /api/memory/rag/reindex`：触发后台全量重建文档索引（P1-9）。
+///
+/// 仅 rag 后端有效（其他后端 400——按钮只在 rag 卡片出现，这是防手滑的兜底）。
+/// 重建在后台执行（对话零阻塞），进度与结果查 `/api/memory/status` 的 `rag` 段。
+pub(super) async fn memory_rag_reindex(State(engines): State<Arc<Engines>>) -> Response {
+    if engines.live_config().memory.engine != crate::plugins::memory::MemoryBackend::Rag {
+        return bad_request(
+            "当前记忆引擎不是 rag：索引重建只对 [memory].engine = \"rag\" 有效，\
+             请先切换引擎并保存（新会话生效）。",
+        );
+    }
+    let mem = engines.memory();
+    if !mem.reindex() {
+        return json_ok(serde_json::json!({
+            "ok": true,
+            "building": true,
+            "message": "索引已在重建中（本次触发被防重入挡下），进度查 /api/memory/status。",
+        }));
+    }
+    json_ok(serde_json::json!({
+        "ok": true,
+        "building": true,
+        "message": "已开始后台重建索引（对话不受影响），完成后 /api/memory/status 的 rag 段可见结果。",
+    }))
+}
+
 /// `POST /api/memory/clear`：`{ "scope": "..." }` 或 `{ "all": true }`（强制显式）。
 pub(super) async fn memory_clear(
     State(engines): State<Arc<Engines>>,
