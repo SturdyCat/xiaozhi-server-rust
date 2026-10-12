@@ -67,7 +67,7 @@
 | P1-5 | 配置预设 + 每设备 overlay | 功能 | `Config::load` 增 device overlay + preset，不引 Redis |
 | P1-6 | 引擎 descriptor 健康自检 | 功能 | 补全 Memory/Soul/Command/Wake 描述符 + `check_all(cfg)->Vec<Phase>` 端点 |
 | P1-7 | 记忆多后端注册表 | 功能 | `GraphMemory` 挂 `MemoryProvider` 注册表；新增"纯存储后端"（仅 record 不抽取） |
-| P1-8 | 声纹 + 动态 TTS 切换 | 功能 | 离线声纹（本地说话人聚类）+ 按说话人切音色 |
+| P1-8 | ~~声纹 + 动态 TTS 切换~~（**用户 2026-10-12 确认不做，已剔除**） | 功能 | 离线声纹（本地说话人聚类）+ 按说话人切音色 |
 | P1-9 | 本地 RAG 后端 | 功能 | 本地文档索引作记忆 trait 可选后端（不对接 Dify 云端） |
 | P1-10 | MCP 设备工具清单发现 | 功能 | 握手上报可用 tools → server 缓存按需调用（替代硬编码 `audio_listener.stop`）；command/wakeup 问候统一到"MCP 工具调用结果驱动"动作模型 |
 
@@ -79,7 +79,7 @@
 |----|------|
 | 启用开关扩展（command/memory/soul/mcp） | P2：为可选模块加 `switchRow` 启用开关 |
 | OTA 体验强化（版本/回滚/进度） | P2：版本对比/回滚视图、上传进度、矩阵视图（保留现有匹配规则可见） |
-| 可访问性 / 浅色主题 | P2：补浅色主题、提升 `textTertiary` 对比至 ≥4.5:1、系统应用 `focusRing` |
+| ~~可访问性 / 浅色主题~~（**用户 2026-10-12 确认不做，已剔除**） | P2：补浅色主题、提升 `textTertiary` 对比至 ≥4.5:1、系统应用 `focusRing` |
 | MCP 可视化增强 | P2：搜索/筛选/分组折叠、可选调用历史 |
 | MQTT-UDP 传输 | P2：**不引入**，保持 WS + v1/v2/v3 回归 |
 | OpenClaw / 音乐 / 激活-OTP | P2：不搬（云端编排/增值/本期不做） |
