@@ -14,16 +14,17 @@ use std::sync::Arc;
 
 use axum::{
     extract::{Json, State},
-    http::{header, StatusCode},
+    http::StatusCode,
     response::{IntoResponse, Response},
 };
 
+use super::json_ok;
 use crate::engine::Engines;
 use crate::plugins::soul::{self, presets, SoulConfig};
 
 /// `GET /api/soul/presets`。
 pub(super) async fn soul_presets() -> Response {
-    json_response(serde_json::json!({
+    json_ok(serde_json::json!({
         "ok": true,
         "presets": presets::json_list(),
         "default_id": presets::DEFAULT_ID,
@@ -41,7 +42,7 @@ pub(super) async fn soul_preview(
     Json(raw): Json<serde_json::Value>,
 ) -> Response {
     match preview_body(&engines.live_config(), &raw) {
-        Ok(body) => json_response(body),
+        Ok(body) => json_ok(body),
         Err(msg) => bad_request(&msg),
     }
 }
@@ -91,18 +92,10 @@ fn preview_body(
     Ok(body)
 }
 
-fn json_response(body: serde_json::Value) -> Response {
-    (
-        [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
-        body.to_string(),
-    )
-        .into_response()
-}
-
 fn bad_request(msg: &str) -> Response {
     (
         StatusCode::BAD_REQUEST,
-        json_response(serde_json::json!({ "ok": false, "message": msg })),
+        json_ok(serde_json::json!({ "ok": false, "message": msg })),
     )
         .into_response()
 }

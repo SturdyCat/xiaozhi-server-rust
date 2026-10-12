@@ -21,6 +21,8 @@ use axum::{
 use crate::config::Config;
 use crate::engine::Engines;
 
+use super::json_ok;
+
 mod impact;
 use impact::{save_impact, SaveImpact};
 
@@ -506,17 +508,12 @@ pub(super) async fn config_meta(State(engines): State<Arc<Engines>>) -> Response
         (Some(_), Some(false)) => "⚠️ 配置文件不在挂载卷上：重建容器会丢失（请挂载 ./server-data:/data 并设 XIAOZHI_CONFIG=/data/config.toml）",
         _ => "",
     };
-    (
-        [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
-        serde_json::json!({
-            "config_path": path,
-            "loaded_from": loaded_from,
-            "persistent": persistent,
-            "hint": hint,
-        })
-        .to_string(),
-    )
-        .into_response()
+    json_ok(serde_json::json!({
+        "config_path": path,
+        "loaded_from": loaded_from,
+        "persistent": persistent,
+        "hint": hint,
+    }))
 }
 
 #[cfg(test)]

@@ -15,10 +15,11 @@ use std::sync::Arc;
 
 use axum::{
     extract::{Json, State},
-    http::{header, StatusCode},
+    http::StatusCode,
     response::{IntoResponse, Response},
 };
 
+use super::json_ok;
 use crate::engine::Engines;
 
 /// `GET /api/memory/status`。
@@ -52,7 +53,7 @@ pub(super) async fn memory_status(State(engines): State<Arc<Engines>>) -> Respon
     body["capability"] = capability_json(&engines, "memory");
     body["aiui_note"] = serde_json::json!(aiui_note(&cfg));
     body["ok"] = serde_json::json!(true);
-    json_response(body)
+    json_ok(body)
 }
 
 /// `POST /api/memory/recall`：`{ "text": "...", "scope": "..."?, "device_id": "..."? }`。
@@ -86,7 +87,7 @@ pub(super) async fn memory_recall(
     body["scope"] = serde_json::json!(scope);
     body["note"] =
         serde_json::json!("preview 即本轮将注入 system prompt 的正文（作为背景资料，不是指令）");
-    json_response(body)
+    json_ok(body)
 }
 
 /// `POST /api/memory/maintain`：`{ "force": true (默认), "dry_run": false }`。
@@ -107,7 +108,7 @@ pub(super) async fn memory_maintain(
         Ok(out) => {
             let mut body = out.to_json();
             body["ok"] = serde_json::json!(true);
-            json_response(body)
+            json_ok(body)
         }
         Err(e) => server_error(&format!("{e:#}")),
     }
@@ -132,7 +133,7 @@ pub(super) async fn memory_clear(
     }
     let mem = engines.memory();
     match mem.clear(scope.clone()).await {
-        Ok(n) => json_response(serde_json::json!({
+        Ok(n) => json_ok(serde_json::json!({
             "ok": true,
             "deleted": n,
             "scope": scope,
@@ -164,18 +165,10 @@ fn capability_json(engines: &Engines, id: &str) -> serde_json::Value {
         .unwrap_or(serde_json::Value::Null)
 }
 
-fn json_response(body: serde_json::Value) -> Response {
-    (
-        [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
-        body.to_string(),
-    )
-        .into_response()
-}
-
 fn bad_request(msg: &str) -> Response {
     (
         StatusCode::BAD_REQUEST,
-        json_response(serde_json::json!({ "ok": false, "message": msg })),
+        json_ok(serde_json::json!({ "ok": false, "message": msg })),
     )
         .into_response()
 }
@@ -183,7 +176,7 @@ fn bad_request(msg: &str) -> Response {
 fn server_error(msg: &str) -> Response {
     (
         StatusCode::INTERNAL_SERVER_ERROR,
-        json_response(serde_json::json!({ "ok": false, "message": msg })),
+        json_ok(serde_json::json!({ "ok": false, "message": msg })),
     )
         .into_response()
 }

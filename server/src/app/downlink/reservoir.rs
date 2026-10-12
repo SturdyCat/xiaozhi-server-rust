@@ -443,7 +443,11 @@ async fn push_sentence(
                 match encoded {
                     Ok(frames) => {
                         for frame in frames {
-                            collected.push(frame.clone());
+                            // 帧仅在写 TTS 缓存时需要副本；cache_key == 0（不可复现/测试台）
+                            // 的句子永远不写缓存，克隆纯属白费（下行是每帧都走的热路径）。
+                            if cache_key != 0 {
+                                collected.push(frame.clone());
+                            }
                             if !sink.push(DownlinkItem::Frame(frame)).await {
                                 return false;
                             }
@@ -460,7 +464,9 @@ async fn push_sentence(
             if intact {
                 match framer.finish() {
                     Ok(Some(tail)) => {
-                        collected.push(tail.clone());
+                        if cache_key != 0 {
+                            collected.push(tail.clone());
+                        }
                         if !sink.push(DownlinkItem::Frame(tail)).await {
                             return false;
                         }

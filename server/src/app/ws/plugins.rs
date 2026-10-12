@@ -10,12 +10,9 @@
 
 use std::sync::Arc;
 
-use axum::{
-    extract::State,
-    http::header,
-    response::{IntoResponse, Response},
-};
+use axum::{extract::State, response::Response};
 
+use super::json_ok;
 use crate::app::ws::config::config_is_persistent;
 use crate::engine::Engines;
 use crate::plugins::registry;
@@ -29,27 +26,12 @@ pub(super) async fn list_plugins(State(engines): State<Arc<Engines>>) -> Respons
         "path": engines.config_path,
         "persistent": engines.config_path.as_deref().map(config_is_persistent),
     });
-    json_response(body)
+    json_ok(body)
 }
 
 /// `GET /api/config/schema`：字段元数据（按能力聚合）。
 pub(super) async fn config_schema(State(_engines): State<Arc<Engines>>) -> Response {
     let mut body = registry::schema_json();
     body["ok"] = serde_json::json!(true);
-    json_response(body)
-}
-
-fn json_response(body: serde_json::Value) -> Response {
-    match serde_json::to_string(&body) {
-        Ok(json) => (
-            [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
-            json,
-        )
-            .into_response(),
-        Err(e) => (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            format!("序列化失败: {e}"),
-        )
-            .into_response(),
-    }
+    json_ok(body)
 }

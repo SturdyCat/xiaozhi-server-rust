@@ -26,12 +26,13 @@ use std::sync::Arc;
 
 use axum::{
     extract::{Path, Query, State},
-    http::{header, StatusCode},
-    response::{IntoResponse, Response},
+    http::StatusCode,
+    response::Response,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use super::json_response;
 use crate::app::registry::{self, ConversationRecord, DeviceRecord, LiveSession};
 use crate::engine::Engines;
 
@@ -326,22 +327,6 @@ fn conversation_json(c: &ConversationRecord) -> Value {
             "elapsed_ms": t.elapsed_ms,
         })).collect::<Vec<_>>(),
     })
-}
-
-fn json_response(code: StatusCode, body: Value) -> Response {
-    match serde_json::to_string(&body) {
-        Ok(json) => (
-            code,
-            [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
-            json,
-        )
-            .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("序列化失败: {e}"),
-        )
-            .into_response(),
-    }
 }
 
 #[cfg(test)]

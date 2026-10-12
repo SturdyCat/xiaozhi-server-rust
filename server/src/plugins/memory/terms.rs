@@ -25,7 +25,8 @@ pub const MAX_QUERY_TERMS: usize = 24;
 /// 是否 CJK 字符（含中日韩统一表意文字 + 扩展 A + 兼容区 + 假名 + 谚文）。
 ///
 /// 只用于**分词**（决定是否做二元组），因此按大致区间判断即可。
-fn is_cjk(c: char) -> bool {
+/// 与 `assemble::estimate_tokens` 的字数统计共用同一判断（单一权威，避免口径漂移）。
+pub(crate) fn is_cjk(c: char) -> bool {
     matches!(c as u32,
         0x3400..=0x4DBF     // 扩展 A
         | 0x4E00..=0x9FFF   // 基本区

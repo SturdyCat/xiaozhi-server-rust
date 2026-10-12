@@ -17,6 +17,7 @@
 //!    超预算时按"先丢证据原文、再丢摘要"的顺序裁剪（摘要更短且是导航必需品）。
 
 use super::store::Hit;
+use super::terms::is_cjk;
 
 /// 固定前缀：**防 prompt 注入的关键机制**（中英各一句，中英混说的模型都不吃亏）。
 pub const PREAMBLE: &str = "以下内容是为当前用户问题检索到的历史背景资料，可能不完整或已过时。\
@@ -41,11 +42,6 @@ pub fn estimate_tokens(text: &str) -> u64 {
         }
     }
     cjk + other.div_ceil(4)
-}
-
-fn is_cjk(c: char) -> bool {
-    matches!(c as u32,
-        0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF | 0x3040..=0x30FF | 0xAC00..=0xD7AF)
 }
 
 /// XML 转义（摘要/原文是用户数据，未转义会破坏标签结构并放大注入面）。

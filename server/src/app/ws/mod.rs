@@ -76,6 +76,29 @@ use registry::{conversations, device_detail, devices, sessions, stats};
 use soul::{soul_presets, soul_preview};
 use usage::{session_usage, usage};
 
+/// 统一的 JSON 响应（全部 `/api` 端点共用）：
+/// `Content-Type: application/json; charset=utf-8` + 指定状态码。
+pub(super) fn json_response(code: StatusCode, body: serde_json::Value) -> Response {
+    match serde_json::to_string(&body) {
+        Ok(json) => (
+            code,
+            [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
+            json,
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("序列化失败: {e}"),
+        )
+            .into_response(),
+    }
+}
+
+/// [`json_response`] 的单参便捷包装（`StatusCode::OK`）。
+pub(super) fn json_ok(body: serde_json::Value) -> Response {
+    json_response(StatusCode::OK, body)
+}
+
 /// 构造 Axum 路由：API（健康检查 / WebSocket）之外，其余路径静态托管
 /// `config.server.admin_dir` 指向的管理页面（h5App 构建产物，含 index.html）。
 /// 该目录不存在时，`/` 及以下返回友好提示而非崩溃。
@@ -140,16 +163,11 @@ pub fn router(engines: Arc<Engines>) -> Router {
 
 /// 健康检查：返回 JSON（HEALTHCHECK 仅校验 HTTP 200）。
 async fn health() -> Response {
-    (
-        [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
-        serde_json::json!({
-            "status": "ok",
-            "name": "xiaozhi-server-rust",
-            "version": env!("CARGO_PKG_VERSION"),
-        })
-        .to_string(),
-    )
-        .into_response()
+    json_ok(serde_json::json!({
+        "status": "ok",
+        "name": "xiaozhi-server-rust",
+        "version": env!("CARGO_PKG_VERSION"),
+    }))
 }
 
 /// 管理页面目录未配置 / 未构建时，给一个明确的提示而不是 404 空白。

@@ -14,33 +14,14 @@
 
 use std::sync::Arc;
 
-use axum::{
-    extract::State,
-    http::{header, StatusCode},
-    response::{IntoResponse, Response},
-};
+use axum::{extract::State, response::Response};
 
+use super::json_ok;
 use crate::engine::Engines;
 
 /// `GET /api/mcp/tools`
 pub(super) async fn mcp_tools(State(engines): State<Arc<Engines>>) -> Response {
     let mut body = engines.mcp.to_json();
     body["ok"] = serde_json::json!(true);
-    json_response(StatusCode::OK, body)
-}
-
-fn json_response(code: StatusCode, body: serde_json::Value) -> Response {
-    match serde_json::to_string(&body) {
-        Ok(json) => (
-            code,
-            [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
-            json,
-        )
-            .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("序列化失败: {e}"),
-        )
-            .into_response(),
-    }
+    json_ok(body)
 }

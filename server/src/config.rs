@@ -40,9 +40,6 @@ pub use crate::plugins::llm::LlmConfig;
 pub use crate::plugins::memory::MemoryConfig;
 pub use crate::plugins::soul::SoulConfig;
 pub use crate::plugins::tts::TtsConfig;
-// 对外 API 面保留（bin crate 内暂无直接引用者）
-#[allow(unused_imports)]
-pub use crate::plugins::tts::XfyunTtsConfig;
 pub use crate::plugins::vad::VadConfig;
 pub use crate::plugins::wakeup::WakeConfig;
 

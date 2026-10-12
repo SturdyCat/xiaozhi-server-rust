@@ -52,11 +52,6 @@ impl VadConfig {
     pub fn normalize(&mut self) {
         self.engine = self.engine_id();
     }
-    /// 模型路径非空即视为配置了真实 VAD。
-    #[allow(dead_code)]
-    pub fn is_real(&self) -> bool {
-        !self.model.is_empty()
-    }
 }
 fn default_vad_model() -> String {
     "/data/models/silero_vad.onnx".into()

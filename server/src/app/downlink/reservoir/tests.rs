@@ -270,8 +270,9 @@ async fn filler_returns_download_quota_per_chunk() {
         .expect("投递成品");
     drop(sentence_tx);
 
-    let filler = spawn_reservoir_filler(abort_flag(), cache, params(), sentence_rx, sink);
+    let filler = spawn_reservoir_filler(abort_flag(), cache.clone(), params(), sentence_rx, sink);
     while source.recv().await.is_some() {}
     filler.await.expect("填充任务正常收尾");
     assert_eq!(budget.queued_ms(), 0, "消费完分片后额度必须归零");
+    assert!(cache.get(0).is_none(), "cache_key == 0 的流式句子不得入缓存");
 }

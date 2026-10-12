@@ -9,7 +9,7 @@ license = "MIT"
 # 默认仅启用 mock 后端，纯 Rust 即可编译（无需模型文件与系统 Opus 库）。
 # 在有网络/模型的目标机上用 `--features sherpa` 启用真实 SenseVoice/Kokoro/Silero 引擎。
 default = []
-sherpa = ["dep:sherpa-onnx", "dep:audiopus", "dep:rubato"]
+sherpa = ["dep:sherpa-onnx", "dep:audiopus"]
 
 [dependencies]
 axum = { version = "0.8.4", features = ["ws"] }
@@ -29,7 +29,6 @@ tower-http = { version = "0.6", features = ["fs"] }
 # 仅在 sherpa feature 下引入（需要网络下载原生库 + 系统 libopus）
 sherpa-onnx = { version = "1.13.8", optional = true }
 audiopus = { version = "0.2", optional = true }
-rubato = { version = "0.15", optional = true }
 tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots", "url"] }
 hmac = "0.13.0"
 sha2 = "0.11.0"

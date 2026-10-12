@@ -1,48 +1,8 @@
-//! 重采样（TTS 输出采样率 → 下行采样率）。
+//! 流式重采样（TTS 输出采样率 → 下行采样率）。
 //!
-//! - 整段路径 [`resample`]：真实路径使用 `rubato`；采样率相同直接跳过。
-//! - 流式路径 [`StreamingResampler`]：**逐分片**推送、跨分片保持相位连续
-//!   （TTS 流式下发的分片边界若各自独立重采样，会产生样本级跳变/爆音）。
-//!   线性插值实现——对 16k→24k 这类升采样语音足够，且无 rubato 的固定块长约束。
-
-use std::borrow::Cow;
-
-/// 整段重采样（工具函数）。当前下行主路径为流式（[`StreamingResampler`]）；
-/// 保留给将来的非流式场景/测试。
-#[cfg(feature = "sherpa")]
-#[allow(dead_code)]
-pub fn resample(samples: &[f32], from_sr: u32, to_sr: u32) -> Cow<'_, [f32]> {
-    if from_sr == to_sr {
-        // 最常见路径（Kokoro 默认 24k→24k）：直接借用，避免整段克隆。
-        return Cow::Borrowed(samples);
-    }
-    use rubato::{
-        Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType,
-        WindowFunction,
-    };
-    let params = SincInterpolationParameters {
-        sinc_len: 256,
-        f_cutoff: 0.95,
-        interpolation: SincInterpolationType::Linear,
-        oversampling_factor: 256,
-        window: WindowFunction::BlackmanHarris2,
-    };
-    let ratio = to_sr as f64 / from_sr as f64;
-    let mut resampler = match SincFixedIn::<f32>::new(ratio, 2.0, params, samples.len().max(1), 1) {
-        Ok(r) => r,
-        Err(_) => return Cow::Borrowed(samples),
-    };
-    match resampler.process(&[samples.to_vec()], None) {
-        Ok(out) if !out.is_empty() => Cow::Owned(out[0].clone()),
-        _ => Cow::Borrowed(samples),
-    }
-}
-
-#[cfg(not(feature = "sherpa"))]
-#[allow(dead_code)]
-pub fn resample(samples: &[f32], _from_sr: u32, _to_sr: u32) -> Cow<'_, [f32]> {
-    Cow::Borrowed(samples)
-}
+//! [`StreamingResampler`]：**逐分片**推送、跨分片保持相位连续
+//! （TTS 流式下发的分片边界若各自独立重采样，会产生样本级跳变/爆音）。
+//! 线性插值实现——对 16k→24k 这类升采样语音足够。
 
 /// 流式线性重采样器：`push` 逐分片推送输入样本，返回该分片转换出的输出样本。
 ///
