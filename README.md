@@ -3,10 +3,12 @@
 基于 [`sherpa-onnx`](https://github.com/k2-fsa/sherpa-onnx) 的 **小智（xiaozhi-esp32）** 语音服务端，纯 Rust 实现：
 
 - **本地 ASR**：SenseVoice INT8（离线，CPU 推理）。
-- **本地 TTS**：Kokoro INT8（离线，CPU 推理）。
-- **VAD**：Silero VAD，负责上行音频的语音段切分。
+- **本地 TTS**：Kokoro INT8（离线，CPU 推理）；亦支持讯飞在线合成（`tts.engine = "xfyun"`）。
+- **VAD**：Silero VAD（实例池化，按会话借还），负责上行音频的语音段切分。
 - **远程 LLM**：通过 OpenAI 兼容的 Chat Completions HTTP 接口接入。
+- **智能上下文**（可选，全部离线）：图记忆 / 纯存储 / 本地文档 RAG 三种记忆后端、灵魂人格档案（内置预设 + 提示词预览）、唤醒问候语、语音指令闸门。
 - **传输**：WebSocket 协议，严格对齐 `xiaozhi-esp32` 固件（文本消息 + 二进制 Opus 音频帧，支持 v1/v2/v3 二进制协议版本）。
+- **管理台**：Web（浏览器直开）+ macOS 测试台，Kuikly 多端工程一处实现双端生效。
 
 > 设计目标：在 Intel Celeron N5105（x86-64，Jasper Lake）这类低功耗主机上，用 Docker 跑起一个完全本地化（ASR/TTS 离线）的小智服务端，LLM 走本地或云端的 HTTP 接口。
 >
@@ -16,13 +18,29 @@
 
 ## 特性
 
+**语音链路与协议**
+
 - 协议层严格对齐 `xiaozhi-esp32` 固件：设备 hello `version` 即二进制协议版本；服务器 hello 的 `audio_params` 作为**下行（TTS）解码参数**。
 - 上行采样率跟随设备（默认 16k），下行采样率由服务器决定（默认 24k），二者独立协商。
+- **下行缓冲三段式**（服务器水库 + 起跑闸 + 提前量）：上游 LLM/TTS 慢于实时时吸收停顿，长回复不断音。
 - **Feature 门控**：`default`（无真实引擎，仅供 `cargo check/test` 编译；运行必须 `--features sherpa`）；`sherpa`（引入 `sherpa-onnx` / `audiopus` / `rubato`，真实引擎）。
 - **无 mock**：ASR 恒为 SenseVoice、TTS 恒为 Kokoro、LLM 恒为 OpenAI 兼容 HTTP、VAD 恒为 Silero——ESP 接入走完整正式流水线；macApp 测试台连接带 `hello.test=true`，走 `asr_test`/`tts_test`/`llm_test` 三个独立服务请求-响应端点。
 - 可选 Bearer Token 鉴权（配置 `server.expected_token`）。
-- **语音指令闸门**（可选，`[command]`）：ASR 识别结果在送进 LLM **之前**按指令词匹配（默认「退下 / 闭嘴 / 关闭」），命中即先说一句可配置的告别语，随后**用 MCP 让设备自己结束聆听**（服务器是 MCP Client，发 `tools/call` 调设备工具 `self.audio_listener.stop`：设备回到待唤醒、**音频通道保留**，下次唤醒复用同一条连接、不再重连）；设备未声明 MCP 或调用失败时自动降级为断开本次会话。全程不调用大模型、不产生回复开销。只对短话生效（默认 ≤ 5 个字，`max_chars` 可调）：长句携带信息，直接交给大模型。默认关闭。
+
+**智能上下文（可选能力，默认零成本）**
+
+- **记忆多后端注册表**（`[memory].engine`）：`graph`（内置图记忆：SQLite 原文 + 辅助模型抽取摘要 + 汉字二元组倒排词法召回）、`store`（纯存储：只存原文不抽取不召回，先积累再决定）、`rag`（本地文档 RAG：扫描目录对 txt/md 建词法索引，设备可回答手册/备忘里的内容，全程零外网、零向量库）。切换后端数据不丢（同一 `db_path` 各表独立）。默认关闭。
+- **灵魂人格档案**（`[soul]`）：内置预设（默认人格）+ 逐字段覆盖 + `POST /api/soul/preview` 最终提示词预览（"人格配了之后到底发了什么"当场可见）。
+- **语音指令闸门**（可选，`[command]`）：ASR 识别结果在送进 LLM **之前**按指令词匹配（默认「退下 / 闭嘴 / 关闭」），命中即先说一句可配置的告别语，随后**用 MCP 让设备自己结束聆听**（服务器是 MCP Client，发 `tools/call` 调设备工具 `self.audio_listener.stop`：设备回到待唤醒、**音频通道保留**，下次唤醒复用同一条连接、不再重连）。**调用决策由会话开始时探测到的每设备 MCP 工具清单驱动**：清单含 stop 工具才发起调用；清单不含（老固件）→ 零次调用直接降级断开；清单未知（探测超时）→ 沿用试探调用 + `-32602` 降级。全程不调用大模型、不产生回复开销。只对短话生效（默认 ≤ 5 个字，`max_chars` 可调）：长句携带信息，直接交给大模型。默认关闭。
 - **唤醒问候语**（可选，`[wakeup]`）：固件唤醒词命中后**立刻**上报 `listen state=detect`，服务器据此马上说一句预制话术（默认「我在」），**跳过 LLM 与正常回复**——唤醒是全系统最高频的动作，为一句固定的话付一次大模型调用没有道理。成品音频（已编码的下行 Opus 帧）按**音色**三级复用：内存缓存（跨会话）→ 磁盘 `<配置文件目录>/hot-audio/`（跨重启）→ 真合成一次后自动落盘，稳态下每次唤醒**零 LLM、零 TTS**；换音色因缓存键含引擎签名/speaker/speed/采样率/帧长而自动重新合成。默认关闭。
+- **AIUI 全链路**（可选，`[aiui]`，与本地级联互斥）：VAD 切段 → 讯飞云端 ASR + LLM + TTS 闭环（本地引擎闲置）。
+
+**配置与运维**
+
+- **配置预设**（P1-5）：把当前全局配置快照为 `presets/<name>.toml`，管理台一键应用（复用部分更新语义 + 原子写）/ 删除，重启保留。
+- **每设备个性化 overlay**（P1-5）：`overlays/devices/<device_id>.toml` 只存**白名单字段**（音色/语速/提示词/历史长度/人格/唤醒话术/指令词表/记忆召回参数等会话内参数）的增量；`server`/`audio`/引擎选择等结构型字段不可覆盖（越界写入被拒并给出「怎么修」提示）；无 overlay 的设备行为与现状完全一致（零成本契约）。生效公式：`生效配置(设备) = 默认值 ⊕ config.toml ⊕ 设备 overlay`。
+- **引擎健康自检**（P1-6）：`GET /api/health/engines` 对全部 11 个 capability 聚合 `enabled/phase/last_error`（纯只读投影），管理台概览页 + 配置页健康卡直接可见"记忆为什么没生效、怎么修"。
+- **运维面板**：延迟大盘（`/api/metrics` 整轮与各段首包 p50/p95）、设备消息注入（`POST /api/devices/{id}/inject`，文本作为用户话语走完整管线）、MCP 工具清单可视化（含「指令闸门兼容」标记）。
 
 ---
 
@@ -70,12 +88,36 @@ cd server && ~/.cargo/bin/cargo run -- --config config.toml
 - `server.expected_token`：Bearer token；为空表示不校验 `Authorization` 头。
 - `audio.downlink_sample_rate` / `downlink_frame_duration_ms`：下行（TTS）采样率与帧长，写入服务器 hello。
 - `audio.binary_protocol_version`：下行二进制协议版本（1/2/3）。**建议先用 1 真机验证，再切 2/3。**
+- `audio.downlink_buffer_ms` / `downlink_buffer_start_ms`：服务器侧下行水库与起跑闸——上游 LLM/TTS 慢于实时时长回复断音的解药（详见 example 内注释）。
 - `llm.api_base` / `api_key` / `model` / `system_prompt`：OpenAI 兼容 Responses API（LLM 恒为真实 HTTP，无 mock）。
-- `tts.backend`：`sherpa`（本地 Kokoro INT8，默认）或 `xfyun`（科大讯飞在线合成，需在 `[tts.xfyun]` 填 app_id/api_key/api_secret/voice）。
-- `command.enabled` / `keywords` / `match_mode` / `max_chars` / `reply`：语音指令闸门（ASR → LLM 之间）。开启后识别到指令词（默认「退下 / 闭嘴 / 关闭」）会先说 `reply`，再**用 MCP 让设备结束聆听**（`tools/call` → `self.audio_listener.stop`；设备回到待唤醒、音频通道保留，下次唤醒不重连），跳过 LLM。设备不支持 MCP（老固件）或调用失败（固件未含该工具 / 超时）时自动降级为**断开本次会话**——两条路径日志都会写明原因。
+- `tts.engine`：`kokoro`（本地 Kokoro INT8，默认，参数见 `[tts.kokoro]` 子段）或 `xfyun`（科大讯飞在线合成，凭据见 `[tts.xfyun]`）。旧写法（`backend = "sherpa"` + `[tts]` 直挂模型路径）加载时自动迁移到新结构，保存一次即写成新格式。
+- `command.enabled` / `keywords` / `match_mode` / `max_chars` / `reply`：语音指令闸门（ASR → LLM 之间）。开启后识别到指令词（默认「退下 / 闭嘴 / 关闭」）会先说 `reply`，再**用 MCP 让设备结束聆听**（`tools/call` → `self.audio_listener.stop`；设备回到待唤醒、音频通道保留，下次唤醒不重连），跳过 LLM。调用决策由**每设备 MCP 工具清单驱动**：清单含 stop 才调用；清单不含（老固件）→ 零次调用直接降级断开（管理台 MCP 工具页有「指令闸门兼容」标记）；清单未知 → 试探调用 + `-32602` 降级。
   `match_mode = "exact"`（默认）要求整句相等——识别文本会先去标点并剥掉句末语气词（「退下吧。」≡「退下」），因此**不会**把「关闭闹钟」误判为关机；改成 `"contains"` 才是"句中出现即命中"。
   `max_chars = 5`（默认）是**长度闸门**：归一化后超过这么多字的识别文本一律不做指令判断、直接交给大模型——「帮我关闭卧室的灯」含「关闭」但不会被断线；`0` = 不限制。注意指令词本身长于 `max_chars` 时会永远命中不了，保存时会被拦下提示。保存后**新会话**生效。
 - `wakeup.enabled` / `greeting` / `persist`：唤醒问候语（唤醒 → LLM 之间）。设备唤醒词命中后固件**立刻**上报 `listen state=detect`（`CONFIG_SEND_WAKE_WORD_DATA=y`），服务器收到即说 `greeting`（默认「我在」），**不调用 LLM、不进入正常回复**。音频三级复用：内存 TTS 缓存 → 磁盘 `<配置文件目录>/hot-audio/`（`persist`）→ 真合成一次后落盘；因此稳态下每次唤醒零 LLM、零 TTS。缓存键含引擎签名/speaker/speed/下行采样率/帧长/文本，**换音色会自动重新合成并另存一份**，不会串用旧音色。`persist` 需要 `[tts].cache_entries > 0`，否则配置校验会拦下并说明怎么改。建议问候语 ≤ 10 字：它播放期间上行音频在缓冲区排队，太长会推迟用户第一句话。保存后**新会话**生效。
+- `memory.enabled` / `engine` / `recall_*` / `inject_position`：记忆（默认关闭）。`engine` 三选一：`graph`（图记忆：原文 + 抽取摘要 + 词法召回）、`store`（只存原文不抽取不召回）、`rag`（本地文档 RAG，文档目录见 `[memory.rag].docs_dir`）。`db_path` / `docs_dir` 必须在挂载卷内。`[memory.extractor]` 可为抽取单独路由更便宜的小模型。
+- `soul.enabled` / `preset` / 人格字段：灵魂人格档案（留空字段由内置预设补，填写即覆盖）；`POST /api/soul/preview` 可在保存前预览最终提示词。
+- `aiui.*`：讯飞 AIUI 全链路（云端 ASR+LLM+TTS 闭环）。⚠️ 启用后本地 ASR/LLM/TTS 引擎与 `[soul]`/`[memory]` 均不参与。
+
+### 配置预设与每设备 overlay（落盘布局）
+
+与主 `config.toml` 同目录（P1-5）：
+
+| 目录 | 内容 | 说明 |
+|---|---|---|
+| `presets/<name>.toml` | 全局配置快照 | 管理台「配置 → 预设」保存/应用/删除；应用 = 复用 `PUT /api/config` 部分更新管线（含密钥护栏与生效粒度回报） |
+| `overlays/devices/<device_id>.toml` | 单设备增量 | 仅白名单会话内字段；设备页「个性化配置」入口或 `PUT /api/devices/{id}/overlay` 写入 |
+
+```bash
+curl http://<host>:8000/api/devices/<device_id>/overlay        # 查看设备 overlay（无则 {}）
+curl -X PUT -H "Content-Type: application/json" \
+     -d '{"tts":{"speaker":3,"speed":1.2}}' \
+     http://<host>:8000/api/devices/<device_id>/overlay        # 该设备换音色/语速（新会话生效）
+curl -X POST http://<host>:8000/api/config/presets -d '{"name":"night"}'   # 当前配置快照为预设
+curl -X POST http://<host>:8000/api/config/presets/night/apply             # 应用预设
+```
+
+> ⚠️ **容器部署**：`presets/`、`overlays/`、`hot-audio/` 与 `config.toml`、`memory.db`、`rag-docs/` 同理，都在配置文件所在目录下派生——**配置文件必须放在挂载卷内**，否则重建容器即丢预设/overlay/记忆/问候音频。
 
 
 ---
@@ -155,7 +197,7 @@ docker run -d --name xiaozhi \
 
 ### 单元自测（Rust）
 
-协议层与音频层含 `#[cfg(test)]` 用例（二进制版本往返、VAD/ASR 桩等）：
+协议/音频/配置/插件/记忆/overlay/preset 各层均含 `#[cfg(test)]` 用例（二进制版本往返、密钥护栏与部分更新语义、overlay 白名单拒止、预设落盘往返、registry 护栏、VAD/ASR 桩等，全量 468+ 例）：
 
 ```bash
 cd server && ~/.cargo/bin/cargo test
@@ -163,7 +205,7 @@ cd server && ~/.cargo/bin/cargo test
 
 ### 协议联调（Python 测试台客户端）
 
-`tests/mock_client.py` 是一个**零第三方依赖**的 WebSocket 客户端（纯标准库实现 RFC 6455 帧）。它模拟 macApp 测试台（hello 带 `test:true`），逐项验证握手、协商与三个独立服务端点：
+`tests/mock_client.py` 是一个**零第三方依赖**的 WebSocket 客户端（纯标准库实现 RFC 6455 帧）。它模拟 macApp 测试台（hello 带 `test:true`），**场景化回归**：握手协商、`asr_test`/`tts_test`/`llm_test` 三个独立服务端点、`abort` 打断后连接存活探针（fatal）、唤醒问候（容忍型：未启用 `[wakeup]` 只记 warning）、多轮对话：
 
 ```bash
 # 先启动服务（需 --features sherpa 与本地模型；或直接用 Docker）
@@ -171,8 +213,7 @@ cd server && cargo run --release --features sherpa -- --config config.toml &
 
 # 运行联调客户端
 python3 server/tests/mock_client.py
-# => 断言 server hello / asr_test→stt / tts_test→tts 序列+音频帧 / llm_test 回包
-# => 输出 PASS 或 FAIL
+# => 逐场景输出 PASS / WARNING，末尾汇总 PASS 或 FAIL
 ```
 
 可用参数：`--host 127.0.0.1 --port 8000 --token <bearer>`（当 `expected_token` 非空时传 `--token`）。
@@ -182,22 +223,38 @@ python3 server/tests/mock_client.py
 管理后台是一个 **Kuikly 多端工程**（`client/`），位于 `client/shared` 公共层，跨端复用（web / Android / iOS / OHOS）。
 其 web 构建产物由 server 在 `/` 静态托管。
 
-默认落地页是 **管理台**（`@Page("admin")`）：左侧边栏 + 六个 section，与参考项目 `xiaozhi-esp32-server` 的
+默认落地页是 **管理台**（`@Page("admin")`）：左侧分组导航 + 搜索框 + 右侧单 section，与参考项目 `xiaozhi-esp32-server` 的
 `manager-web` 同一信息架构（那边是「首页看板 + 设备管理 + 模型配置 + …」，本项目按自身能力裁剪）：
 
 | Section | 数据源 | 回答什么问题 |
 |---|---|---|
-| 概览 | `GET /api/stats` + `/api/plugins` | 现在有几台设备在线、活会话多少、能力有没有异常 |
-| 设备 | `GET /api/devices` | 哪些设备连过、最后活跃、协商参数、上次会话为什么断 |
+| 概览 | `GET /api/stats` + `/api/plugins` | 现在有几台设备在线、活会话多少、11 个能力有没有异常（degraded/failed 可点击跳配置） |
+| 测试台 | —（Web 占位） | Web 端无麦克风显示不可用说明 + 替代路径（LLM/TTS/VAD 内联测试在配置页可用）；端到端语音测试用 macOS 测试台 |
+| 设备 | `GET /api/devices` | 哪些设备连过、最后活跃、协商参数、上次会话为什么断；支持消息注入、个性化配置入口 |
 | 会话 | `GET /api/sessions` | **此刻**哪些连接活着、各自在聆听/思考/说话 |
 | 对话记录 | `GET /api/conversations` | 最近聊了什么（内存环形，非持久化） |
 | 用量 | `GET /api/usage` | 令牌花在哪、上下文被记忆/人格撑大了多少 |
-| 配置 | `GET/POST /api/config` | 读写 `config.toml` 全部参数 |
+| 延迟 | `GET /api/metrics` | 整轮与各段（VAD/ASR/LLM/TTS）首包延迟 p50/p95、错误率（内存态） |
+| 配置 | `GET/POST /api/config` 等 | 读写 `config.toml` 全部参数 + 预设 + 每设备 overlay + 能力健康卡 + 内联连通性测试 |
 
-> ⚠️ **设备/会话/对话记录是进程内内存态**（口径写在每个页面与每个响应里）：重启清零、
+> ⚠️ **设备/会话/对话记录/延迟是进程内内存态**（口径写在每个页面与每个响应里）：重启清零、
 > `online` 由会话生命周期派生而非心跳、对话只保留最近若干轮。要长期留存请开启 `[memory]`。
 >
-> 单页模式仍可用 `?page_name=config` 单独打开配置页（`@Page("config")`，适合嵌入式/调试场景）。
+> 单页模式仍可用 `?page_name=config` 单独打开配置页（`@Page("config")`，支持 `&edit_device=<id>` 直接进入某设备个性化编辑；适合嵌入式/调试场景）。
+
+### HTTP API 一览（管理动作）
+
+| 端点 | 语义 |
+|---|---|
+| `GET /api/health` / `GET /api/health/engines` | 存活探针 / 11 个 capability 健康自检（纯只读投影，幂等无副作用） |
+| `GET / POST(=PUT) /api/config` | 配置读写（部分更新：缺失字段保持原值、显式 `null` 清除、密钥空串保留、`expected_revision` 乐观并发 409 拦过期写入） |
+| `GET/PUT/DELETE /api/devices/{id}/overlay` | 每设备白名单增量（POST = PUT、`POST .../overlay/delete` = DELETE 的别名，供 Kuikly 客户端使用） |
+| `GET/POST /api/config/presets`、`POST .../{name}/apply`、`DELETE/POST .../{name}/delete` | 配置预设：列出 / 快照当前 / 应用 / 删除 |
+| `POST /api/test/{llm,tts,vad}` | 内联连通性与首包延迟测试（按磁盘最新配置 ad-hoc 建引擎，无需麦克风，Web 可用） |
+| `GET /api/memory/status`、`POST /api/memory/{recall,maintain,clear,rag/reindex}` | 记忆状态 / 手动试召回 / 立即维护 / 清空 / RAG 索引重建 |
+| `GET /api/soul/presets`、`POST /api/soul/preview` | 内置人格预设清单 / 最终提示词预览（保存前校验器） |
+| `POST /api/devices/{id}/inject` | 设备消息注入（文本作为用户话语走完整管线） |
+| `GET /api/metrics`、`GET /api/usage` | 延迟大盘 / 令牌用量（内存态） |
 
 配置读写沿用 `GET` / `POST`（或 `PUT`）`/api/config`，**部分更新**语义（缺失字段保持原值、显式 `null` 清除、
 密钥空串保留），无需手改文件；auth 沿用 `server.expected_token` 语义，不另造简化鉴权。
@@ -252,18 +309,20 @@ curl -X POST -H "Authorization: Bearer <expected_token>" \
 
 `web` 受浏览器麦克风 / WebSocket 二进制等限制，不适合做语音链路测试。因此另起 **macOS App**（`apps/macosApp`，Mac Catalyst，复用 iOS 渲染器 `OpenKuiklyIOSRender`）承载 ASR/TTS 测试，替代原 web 测试台：
 
-- **测试页 `@Page("test")` 仅放在 `client/shared/src/macosArm64Main`**：只编译进 macOS 框架，**web/Android/iOS/OHOS 的包都不含测试代码**，web 自然无测试功能。
-- 管理后台 `@Page("config")` 仍在 `commonMain`，**跨端复用**；测试页提供「管理后台」入口跳过去。
+- **测试页仅放在 `client/shared/src/macosArm64Main`**：只编译进 macOS 框架，**web/Android/iOS/OHOS 的包都不含测试代码**；web 管理台侧边栏的「测试台」入口会显示不可用说明与替代路径（P1-3 平台分支）。
+- **四个 tab**：连接（服务器地址 + 自动 WS）/ ASR 识别（录音试听 → 发送识别解耦 + 波形回放）/ TTS 合成（音色下拉 + 语速，可临时覆盖当前配置音色）/ LLM 对话；每个 tab 右侧内嵌对应配置卡（改动即存表单，配合顶栏「保存配置」一键写回）。
 - 测试逻辑复用 server 的专用测试协议（见 `server/src/app/protocol.rs` / `server/src/app/session.rs`）：
   - `asr_test {action: start|stop}`：整段录音缓冲后一次性识别，回 `stt`；
-  - `tts_test {text, speaker, lang, speed}`：合成并流式下发 Opus 音频。
-- 原生桥接在 `apps/macosApp/XiaoZhiModule.m`（Kuikly 自定义 Module `XiaoZhiModule`）：负责 WS 建连、麦克风采集、音频播放。**Opus 编解码目前为占位 TODO**（需接入 `libopus` / OpusKit），是联调前唯一待补的原生环节。
+  - `tts_test {text, speaker, lang, speed}`：合成并流式下发 Opus 音频；
+  - `llm_test {text}`：LLM 连通性对话。
+- 原生桥接在 `apps/macosApp/XiaoZhiModule*.m`（Kuikly 自定义 Module `XiaoZhiModule`）：WS 建连、麦克风采集、音频播放、**Opus 编解码**（`XiaoZhiModule+Opus.m`，libopus）均已实现，测试台端到端可用。
 
 ```bash
-# ① 编出 KMP 业务框架 shared.framework（含 config 管理页 + test 测试页），仅 Apple Silicon
+# ① 编出 KMP 业务框架 shared.framework（含管理页 + 测试台，仅 Apple Silicon）
 cd client && ./gradlew :shared:linkReleaseFrameworkMacosArm64
-#    产物在 client/shared/build/bin/macosArm64/releaseShared/shared.framework
-#    （注：Kotlin/Native 没有 assembleMacosArm64 任务，正确任务名是 linkReleaseFrameworkMacosArm64）
+#    产物在 client/shared/build/bin/macosArm64/releaseFramework/shared.framework
+#    （注：Kotlin/Native 没有 assembleMacosArm64 任务，正确任务名是 linkReleaseFrameworkMacosArm64；
+#     改动任何 @Page 或 shared 业务代码后必须重跑本任务，否则 Xcode 跑的是旧框架）
 
 # ② 生成 Xcode 工程（需 brew install xcodegen）
 cd client/apps/macosApp && xcodegen generate        # 生成 macosApp.xcodeproj，并 embed 上面的 shared.framework
@@ -276,7 +335,7 @@ open macosApp.xcworkspace
 ```
 
 > 启动顺序不可省：必须先 ① 编出 `shared.framework`，② 的 xcodegen 才能把框架正确 embed 进 App；
-> 否则链接阶段报 `shared.framework not found`。Opus 编解码（`XiaoZhiModule.m`）仍为 TODO，联调前需补。
+> 否则链接阶段报 `shared.framework not found`。Xcode 重跑后若白屏（页面回退占位），先 Clean Build Folder。
 
 > 协议要点与 `tests/mock_client.py` 共用同一套 `hello(test=true) / asr_test / tts_test / llm_test` 语义（macApp 测试台同款），便于回归。
 
@@ -290,21 +349,22 @@ open macosApp.xcworkspace
 .
 ├── Dockerfile / docker-compose.yml / docker-entrypoint.sh   # 部署编排（仓库根）
 ├── server/                      # Rust 服务端（模块职责与复杂逻辑见 server/src/**/*.rs 的 //! 注释；整体架构见 docs/architecture.md）
-│   ├── src/                    # 根：main/config/engine；app/ 应用层（session/ws/protocol/…）；
-│   │                           # plugins/ 引擎插件（asr/tts/llm/vad/aiui 按能力分目录）—— 各文件顶部 //! 即权威说明
+│   ├── src/                    # 根：main/config（含 config/overlay.rs 每设备白名单）/engine；
+│   │                           # app/ 应用层（session/ws/protocol/events/pipeline/metrics/…）；
+│   │                           # plugins/ 引擎与能力插件（asr/tts/llm/vad/aiui/memory/soul/command/wakeup/mcp + registry/health）—— 各文件顶部 //! 即权威说明
 │   ├── config.toml / config.example.toml
 │   ├── scripts/download_models.sh
-│   └── tests/mock_client.py
+│   └── tests/mock_client.py    # 场景化协议联调（握手/识别/合成/对话 + abort 打断 + 唤醒问候，多轮回归）
 └── client/                      # Kuikly 多端工程（管理后台）
     ├── settings.gradle.kts      rootProject.name = "client"
     ├── shared/
-    │   ├── commonMain/         公共代码：@Page("config") 管理后台（跨端）+ 配置表单 + NetworkModule
-    │   └── macosArm64Main/     仅 macOS(arm64) 编译：@Page("test") ASR/TTS 测试台 + XiaoZhiModule
+    │   ├── commonMain/         公共代码：@Page("admin") 管理台 + @Page("config") 配置页（跨端）+ 配置表单/预设/设备 overlay 编辑 + 运维面板
+    │   └── macosArm64Main/     仅 macOS(arm64) 编译：@Page("router") 单窗口壳（连接页 + 测试台 + 配置）+ XiaoZhiModule
     └── apps/
-        ├── h5App/               Web(H5) 宿主：Main.kt + index.html（仅管理后台，无测试功能）
+        ├── h5App/               Web(H5) 宿主：Main.kt + index.html（管理台 + 配置页；无语音测试）
         ├── androidApp/          Android 宿主（仅 arm64-v8a，ndk.abiFilters 限定）
         ├── iosApp/              iOS 宿主（原生；仅 arm64：iosArm64 + Apple Silicon 模拟器，Podfile 排除 x86_64）
-        ├── macosApp/            macOS 宿主（原生，Mac Catalyst）：ASR/TTS 测试台（仅 arm64）
+        ├── macosApp/            macOS 宿主（原生，Mac Catalyst）：ASR/TTS/LLM 测试台（仅 arm64）
         └── ohosApp/             HarmonyOS 宿主（原生）
 ```
 
@@ -316,9 +376,10 @@ open macosApp.xcworkspace
 ## 状态与已知限制
 
 - **本期未实现激活流程（OTA/activate）**：标准 xiaozhi-server 含激活/OTP，本期接受任意设备（可选 token 校验）。如需对接官方激活另开任务。
-- **VAD 模型加载**：每次会话 `VoiceActivityDetector::create` 会加载模型；连接数大时建议池化（待优化）。
 - **ASR 流式**：本期 SenseVoice 为离线逐段识别；如需逐字流式可后续换 Zipformer `OnlineRecognizer`。
 - **未启用 `sherpa` 的编译下行音频为空帧**：`encode_opus_frame` 占位实现返回空（仅供编译/测试）；真实音频需 `--features sherpa` + libopus。
+- **RAG 召回为词法检索**（BM25/倒排路线，与图记忆同一中文分词口径）：无 embedding；语义检索（本地 ONNX 小模型）列为后续可选增强。
+- **iOS/Android/OHOS 宿主已就位但未启用语音测试台**：测试台原生桥接当前仅在 macOS 编译；跨端复用下沉列为按需项。
 
 ---
 

@@ -39,7 +39,9 @@
 
 ---
 
-### ▶ Phase 1 — P0 六项（低成本高收益，建议一个迭代 ~1–2 周）
+### ▶ Phase 1 — P0 六项 ✅ 已完成（2026-10 交付）
+
+> ✅ **状态**：P0-1 ~ P0-6 六项全部交付（含 VAD 实例池化 `plugins/vad/pool.rs`、场景化 `mock_client.py`、事件总线 `app/events.rs`）。
 
 > 均契合离线单二进制定位，且多数复用现有代码（`schema_json()` / `bench.rs` / `prefetch` abort 语义 / `mock_client.py`）。
 
@@ -56,7 +58,9 @@
 
 ---
 
-### ▶ Phase 2 — P1 增强（第二个迭代）
+### ▶ Phase 2 — P1 增强 ✅ 已完成（2026-10 交付）
+
+> ✅ **状态（2026-10-13）**：P1-1 / P1-2 / P1-4 / P1-5 / P1-6 / P1-7 / P1-9 / P1-10 与 P1-3（Web 测试台平台分支卡片）全部交付；P1-8 经用户确认剔除。设计记录见 `docs/p1-round1-design.md` / `p2-round2-design.md` / `p3-round3-design.md`，功能需求与验收见 `docs/p1-features-prd.md`。全量回归：`cargo test` 468+ 例全绿、`--features sherpa` 编译通过、Kuikly JS/macOS 双目标编译通过。
 
 | # | 项 | 维度 | 具体动作 |
 |---|----|------|----------|

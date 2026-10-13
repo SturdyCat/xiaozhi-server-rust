@@ -245,8 +245,8 @@ examples = []                       # 风格范例：每条一组 Q/A（锁风�
 # ⚠️ 记忆只在本地 LLM 流水线生效：启用 [aiui] 全链路时云端闭环绕过本地 LLM，人格/记忆都不参与。
 [memory]
 enabled = false                     # true = 启用记忆
-engine = "graph"                    # graph = 内置图记忆；none = 保留配置但不生效（旧键 backend 仍可读）
-db_path = "/data/memory.db"         # ⚠️ 必须放在挂载卷内，否则重建容器即丢全部记忆
+engine = "graph"                    # graph = 内置图记忆 | store = 纯存储（只存原文不抽取不召回，先积累再决定）| rag = 本地文档 RAG（词法检索，零外网）| none = 保留配置但不生效（旧键 backend 仍可读）
+db_path = "/data/memory.db"         # ⚠️ 必须放在挂载卷内，否则重建容器即丢全部记忆（graph/store/rag 共用，切后端数据不丢）
 db_busy_timeout_ms = 5000           # SQLite 写锁等待（与 DSH 桌面端共用同一库文件时才需调大）
 recall_enabled = true               # false = 只写不读（先积累数据）
 extraction_enabled = true           # false = 只存原文、不调用辅助模型（没有摘要可召回）
@@ -271,3 +271,9 @@ api_base = ""                       # 可指向更便宜的端点
 api_key = ""                        # 留空不修改；GET /api/config 永不回传明文
 model = ""                          # 建议用小模型（抽取只要稳定 JSON）
 temperature = 0.1
+
+[memory.rag]                        # engine = "rag" 时的本地文档索引（P1-9；独立索引表，与 graph/store 数据互不干扰）
+docs_dir = "/data/rag-docs"         # ⚠️ 放挂载卷内；扫描 txt/md 文件建词法索引（管理台「记忆」section 可触发重建）
+chunk_size = 512                    # 分块字符数（保守分块，中文场景可用）
+chunk_overlap = 64                  # 相邻分块重叠字符数
+top_k = 4                           # 每次召回最多注入几个分块（受 recall_max_tokens 硬上限约束）
