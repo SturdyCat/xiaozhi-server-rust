@@ -293,12 +293,25 @@ pub(crate) struct SentenceSource {
 ///
 /// `budget` = 本轮**下载缓冲**（跨句共享，见 [`DownloadBudget`]）：合成回调据此控制下载流速。
 ///
+/// `tts_gate`（缺口①）= TTS 推理闸门：**缓存未命中**才过闸（`acquire_with_abort`，排队期
+/// 响应打断），permit move 进 `spawn_blocking` 闭包随推理结束归还；缓存命中零合成不过闸。
+/// ⚠️ **不要**在等上一句 `prev` 时持许可——上一句在飞时先 `await` 它收尾，许可只覆盖
+/// 本句自己的推理窗口。
+///
+/// `first_pcm`（缺口②）= 首个**非缓存**句的首个 PCM 分片回调（TTFA 分段采集的
+/// `tts_first_pcm` 埋点）；`None` = 不采集。first-only 语义由调用方闭包用 `AtomicBool`
+/// 实现（每分片一次原子读，无锁），本模块不 import [`crate::app::events`] 类型——
+/// 保持通用流水线与观测解耦。
+///
 /// 返回的接收端被丢弃（或 abort 置位）后，worker 会在当前句合成收尾后自行退出，
 /// 不留 detached 任务。
+#[allow(clippy::too_many_arguments)] // 流水线参数（闸门/埋点）与既有入参同性质
 pub(crate) fn spawn_sentence_prefetch<F>(
     abort: Arc<AtomicBool>,
     cache: Arc<TtsCache>,
     budget: Arc<DownloadBudget>,
+    tts_gate: crate::app::inference::GateHandle,
+    first_pcm: Option<Arc<dyn Fn() + Send + Sync>>,
     mut resolve: F,
     mut sentences: mpsc::UnboundedReceiver<String>,
 ) -> mpsc::Receiver<PreparedSentence>
@@ -314,6 +327,7 @@ where
             if abort.load(Ordering::Relaxed) {
                 break;
             }
+            // 等上一句收尾时**不持许可**（见函数文档）：许可只覆盖本句自己的推理窗口。
             if let Some((text, handle)) = prev.take() {
                 log_synth_result(&text, handle.await);
             }
@@ -321,7 +335,7 @@ where
                 break;
             }
             let SentenceSource { tts, cache_key, speed, speaker } = resolve(&sentence);
-            // 缓存命中：零合成，直接把已编码帧按原顺序投递
+            // 缓存命中：零合成，直接把已编码帧按原顺序投递（**不过闸门**）
             if let Some(hit) = cache.get(cache_key) {
                 tracing::debug!("TTS 缓存命中（预取 {} 帧）", hit.opus_frames.len());
                 let item = PreparedSentence {
@@ -334,6 +348,10 @@ where
                 }
                 continue;
             }
+            // 推理闸门（缺口①）：缓存未命中才过闸排队（abort 感知：打断后不白等）。
+            let Some(permit) = tts_gate.acquire_with_abort(&abort).await else {
+                break; // 已打断：本轮不再合成
+            };
             let sr = tts.output_sample_rate();
             let (chunk_tx, chunk_rx) = mpsc::channel::<PcmChunk>(PREFETCH_PCM_SLOTS);
             let (done_tx, done_rx) = oneshot::channel::<bool>();
@@ -346,7 +364,11 @@ where
             // 只靠 abort 标志不够——**新一轮回复会把 abort 复位**，上一轮残留的合成
             // 就会白跑（在线合成要白白建一条短连接、本地合成白烧 CPU）。
             let tx_cb = tx.clone();
+            // 缺口②：首个 PCM 分片回调（first-only 由调用方闭包保证）。
+            let first_pcm_cb = first_pcm.clone();
             let handle = tokio::task::spawn_blocking(move || {
+                // 推理闸门 permit：RAII——闭包退出（正常结束/回调取消收尾/panic 展开）即归还。
+                let _gate_permit = permit;
                 let r = tts.synthesize_stream(
                     &synth_text,
                     speed,
@@ -355,6 +377,9 @@ where
                         // 打断/消费者退出：回调返回 false → 引擎尽快收尾
                         if abort_cb.load(Ordering::Relaxed) || tx_cb.is_closed() {
                             return false;
+                        }
+                        if let Some(hook) = first_pcm_cb.as_ref() {
+                            hook();
                         }
                         // 下载缓冲：额度不够就在这里等（= 按缓存需要控制下载流速）
                         push_pcm(&budget_cb, &chunk_tx, chunk.to_vec(), sr, &abort_cb)

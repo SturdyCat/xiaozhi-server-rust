@@ -75,8 +75,10 @@ mod registry;
 mod soul;
 mod usage;
 use config::{
-    config_meta, device_overlay_delete, device_overlay_get, device_overlay_put, get_config, preset_apply, preset_delete, preset_save, presets_list, put_config,
+    config_meta, get_config, put_config,
 };
+use config::device_overlay::{device_overlay_delete, device_overlay_get, device_overlay_put};
+use config::presets::{preset_apply, preset_delete, preset_save, presets_list};
 use health::engines_health;
 use mcp::mcp_tools;
 use memory::{memory_clear, memory_maintain, memory_rag_reindex, memory_recall, memory_status};

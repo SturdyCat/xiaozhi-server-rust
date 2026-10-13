@@ -20,7 +20,7 @@ mod maintenance;
 mod rag_index;
 pub use maintenance::KeepPolicy;
 // RAG 索引扩展（P1-9）：类型供 memory/rag.rs 使用（实现在同目录子文件，访问私有 conn()）
-pub(super) use rag_index::{BuildSummary, RagIndexCounts, RagSearchHit};
+pub(super) use rag_index::{BuildSummary, RagSearchHit};
 
 /// 打开记忆库（含父目录创建与迁移）。
 pub fn open(cfg: &MemoryConfig) -> Result<Arc<Store>> {

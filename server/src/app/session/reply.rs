@@ -2,21 +2,25 @@
 //!
 //! 从 `session.rs` 拆出（见 `AGENTS.md` §5.10 文件规模约定）。`Session` 定义在父模块，
 //! **子模块可直接访问其私有字段**，因此拆分无需放宽任何可见性。
+//!
+//! LLM 生产者（读流 + 分句 + 定时 flush watchdog）进一步抽到 [`producer`]——
+//! 本文件只保留编排层（prompt 组装 / 历史与计量 / 兜底与观测）。
 
-use std::sync::atomic::Ordering;
-use std::time::Instant;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use crate::app::downlink::{
     drain_reservoir, new_reservoir, send_tts_state, spawn_reservoir_filler,
 };
+use crate::app::events::TurnTrace;
 use crate::app::prefetch::{PreparedSentence, SentenceSource};
 use crate::app::protocol::ServerMessage;
-use crate::app::splitter::SentenceSplitter;
 use crate::app::transport::Transport;
-use crate::plugins::llm::LlmEvent;
 use crate::plugins::prompt::TurnPrompt;
 
-use super::{send_text, Session, FALLBACK_REPLY};
+use super::producer::{LlmProducer, spawn_llm_producer};
+use super::{Session, FALLBACK_REPLY, send_text};
 
 /// 一次回复的下行结果（供日志与兜底判定）。
 #[derive(Debug, Default, Clone, Copy)]
@@ -114,20 +118,28 @@ impl<'a, T: Transport> Session<'a, T> {
                     m.dry_run
                 ),
                 Ok(_) => {}
-                Err(e) => tracing::warn!("session {sid} 记忆维护异常: {e:#}"),
+                Err(e) => tracing::warn!("session {sid} 记忆维护异常: {e}"),
             }
         });
     }
+
     /// 从用户文本开始：stt → LLM 流式按句切分 → 逐句 TTS + 逐帧下行（流水线重叠）。
     ///
-    /// 生产者 task 读 LLM SSE 流并按句切分推入 channel；消费者（本 task）逐句
-    /// `spawn_blocking` 合成 + 下发，读流与合成/下发**重叠**——首字音频延迟（TTFA）
-    /// 从「整段串行」降到「首句」。abort 贯穿全链路：LLM 读流回调、合成间隙、
-    /// 逐帧下行均轮询打断标志，置位即停。
+    /// 生产者 task 读 LLM SSE 流并按句切分推入 channel（含定时 flush watchdog，缺口③，
+    /// 见 [`producer`]）；消费者（本 task）逐句合成 + 下发，读流与合成/下发**重叠**。
+    /// abort 贯穿全链路：LLM 读流回调、合成间隙、逐帧下行均轮询打断标志，置位即停。
     ///
-    /// ⚠️ `pub(super)`：调用方在**父模块**（消息循环 `handle_text`）。父模块看不到子模块的私有项，
+    /// 分段延迟（缺口②）：`trace` 由调用方创建（锚点 = speech_end / inject），
+    /// producer 回调 mark 首 token / 首句，prefetch 回调 mark 首个 PCM，
+    /// [`Self::drain_prepared`] mark 首帧下发，各结束分支 emit。
+    ///
+    /// ⚠️ `pub(super)`：调用方在**父模块**（消息循环）。父模块看不到子模块的私有项，
     /// 故此处放宽到 `pub(super)`（最小可见性，而非对外 `pub`）。
-    pub(super) async fn stream_response(&mut self, user_text: &str) -> anyhow::Result<()> {
+    pub(super) async fn stream_response(
+        &mut self,
+        user_text: &str,
+        trace: &Arc<TurnTrace>,
+    ) -> anyhow::Result<()> {
         let session_id = self.session_id.clone();
         self.abort.store(false, Ordering::Relaxed); // 新一轮对话重置打断标志
         send_text(
@@ -153,54 +165,31 @@ impl<'a, T: Transport> Session<'a, T> {
         let t0 = std::time::Instant::now();
         // 本轮上下文：人格 + 记忆召回（**在 LLM 之前**，且召回失败不影响继续）
         let prompt = self.build_turn_prompt(user_text).await;
-        // 生产者：读 LLM 流 → 按句切分 → channel。
-        // unbounded：文本量级小（KB），无需反压；闭包借用 splitter/tx，流结束后仍可 flush。
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-        let producer = {
-            // 本轮固定用"当前生效"的 LLM 引擎（读锁后克隆 Arc）：热切换发生在会话之间，
-            // 不会在一轮对话中途换掉引擎。
-            let llm = self.engines.llm();
-            let abort = self.abort.clone();
-            let history = self.history.clone();
-            let user = user_text.to_string();
-            tokio::spawn(async move {
-                let mut splitter = SentenceSplitter::new();
-                let result = llm
-                    .chat_stream(
-                        &history,
-                        &user,
-                        &prompt,
-                        None,
-                        Box::new(|event| {
-                            if abort.load(Ordering::Relaxed) {
-                                return false; // 设备打断：停止读流
-                            }
-                            if let LlmEvent::Text(delta) = event {
-                                for s in splitter.feed(&delta) {
-                                    let _ = tx.send(s);
-                                }
-                            }
-                            true
-                        }),
-                    )
-                    .await;
-                for s in splitter.flush() {
-                    let _ = tx.send(s);
-                }
-                result
-            })
-        };
+        // 定时 flush 等待（缺口③）：每轮从生效配置现读（0 = 关闭）。
+        // ⚠️ 仅**全局**生效：`llm.sentence_flush_ms` 不在设备 overlay 白名单
+        // （`config/overlay.rs` 的 llm 段只放行 system_prompt/max_history）。
+        let flush_wait = Duration::from_millis(self.eff_config.llm.sentence_flush_ms as u64);
+        // 生产者：读 LLM 流 → 按句切分（+ watchdog）→ channel
+        let LlmProducer { sentences: rx, result: producer } = spawn_llm_producer(
+            self.engines.llm(),
+            self.history.clone(),
+            user_text.to_string(),
+            prompt,
+            self.abort.clone(),
+            trace.clone(),
+            flush_wait,
+        );
 
         // 预取：句子 → 成品（下一句的合成跑在**本句播放期间**，消除句间合成气泡——
         // 在线合成每次调用都是一条短连接，旧串行实现每句边界都要重付一次握手延迟）
-        let (prepared, download) = self.spawn_prefetch(rx);
+        let (prepared, download) = self.spawn_prefetch(rx, trace);
         // 观测：进入"说话中"（管理页「会话」的实时阶段）。整轮只置一次——
         // 本轮结束（成功或兜底）会由 `note_assistant_turn` 翻回"空闲"。
         self.note_phase(crate::app::registry::Phase::Speaking);
         // 消费者：水库按实时节拍抽取下发（`tts start` 在首项到达时才发）→ 整轮结束 `tts stop`
         // 新一轮回复：节拍器时间表重置（本回复内各句共享同一时间表 → 句间无缝）
         self.pacer.reset();
-        let outcome = self.drain_prepared(prepared, download, t0).await?;
+        let outcome = self.drain_prepared(prepared, download, t0, trace).await?;
         let DownlinkOutcome {
             sentences: sentences_done,
             frames: frames_total,
@@ -229,6 +218,8 @@ impl<'a, T: Transport> Session<'a, T> {
                     device_id: self.device_id.clone(),
                     message: format!("LLM 调用失败（{}）", failure.category()),
                 });
+                // 分段延迟：失败轮照样 emit（锚点轮次发生了就是发生了）
+                self.emit_turn_latency(trace, interrupted);
                 if !interrupted && frames_total == 0 {
                     self.speak_fallback(FALLBACK_REPLY).await?;
                 }
@@ -251,6 +242,7 @@ impl<'a, T: Transport> Session<'a, T> {
                     device_id: self.device_id.clone(),
                     message: format!("LLM 任务异常: {e}"),
                 });
+                self.emit_turn_latency(trace, interrupted);
                 if !interrupted && frames_total == 0 {
                     self.speak_fallback(FALLBACK_REPLY).await?;
                 }
@@ -279,6 +271,8 @@ impl<'a, T: Transport> Session<'a, T> {
             text: llm_out.text.clone(),
             elapsed_ms: Some(t0.elapsed().as_millis() as u64),
         });
+        // 分段延迟（缺口②）：正常结束的整轮 emit
+        self.emit_turn_latency(trace, interrupted);
         // ⚠️ 这里打印的是**整轮耗时**（t0 → 最后一帧下发完成），不是"LLM 流耗时"：
         // 旧文案写"LLM 流 Xms"会让人误读成 LLM 吞吐（曾据此误判上游速度）。
         // 与"音频 Xms"对比才是判断节流的正确口径：两者接近 = 全程实时无缝；
@@ -327,11 +321,14 @@ impl<'a, T: Transport> Session<'a, T> {
         Ok(())
     }
 
-    /// 主动说一句**非 LLM 生成**的话（LLM 失败兜底 / 指令闸门的告别语）。
+    /// 主动说一句**非 LLM 生成**的话（LLM 失败兜底 / 指令闸门的告别语 / 唤醒问候语）。
     ///
     /// 走与正常回复**完全同一条**下行链路（预取 → 节拍器 → tts start/stop），
     /// 因此听感与打断语义一致；合成失败只记日志（调用方各自决定后续行为：
     /// 兜底继续返回、指令闸门照常断开）。
+    ///
+    /// 分段延迟（缺口②）：自建 trace（anchor=`canned`），只采 `first_audio_ms`
+    /// ——预制话术没有 LLM/分句阶段；与正常回复各自成事件，靠 anchor 区分。
     pub(super) async fn speak_canned(&mut self, text: &str) -> anyhow::Result<()> {
         // 一句独立的话 = 一次独立回复：节拍器时间表重置（指令闸门路径不会经过
         // `stream_response` 的 reset，不重置会沿用上一轮的时间锚点）。
@@ -340,18 +337,21 @@ impl<'a, T: Transport> Session<'a, T> {
         // `tts start`/`stop` 都不发 —— 客户端/测试台会卡在"合成中"，用户则听到静音。
         // 指令闸门路径本来就会清（见 `command.rs`），这里给兜底路径补上同一语义。
         self.abort.store(false, Ordering::Relaxed);
+        let trace = TurnTrace::new(crate::app::events::ANCHOR_CANNED);
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
         let _ = tx.send(text.to_string());
         drop(tx); // 只有一句 → 关掉句子流，预取 worker 处理完即退出
-        let (prepared, download) = self.spawn_prefetch(rx);
+        let (prepared, download) = self.spawn_prefetch(rx, &trace);
         let t0 = Instant::now();
-        match self.drain_prepared(prepared, download, t0).await {
+        match self.drain_prepared(prepared, download, t0, &trace).await {
             Ok(o) if o.sentences == 0 => {
                 tracing::warn!("session {} 话术未下发任何音频: {text}", self.session_id);
             }
             Ok(_) => {}
             Err(e) => tracing::warn!("session {} 话术下发失败: {e}", self.session_id),
         }
+        // 分段延迟：canned 轮 emit（anchor=canned，first_audio 之外的阶段为 None）
+        self.emit_turn_latency(&trace, false);
         Ok(())
     }
 
@@ -363,22 +363,38 @@ impl<'a, T: Transport> Session<'a, T> {
     /// 同时建出本轮的**下载缓冲**（[`DownloadBudget`]）：合成回调据此按预算暂停/恢复
     /// TTS 流下载（内存换性能 + 下载限速），返回值随行交给 [`Self::drain_prepared`]
     /// 打印每轮观测。
+    ///
+    /// 缺口①：TTS 闸门取自 `engines.inference`（进程级，与生产/测试台共用）。
+    /// 缺口②：`trace` → first-only 的 `tts_first_pcm` 回调闭包（原子读，无锁）。
     fn spawn_prefetch(
         &self,
         sentences: tokio::sync::mpsc::UnboundedReceiver<String>,
+        trace: &Arc<TurnTrace>,
     ) -> (
         tokio::sync::mpsc::Receiver<PreparedSentence>,
-        std::sync::Arc<crate::app::prefetch::DownloadBudget>,
+        Arc<crate::app::prefetch::DownloadBudget>,
     ) {
         let engines = self.engines.clone();
         let params = self.params;
         let eff_config = self.eff_config.clone();
         let download =
             crate::app::prefetch::DownloadBudget::new(self.params.download_buffer_ms);
+        // 首个非缓存句的首个 PCM 分片 → mark_tts_first_pcm（first-only 用原子标志，
+        // 避免每分片加锁；缓存命中句不走合成回调，天然不触发——与"缓存轮该阶段为
+        // None"的口径一致）
+        let pcm_once = Arc::new(AtomicBool::new(false));
+        let trace_for_pcm = trace.clone();
+        let first_pcm: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            if !pcm_once.swap(true, Ordering::Relaxed) {
+                trace_for_pcm.mark_tts_first_pcm();
+            }
+        });
         let prepared = crate::app::prefetch::spawn_sentence_prefetch(
             self.abort.clone(),
             self.engines.tts_cache.clone(),
             download.clone(),
+            self.engines.inference.tts(),
+            Some(first_pcm),
             move |sentence: &str| {
                 let live = eff_config.clone();
                 // 缓存键口径的**唯一权威**在 `HotAudioKey::from_session`。
@@ -413,14 +429,13 @@ impl<'a, T: Transport> Session<'a, T> {
     /// - **本函数**（发送端）按实时节拍从水库取帧下发——上游停顿由水库存货吸收，
     ///   设备解码队列不再被抽干（这是"长回复断续"的正面解）。
     ///
-    /// 每轮结束打印三类观测：节拍器的**设备解码队列余量最低估计**（断音现场证据）、
-    /// 水库水位/饥饿（上游供数是否慢于播放）、下载缓冲水位/限速（TTS 流下载是否被按预算压住）
-    /// 与**本轮吞吐**（音频时长 / 播放窗口，< 1.0× 即上游持续慢于实时——缓冲只能推迟断音）。
+    /// 缺口②：首帧实际下发（`first_frame_at`）→ `trace.mark_first_audio_at`。
     async fn drain_prepared(
         &mut self,
         prepared: tokio::sync::mpsc::Receiver<PreparedSentence>,
-        download: std::sync::Arc<crate::app::prefetch::DownloadBudget>,
+        download: Arc<crate::app::prefetch::DownloadBudget>,
         t0: Instant,
+        trace: &Arc<TurnTrace>,
     ) -> anyhow::Result<DownlinkOutcome> {
         let session_id = self.session_id.clone();
         // 水库容量与起跑闸都取**会话级快照**（`[audio]` 是 restart_only，会话内不变）
@@ -447,6 +462,9 @@ impl<'a, T: Transport> Session<'a, T> {
             &mut first_frame_at,
         )
         .await?;
+        // 缺口②：首帧实际下发 → mark。⚠️ 必须传 sender 记下的**首帧时刻**（`first_frame_at`
+        // out-param）：此刻 drain 已返回、末帧已发完，用"现在"记会失真成整轮耗时。
+        trace.mark_first_audio_at(first_frame_at);
         // 收尾：正常路径填充任务已自行收工（写端丢弃）；打断/异常时立刻停掉，
         // 别再白合成、白编码本轮剩余音频。
         filler.abort();

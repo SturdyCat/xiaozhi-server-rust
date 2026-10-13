@@ -40,6 +40,7 @@ pub const ORDER_TOOLS: i32 = 900;
 #[allow(dead_code)]
 pub const ORDER_HISTORY: i32 = 1000;
 /// 记忆召回。
+#[allow(dead_code)] // 同族 ORDER_TOOLS/ORDER_HISTORY：声明顺序保留位（memory 块当前由 position 字段定位）
 pub const ORDER_MEMORY: i32 = 1100;
 
 /// 已声明的运行时变量（`{{name}}`）：**唯一权威**，未在此列的引用一律报错。

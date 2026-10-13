@@ -47,6 +47,8 @@ pub use llm_extract::{Extraction, EXTRACT_INSTRUCTIONS, OUTCOMES};
 
 // 配置与数据类型拆分到子文件，此处 `pub use` 再导出，
 // 保证既有 `crate::plugins::memory::Xxx` 与子模块 `super::Xxx` 引用路径不变。
+// RagConfig：类型经 `MemoryConfig.rag` 字段暴露；re-export 仅为 rag 单测 `super::*` 可达。
+#[allow(unused_imports)]
 pub use config::{MemoryBackend, MemoryConfig, RagConfig, RetentionConfig};
 // 抽取路由配置：类型经 `MemoryConfig.extractor` 字段暴露；显式 re-export 仅为单测 `super::*` 可达。
 #[allow(unused_imports)]

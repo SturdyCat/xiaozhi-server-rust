@@ -1,3 +1,4 @@
+use super::projection::{ADVANCED_KEYS, full_field_key};
 use super::*;
 
 /// 注册表 id 必须命名空间唯一（`<capability>.<impl>`）。

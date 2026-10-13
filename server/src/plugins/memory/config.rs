@@ -438,6 +438,8 @@ impl MemoryConfig {
 
 impl ExtractorConfig {
     /// 是否所有字段都空（→ 复用 `[llm]`）。
+    /// 当前调用方经 `resolve_missing` 间接覆盖同一判定；保留为公共原语。
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.api_base.trim().is_empty()
             && self.model.trim().is_empty()

@@ -41,6 +41,8 @@ pub struct RagIndexCounts {
 /// 一次文档检索命中（chunk 正文 + 来源文档路径 + 命中词项数）。
 #[derive(Debug, Clone)]
 pub struct RagSearchHit {
+    /// 命中 chunk 的稳定 id：检索可解释性/后续"跳原文"预留，正文消费方不读。
+    #[allow(dead_code)]
     pub chunk_id: String,
     pub text: String,
     /// 来源文档相对路径（可解释性：部署者能验证"为什么召回了这段"）。

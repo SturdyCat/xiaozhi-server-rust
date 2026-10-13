@@ -1,23 +1,18 @@
 # xiaozhi-server-rust 整体优化实施方案（合并版）
 
-> 目的：把两路工作合并成一份可执行的分阶段路线图——(A) 前期《分模块优化分析》(`docs/architecture-optimization-analysis.md`，参考 Golang 版优秀设计)；(B) 本会话已落地的「配置 UI 导航重组」。
+> 目的：把两路工作合并成一份可执行的分阶段路线图——(A) 前期《分模块优化分析》(`docs/architecture-optimization-analysis.md`，参考 Golang 版优秀设计)；(B) 2026-10 落地的「配置 UI 导航重组」。
 > 方法论：取其架构思想，不搬其重实现；凡新增服务端能力优先复用现有 `registry`/`schema`/`bench`/`observe` 基础设施。
 > 定位前提：Rust 版 = 离线 ASR/TTS(sherpa-onnx) + 云端 HTTP LLM 的**单二进制 Docker** 小智服务端，固件协议严格对齐(v1/v2/v3)，N5105 低功耗主机；macOS/iOS/Android 有原生麦克风可做语音链路测试，Web 仅能做 LLM/TTS 延迟类轻测。
 
 ---
 
-## 0. 已交付（本会话内完成，编译验证通过）
+## 0. Phase 0 交付记录（编译验证通过）
 
 ### 0.1 配置 UI 导航重组（需求：tab 太多无从下手 → 简化 + 更好组织 + 更友好导航）
-- **改动**：把 14 个平铺 `tabbedPanel` → 「左侧 220px 分组导航 + 顶部搜索框 + 右侧单 section 内容」两栏布局。
-- **文件**：
-  - `ConfigSections.kt`：新增 `group` + `keywords`（中文意图→section 搜索，如"音色"→TTS、"固件"→OTA），`groups`/`pinned`/`sectionsIn()`/`search()`。
-  - `ConfigFormState.kt`：新增 `configSection`(getter/setter 同步 `configSectionList: ObservableList<String>`) + `configSearch`；移除旧 `tabUi`。
-  - `ConfigCards.kt`：废弃 `renderForm`，新增 `renderConfigLayout` / `renderConfigSection`（按 id 分发、**复用全部原卡片函数零改动**）/ `configSearchField` / `configGroupHeader`；右侧用 `vfor({ form.configSectionList })` 保证切换响应式重渲染。
-  - `AdminPage.kt` / `ConfigPage.kt` / `AdminShell.kt`(macOS)：三处 `renderForm→renderConfigLayout`，去掉 `pageWidth/pageHeight`。
-  - `AdminComponents.kt`：`tabbedPanel/TabUiState/TabPage` 保留（TestBench 仍用）。
-- **验证**：`:shared:compileKotlinJs` 与 `:shared:compileKotlinMacosArm64` 均 `BUILD SUCCESSFUL`（`compileKotlinMetadata` 被 Kuikly 插件 SKIP，改用真实目标校验）。
-- **未做（本期明确的下一步候选项）**：**按场景/角色折叠高级字段**的"简化配置选项"——需要 schema 配合标记 `advanced` 字段，纯前端无法安全实现，列为待确认项（见 §4）。
+- **改动**：14 个平铺 `tabbedPanel` → 「左侧 220px 分组导航 + 顶部搜索框 + 右侧单 section 内容」两栏布局。
+- **关键落点**：`ConfigSections.kt`（`group` + `keywords` 中文意图搜索，如"音色"→TTS）；`ConfigFormState.kt`（`configSection` 同步 `configSectionList: ObservableList<String>` + `configSearch`）；`ConfigCards.kt`（`renderConfigLayout`/`renderConfigSection` 复用全部原卡片函数，`vfor({ form.configSectionList })` 保证切换响应式）；`AdminComponents.kt` 的 `tabbedPanel` 保留（TestBench 仍用）。
+- **验证**：`:shared:compileKotlinJs` 与 `:shared:compileKotlinMacosArm64` 均 `BUILD SUCCESSFUL`（⚠️ `compileKotlinMetadata` 被 Kuikly 插件 SKIP 是空壳任务，编译验证必须用真实目标）。
+- **未做**：**按场景/角色折叠高级字段**——需 schema 配合标记 `advanced` 字段，纯前端无法安全实现；Phase 3「启用开关扩展」可一并评估（见 §4）。
 
 ---
 
@@ -60,7 +55,7 @@
 
 ### ▶ Phase 2 — P1 增强 ✅ 已完成（2026-10 交付）
 
-> ✅ **状态（2026-10-13）**：P1-1 / P1-2 / P1-4 / P1-5 / P1-6 / P1-7 / P1-9 / P1-10 与 P1-3（Web 测试台平台分支卡片）全部交付；P1-8 经用户确认剔除。设计记录见 `docs/p1-round1-design.md` / `p2-round2-design.md` / `p3-round3-design.md`，功能需求与验收见 `docs/p1-features-prd.md`。全量回归：`cargo test` 468+ 例全绿、`--features sherpa` 编译通过、Kuikly JS/macOS 双目标编译通过。
+> ✅ **状态（2026-10-13）**：除 P1-8（用户确认剔除）外全部交付。设计记录见 `docs/p1-round1-design.md` / `p2-round2-design.md` / `p3-round3-design.md`，功能需求与验收见 `docs/p1-features-prd.md`。全量回归：`cargo test` 468+ 例全绿、`--features sherpa` 编译通过、Kuikly JS/macOS 双目标编译通过。
 
 | # | 项 | 维度 | 具体动作 |
 |---|----|------|----------|
@@ -101,18 +96,8 @@
 
 ---
 
-## 4. 待你确认：下一步优先做哪些
+## 4. 下一步
 
-> 按你"先列任务确认、不要直接改代码"的要求，以下为待确认清单，确认后我再动手。
-
-**A. 折叠高级字段（§0 未做的"简化配置选项"收尾）**
-- 需要 schema 增加 `advanced` 字段标记；前端分组导航内按"基础/高级"折叠。纯前端无法安全实现，依赖服务端 schema 改动。
-- 工作量：中（前后端配合）。
-
-**B. 直接进 Phase 1 / P0 六项**
-- 建议优先级排序（按收益/复用度）：P0-2（内联测试+延迟，bench.rs 现成）> P0-5（事件总线，解耦基础设施）> P0-6（联调+护栏，CI 安全网）> P0-1（向导化+就绪度）> P0-4（文本管线）> P0-3（VAD 池，需先验证并发）。
-
-**C. 先补 P1 中的 UI 项（导航响应式/骨架屏）**
-- 与 §0 的导航重组衔接最紧，纯前端、风险低。
-
-请回复你想先推进 **A / B / C** 中的哪些（可多选），以及 P0 内部是否按上述排序，我再给出细化任务清单与改动文件范围。
+Phase 0 / 1 / 2 均已交付。剩余待办仅两类，均为按需启动：
+- **Phase 3（§2）**：默认不投入，待明确需求再逐项评估。
+- **折叠高级字段（§0.1 未做项）**：需服务端 schema 增加 `advanced` 标记，可与 Phase 3「启用开关扩展」一并评估。

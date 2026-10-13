@@ -76,7 +76,8 @@ impl MaintainOpts {
         Self::default()
     }
 
-    /// 管理页「立即维护」。
+    /// 管理页「立即维护」（HTTP 端点接线预留：`POST /api/memory/maintain` 的强制档）。
+    #[allow(dead_code)]
     pub fn forced(dry_run: bool) -> Self {
         Self {
             force: true,

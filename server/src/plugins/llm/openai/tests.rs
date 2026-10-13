@@ -45,6 +45,7 @@ fn build_input_maps_history_roles() {
         max_history: 10,
         temperature: 0.7,
         stream: true,
+        sentence_flush_ms: 1500,
     };
     let client = LlmClient::new(&cfg);
     let history = vec![

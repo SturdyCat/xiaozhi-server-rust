@@ -7,9 +7,8 @@
 //!
 //! - **全内存态、进程重启清零**（口径与 `app/registry` 一致）；前端页面必须注明。
 //! - 整轮延迟样本 = 助手轮次的 `elapsed_ms`（事件里已带），环形窗口最近 [`TURN_WINDOW`] 轮。
-//! - **每模块被动首包延迟暂未纳入**：正常会话中 VAD/ASR/LLM/TTS 的分模块首包目前只在
-//!   测试台（`bench.rs`）与内联测试（`bench_api.rs`）测量；后续若要被动采集，在
-//!   `reply.rs` 的流式回调处补事件字段即可（订阅者无需改 session）。
+//! - **分段延迟**（缺口②）：`TurnLatency` 事件的各阶段偏移各自入窗（同窗口大小），
+//!   `/api/metrics` 的 `latency` 节只增不改（老字段原样保留）。
 //!
 //! ## 订阅时序
 //!
@@ -22,10 +21,53 @@ use std::time::Instant;
 
 use tokio::sync::broadcast;
 
-use crate::app::events::ServerEvent;
+use crate::app::events::{ANCHOR_INJECT, ANCHOR_SPEECH_END, ServerEvent};
 
 /// 整轮延迟样本窗口（p50/p95 的计算样本数；超出丢最旧）。
 const TURN_WINDOW: usize = 200;
+
+/// 各分段延迟样本的窗口：与整轮同尺寸（最近 [`TURN_WINDOW`] 轮，超出丢最旧）。
+fn push_window(w: &mut VecDeque<u64>, v: u64) {
+    w.push_back(v);
+    while w.len() > TURN_WINDOW {
+        w.pop_front();
+    }
+}
+
+/// 分段延迟窗口（缺口②）：`TurnLatency` 事件的各阶段样本。
+/// 各窗口独立（某阶段 `None` 的轮次不进该阶段的窗）。
+#[derive(Default)]
+struct StageWindows {
+    asr_end_ms: VecDeque<u64>,
+    llm_first_token_ms: VecDeque<u64>,
+    sentence_ready_ms: VecDeque<u64>,
+    tts_first_pcm_ms: VecDeque<u64>,
+    first_audio_ms: VecDeque<u64>,
+}
+
+/// 一个阶段的分位投影：p50/p90/p95/p99/max/samples（与整轮的口径一致）。
+fn stage_stats_json(w: &VecDeque<u64>) -> serde_json::Value {
+    let mut samples: Vec<u64> = w.iter().copied().collect();
+    samples.sort_unstable();
+    // 分位取"向上取整位"（p95 of 100 样本 = 第 95 个）；空样本一律 0。
+    let pick = |q: f64| -> u64 {
+        if samples.is_empty() {
+            0
+        } else {
+            let idx =
+                (((samples.len() as f64) * q).ceil() as usize).clamp(1, samples.len()) - 1;
+            samples[idx]
+        }
+    };
+    serde_json::json!({
+        "p50_ms": pick(0.50),
+        "p90_ms": pick(0.90),
+        "p95_ms": pick(0.95),
+        "p99_ms": pick(0.99),
+        "max_ms": samples.last().copied().unwrap_or(0),
+        "samples": samples.len(),
+    })
+}
 
 #[derive(Default)]
 struct Inner {
@@ -42,6 +84,8 @@ struct Inner {
     interrupted: u64,
     errors: u64,
     last_error: Option<String>,
+    /// 分段延迟窗口（缺口②）。
+    stages: StageWindows,
 }
 
 /// 进程级聚合器。挂在 [`crate::engine::Engines`] 上（与 registry/usage 同性质的只读观测面）。
@@ -85,6 +129,32 @@ impl Metrics {
                 g.errors += 1;
                 g.last_error = Some(message.clone());
             }
+            ServerEvent::TurnLatency { stages, .. } => {
+                // 分窗口径（QA Round 1 拍板）：仅语音/注入轮入窗——canned（兜底/问候/
+                // 告别，常走缓存零合成）与 aiui（云端闭环，本地无中间里程碑）与
+                // 正常语音轮的延迟结构完全不同，混窗会系统性拉低语音轮分位。
+                // anchor 在此消费（事件负载字段，非 dead code）。
+                if !matches!(stages.anchor, ANCHOR_SPEECH_END | ANCHOR_INJECT) {
+                    return;
+                }
+                let s = &mut g.stages;
+                // 各阶段 Some(ms) 分别入窗（None = 本轮未发生，不进窗——否则会拉低分位）
+                if let Some(v) = stages.asr_end_ms {
+                    push_window(&mut s.asr_end_ms, v);
+                }
+                if let Some(v) = stages.llm_first_token_ms {
+                    push_window(&mut s.llm_first_token_ms, v);
+                }
+                if let Some(v) = stages.sentence_ready_ms {
+                    push_window(&mut s.sentence_ready_ms, v);
+                }
+                if let Some(v) = stages.tts_first_pcm_ms {
+                    push_window(&mut s.tts_first_pcm_ms, v);
+                }
+                if let Some(v) = stages.first_audio_ms {
+                    push_window(&mut s.first_audio_ms, v);
+                }
+            }
         }
     }
 
@@ -109,7 +179,9 @@ impl Metrics {
             "turns": {
                 "total": g.turns,
                 "elapsed_p50_ms": pick(0.50),
+                "elapsed_p90_ms": pick(0.90),
                 "elapsed_p95_ms": pick(0.95),
+                "elapsed_p99_ms": pick(0.99),
                 "elapsed_max_ms": samples.last().copied().unwrap_or(0),
                 "samples": samples.len(),
             },
@@ -120,6 +192,18 @@ impl Metrics {
                 "interrupted": g.interrupted,
             },
             "errors": { "count": g.errors, "last": g.last_error },
+            // 缺口②（additive）：各阶段相对锚点的毫秒偏移，仅统计**语音/注入轮**
+            //（canned=兜底问候告别常走缓存、aiui=云端闭环，延迟结构与语音轮不同，
+            // 混窗会拉低分位，故不入窗——见 observe() 的过滤）。缓存命中轮
+            // tts_first_pcm_ms 为空（零合成无从谈首 PCM）。
+            "latency": {
+                "note": "各阶段相对锚点的毫秒偏移；仅统计 speech_end（语音）/ inject（注入）轮，canned/aiui 轮不入窗；缓存命中轮 tts_first_pcm 为空",
+                "asr_end_ms": stage_stats_json(&g.stages.asr_end_ms),
+                "llm_first_token_ms": stage_stats_json(&g.stages.llm_first_token_ms),
+                "sentence_ready_ms": stage_stats_json(&g.stages.sentence_ready_ms),
+                "tts_first_pcm_ms": stage_stats_json(&g.stages.tts_first_pcm_ms),
+                "first_audio_ms": stage_stats_json(&g.stages.first_audio_ms),
+            },
         })
     }
 }
@@ -136,3 +220,6 @@ pub async fn subscriber(metrics: Metrics, mut rx: broadcast::Receiver<ServerEven
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

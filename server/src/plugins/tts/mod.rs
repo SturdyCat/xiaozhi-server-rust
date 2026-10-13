@@ -77,6 +77,13 @@ pub struct TtsConfig {
     /// 发音人 id：跨实现的**参数槽**（Kokoro 用 sid，讯飞忽略并改由 `[tts.xfyun].voice` 决定）。
     #[serde(default)]
     pub speaker: i32,
+    /// 同时进行的 TTS 合成路上限（跨会话排队背压，缺口①）。
+    ///
+    /// 默认 1：本地 Kokoro 每路占用 `num_threads` 线程（默认 4），恰等于 `engine.rs //!`
+    /// 预算表的 TTS 段线程预算；讯飞在线为网络型引擎，多设备部署建议放宽到 2~4。
+    /// 随 TTS 热切换对账（NextSession：`Engines::refresh_tts` 成功后 reconfigure）。
+    #[serde(default = "default_max_concurrent")]
+    pub max_concurrent: u32,
     /// 本地 Kokoro INT8（`[tts.kokoro]`）。
     #[serde(default)]
     pub kokoro: KokoroTtsConfig,
@@ -197,7 +204,10 @@ impl TtsConfig {
         }
         self.engine = canonical;
 
-        // (2) 旧扁平字段 → [tts.kokoro]
+        // (2) 推理闸门许可数：0 会把合成永久堵死，clamp ≥ 1（见 app::inference）。
+        self.max_concurrent = self.max_concurrent.max(1);
+
+        // (3) 旧扁平字段 → [tts.kokoro]
         let def = KokoroTtsConfig::default();
         let mut moved: Vec<&'static str> = Vec::new();
         macro_rules! absorb_str {
@@ -229,6 +239,11 @@ impl TtsConfig {
 
 fn default_cache_entries() -> u32 {
     256
+}
+
+/// `[tts].max_concurrent` 默认 1（推理闸门许可数，见 `app::inference`）。
+fn default_max_concurrent() -> u32 {
+    1
 }
 
 fn default_tts_model() -> String {
@@ -394,6 +409,7 @@ impl Default for TtsConfig {
             cache_entries: default_cache_entries(),
             speed: default_speed(),
             speaker: 0,
+            max_concurrent: default_max_concurrent(),
             kokoro: KokoroTtsConfig::default(),
             xfyun: XfyunTtsConfig::default(),
             backend: String::new(),

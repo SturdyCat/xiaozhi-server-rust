@@ -265,3 +265,46 @@ fn download_budget_is_derived_and_bounded() {
         );
     }
 }
+
+/// 缺口③（QA Round 1 建议 6）：`[llm].sentence_flush_ms` 的 normalize clamp 语义。
+/// - 上限 60000（防异常配置把 watchdog 周期拖到分钟级）；
+/// - 0 合法保留（= 关闭定时 flush，回退现行为）；
+/// - 常规值原样通过。
+#[test]
+fn llm_sentence_flush_ms_clamped_by_normalize() {
+    let mut cfg = Config::default();
+    assert_eq!(cfg.llm.sentence_flush_ms, 1500, "serde 默认 1500");
+
+    cfg.llm.sentence_flush_ms = 120_000; // 超上限
+    cfg.normalize();
+    assert_eq!(cfg.llm.sentence_flush_ms, 60_000, ">60000 必须收敛到 60000");
+
+    cfg.llm.sentence_flush_ms = 0; // 关闭档
+    cfg.normalize();
+    assert_eq!(cfg.llm.sentence_flush_ms, 0, "0 合法保留（关闭定时 flush）");
+
+    cfg.llm.sentence_flush_ms = 2_500;
+    cfg.normalize();
+    assert_eq!(cfg.llm.sentence_flush_ms, 2_500, "区间内原样通过");
+
+    // 幂等：连续 normalize 不再变化
+    cfg.normalize();
+    assert_eq!(cfg.llm.sentence_flush_ms, 2_500);
+}
+
+/// 缺口①（同类护栏顺带）：`[asr]/[tts].max_concurrent` 的 clamp ≥ 1 语义。
+#[test]
+fn inference_gate_permits_clamped_to_at_least_one() {
+    let mut cfg = Config::default();
+    cfg.asr.max_concurrent = 0;
+    cfg.tts.max_concurrent = 0;
+    cfg.normalize();
+    assert_eq!(cfg.asr.max_concurrent, 1, "asr 0 许可会被永久堵死，clamp ≥1");
+    assert_eq!(cfg.tts.max_concurrent, 1, "tts 0 许可会被永久堵死，clamp ≥1");
+
+    cfg.asr.max_concurrent = 4;
+    cfg.tts.max_concurrent = 8;
+    cfg.normalize();
+    assert_eq!(cfg.asr.max_concurrent, 4, "合法放宽值原样保留");
+    assert_eq!(cfg.tts.max_concurrent, 8);
+}

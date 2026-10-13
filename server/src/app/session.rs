@@ -23,15 +23,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::app::audio::opus::OpusFrameDecoder;
-use crate::app::downlink::{
-    DownlinkPacer, drain_reservoir, new_reservoir, send_tts_state, spawn_single_sentence_filler,
-};
-use crate::app::prefetch::PreparedAudio;
+use crate::app::downlink::DownlinkPacer;
+use crate::app::events::TurnTrace;
 use crate::app::protocol::{unwrap_uplink, BinVersion, ClientMessage, ServerMessage};
 use crate::app::transport::{IncomingFrame, Transport};
 use crate::config::Config;
 use crate::engine::Engines;
-use crate::plugins::aiui::{FullChainEngine, FullChainTurn};
+use crate::plugins::aiui::FullChainEngine;
 use crate::plugins::asr::AsrEngine;
 use crate::plugins::command::CommandGate;
 use crate::plugins::wakeup::WakeGreeting;
@@ -46,13 +44,18 @@ enum UtteranceDecision {
     CommandStop,
 }
 
+mod aiui;
 mod bench;
 mod command;
 mod mcp;
 mod observe;
+mod producer;
 mod reply;
 mod start;
 mod wakeup;
+
+// 上行 PCM 采样格式换算（AIUI 路径用）：下移到 app/audio/pcm（行为不变搬移）。
+pub(crate) use crate::app::audio::pcm::f32_to_i16_16k;
 
 // 会话入口对 `app::ws` 可见（网关把升级后的连接交给会话状态机）。
 pub use start::run_session;
@@ -270,18 +273,22 @@ impl<'a, T: Transport> Session<'a, T> {
     ///
     /// 这让"上游 LLM/TTS 是否正常"可以不经 ASR 直接验证（联调利器），且对话记录、
     /// 事件总线、打断语义（设备仍可 abort）与正常轮次一一一致。
+    ///
+    /// 分段延迟（缺口②）：anchor=`inject`（文本到达时刻），无 asr/sentence 之前的
+    /// 语音阶段——`asr_end_ms` 为 `None`，LLM 及之后各阶段照常采集。
     async fn handle_inject(&mut self, text: &str) {
         tracing::info!(
             "session {} 管理台注入文本（{} 字），走完整管线",
             self.session_id,
             text.chars().count()
         );
+        let trace = TurnTrace::new(crate::app::events::ANCHOR_INJECT);
         match self.decide_user_text(text).await {
             // 副作用（告别语 + MCP 结束聆听 / close_requested 置位）已在闸门内执行完，
             // 主循环下一轮即按 close_requested 收尾——语义与语音触发的指令一致。
             UtteranceDecision::CommandStop => {}
             UtteranceDecision::Respond => {
-                if let Err(e) = self.stream_response(text).await {
+                if let Err(e) = self.stream_response(text, &trace).await {
                     tracing::warn!("session {} 注入轮次流水线失败: {e}", self.session_id);
                 }
             }
@@ -292,12 +299,25 @@ impl<'a, T: Transport> Session<'a, T> {
     /// `recognize_segments` 与 `AsrTest` 共用，避免重复 clone 引擎与计时样板。
     /// 写成不借用 `&self` 的关联函数：避免捕获 `Session`（含 `&mut T` 传输，非 `Sync`）
     /// 导致返回的 future 不满足 `Send`，破坏 `ws.rs` 的 `on_upgrade` 要求。
+    ///
+    /// 推理闸门（缺口①）：先过 ASR 闸门（裸 acquire，**不查 abort**——`abort` 只在
+    /// `stream_response` 入口复位，而 ASR 发生在它之前，stale abort 不能吞掉
+    /// "打断后立刻说的新话语"，见 `app/inference` 模块注释）。permit move 进
+    /// `spawn_blocking` 闭包、随推理结束 RAII 归还。
     async fn asr_recognize(
         asr: Arc<dyn AsrEngine>,
+        asr_gate: crate::app::inference::GateHandle,
         sr: u32,
         pcm: Vec<f32>,
     ) -> Result<String, String> {
-        blocking_result(move || asr.recognize(&pcm, sr)).await
+        let Some(_permit) = asr_gate.acquire().await else {
+            return Err("ASR 推理闸门已关闭".to_string());
+        };
+        blocking_result(move || {
+            // permit 随本闭包 Drop 归还闸门
+            asr.recognize(&pcm, sr)
+        })
+        .await
     }
 
     /// 将 VAD 切出的语音段送 ASR → 完整流水线；常规分帧与会话结束 flush 共用。
@@ -309,20 +329,28 @@ impl<'a, T: Transport> Session<'a, T> {
             return;
         }
         for seg in segments {
+            // 分段延迟（缺口②）：锚点 = speech_end（VAD 切句、即将送 ASR 的时刻，
+            // 与 VAD 回调同 tick，误差微秒级）。
+            let trace = TurnTrace::new(crate::app::events::ANCHOR_SPEECH_END);
             let t0 = std::time::Instant::now();
-            let user_text =
-                match Self::asr_recognize(self.engines.asr.clone(), self.params.uplink_sr, seg)
-                    .await
-                {
-                    Ok(t) => t,
-                    Err(e) => {
-                        tracing::warn!("ASR 识别失败: {e}");
-                        continue;
-                    }
-                };
+            let user_text = match Self::asr_recognize(
+                self.engines.asr.clone(),
+                self.engines.inference.asr(),
+                self.params.uplink_sr,
+                seg,
+            )
+            .await
+            {
+                Ok(t) => t,
+                Err(e) => {
+                    tracing::warn!("ASR 识别失败: {e}");
+                    continue;
+                }
+            };
             if user_text.trim().is_empty() {
                 continue;
             }
+            trace.mark_asr_end();
             tracing::info!(
                 "session {session_id} 识别完成：耗时 {}ms（{} 字）",
                 t0.elapsed().as_millis(),
@@ -332,7 +360,7 @@ impl<'a, T: Transport> Session<'a, T> {
             match self.decide_user_text(&user_text).await {
                 UtteranceDecision::CommandStop => return, // 本批剩余语音段一并丢弃
                 UtteranceDecision::Respond => {
-                    if let Err(e) = self.stream_response(&user_text).await {
+                    if let Err(e) = self.stream_response(&user_text, &trace).await {
                         tracing::warn!("流水处理失败: {e}");
                     }
                 }
@@ -375,141 +403,6 @@ impl<'a, T: Transport> Session<'a, T> {
         UtteranceDecision::Respond
     }
 
-    /// AIUI 全链路：每段 = 一轮 oneshot 交互（识别 + 大模型 + 合成在 AIUI 云端闭环）。
-    /// stt/nlp 文本照常走 stt 消息与会话历史；合成音频（16k PCM）复用现有下行链路。
-    async fn aiui_segments(&mut self, segments: Vec<Vec<f32>>) {
-        let session_id = self.session_id.clone();
-        for seg in segments {
-            let pcm_i16 = f32_to_i16_16k(&seg, self.params.uplink_sr);
-            let Some(aiui) = self.aiui.as_ref().map(Arc::clone) else {
-                continue;
-            };
-            let t0 = std::time::Instant::now();
-            let res = blocking_result(move || {
-                let mut g = aiui.lock().unwrap_or_else(|e| e.into_inner());
-                g.turn(&pcm_i16)
-            })
-            .await;
-            let turn = match res {
-                Ok(t) => t,
-                Err(e) => {
-                    tracing::warn!("session {session_id} AIUI 轮次失败: {e}");
-                    continue;
-                }
-            };
-            if turn.stt.trim().is_empty() {
-                continue; // 静音轮（云端 Silence 事件），同空识别结果处理
-            }
-            tracing::info!(
-                "session {session_id} AIUI 轮次完成：耗时 {}ms（识别 {} 字 / 回复 {} 字 / 音频 {} 字节）",
-                t0.elapsed().as_millis(),
-                turn.stt.chars().count(),
-                turn.reply.chars().count(),
-                turn.audio.len()
-            );
-            // 文本侧优先级管线（P0-4）：与级联流水线共用统一入口（记录 + 指令闸门）。
-            // 识别文本要等云端闭环回来才可见（本地没有 ASR 可拦），因此命中指令时只能
-            // "丢弃本轮云端回复"—但会话照样按指令断开（语义与级联流水线一致）。
-            match self.decide_user_text(&turn.stt).await {
-                UtteranceDecision::CommandStop => return,
-                UtteranceDecision::Respond => {
-                    if let Err(e) = self.aiui_downlink(&turn).await {
-                        tracing::warn!("session {session_id} AIUI 下行失败: {e}");
-                    }
-                }
-            }
-        }
-    }
-
-    /// AIUI 轮次结果下发：stt 文本 → 水库（重采样 + Opus 分帧）→ 按实时节拍下发 → `tts stop`。
-    ///
-    /// 与级联流水线（`reply::drain_prepared`）走**同一条**下行链路：同一节拍器、同一水库
-    /// （服务器内存缓冲 + 起跑闸）、同一 `tts start` 起跑缓冲语义——只在"音频从哪来"
-    /// 上不同（云端一次性回传的 PCM，而不是逐句流式合成）。
-    async fn aiui_downlink(&mut self, turn: &FullChainTurn) -> anyhow::Result<()> {
-        self.pacer.reset(); // 新一轮回复：节拍器时间表重置
-        send_text(
-            self.transport,
-            &ServerMessage::Stt {
-                session_id: self.session_id.clone(),
-                text: turn.stt.clone(),
-            },
-        )
-        .await?;
-        // i16 LE 字节 → f32 分片（3200 字节 = 1600 样本 = 100ms @16k）
-        let chunks: Vec<Vec<f32>> = turn
-            .audio
-            .chunks(3200)
-            .map(|chunk| {
-                chunk
-                    .as_chunks::<2>()
-                    .0
-                    .iter()
-                    .map(|c| i16::from_le_bytes(*c) as f32 / 32768.0)
-                    .collect()
-            })
-            .collect();
-        // 有界分片通道（容量与内存口径同 `prefetch` 的一次性回传路径）：用后台任务喂，
-        // 避免在水库还没被消费时把会话任务阻塞在 `send` 上。
-        // ⚠️ AIUI 是**一次性回传**（整段音频已在 `turn.audio` 里），没有"流式下载"可限速，
-        // 故分片不占下载缓冲（`PcmChunk::unbudgeted`）——下载缓冲只服务逐句流式合成。
-        let (tx, chunk_rx) = tokio::sync::mpsc::channel::<crate::app::prefetch::PcmChunk>(
-            crate::app::prefetch::PREFETCH_PCM_CHUNKS,
-        );
-        tokio::spawn(async move {
-            for c in chunks {
-                if tx
-                    .send(crate::app::prefetch::PcmChunk::unbudgeted(c))
-                    .await
-                    .is_err()
-                {
-                    break; // 水库读端已放弃（打断/本轮结束）
-                }
-            }
-        });
-        let (done_tx, done_rx) = tokio::sync::oneshot::channel::<bool>();
-        let _ = done_tx.send(true); // 云端音频已完整在手：视为"合成正常结束"
-        let (sink, source) =
-            new_reservoir(self.params.downlink_buffer_ms, self.params.downlink_frame_ms);
-        let filler = spawn_single_sentence_filler(
-            self.abort.clone(),
-            self.engines.tts_cache.clone(),
-            self.params,
-            sink,
-            turn.stt.clone(),
-            PreparedAudio::Stream { sr: 16000, chunks: chunk_rx, done: done_rx },
-            0, // AIUI 全链路回传音频不入缓存（音频由云端给定，同句不保证可复现）
-        );
-        let mut first_frame_at = None;
-        let t0 = std::time::Instant::now();
-        let drain = drain_reservoir(
-            self.transport,
-            &self.params,
-            &self.session_id,
-            &self.abort,
-            &mut self.downlink_ts,
-            &mut self.pacer,
-            source,
-            t0,
-            &mut first_frame_at,
-        )
-        .await?;
-        filler.abort();
-        if drain.tts_started {
-            send_tts_state(self.transport, &self.session_id, "stop").await?;
-        }
-        // 历史语义与级联流水线一致：被打断（下行早停）不入历史，避免脏上下文
-        if !drain.interrupted && !turn.reply.trim().is_empty() {
-            self.history.push(("user".to_string(), turn.stt.clone()));
-            self.history
-                .push(("assistant".to_string(), turn.reply.clone()));
-            let max_history = self.eff_config.llm.max_history;
-            while self.history.len() > max_history {
-                self.history.remove(0);
-            }
-        }
-        Ok(())
-    }
 
     async fn handle_text(&mut self, text: &str) -> anyhow::Result<()> {
         let session_id = self.session_id.clone();
@@ -618,28 +511,6 @@ impl<'a, T: Transport> Session<'a, T> {
     }
 }
 
-
-/// 上行 f32 PCM → 16k i16（AIUI 仅收 16k；设备默认上行 16k，非 16k 走线性插值重采样）。
-fn f32_to_i16_16k(pcm: &[f32], uplink_sr: u32) -> Vec<i16> {
-    if uplink_sr == 16_000 {
-        return pcm
-            .iter()
-            .map(|&s| (s.clamp(-1.0, 1.0) * 32767.0) as i16)
-            .collect();
-    }
-    let ratio = uplink_sr as f32 / 16_000.0;
-    let mut out = Vec::with_capacity((pcm.len() as f32 / ratio) as usize + 1);
-    let mut pos = 0.0f32;
-    while (pos as usize) < pcm.len() {
-        let i = pos as usize;
-        let frac = pos - i as f32;
-        let a = pcm[i];
-        let b = pcm.get(i + 1).copied().unwrap_or(a);
-        out.push(((a + (b - a) * frac).clamp(-1.0, 1.0) * 32767.0) as i16);
-        pos += ratio;
-    }
-    out
-}
 
 /// 协议层发送：`ServerMessage` 序列化后交承载下发（错误映射在承载实现内完成）。
 pub(crate) async fn send_text<T: Transport>(

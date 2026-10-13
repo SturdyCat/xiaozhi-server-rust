@@ -11,6 +11,11 @@
 //! 各段错峰执行，控制在 4 核以内为其他服务留余量；容器侧由 `docker-compose.yml` 的
 //! `cpus:"3.5"` 进一步限核。详见 [`crate::app::session`] 与各引擎模块注释。
 //!
+//! **推理闸门**（缺口①，[`Self::inference`]）：上述预算只在"每能力同时 **1 路**推理"时成立；
+//! `spawn_blocking` 本身无并发上限，多设备同时说话即超订。ASR/TTS 各一把
+//! `Semaphore`（`[asr]/[tts].max_concurrent`，默认 1）包在全部推理调用点外，
+//! 忙时排队而不是压垮 CPU——见 [`crate::app::inference`] 模块注释。
+//!
 //! ## TTS 语言池与热切换
 //! Kokoro 的 `lang` 在建模时固定，故 [`Engines::tts_for`] 按语言按需构建并缓存
 //! 引擎（首次约数秒），配置默认语言直接返回默认引擎。
@@ -91,6 +96,9 @@ pub struct Engines {
     /// 会话注入注册表（P1-2）：活跃会话注册 `mpsc::Sender`，HTTP 端点据此投递文本
     /// （`POST /api/devices/{id}/inject`）；见 `app/inject` 模块注释。
     pub inject: crate::app::inject::Injector,
+    /// 推理并发闸门（缺口①）：ASR/TTS 各一把 Semaphore，包在全部 `spawn_blocking`
+    /// 推理调用点外（会话 / 预取 worker / 测试台共用）；见 `app/inference` 模块注释。
+    pub inference: crate::app::inference::InferenceGates,
     pub config: Arc<Config>,
     /// server 启动时实际加载的配置文件路径；为 `None` 表示用的是内置默认配置，
     /// 此时 `PUT /api/config` 无法持久化（需以 `--config` 指定文件后重启）。
@@ -141,6 +149,7 @@ impl Engines {
             metrics: crate::app::metrics::Metrics::new(),
             mcp: crate::app::mcp::registry::McpRegistry::new(),
             inject: crate::app::inject::Injector::new(),
+            inference: crate::app::inference::InferenceGates::new(config),
             config: Arc::new(config.clone()),
             config_path,
         }))
@@ -366,7 +375,12 @@ impl Engines {
     fn refresh_tts(&self, fresh: &Config) -> Result<(), String> {
         let sig = match decide_refresh(Capability::Tts, &self.tts_sig, fresh) {
             Ok(Some(sig)) => sig,
-            Ok(None) => return Ok(()), // 签名未变：零开销
+            // 签名未变：零开销——但推理闸门许可数不在签名里（它不重建引擎），
+            // 仍需对账（`[tts].max_concurrent` 是独立于引擎的 NextSession 旋钮）。
+            Ok(None) => {
+                self.inference.reconfigure_tts(fresh.tts.max_concurrent);
+                return Ok(());
+            }
             Err(msg) => {
                 self.mark_capability(Capability::Tts, Phase::Failed, Some(msg.clone()));
                 return Err(msg);
@@ -410,6 +424,10 @@ impl Engines {
         // ⚠️ 缓存里是**旧引擎**产出的下行音频：换了引擎（音色/采样率不同）后
         // 若继续命中，会播出上一个引擎的声音。故一并清空。
         self.tts_cache.clear();
+        // 推理闸门对账（缺口①）：`[tts].max_concurrent` 是 NextSession 语义，
+        // 随 TTS 热切换一起生效——许可数变化就换新 Semaphore（在飞 permit 持旧 Arc，
+        // 短暂重叠可接受，见 `app/inference` 模块注释）。
+        self.inference.reconfigure_tts(fresh.tts.max_concurrent);
         self.mark_capability(Capability::Tts, Phase::Active, None);
         tracing::info!("TTS 引擎已热切换：engine={engine_id}（新会话生效）");
         Ok(())

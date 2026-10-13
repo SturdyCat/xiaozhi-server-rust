@@ -48,6 +48,13 @@ pub struct LlmConfig {
     /// `false` 退回整段（兼容不支持 SSE 的端点）。
     #[serde(default = "default_stream")]
     pub stream: bool,
+    /// 残句定时出句等待（毫秒，缺口③）：LLM 流距上一 token 静默 ≥ 此值且残句非空时，
+    /// 先把残句送 TTS（TTFA 上界收紧；思考型停顿不再无限等标点或 50 字硬切）。
+    ///
+    /// 0 = 关闭（回退现行为）。默认 1500：比常见 inter-token 间隙（20~100ms、偶发
+    /// 300~800ms）高一个量级，避免误切；normalize clamp 到 `[0, 60000]`。
+    #[serde(default = "default_sentence_flush_ms")]
+    pub sentence_flush_ms: u32,
 }
 fn default_api_base() -> String {
     "https://api.example.com/v1/responses".into()
@@ -71,6 +78,11 @@ fn default_temperature() -> f32 {
 
 fn default_stream() -> bool {
     true
+}
+
+/// `[llm].sentence_flush_ms` 默认 1500（缺口③：残句定时出句等待）。
+fn default_sentence_flush_ms() -> u32 {
+    1500
 }
 
 pub mod failure;
@@ -184,6 +196,7 @@ impl Default for LlmConfig {
             max_history: default_max_history(),
             temperature: default_temperature(),
             stream: default_stream(),
+            sentence_flush_ms: default_sentence_flush_ms(),
         }
     }
 }
@@ -195,5 +208,7 @@ impl LlmConfig {
     }
     pub fn normalize(&mut self) {
         self.engine = self.engine_id();
+        // clamp 到 [0, 60000]：0 = 关闭；上限防异常配置把 watchdog 周期拖到分钟级。
+        self.sentence_flush_ms = self.sentence_flush_ms.min(60_000);
     }
 }

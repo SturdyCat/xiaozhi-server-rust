@@ -48,6 +48,13 @@ pub struct AsrConfig {
     pub num_threads: u32,
     #[serde(default = "default_provider")]
     pub provider: String,
+    /// 同时进行的 ASR 推理路上限（跨会话排队背压，缺口①）。
+    ///
+    /// 默认 1：每路占用 `num_threads` 线程（默认 2），恰等于 `engine.rs //!` 预算表的
+    /// ASR 段线程预算——多设备同时说话时在闸门处排队而不是把 CPU 压垮。
+    /// 算力富余（或 ASR 为在线引擎）可放宽。改后需重启（ASR 段为 RestartOnly）。
+    #[serde(default = "default_one")]
+    pub max_concurrent: u32,
 }
 
 impl AsrConfig {
@@ -57,6 +64,8 @@ impl AsrConfig {
     }
     pub fn normalize(&mut self) {
         self.engine = self.engine_id();
+        // 0 许可会把识别永久堵死，clamp ≥ 1（见 app::inference 模块注释）。
+        self.max_concurrent = self.max_concurrent.max(1);
     }
 }
 fn default_asr_model() -> String {
@@ -81,6 +90,11 @@ fn default_num_threads() -> u32 {
 
 fn default_provider() -> String {
     "cpu".into()
+}
+
+/// `[asr].max_concurrent` 默认 1（推理闸门许可数，见 `app::inference`）。
+fn default_one() -> u32 {
+    1
 }
 
 #[cfg(feature = "sherpa")]
@@ -111,6 +125,7 @@ impl Default for AsrConfig {
             use_itn: default_true(),
             num_threads: default_num_threads(),
             provider: default_provider(),
+            max_concurrent: default_one(),
         }
     }
 }

@@ -4,4 +4,5 @@
 //! 未启用 `sherpa` feature 的编译提供占位实现（无 libopus），仅供检查/测试编译通过；生产不含。
 
 pub mod opus;
+pub mod pcm;
 pub mod resample;

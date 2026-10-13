@@ -47,6 +47,8 @@ impl BenchResult {
     fn err(elapsed_ms: u64, engine: Option<String>, error: String) -> Self {
         Self { state: "error", elapsed_ms, first_packet_ms: None, engine, text: None, error: Some(error) }
     }
+    /// 仅默认 feature（无 sherpa）的 kokoro 分支使用；sherpa 构建下该状态不可达。
+    #[cfg(not(feature = "sherpa"))]
     fn unavailable(error: String) -> Self {
         Self { state: "unavailable", elapsed_ms: 0, first_packet_ms: None, engine: None, text: None, error: Some(error) }
     }
@@ -150,6 +152,8 @@ pub async fn bench_llm(
 /// - 引擎为 xfyun（远程，默认 feature 可用）：直接构建并合成，`vcn` 可覆盖音色。
 /// - 引擎为 kokoro（本地 sherpa）：`--features sherpa` 走真实合成；默认 feature 下
 ///   本地 TTS 不可用 → 返回 `state="unavailable"`。
+///
+/// 推理闸门（缺口①）：与生产会话共用同一把 TTS 闸门（HTTP 内联测试与生产共享 CPU）。
 pub async fn bench_tts(
     engines: &Arc<Engines>,
     text: &str,
@@ -168,6 +172,7 @@ pub async fn bench_tts(
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| disk_tts.kokoro.lang.as_str());
     let vcn_override = vcn.map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+    let gate = engines.inference.tts();
 
     // xfyun（远程）路径：默认 feature 下也可构建。
     if engine_id == "xfyun" {
@@ -180,7 +185,7 @@ pub async fn bench_tts(
             Err(e) => return BenchResult::err(0, Some("xfyun".to_string()), format!("{e:#}")),
         };
         let engine_name = tts.name().to_string();
-        return run_tts_bench(tts, text.to_string(), speed, speaker, engine_name).await;
+        return run_tts_bench(tts, gate, text.to_string(), speed, speaker, engine_name).await;
     }
 
     // kokoro（本地 sherpa）路径。
@@ -188,11 +193,11 @@ pub async fn bench_tts(
     {
         let tts = engines.tts_for(&lang);
         let engine_name = tts.name().to_string();
-        return run_tts_bench(tts, text.to_string(), speed, speaker, engine_name).await;
+        return run_tts_bench(tts, gate, text.to_string(), speed, speaker, engine_name).await;
     }
     #[cfg(not(feature = "sherpa"))]
     {
-        let _ = (lang, vcn_override, speaker);
+        let _ = (lang, vcn_override, speaker, gate);
         BenchResult::unavailable(
             "本地 TTS 需 sherpa 构建（本二进制未启用 sherpa feature，请用 --features sherpa 编译）".to_string(),
         )
@@ -200,8 +205,11 @@ pub async fn bench_tts(
 }
 
 /// 在 `spawn_blocking` 中跑同步阻塞的流式合成，记录首个音频 chunk 时刻（首包延迟）。
+/// 过 TTS 推理闸门（缺口①）：与生产会话共用，permit move 进闭包 RAII 归还。
+#[allow(clippy::too_many_arguments)] // 与既有参数 + 闸门入参同性质
 async fn run_tts_bench(
     tts: Arc<dyn TtsEngine>,
+    tts_gate: crate::app::inference::GateHandle,
     text: String,
     speed: f32,
     speaker: i32,
@@ -209,7 +217,12 @@ async fn run_tts_bench(
 ) -> BenchResult {
     let first = Arc::new(Mutex::new(None::<u64>));
     let first_cb = first.clone();
+    // 内联测试无会话级 abort：裸 acquire（排队等待不响应打断，测完为止）。
+    let Some(permit) = tts_gate.acquire().await else {
+        return BenchResult::err(0, Some(engine_name), "TTS 推理闸门已关闭".to_string());
+    };
     let producer = tokio::task::spawn_blocking(move || {
+        let _gate_permit = permit; // RAII：闭包退出即归还
         let t0 = Instant::now();
         let r = tts.synthesize_stream(
             &text,

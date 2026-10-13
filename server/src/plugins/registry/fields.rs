@@ -18,15 +18,27 @@ pub(super) const CAPABILITY_COMMON_FIELDS: &[(
     (
         Capability::Asr,
         &["asr"],
-        &[FieldSchema {
-            key: "engine",
-            label: "识别引擎",
-            kind: FieldKind::Enum(&["sensevoice"]),
-            default_hint: "sensevoice",
-            help: "选择 `[asr]` 的实现；当前只有 SenseVoice（本地离线）。改后需重启。",
-            hot: HotReload::RestartOnly,
-            required: true,
-        }],
+        &[
+            FieldSchema {
+                key: "engine",
+                label: "识别引擎",
+                kind: FieldKind::Enum(&["sensevoice"]),
+                default_hint: "sensevoice",
+                help: "选择 `[asr]` 的实现；当前只有 SenseVoice（本地离线）。改后需重启。",
+                hot: HotReload::RestartOnly,
+                required: true,
+            },
+            FieldSchema {
+                key: "max_concurrent",
+                label: "并发推理路上限",
+                kind: FieldKind::Int,
+                default_hint: "1",
+                help: "跨会话的 ASR 推理闸门（排队背压）：本地引擎每路占 num_threads 线程，\
+                        默认 1 路恰等于线程预算；算力富余可放宽。改后需重启。",
+                hot: HotReload::RestartOnly,
+                required: false,
+            },
+        ],
     ),
     (
         Capability::Vad,
@@ -78,6 +90,17 @@ pub(super) const CAPABILITY_COMMON_FIELDS: &[(
                 kind: FieldKind::Int,
                 default_hint: "0",
                 help: "跨实现的参数槽：Kokoro 用音色 id（测试台可临时覆盖），在线服务商忽略它。",
+                hot: HotReload::NextSession,
+                required: false,
+            },
+            FieldSchema {
+                key: "max_concurrent",
+                label: "并发合成路上限",
+                kind: FieldKind::Int,
+                default_hint: "1",
+                help: "跨会话的 TTS 合成闸门（排队背压）：本地引擎每路占 num_threads 线程，\
+                        默认 1 路恰等于线程预算；在线引擎（如讯飞）或算力富余可放宽。\
+                        随 TTS 热切换对账，新会话生效。",
                 hot: HotReload::NextSession,
                 required: false,
             },
@@ -384,6 +407,16 @@ pub(super) const LLM_OPENAI_FIELDS: &[FieldSchema] = &[
         kind: FieldKind::Bool,
         default_hint: "true",
         help: "关闭后退回整段返回（首字延迟明显变差，仅用于不支持 SSE 的端点）。",
+        hot: HotReload::NextSession,
+        required: false,
+    },
+    FieldSchema {
+        key: "sentence_flush_ms",
+        label: "残句定时出句(ms)",
+        kind: FieldKind::Int,
+        default_hint: "1500",
+        help: "LLM 流静默 ≥ 此值且残句非空时先把残句送 TTS（TTFA 更稳但残句更碎）；\
+                调大趋近现状，0 = 关闭。上限 60000。",
         hot: HotReload::NextSession,
         required: false,
     },

@@ -265,6 +265,48 @@ LLM 只有 OpenAI 兼容 Responses API 一条路径；联调失败先检查 `[ll
   `config/tests.rs::{audio_lead_ms_is_capped_to_device_queue_packets,
   audio_reservoir_params_are_normalized}`。
 
+### 5.2c-i 🚨 ASR/TTS 推理闸门（`app::inference`，勿拆）＋ TTFA 分段指标（`ServerEvent::TurnLatency`）＋ 残句定时 flush（`[llm].sentence_flush_ms`）——2026-10 三缺口批次
+
+**推理闸门**（缺口①）：`Engines.inference`（`InferenceGates`）挂着 ASR/TTS 各一把
+`tokio::sync::Semaphore`，包在**全部** `spawn_blocking` 推理调用点外（会话 ASR / 预取 worker
+TTS / 测试台 asr_test、tts_test / HTTP `POST /api/test/tts`）——`spawn_blocking` 本身无并发上限
+（tokio blocking 池默认 512 线程），多设备同时说话即 CPU 超订。要点：
+
+- **许可默认 1**（`[asr]/[tts].max_concurrent`）：读法 = "并发推理线程总量 = num_threads 段预算"
+  （1 路 × 2 线程 = ASR 段预算 2；1 路 × 4 线程 = TTS 段预算 4，与 `engine.rs //!` 预算表对齐）。
+  本地引擎每路占 num_threads 线程，恰等于段预算；在线引擎（如讯飞，网络型不吃本地 CPU）
+  或算力富余可放宽到 2~4，无需改代码。
+- **获取模式跨文件统一**：`gate.acquire_owned().await`（cancel-safe），permit **move 进
+  `spawn_blocking` 闭包** RAII 归还，绝不手工 release；TTS 侧用 `acquire_with_abort`
+  （200ms 轮询打断，对齐 `sender.rs::POLL_MS`）；ASR 侧**裸 acquire 不查 abort**
+  （`abort` 只在 `stream_response` 入口复位而 ASR 在它之前，stale abort 不能吞掉
+  "打断后紧跟的新话语"）。**等上一句 `prev` 时不得持许可**；**缓存命中不过闸**。
+- TTS 段是 `NextSession`：`Engines::refresh_tts` 成功路径 `reconfigure_tts` 对账
+  （换新 Semaphore 时在飞 permit 持旧 Arc，瞬时重叠 = 新旧之和，可接受）；ASR 段 RestartOnly。
+- AIUI 全链路（云端闭环网络调用）与音色探测（既有并发 2）**不过闸门**；引擎热刷新
+  （模型重建，IO 为主且低频）也**不过**——纳入会让新会话建立与在飞推理互卡。
+- 观测：`GET /api/metrics` 的 `inference_gates` 节（许可数 + 排队等待计数，additive）。
+
+**TTFA 分段指标**（缺口②）：`ServerEvent::TurnLatency { stages, interrupted }`
+（锚点 anchor ∈ {speech_end, inject, canned, aiui}，**常量集合唯一权威在 `app/events.rs`**）。
+六里程碑：`asr_end`（session.rs mark）→ `llm_first_token` / `sentence_ready`（producer 回调）→
+`tts_first_pcm`（prefetch 的 first_pcm hook，**缓存命中轮为 None**）→ `first_audio`
+（`drain_prepared` 拿到 `first_frame_at` 后，即既有 TTFA 日志口径）。各 mark 均 first-only
+（`None→Some`）、`Instant` 单调钟、展示为"相对锚点偏移"。聚合在 `app/metrics`
+（每阶段独立 200 样本窗，p50/p90/p95/p99/max）→ `/api/metrics` 的 `latency` 节（**只增不改**，
+老字段原样）。会话侧出口统一走 `Session::emit_turn_latency`（observe.rs）。
+
+**残句定时 flush**（缺口③）：`SentenceSplitter` 带 `last_feed`；`session/producer.rs` 的
+`spawn_llm_producer` 旁挂 `spawn_flush_watchdog`——LLM 流静默 ≥ `[llm].sentence_flush_ms`
+（默认 1500，0=关，上限 60000）且残句非空时先把残句送 TTS（思考型停顿不再无限等标点
+或 50 字硬切）。watchdog 退出三条件（producer done / abort / 通道关闭）**先查再取**，
+保证打断后不追加残句；新 token 刷新 deadline（误醒无害）。⚠️ 改这条链路不要把
+watchdog 挪回 LLM 回调内——回调只在 token 到达时执行，"停顿"期间没有代码在跑。
+
+新增配置键（均已同步 registry 字段元数据与 config.example.toml）：
+`[asr].max_concurrent`（1，RestartOnly）、`[tts].max_concurrent`（1，NextSession）、
+`[llm].sentence_flush_ms`（1500，NextSession）。
+
 ### 5.2d 二进制帧 v2/v3 是**网络序（大端）** + 下行版本必须跟随设备（2026-10-07 实测修正）
 
 两个曾同时存在的对齐缺口（设备默认 v1 裸包时都无感，切 v2/v3 必坏）：

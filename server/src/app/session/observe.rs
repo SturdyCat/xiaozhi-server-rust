@@ -15,7 +15,10 @@
 //! 这些方法**只记录、不决策**，也没有返回值：注册表内部对锁中毒是容错的（见其模块注释），
 //! 因此调用点不需要（也不应该）处理任何错误——观测面绝不允许把语音链路带崩。
 
+use std::sync::Arc;
+
 use super::Session;
+use crate::app::events::{ServerEvent, TurnTrace};
 use crate::app::registry::Phase;
 use crate::app::transport::Transport;
 
@@ -44,5 +47,20 @@ impl<'a, T: Transport> Session<'a, T> {
     /// 记一条会话级异常：会话结束时会带到设备画像上，因此断电后仍能回答"上次为什么断"。
     pub(super) fn note_error(&self, error: impl Into<String>) {
         self.engines.registry.record_error(&self.session_id, error);
+    }
+
+    /// 会话内统一的分段延迟事件出口（缺口②）：session_id/device_id 取值口径只有一处，
+    /// 与 `note_*` 同理（横切埋点具名收敛，不散落在流水线各分支）。
+    ///
+    /// 只记录、无返回值：事件总线对慢消费者/无订阅者的容错语义见 `app/events`。
+    pub(super) fn emit_turn_latency(&self, trace: &Arc<TurnTrace>, interrupted: bool) {
+        self.engines
+            .event_bus
+            .emit(ServerEvent::TurnLatency {
+                session_id: self.session_id.clone(),
+                device_id: self.device_id.clone(),
+                stages: trace.snapshot(),
+                interrupted,
+            });
     }
 }

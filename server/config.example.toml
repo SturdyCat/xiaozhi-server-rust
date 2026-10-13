@@ -78,6 +78,10 @@ use_itn = true
 # 识别线程数（默认 2）：与 TTS/VAD 错峰，避免占满 4 核小主机
 num_threads = 2
 provider = "cpu"
+# 并发推理路上限（默认 1，重启生效）：跨会话的 ASR 闸门——多设备同时说话时排队，
+# 而不是把 CPU 压垮。本地引擎每路占 num_threads 线程（1 路 × 2 线程 = 恰等于线程预算）；
+# 算力富余（换了更大的主机）可放宽。
+max_concurrent = 1
 
 [vad]
 # 引擎选择（P4 约定，可选 silero）；阈值等参数对新会话生效。
@@ -105,6 +109,10 @@ speed = 1.0
 # 零合成/零编码延迟，直接按实时节奏下发——高频短句（"好的""我在"）TTFA 从
 # 合成耗时降到一次预充突发（≈[audio].downlink_lead_ms）。
 cache_entries = 256
+# 并发合成路上限（默认 1，随 TTS 热切换对账、新会话生效）：跨会话的 TTS 闸门。
+# 本地引擎每路占 num_threads 线程（1 路 × 4 线程 = 恰等于线程预算）；
+# 讯飞在线是网络型引擎（不吃本地 CPU），多设备部署建议放宽到 2~4。
+max_concurrent = 1
 
 [tts.kokoro]
 model = "/data/models/Kokoro/model.int8.onnx"
@@ -147,6 +155,11 @@ max_history = 10
 temperature = 0.7
 # SSE 流式（逐 token 返回，配合按句下发降低首字延迟）；false 退回整段解析
 stream = true
+# 残句定时出句（毫秒，默认 1500，新会话生效）：LLM 流距上一 token 静默 ≥ 此值且
+# 残句非空时，先把残句送 TTS——思考型模型的长停顿不再无限等标点或 50 字硬切，
+# 首字音频延迟有上界。调小 → 首字更稳但残句更碎（中文 TTS 对碎片句韵律可接受）；
+# 调大 → 行为趋近现状；0 = 关闭。上限 60000。
+sentence_flush_ms = 1500
 
 # ===== 语音指令闸门（ASR → LLM 之间）：说「退下」就直接结束这次会话 =====
 # 默认关闭（enabled = false）：不启用时行为与没有这一段完全一致（零开销）。

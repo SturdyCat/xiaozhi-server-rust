@@ -127,6 +127,13 @@ fn abort_flag() -> Arc<AtomicBool> {
     Arc::new(AtomicBool::new(false))
 }
 
+/// 测试用 TTS 闸门（默认与生产一致的 1 路许可；串行断言用例传 1）。
+fn gate(permits: u32) -> crate::app::inference::GateHandle {
+    let mut cfg = crate::config::Config::default();
+    cfg.tts.max_concurrent = permits;
+    crate::app::inference::InferenceGates::new(&cfg).tts()
+}
+
 /// 本轮下载缓冲（8s 预算）：单测只关心它不改变既有语义（顺序/串行/打断）。
 fn budget() -> Arc<DownloadBudget> {
     DownloadBudget::new(8_000)
@@ -146,6 +153,8 @@ async fn prefetch_starts_next_synthesis_before_current_finishes_playing() {
             abort_flag(),
             Arc::new(TtsCache::new(16)),
             budget(),
+            gate(1),
+            None,
             resolver(tts.clone(), 1),
             sentences(&["A", "B"]),
         );
@@ -189,6 +198,8 @@ async fn prefetch_serializes_synthesis() {
         abort_flag(),
         Arc::new(TtsCache::new(16)),
         budget(),
+        gate(1),
+        None,
         resolver(tts.clone(), 1),
         sentences(&["A", "B", "C"]),
     );
@@ -225,6 +236,8 @@ async fn prefetch_stops_on_abort() {
         abort.clone(),
         Arc::new(TtsCache::new(16)),
         budget(),
+        gate(1),
+        None,
         resolver(tts.clone(), 1),
         sentences(&["A", "B", "C"]),
     );
@@ -267,6 +280,8 @@ async fn prefetch_cache_hit_delivers_encoded_frames() {
             abort_flag(),
             cache,
             budget(),
+            gate(1),
+            None,
             resolver(tts.clone(), 42),
             sentences(&["好的"]),
         );
@@ -291,6 +306,8 @@ async fn prefetch_reports_failed_synthesis() {
         abort_flag(),
         Arc::new(TtsCache::new(16)),
         budget(),
+        gate(1),
+        None,
         resolver(tts.clone(), 1),
         sentences(&["会失败的句子"]),
     );
@@ -313,6 +330,8 @@ async fn prefetch_reports_successful_synthesis() {
         abort_flag(),
         Arc::new(TtsCache::new(16)),
         budget(),
+        gate(1),
+        None,
         resolver(tts, 1),
         sentences(&["正常句子"]),
     );
@@ -443,6 +462,8 @@ async fn download_budget_bounds_pipeline_without_losing_chunks() {
         abort_flag(),
         Arc::new(TtsCache::new(16)),
         budget.clone(),
+        gate(1),
+        None,
         resolver(tts, 1),
         sentences(&["A"]),
     );
@@ -463,3 +484,5 @@ async fn download_budget_bounds_pipeline_without_losing_chunks() {
     assert!(st.peak_ms <= 300, "积压不得超出预算，实测 {}ms", st.peak_ms);
     assert_eq!(budget.queued_ms(), 0, "本轮结束后额度必须归零");
 }
+
+mod gates;

@@ -40,9 +40,15 @@ impl<'a, T: Transport> Session<'a, T> {
                     "(未录制到音频)".to_string()
                 } else {
                     let t0 = std::time::Instant::now();
-                    let recognized =
-                        Self::asr_recognize(self.engines.asr.clone(), self.params.uplink_sr, buf)
-                            .await;
+                    let recognized = Self::asr_recognize(
+                        self.engines.asr.clone(),
+                        // 测试台与生产会话共用同一把 ASR 闸门（缺口①）：管理台测试台
+                        // 与生产共享 CPU，不过闸门等于给生产埋雷。
+                        self.engines.inference.asr(),
+                        self.params.uplink_sr,
+                        buf,
+                    )
+                    .await;
                     match recognized {
                         Ok(t) => {
                             tracing::info!(
@@ -184,6 +190,18 @@ impl<'a, T: Transport> Session<'a, T> {
         let tts_sr = tts.output_sample_rate();
         let engine_name = tts.name().to_string();
         let t0 = std::time::Instant::now();
+        // 推理闸门（缺口①）：测试台合成与生产会话共用同一把 TTS 闸门——
+        // 排队期响应打断（abort 感知），permit move 进闭包随合成结束 RAII 归还。
+        let Some(tts_permit) = self
+            .engines
+            .inference
+            .tts()
+            .acquire_with_abort(&self.abort)
+            .await
+        else {
+            tracing::info!("session {session_id} 测试合成在闸门排队期被打断");
+            return Ok(());
+        };
         // 流式合成：spawn_blocking 跑引擎，分片经 channel 边收边下发（首片即出声）。
         // 失败经 tts_test 结果回报测试台（不再静默）。
         // 与正常会话走**同一个下载缓冲**（按预算控制下载流速，见 `app::prefetch`）。
@@ -197,6 +215,7 @@ impl<'a, T: Transport> Session<'a, T> {
         let abort_c = self.abort.clone();
         let budget_c = download.clone();
         let producer = tokio::task::spawn_blocking(move || {
+            let _gate_permit = tts_permit; // RAII：闭包退出即归还推理闸门
             let r = tts.synthesize_stream(
                 &text_c,
                 speed,
