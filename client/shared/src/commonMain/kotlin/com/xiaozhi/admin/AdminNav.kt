@@ -33,6 +33,8 @@ object AdminNav {
     val all: List<NavDescriptor> = listOf(
         // order 以 10 为步长：留出插入空间，避免每次新增都要重排既有值
         NavDescriptor("overview", 0, "概览", GROUP_OBSERVE),
+        // 测试台（P1-3）：web 端仅占位引导（麦克风/音频链路不可用），真实现只在 macOS 客户端
+        NavDescriptor("testbench", 5, "测试台", GROUP_OBSERVE),
         NavDescriptor("devices", 10, "设备", GROUP_OBSERVE),
         NavDescriptor("sessions", 20, "会话", GROUP_OBSERVE),
         NavDescriptor("conversations", 30, "对话记录", GROUP_OBSERVE),

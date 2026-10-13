@@ -228,6 +228,11 @@ class AdminPage : Pager() {
                             }
                         }
                     }
+                    vif({ ctx.selectedSection == "testbench" }) {
+                        // 测试台（P1-3）：web 端占位——麦克风/音频链路依赖原生能力，
+                        // 完整测试台只在 macOS 客户端（macosArm64Main），此处仅做引导
+                        opsScroller { testbenchUnavailableCard() }
+                    }
                     vif({ ctx.selectedSection == "devices" }) {
                         opsScroller {
                             renderOpsDevices(
@@ -387,5 +392,30 @@ private fun ViewContainer<*, *>.hamburgerButton(onClick: () -> Unit) {
                 }
             }
         }
+    }
+}
+
+/**
+ * 测试台占位卡（P1-3 范围 A）：web 端不实现测试台本体，只说明原因并给出两条替代路径。
+ *
+ * 为什么是占位而不是真实现：测试台需要**本地麦克风/扬声器**走音频采集-播放链路，
+ * 这是浏览器/页面容器之外的原生能力；本项目只有 macOS 客户端（macosArm64Main 的
+ * `TestBenchState`）接了这条链路，web（h5App）产物不编译那部分代码。范围 A 拍板：
+ * 不把原生逻辑下沉到 common，web 端仅保留导航占位做引导，避免用户以为功能缺失。
+ */
+private fun ViewContainer<*, *>.testbenchUnavailableCard() {
+    groupedCard("测试台") {
+        Text {
+            attr {
+                fontSize(AdminType.body)
+                color(AdminColors.textPrimary)
+                text("语音测试台需要本地麦克风与音频播放链路，网页端无法使用。请在 macOS 客户端中打开「测试台」进行端到端语音验证。")
+            }
+        }
+        // Text 不支持 padding/margin 属性（Kuikly DSL 限制），间距一律包 View
+        View { attr { height(AdminSpace.sm) } }
+        textNote(
+            "替代路径：配置页中 LLM / TTS / VAD 各项的「测试」按钮在服务端执行，无需麦克风即可验证上游链路连通性。",
+        )
     }
 }
