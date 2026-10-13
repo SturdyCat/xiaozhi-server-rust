@@ -43,6 +43,39 @@ pub use crate::plugins::tts::TtsConfig;
 pub use crate::plugins::vad::VadConfig;
 pub use crate::plugins::wakeup::WakeConfig;
 
+/// 每设备配置 overlay（白名单合并 / 落盘路径，见 `config/overlay.rs`）。
+pub mod overlay;
+
+/// 配置层「部分更新」合并（JSON 递归合并）。
+///
+/// 语义：
+/// - 基线与补丁都是对象时**递归**合并：只覆盖补丁里出现的键；
+/// - 补丁里**显式 `null`** = 清除该键 → 反序列化回落 serde 默认值；
+/// - 任一端不是对象（如 `"tts": 5`）→ 整体替换，随后由反序列化报出精确类型错误。
+///
+/// ⚠️ 必须在**解析成 `Config` 之前**于 JSON 层完成：`Config` 每个字段都带 serde default，
+/// 先解析就无法区分"客户端发了默认值"与"客户端根本没发"。
+///
+/// `app::ws::config::merge_client_patch`（PUT /api/config 管线）与 `config::overlay`
+/// （设备 overlay 合并）共用本函数，保证「出现即覆盖 / 显式 null 即清除」语义一致。
+pub(crate) fn merge_patch(base: &mut serde_json::Value, patch: &serde_json::Value) {
+    match (base.as_object_mut(), patch) {
+        (Some(base_obj), serde_json::Value::Object(patch_obj)) => {
+            for (k, v) in patch_obj {
+                if v.is_null() {
+                    base_obj.remove(k); // 清除 → 反序列化取默认值
+                } else if let Some(slot) = base_obj.get_mut(k) {
+                    merge_patch(slot, v);
+                } else {
+                    base_obj.insert(k.clone(), v.clone());
+                }
+            }
+        }
+        // 基线或补丁不是对象（如 `"tts": 5`）→ 整体替换，随后由反序列化报出精确类型错误
+        _ => *base = patch.clone(),
+    }
+}
+
 /// 一个能力**可选实现**的声明（配置层权威，不是注册表）。
 ///
 /// `id` = 实现 id（= 注册表描述符 id 去掉 `"<cap>."` 前缀）；`aliases` = 历史写法（只读兼容，

@@ -84,7 +84,7 @@ impl<'a, T: Transport> Session<'a, T> {
             return Ok(());
         }
         // 会话级最新快照：测试台看的就是"刚保存的配置"（热刷新后 live = 盘上值）
-        let live = self.engines.live_config();
+        let live = self.eff_config.clone();
         let lang = lang
             .filter(|s| !s.trim().is_empty())
             .unwrap_or_else(|| live.tts.kokoro.lang.clone());

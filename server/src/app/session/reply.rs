@@ -38,7 +38,7 @@ impl<'a, T: Transport> Session<'a, T> {
     ///   `[llm].system_prompt`（保存期/启动期已校验，这是兜底）；
     /// - 记忆召回自带预算与超时降级，返回 `None` 就是"本轮无记忆"，绝不会抛出来。
     pub(super) async fn build_turn_prompt(&mut self, user_text: &str) -> TurnPrompt {
-        let cfg = self.engines.live_config();
+        let cfg = self.eff_config.clone();
         let instructions = match crate::plugins::soul::instructions(&cfg, &self.device_id) {
             Ok(t) => t,
             Err(e) => {
@@ -80,7 +80,7 @@ impl<'a, T: Transport> Session<'a, T> {
     /// 写原文本身很快，但同样没必要让用户等——两者一起 `spawn`，失败只记日志
     ///（记忆坏了不能让对话坏）。
     pub(super) fn spawn_memory_write(&self, user_text: &str, assistant_text: &str) {
-        let cfg = self.engines.live_config();
+        let cfg = self.eff_config.clone();
         if !cfg.memory.active() {
             return;
         }
@@ -306,7 +306,7 @@ impl<'a, T: Transport> Session<'a, T> {
             self.history
                 .push(("assistant".to_string(), llm_out.text.clone()));
             // 按 [llm].max_history 截断多轮历史，只保留最近 N 条（role, content）。
-            let max_history = self.engines.live_config().llm.max_history;
+            let max_history = self.eff_config.llm.max_history;
             while self.history.len() > max_history {
                 self.history.remove(0);
             }
@@ -372,6 +372,7 @@ impl<'a, T: Transport> Session<'a, T> {
     ) {
         let engines = self.engines.clone();
         let params = self.params;
+        let eff_config = self.eff_config.clone();
         let download =
             crate::app::prefetch::DownloadBudget::new(self.params.download_buffer_ms);
         let prepared = crate::app::prefetch::spawn_sentence_prefetch(
@@ -379,7 +380,7 @@ impl<'a, T: Transport> Session<'a, T> {
             self.engines.tts_cache.clone(),
             download.clone(),
             move |sentence: &str| {
-                let live = engines.live_config();
+                let live = eff_config.clone();
                 // 缓存键口径的**唯一权威**在 `HotAudioKey::from_session`。
                 //
                 // 为什么不让本处自己拼 `TtsCache::make_key`：唤醒问候语路径要把**同一个键**

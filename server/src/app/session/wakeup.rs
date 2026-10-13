@@ -130,7 +130,7 @@ impl<'a, T: Transport> Session<'a, T> {
         // 键口径与合成路径**共用**同一构造入口（见 `HotAudioKey::from_session` 文档）：
         // 两处各写一遍必然漂移，而漂移的表现是"缓存永远不命中"——不报错，最难查。
         let key = HotAudioKey::from_session(
-            &self.engines.live_config(),
+            &self.eff_config,
             self.params.downlink_sr,
             self.params.downlink_frame_ms,
             &text,

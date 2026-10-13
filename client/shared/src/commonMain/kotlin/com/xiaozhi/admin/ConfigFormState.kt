@@ -204,6 +204,20 @@ class ConfigFormState(private val scope: PagerScope) {
     /// 由 save 成功时写入、load/reload 或保存失败时清空。
     var saveImpactNote by scope.observable("")
 
+    // ===== 编辑对象（P1-5：全局配置 / 设备个性化 overlay）=====
+    /// 当前编辑目标："" = 全局配置；非空 = 该设备 ID 的个性化 overlay。
+    /// 设备目标下 load 走「全局基线 + overlay 套用」、save 走「白名单差量 → 设备 overlay」
+    ///（见 [loadDeviceTarget] / [saveDeviceOverlay]），预设与 revision 等**全局**机制不参与。
+    var editDeviceId by scope.observable("")
+
+    /**
+     * 设备 overlay 的**全局基线**快照：进入设备编辑时，在 fill 全局配置之后、
+     * 套用 overlay 之前抓取一次（保存成功后**不更新**——增量始终相对全局求差，
+     * 否则"保存后再保存"会把 diff 误判为空而清掉 overlay）。
+     * null = 非设备编辑（或基线未就绪）。
+     */
+    private var deviceBaseline: JSONObject? = null
+
     /**
      * 「保存配置」按钮的**完成态**（三态按钮的第三态）："" 正常 / "ok" 保存成功 / "error" 保存失败。
      * 请求进行中由 [saving] 表达（按钮文案切「保存中…」并拦截重复点击）；
@@ -216,6 +230,16 @@ class ConfigFormState(private val scope: PagerScope) {
 
     /** 当前展开的下拉（TTS engine 选择等，"" = 全部收起）；放状态类避免 Pager body 重建丢失展开态。 */
     var openDropdown by scope.observable("")
+
+    // ===== 配置预设（P1-5：快照 / 应用 / 删除；仅作用于全局配置）=====
+    /// 服务端已有的预设名列表（GET /api/config/presets）。
+    val presetNames: ObservableList<String> by scope.observableList()
+    /// 「保存为预设」的名称草稿。
+    var presetNameDraft by scope.observable("")
+    /// 预设动作的就地反馈（保存 / 应用 / 删除结果；空 = 无）。
+    var presetMsg by scope.observable("")
+    /// 预设动作进行中（拦截重复点击）。
+    var presetBusy by scope.observable(false)
 
     /** 下拉「是否展开」的判定（收敛各调用点 `openDropdown == id` 三行样板）。 */
     fun isDropdownOpen(id: String): Boolean = openDropdown == id
@@ -540,6 +564,11 @@ class ConfigFormState(private val scope: PagerScope) {
 
     fun load(ctx: Pager, baseUrl: String = "") {
         serverBase = baseUrl
+        // 设备个性化目标（P1-5）：全局基线 + overlay 套用，与全局加载分道
+        if (editDeviceId.isNotEmpty()) {
+            loadDeviceTarget(ctx, baseUrl)
+            return
+        }
         network(ctx).requestGet("${baseUrl}/api/config", JSONObject()) { data, success, errorMsg, _ ->
             if (success) {
                 fill(data)
@@ -555,6 +584,76 @@ class ConfigFormState(private val scope: PagerScope) {
                 statusMsg = "加载失败: $errorMsg"
                 statusLevel = "error"
             }
+        }
+    }
+
+    /**
+     * 加载设备个性化目标：先拉全局配置填表（基线），抓取白名单快照，再拉该设备
+     * overlay 套用到表单（只覆盖白名单字段，其余字段保持全局值 → 表单即「设备生效值」）。
+     * 保存时按 [deviceBaseline] 求差，只把相对全局改动的白名单字段写回 overlay。
+     */
+    private fun loadDeviceTarget(ctx: Pager, baseUrl: String) {
+        val id = editDeviceId
+        network(ctx).requestGet("${baseUrl}/api/config", JSONObject()) { data, success, errorMsg, _ ->
+            if (!success) {
+                statusMsg = "加载失败: $errorMsg"
+                statusLevel = "error"
+                return@requestGet
+            }
+            fill(data)
+            loadVoices(ctx, baseUrl)
+            loadConfigMeta(ctx, baseUrl)
+            schema.load(ctx, baseUrl)
+            // 全局基线快照（必须在套用 overlay 之前抓）
+            deviceBaseline = buildOverlayJson()
+            network(ctx).requestGet("${baseUrl}/api/devices/$id/overlay", JSONObject()) { odata, osuccess, oerr, _ ->
+                if (osuccess) {
+                    val overlay = odata?.optJSONObject("overlay")
+                    val has = overlay != null && overlay.length() > 0
+                    if (has) fill(overlay!!) // overlay 只含白名单字段 → fill 缺键保留当前（全局）值
+                    conflict = false
+                    saveImpactNote = ""
+                    dirty = false
+                    statusMsg = if (has) {
+                        "已加载设备 $id 的个性化配置（改动保存后仅对该设备生效，其余字段沿用全局）"
+                    } else {
+                        "设备 $id 暂无个性化配置：当前显示全局值，保存后差异字段仅对该设备生效"
+                    }
+                    statusLevel = "ok"
+                } else {
+                    statusMsg = "设备 overlay 加载失败: $oerr"
+                    statusLevel = "error"
+                }
+            }
+        }
+    }
+
+    /** 退出设备编辑，回到全局配置（清基线并重新加载全局）。 */
+    fun backToGlobal(ctx: Pager) {
+        editDeviceId = ""
+        deviceBaseline = null
+        load(ctx, serverBase)
+    }
+
+    /**
+     * 清除设备 overlay（恢复完全使用全局配置）并退回全局编辑。
+     * Kuikly 无 DELETE：走服务端 POST `.../overlay/delete` 别名（同 OTA 删除惯例）。
+     */
+    fun clearDeviceOverlay(ctx: Pager, onResult: ((String, String) -> Unit)? = null) {
+        val id = editDeviceId
+        if (id.isEmpty()) return
+        val headers = JSONObject().apply { put("Content-Type", "application/json") }
+        network(ctx).httpRequest("${serverBase}/api/devices/$id/overlay/delete", true, JSONObject(), headers) { data, success, errorMsg, resp ->
+            val code = resp.statusCode
+            val serverMsg = data?.optString("message", "") ?: ""
+            val ok = success && (code == null || code in 200..299)
+            val msg = if (ok) {
+                serverMsg.ifEmpty { "已清除设备 $id 的个性化配置（恢复使用全局配置）" }
+            } else {
+                "清除失败: ${serverMsg.ifEmpty { errorMsg.ifEmpty { "HTTP $code" } }}"
+            }
+            onResult?.invoke(msg, if (ok) "ok" else "error")
+            if (ok) backToGlobal(ctx)
         }
     }
 
@@ -577,6 +676,11 @@ class ConfigFormState(private val scope: PagerScope) {
         // 进入"保存中"：清掉上一次的完成态，并作废旧的回落定时器
         saveResult = ""
         saveResultSeq++
+        // 设备个性化目标（P1-5）：白名单差量 → 设备 overlay，不走全局 /api/config
+        if (editDeviceId.isNotEmpty()) {
+            saveDeviceOverlay(ctx, baseUrl, onResult)
+            return
+        }
         val body = JSONObject().apply {
             put("server", JSONObject().apply {
                 put("port", port.toIntOrNull() ?: 8000)
@@ -736,6 +840,185 @@ class ConfigFormState(private val scope: PagerScope) {
             val resultSeq = ++saveResultSeq
             scope.setTimeout(SAVE_RESULT_HOLD_MS) { if (resultSeq == saveResultSeq) saveResult = "" }
             onResult?.invoke(statusMsg, statusLevel)
+        }
+    }
+
+    // ============================================================
+    // 设备个性化 overlay（P1-5）：白名单构建 + 相对全局求差 + 差量保存
+    // ============================================================
+    // 白名单与服务端 `config/overlay.rs` 一致（会话内参数可覆盖；engine/模型/结构型字段
+    // 永远走全局）。服务端还会再做一次校验+裁剪（prune），这里构建的子集是"客户端口径"。
+
+    /** overlay 的顶层 section（与白名单一一对应；同序构建 → toString 可比较）。 */
+    private val overlaySectionKeys = listOf("tts", "llm", "soul", "wakeup", "command", "memory")
+
+    /**
+     * 从当前表单构建**完整白名单 overlay**（所有可覆盖字段的当前生效值）。
+     * 仅用于：设备加载时抓全局基线、保存时与基线求差。不直接整体上传——
+     * 整体上传会把没改过的白名单字段也钉死到设备上，全局后续调整会被旧值遮蔽。
+     */
+    private fun buildOverlayJson(): JSONObject = JSONObject().apply {
+        put("tts", JSONObject().apply {
+            put("speaker", ttsSpeaker.toIntOrNull() ?: 0)
+            put("speed", ttsSpeed.toDoubleOrNull() ?: 1.0)
+            put("xfyun", JSONObject().apply { put("voice", xfyunVoice) })
+        })
+        put("llm", JSONObject().apply {
+            put("system_prompt", llmSystemPrompt)
+            put("max_history", llmMaxHistory.toIntOrNull() ?: 10)
+        })
+        // [soul] 全段可覆盖：直接复用 sm.soulJson()（与保存/预览同一构建，避免字段漂移）
+        put("soul", sm.soulJson())
+        // [wakeup] / [command] 全段可覆盖：复用各自 putJson（写入本对象）
+        wake.putJson(this)
+        cmd.putJson(this)
+        // [memory] 仅召回参数可覆盖（引擎/构建/抽取字段不在白名单）
+        put("memory", JSONObject().apply {
+            put("recall_enabled", sm.memoryRecallEnabled.toBooleanStrictOrNull() ?: true)
+            put("fresh_turn_count", sm.memoryFreshTurnCount.toIntOrNull() ?: 5)
+            put("recall_max_nodes", sm.memoryRecallMaxNodes.toIntOrNull() ?: 6)
+            put("recall_max_tokens", sm.memoryRecallMaxTokens.toIntOrNull() ?: 400)
+            put("recall_budget_ms", sm.memoryRecallBudgetMs.toIntOrNull() ?: 300)
+            put("inject_position", sm.memoryInjectPosition)
+        })
+    }
+
+    /**
+     * 求差：当前表单 vs 全局基线，返回「相对全局有改动的 section」。
+     * 同一构建器同序 put → section 的 toString 相等即内容相等（无需逐字段比较）。
+     */
+    private fun computeOverlayDiff(): JSONObject {
+        val diff = JSONObject()
+        val current = buildOverlayJson()
+        val baseline = deviceBaseline ?: JSONObject()
+        for (key in overlaySectionKeys) {
+            val cur = current.optJSONObject(key)
+            val base = baseline.optJSONObject(key)
+            if (cur != null && cur.toString() != (base?.toString() ?: "")) {
+                diff.put(key, cur)
+            }
+        }
+        return diff
+    }
+
+    /**
+     * 保存设备个性化 overlay（PUT /api/devices/{id}/overlay 的差量）。
+     *
+     * - 差量为空 → 清除 overlay（设备恢复完全使用全局配置）；
+     * - Kuikly NetworkModule 只有 GET/POST：跟随 OTA 删除惯例走服务端 POST 别名
+     *   （POST = PUT、POST `.../overlay/delete` = DELETE）。
+     * - 基线在保存成功后**不更新**：增量始终相对全局，连续保存不会把上一次的差量
+     *   误判为"无改动"而清掉 overlay（基线只在 [loadDeviceTarget] 抓取 / [backToGlobal] 清除）。
+     */
+    private fun saveDeviceOverlay(ctx: Pager, baseUrl: String, onResult: ((String, String) -> Unit)?) {
+        val id = editDeviceId
+        val diff = computeOverlayDiff()
+        val clear = diff.length() == 0
+        val url = "${baseUrl}/api/devices/$id/overlay" + if (clear) "/delete" else ""
+        val body = if (clear) JSONObject() else diff
+        val headers = JSONObject().apply { put("Content-Type", "application/json") }
+        network(ctx).httpRequest(url, true, body, headers) { data, success, errorMsg, resp ->
+            saving = false
+            val code = resp.statusCode
+            val serverMsg = data?.optString("message", "") ?: ""
+            if (success && (code == null || code in 200..299)) {
+                dirty = false
+                conflict = false
+                lastSavedAt = "已保存"
+                statusMsg = serverMsg.ifEmpty {
+                    if (clear) "已清除设备 $id 的个性化配置（恢复使用全局配置）"
+                    else "设备 $id 的个性化配置已保存（新会话生效）"
+                }
+                statusLevel = "ok"
+            } else {
+                statusMsg = "保存失败: ${serverMsg.ifEmpty { if (errorMsg.isNotEmpty()) errorMsg else "HTTP $code" }}"
+                statusLevel = "error"
+            }
+            // 三态按钮完成态 + 回落定时器（与全局保存同一口径）
+            saveResult = statusLevel
+            val resultSeq = ++saveResultSeq
+            scope.setTimeout(SAVE_RESULT_HOLD_MS) { if (resultSeq == saveResultSeq) saveResult = "" }
+            onResult?.invoke(statusMsg, statusLevel)
+        }
+    }
+
+    // ============================================================
+    // 配置预设（P1-5）：快照当前全局配置 / 应用 / 删除
+    // ============================================================
+    // 「保存为预设」只上报预设名：服务端读盘快照当前生效配置（客户端表单可能落后于盘上值）。
+    // 预设仅作用于**全局**配置；设备个性化模式下预设卡不显示。
+
+    /** 拉取预设名列表（GET /api/config/presets；失败静默，列表保持原样）。 */
+    fun loadPresets(ctx: Pager, baseUrl: String = "") {
+        network(ctx).requestGet("${baseUrl}/api/config/presets", JSONObject()) { data, success, _, _ ->
+            if (!success) return@requestGet
+            presetNames.clear()
+            val arr = data?.optJSONArray("presets") ?: return@requestGet
+            for (i in 0 until arr.length()) {
+                val n = arr.optString(i) ?: ""
+                if (n.isNotEmpty()) presetNames.add(n)
+            }
+        }
+    }
+
+    /** 把当前全局配置快照为预设（POST /api/config/presets {name}，服务端读盘）。 */
+    fun savePreset(ctx: Pager, baseUrl: String = "") {
+        val name = presetNameDraft.trim()
+        if (name.isEmpty()) {
+            presetMsg = "请先填写预设名（字母数字与 - _ .）"
+            return
+        }
+        presetBusy = true
+        presetMsg = ""
+        val body = JSONObject().apply { put("name", name) }
+        val headers = JSONObject().apply { put("Content-Type", "application/json") }
+        network(ctx).httpRequest("${baseUrl}/api/config/presets", true, body, headers) { data, success, errorMsg, resp ->
+            presetBusy = false
+            val code = resp.statusCode
+            val serverMsg = data?.optString("message", "") ?: ""
+            if (success && (code == null || code in 200..299)) {
+                presetMsg = serverMsg.ifEmpty { "已把当前配置保存为预设「$name」" }
+                presetNameDraft = ""
+                loadPresets(ctx, baseUrl)
+            } else {
+                presetMsg = "保存预设失败: ${serverMsg.ifEmpty { errorMsg.ifEmpty { "HTTP $code" } }}"
+            }
+        }
+    }
+
+    /** 应用预设到全局配置（POST /api/config/presets/{name}/apply），成功后重载表单反映新值。 */
+    fun applyPreset(ctx: Pager, baseUrl: String = "", name: String) {
+        presetBusy = true
+        presetMsg = ""
+        val headers = JSONObject().apply { put("Content-Type", "application/json") }
+        network(ctx).httpRequest("${baseUrl}/api/config/presets/$name/apply", true, JSONObject(), headers) { data, success, errorMsg, resp ->
+            presetBusy = false
+            val code = resp.statusCode
+            val serverMsg = data?.optString("message", "") ?: ""
+            if (success && (code == null || code in 200..299)) {
+                presetMsg = serverMsg.ifEmpty { "已应用预设「$name」（新会话生效）" }
+                // 全局配置已被预设覆盖：重载表单（预设仅作用于全局；设备目标下预设卡不显示）
+                load(ctx, baseUrl)
+            } else {
+                presetMsg = "应用预设失败: ${serverMsg.ifEmpty { errorMsg.ifEmpty { "HTTP $code" } }}"
+            }
+        }
+    }
+
+    /** 删除预设（POST /api/config/presets/{name}/delete 别名；Kuikly 无 DELETE）。 */
+    fun deletePreset(ctx: Pager, baseUrl: String = "", name: String) {
+        presetBusy = true
+        presetMsg = ""
+        network(ctx).requestPost("${baseUrl}/api/config/presets/$name/delete", JSONObject()) { data, success, errorMsg, resp ->
+            presetBusy = false
+            val code = resp.statusCode
+            val serverMsg = data?.optString("message", "") ?: ""
+            if (success && (code == null || code in 200..299)) {
+                presetMsg = serverMsg.ifEmpty { "已删除预设「$name」" }
+                loadPresets(ctx, baseUrl)
+            } else {
+                presetMsg = "删除预设失败: ${serverMsg.ifEmpty { errorMsg.ifEmpty { "HTTP $code" } }}"
+            }
         }
     }
 

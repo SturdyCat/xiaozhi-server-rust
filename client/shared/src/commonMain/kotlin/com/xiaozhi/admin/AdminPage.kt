@@ -108,6 +108,7 @@ class AdminPage : Pager() {
         //（`?token=xxx&page_name=admin`，与 /api/ws 的浏览器兜底口径一致）。
         val token = pagerData.params.optString("token", "")
         form.load(this)
+        form.loadPresets(this)
         plugins.load(this)
         mcpTools.load(this)
         ota.load(this, "", token)
@@ -166,7 +167,14 @@ class AdminPage : Pager() {
                     }
 
                     largeTitleBar(
-                        title = { AdminNav.label(ctx.selectedSection) },
+                        title = {
+                            // 配置 section：编辑目标为设备时标题带设备号（P1-5「当前编辑对象」）
+                            if (ctx.selectedSection == "config") {
+                                if (ctx.form.editDeviceId.isEmpty()) "配置" else "配置 · 设备 ${ctx.form.editDeviceId}"
+                            } else {
+                                AdminNav.label(ctx.selectedSection)
+                            }
+                        },
                         // 窄屏：汉堡按钮开抽屉（宽屏 vif 不渲染，常驻侧边栏承担导航）
                         leading = {
                             vif({ isNarrow() }) {
@@ -179,7 +187,9 @@ class AdminPage : Pager() {
                                 secondaryButton("重新加载") { ctx.form.reload(ctx) }
                                 View { attr { width(AdminSpace.sm) } }
                             }
-                            vif({ ctx.selectedSection == "config" }) {
+                            // 保存按钮：构建期文案参数 → 用 vif 切换两份按钮响应编辑对象
+                            //（全局 = POST /api/config；设备 = 白名单差量 PUT overlay）
+                            vif({ ctx.selectedSection == "config" && ctx.form.editDeviceId.isEmpty() }) {
                                 primaryButton(
                                     "保存配置",
                                     loading = { ctx.form.saving },
@@ -190,6 +200,18 @@ class AdminPage : Pager() {
                                 ) {
                                     // toast 在**接口返回后**由回调触发（不能紧随 save() 取 statusMsg：
                                     // 那时请求还没回来，会弹出上一条旧消息）
+                                    ctx.form.save(ctx) { msg, level -> ctx.showToast(msg, level) }
+                                }
+                            }
+                            vif({ ctx.selectedSection == "config" && ctx.form.editDeviceId.isNotEmpty() }) {
+                                primaryButton(
+                                    "保存设备配置",
+                                    loading = { ctx.form.saving },
+                                    loadingText = "保存中…",
+                                    result = { ctx.form.saveResult },
+                                    successText = "✓ 已保存",
+                                    errorText = "✕ 保存失败",
+                                ) {
                                     ctx.form.save(ctx) { msg, level -> ctx.showToast(msg, level) }
                                 }
                             }
@@ -207,7 +229,20 @@ class AdminPage : Pager() {
                         }
                     }
                     vif({ ctx.selectedSection == "devices" }) {
-                        opsScroller { renderOpsDevices(ctx.devices, ctx) }
+                        opsScroller {
+                            renderOpsDevices(
+                                ctx.devices,
+                                ctx.form,
+                                // 「个性化配置」入口（P1-5）：以该设备为编辑目标跳配置 section
+                                //（editDeviceId 置位后 load 走「全局基线 + overlay」分支）
+                                { id ->
+                                    ctx.form.editDeviceId = id
+                                    ctx.form.load(ctx)
+                                    ctx.selectedSection = "config"
+                                },
+                                ctx,
+                            )
+                        }
                     }
                     vif({ ctx.selectedSection == "sessions" }) {
                         opsScroller { renderOpsSessions(ctx.sessions, ctx) }

@@ -168,6 +168,42 @@ impl Engines {
         self.host.config()
     }
 
+    /// **每设备生效配置** = 全局 `live_config()` ⊕ 该设备的 overlay（仅白名单字段）。
+    ///
+    /// overlay 只含会话内参数（tts 音色/语速、llm 提示词与历史长度、soul 人设、
+    /// wakeup/command 话术、memory 召回参数），**永不触碰引擎签名**——叠加后各引擎的
+    /// `signature_of` 不变，故共享 TTS/LLM/Memory 引擎仍按全局配置构建、不重建。
+    ///
+    /// 无 `Device-Id`（unknown）/ 无 overlay 文件 / 内置默认配置 → 直接返回全局快照，
+    /// 与现状完全一致（零成本契约）。读盘失败（坏文件 / 越界字段）防御性回退全局。
+    ///
+    /// ⚠️ 会话开始时算一次存入 `Session.eff_config` 即可；overlay 是会话级生效，
+    /// 运行中改 overlay 只对**下一次**会话生效（与全局部分更新同源）。
+    pub fn effective_config(&self, device_id: &str) -> Arc<Config> {
+        let global = self.host.config();
+        if device_id.is_empty() || device_id == "unknown" {
+            return global;
+        }
+        let Some(config_path) = &self.config_path else {
+            return global;
+        };
+        let Some(path) = crate::config::overlay::device_overlay_path(config_path, device_id) else {
+            return global;
+        };
+        let Some(overlay) = crate::config::overlay::read_device_overlay_value(&path) else {
+            return global;
+        };
+        let mut overlay = overlay;
+        crate::config::overlay::prune_disallowed(&mut overlay);
+        match crate::config::overlay::merge_overlay(&global, &overlay) {
+            Ok(c) => Arc::new(c),
+            Err(e) => {
+                tracing::warn!("合并设备 {device_id} overlay 失败，用全局配置: {e}");
+                global
+            }
+        }
+    }
+
     /// 默认 TTS 引擎（服务器配置语言；设备流水线路径用）。
     pub fn tts(&self) -> Arc<dyn TtsEngine> {
         self.tts.read().unwrap_or_else(|e| e.into_inner()).clone()

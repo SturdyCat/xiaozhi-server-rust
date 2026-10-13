@@ -151,7 +151,13 @@ class AdminShell : Pager() {
                         // 测试台各 tab 内嵌了对应配置卡，「保存配置」两个 section 都要可用。
                         largeTitleBar(
                             title = {
-                                if (ctx.selectedSection == "config") "配置" else "测试台"
+                                if (ctx.selectedSection == "config") {
+                                    // 编辑目标为设备时标题带设备号（P1-5「当前编辑对象」）
+                                    if (ctx.form.editDeviceId.isEmpty()) "配置"
+                                    else "配置 · 设备 ${ctx.form.editDeviceId}"
+                                } else {
+                                    "测试台"
+                                }
                             },
                             trailing = {
                                 vif({ ctx.selectedSection == "config" && ctx.form.conflict }) {
@@ -161,7 +167,12 @@ class AdminShell : Pager() {
                                     }
                                     View { attr { width(AdminSpace.sm) } }
                                 }
-                                vif({ ctx.selectedSection == "config" || ctx.selectedSection == "testbench" }) {
+                                // 保存按钮：构建期文案参数 → 用 vif 切换两份按钮响应编辑对象
+                                //（全局 = POST /api/config；设备 = 白名单差量 PUT overlay）
+                                vif({
+                                    (ctx.selectedSection == "config" || ctx.selectedSection == "testbench") &&
+                                        ctx.form.editDeviceId.isEmpty()
+                                }) {
                                     // 三态按钮：saving → 「保存中…」灰底拦截点击；接口返回后短暂显示
                                     // 「✓ 已保存 / ✕ 保存失败」（form.saveResult，约 2s 后自动回落）。
                                     primaryButton(
@@ -174,6 +185,23 @@ class AdminShell : Pager() {
                                     ) {
                                         // toast 在**接口返回后**由 save 回调触发（不能紧随 save() 取 statusMsg：
                                         // 那时请求还没回来，会弹出上一条旧消息）
+                                        ctx.form.save(ctx, ctx.conn.baseUrl) { msg, level ->
+                                            ctx.showToast(msg, level)
+                                        }
+                                    }
+                                }
+                                vif({
+                                    (ctx.selectedSection == "config" || ctx.selectedSection == "testbench") &&
+                                        ctx.form.editDeviceId.isNotEmpty()
+                                }) {
+                                    primaryButton(
+                                        "保存设备配置",
+                                        loading = { ctx.form.saving },
+                                        loadingText = "保存中…",
+                                        result = { ctx.form.saveResult },
+                                        successText = "✓ 已保存",
+                                        errorText = "✕ 保存失败",
+                                    ) {
                                         ctx.form.save(ctx, ctx.conn.baseUrl) { msg, level ->
                                             ctx.showToast(msg, level)
                                         }

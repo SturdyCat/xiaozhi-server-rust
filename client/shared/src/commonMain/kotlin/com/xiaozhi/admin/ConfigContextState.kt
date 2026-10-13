@@ -165,8 +165,10 @@ class ContextSectionState(private val scope: PagerScope) {
      *
      * ⚠️ `preset` 必须回传：它是"默认灵魂"的基线选择；不回传就会被服务端的部分更新语义
      * 保留成旧值（用户在下拉里换了预设却等于没换）。
+     *
+     * internal：设备个性化（P1-5）构建 overlay 时整段复用（`[soul]` 在白名单内全段可覆盖）。
      */
-    private fun soulJson(): JSONObject = JSONObject().apply {
+    internal fun soulJson(): JSONObject = JSONObject().apply {
         put("enabled", soulEnabled.toBooleanStrictOrNull() ?: false)
         put("preset", soulPreset)
         put("name", soulName)

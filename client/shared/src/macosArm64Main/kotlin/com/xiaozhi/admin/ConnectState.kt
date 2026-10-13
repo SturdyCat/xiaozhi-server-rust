@@ -126,6 +126,8 @@ class ConnectState(private val scope: PagerScope) {
                 shell.engineHealth.load(shell, base)
                 // 设备 MCP 工具清单（会话开始时服务器探测到的；失败不影响表单与连接流程）
                 shell.mcpTools.load(shell, base)
+                // 配置预设清单（P1-5：预设卡数据源；失败静默，不影响表单与连接流程）
+                shell.form.loadPresets(shell, base)
                 // 从配置提取 WS 鉴权 token，派生 WS 地址并自动连接
                 val token = data.optJSONObject("server")?.optString("expected_token", "") ?: ""
                 // 固件托管清单（OTA 页数据源；上传/删除也要用同一个 base + token）

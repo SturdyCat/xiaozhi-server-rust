@@ -215,6 +215,8 @@ fun ViewContainer<*, *>.renderConfigSection(
         textNote(form.saveImpactNote, tone = "warn", micro = true)
         View { attr { height(AdminSpace.sm) } }
     }
+    // 编辑对象横幅（P1-5）：设备个性化目标时显示（全局模式不渲染）
+    editTargetBanner(form, toast, ctx)
     // 就绪度徽标：对应能力 phase 偏离（degraded/failed）时显示状态 + 原因（位于 section 卡片上方）
     sectionReadinessBanner(meta, id)
     when (id) {
@@ -222,6 +224,20 @@ fun ViewContainer<*, *>.renderConfigSection(
         "overview" -> {
             overviewCard(meta, ctx)
             engineHealthCard(health, ctx) { section -> form.configSection = section }
+        }
+        // 预设（P1-5）：快照 / 应用 / 删除全局配置；设备个性化模式下不可用
+        "presets" -> {
+            vif({ form.editDeviceId.isEmpty() }) {
+                presetCard(form, ctx)
+            }
+            vif({ form.editDeviceId.isNotEmpty() }) {
+                groupedCard("预设") {
+                    textNote(
+                        "预设仅作用于全局配置；当前正在编辑设备的个性化配置，请先点顶部「返回全局」再管理预设。",
+                        micro = true,
+                    )
+                }
+            }
         }
         "mcp" -> mcpToolsCard(mcp, ctx)
         "ota" -> otaCard(ota, toast, ctx)
@@ -716,3 +732,97 @@ fun ViewContainer<*, *>.aiuiConfigCard(form: ConfigFormState) {
  */
 private fun secretHint(configured: Boolean): String =
     if (configured) "已配置（留空则不修改）" else "未配置"
+
+// ============================================================
+// 设备个性化（P1-5）：编辑对象横幅
+// ============================================================
+
+/**
+ * 「当前编辑对象」横幅：编辑目标为某设备时显示（全局模式不渲染）。
+ *
+ * 说清覆盖范围（只有会话内参数可按设备覆盖，结构型字段始终走全局）——不说清楚，
+ * 用户会在设备模式里改 Server 端口、以为只影响这台设备（实际始终是全局值）。
+ * 出口两个：「返回全局」只是切回全局编辑（不动设备 overlay）；
+ * 「恢复全局配置」删除该设备 overlay（POST .../overlay/delete）后切回全局。
+ */
+fun ViewContainer<*, *>.editTargetBanner(form: ConfigFormState, toast: ToastState, ctx: Pager) {
+    vif({ form.editDeviceId.isNotEmpty() }) {
+        groupedCard("当前编辑对象：设备 ${form.editDeviceId}") {
+            textNote(
+                "正在编辑设备「${form.editDeviceId}」的个性化配置：仅音色 / 语速 / 提示词 / 人格 / " +
+                    "唤醒问候 / 指令 / 记忆召回等会话内参数可按设备覆盖；Server / Audio / 模型与引擎等" +
+                    "结构型字段始终沿用全局。保存按钮提交的是相对全局的差量。",
+                micro = true,
+            )
+            actionRow {
+                secondaryButton("返回全局") { form.backToGlobal(ctx) }
+                View { attr { width(AdminSpace.sm) } }
+                secondaryButton("恢复全局配置") {
+                    form.clearDeviceOverlay(ctx) { msg, level -> toast.show(msg, level) }
+                }
+            }
+        }
+    }
+}
+
+// ============================================================
+// 配置预设（P1-5）：快照 / 应用 / 删除
+// ============================================================
+
+/**
+ * 配置预设卡：把当前全局配置快照为预设（服务端读盘），列表内逐项应用 / 删除。
+ * 应用走 `PUT /api/config` 同款部分更新管线（服务端），成功后自动重载表单。
+ */
+fun ViewContainer<*, *>.presetCard(form: ConfigFormState, ctx: Pager) {
+    groupedCard("配置预设") {
+        textNote(
+            "把当前全局配置快照为预设，随时一键应用（回滚）。预设仅作用于全局配置；" +
+                "保存的是服务端盘上的生效值（不是表单草稿）。",
+            micro = true,
+        )
+        labeledField(
+            "预设名",
+            { form.presetNameDraft },
+            { form.presetNameDraft = it; },
+            "如 night（字母数字与 - _ .）",
+        )
+        actionRow {
+            primaryButton(
+                "保存当前配置为预设",
+                loading = { form.presetBusy },
+                loadingText = "保存中…",
+            ) { form.savePreset(ctx, form.serverBase) }
+        }
+        vif({ form.presetMsg.isNotEmpty() }) {
+            textNote(
+                form.presetMsg,
+                tone = if (form.presetMsg.contains("失败")) "error" else "tertiary",
+                micro = true,
+            )
+        }
+        dividerH()
+        vif({ form.presetNames.size == 0 }) {
+            textNote("还没有预设。填好名称点「保存当前配置为预设」即可创建。", micro = true)
+        }
+        vfor({ form.presetNames }) { name ->
+            View {
+                attr {
+                    flexDirectionRow()
+                    alignItemsCenter()
+                    marginBottom(AdminSpace.xs)
+                }
+                Text {
+                    attr {
+                        flex(1f)
+                        fontSize(AdminType.body)
+                        color(AdminColors.textPrimary)
+                        text(name)
+                    }
+                }
+                secondaryButton("应用") { form.applyPreset(ctx, form.serverBase, name) }
+                View { attr { width(AdminSpace.sm) } }
+                secondaryButton("删除") { form.deletePreset(ctx, form.serverBase, name) }
+            }
+        }
+    }
+}

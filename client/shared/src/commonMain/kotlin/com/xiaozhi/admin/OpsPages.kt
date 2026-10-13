@@ -182,9 +182,15 @@ private fun ViewContainer<*, *>.metricRow(name: String, value: String, hint: Str
  * 设备页：本进程见过的设备 + 在线状态 + 协商参数 + 上次异常。
  *
  * 参考项目对应物是 `DeviceManagement.vue`。差别：那边有"绑定智能体/解绑/工具调用"等写操作，
- * 本页**刻意只读**——写操作要动设备侧状态，本期不做（见最终报告的范围说明）。
+ * 本页除「个性化配置」（P1-5，跳配置页以该设备为编辑目标）外**刻意只读**——
+ * 其余写操作要动设备侧状态，本期不做（见最终报告的范围说明）。
  */
-fun ViewContainer<*, *>.renderOpsDevices(devices: DevicesState, ctx: Pager) {
+fun ViewContainer<*, *>.renderOpsDevices(
+    devices: DevicesState,
+    form: ConfigFormState,
+    onEditDevice: (String) -> Unit,
+    ctx: Pager,
+) {
     opsHeader({ devices.summary.ifEmpty { if (devices.loading) "加载中…" else "—" } }, { devices.loading }) {
         devices.refresh(ctx)
     }
@@ -237,6 +243,15 @@ fun ViewContainer<*, *>.renderOpsDevices(devices: DevicesState, ctx: Pager) {
             }
             if (row.clientId.isNotEmpty() && row.clientId != row.deviceId) {
                 textNote("Client-Id ${row.clientId}", micro = true)
+            }
+            // 个性化配置入口（P1-5）：按设备覆盖会话内参数（音色/语速/提示词/人格等白名单字段）。
+            // 测试台连接不显示（is_test 不是真实设备，个性化无意义）。
+            if (!row.isTest && row.deviceId.isNotEmpty()) {
+                actionRow {
+                    secondaryButton(
+                        if (form.editDeviceId == row.deviceId) "正在编辑该设备" else "个性化配置",
+                    ) { onEditDevice(row.deviceId) }
+                }
             }
             // 设备消息注入（P1-2）：在线的设备会话才能注入（文本作为用户话语走完整管线）；
             // 测试台连接不显示入口（服务端也会拒绝——它走独立请求-响应，语义不通）。

@@ -55,6 +55,9 @@ pub async fn run_session<T: Transport>(
     let vad = engines.acquire_vad().await?;
     let uplink_decoder = OpusFrameDecoder::new(params.uplink_sr)?;
     let real_audio = engines.config.real_audio();
+    // 每设备生效配置：全局 live_config ⊕ 本设备 overlay（白名单字段）。
+    // 会话开始算一次，供命令/唤醒快照与请求时现读类共用（overlay 仅会话级生效）。
+    let eff_config = engines.effective_config(&device_id);
     // AIUI 全链路会话：sn = 前缀 + 会话短 id（云端个性化/上下文绑定，≤32 字符）
     // ⚠️ AIUI 全链路刻意用**启动快照**（注册表里是 RestartOnly）：它决定整条流水线的
     // 走向，且启用时凭据缺失是致命错误（boot 即失败）；热启用会带来"半配置切换链路"的风险。
@@ -73,10 +76,10 @@ pub async fn run_session<T: Transport>(
         None
     };
     // 指令闸门快照：会话开始时取一次（= 注册表声明的 next_session 语义）。
-    // 未启用时是恒不命中的空闸门，零开销、零行为变化。
-    let commands = CommandGate::new(&engines.live_config().command);
-    // 唤醒问候语快照：同上（next_session 语义）。
-    let wake = WakeGreeting::new(&engines.live_config().wakeup);
+    // 未启用时是恒不命中的空闸门，零开销、零行为变化。数据源用每设备生效配置。
+    let commands = CommandGate::new(&eff_config.command);
+    // 唤醒问候语快照：同上（next_session 语义）。数据源用每设备生效配置。
+    let wake = WakeGreeting::new(&eff_config.wakeup);
     // 登记设备与会话（管理页「设备 / 会话 / 对话记录 / 概览」的数据源）。
     //
     // ⚠️ 位置在**所有可失败的初始化之后**：`new_vad()` / `OpusFrameDecoder::new()` 出错时
@@ -120,6 +123,7 @@ pub async fn run_session<T: Transport>(
         params,
         session_id,
         device_id,
+        eff_config,
         history: Vec::new(),
         downlink_ts: 0,
         test_recording: false,

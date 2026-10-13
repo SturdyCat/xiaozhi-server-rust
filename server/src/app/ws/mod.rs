@@ -50,7 +50,7 @@ use axum::{
     extract::{ws::WebSocketUpgrade, ws::WebSocket, Query, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{delete, get},
     Router,
 };
 use tower_http::services::{ServeDir, ServeFile};
@@ -74,7 +74,9 @@ mod plugins;
 mod registry;
 mod soul;
 mod usage;
-use config::{config_meta, get_config, put_config};
+use config::{
+    config_meta, device_overlay_delete, device_overlay_get, device_overlay_put, get_config, preset_apply, preset_delete, preset_save, presets_list, put_config,
+};
 use health::engines_health;
 use mcp::mcp_tools;
 use memory::{memory_clear, memory_maintain, memory_rag_reindex, memory_recall, memory_status};
@@ -125,6 +127,19 @@ pub fn router(engines: Arc<Engines>) -> Router {
         .route("/api/health/engines", get(engines_health))
         // 配置来源元信息（macApp 显示"配置文件路径 + 是否持久化"，排查配置丢失去向）
         .route("/api/config/meta", get(config_meta))
+        // 配置预设（P1-5）：保存当前 / 列出 / 应用 / 删除。
+        // `{name}/delete` 的 POST 别名：Kuikly NetworkModule 只支持 GET/POST（无 DELETE），
+        // 与 OTA 固件删除的 `POST /api/ota/firmware/delete` 同一惯例。
+        .route("/api/config/presets", get(presets_list).post(preset_save))
+        .route("/api/config/presets/{name}", delete(preset_delete))
+        .route(
+            "/api/config/presets/{name}/apply",
+            axum::routing::post(preset_apply),
+        )
+        .route(
+            "/api/config/presets/{name}/delete",
+            axum::routing::post(preset_delete),
+        )
         // 能力清单 + 状态（enabled/phase/last_error）与字段元数据（配置页据此校验/提示）
         .route("/api/plugins", get(list_plugins))
         .route("/api/config/schema", get(config_schema))
@@ -152,6 +167,20 @@ pub fn router(engines: Arc<Engines>) -> Router {
         .route("/api/devices/{device_id}", get(device_detail))
         // 设备消息注入（P1-2）：文本作为用户话语走完整管线（会话侧通道见 app/inject）
         .route("/api/devices/{device_id}/inject", axum::routing::post(device_inject))
+        // 每设备 overlay（P1-5）：白名单字段增量；仅会话内参数可覆盖，结构型参数拒绝。
+        // POST = PUT 的别名、`/delete` 的 POST = DELETE 的别名（Kuikly 客户端无 PUT/DELETE，
+        // 同 OTA 固件删除惯例）。
+        .route(
+            "/api/devices/{device_id}/overlay",
+            get(device_overlay_get)
+                .put(device_overlay_put)
+                .post(device_overlay_put)
+                .delete(device_overlay_delete),
+        )
+        .route(
+            "/api/devices/{device_id}/overlay/delete",
+            axum::routing::post(device_overlay_delete),
+        )
         .route("/api/sessions", get(sessions))
         .route("/api/conversations", get(conversations))
         .route("/api/stats", get(stats))

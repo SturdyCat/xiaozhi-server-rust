@@ -45,6 +45,11 @@ object ConfigSections {
      */
     val all: List<SectionDescriptor> = listOf(
         SectionDescriptor("overview", 0, "总览", null, listOf("总览", "能力", "插件", "overview")),
+        // 预设（P1-5）：置顶项。快照/应用全局配置；设备个性化模式下仅显示不可用提示。
+        SectionDescriptor(
+            "presets", 5, "预设", null,
+            listOf("预设", "快照", "备份", "回滚", "preset", "profile"),
+        ),
         // —— 服务与接入 ——
         SectionDescriptor(
             "server", 10, "Server", "service",

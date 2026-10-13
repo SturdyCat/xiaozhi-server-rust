@@ -29,6 +29,7 @@ use crate::app::downlink::{
 use crate::app::prefetch::PreparedAudio;
 use crate::app::protocol::{unwrap_uplink, BinVersion, ClientMessage, ServerMessage};
 use crate::app::transport::{IncomingFrame, Transport};
+use crate::config::Config;
 use crate::engine::Engines;
 use crate::plugins::aiui::{FullChainEngine, FullChainTurn};
 use crate::plugins::asr::AsrEngine;
@@ -109,6 +110,9 @@ pub struct Session<'a, T: Transport> {
     /// 设备标识（握手头 `Device-Id`）：记忆作用域的稳定键（`xiaozhi:<device_id>`）
     /// 与 `{{device_id}}` 插值的取值来源。
     device_id: String,
+    /// 每设备生效配置（全局 `live_config()` ⊕ 设备 overlay 白名单字段）。
+    /// 会话开始时算一次；请求时现读类与命令/唤醒快照类都走它，使 per-device overlay 生效。
+    eff_config: Arc<Config>,
     history: Vec<(String, String)>,
     downlink_ts: u32,
     test_recording: bool,
@@ -499,7 +503,7 @@ impl<'a, T: Transport> Session<'a, T> {
             self.history.push(("user".to_string(), turn.stt.clone()));
             self.history
                 .push(("assistant".to_string(), turn.reply.clone()));
-            let max_history = self.engines.live_config().llm.max_history;
+            let max_history = self.eff_config.llm.max_history;
             while self.history.len() > max_history {
                 self.history.remove(0);
             }
