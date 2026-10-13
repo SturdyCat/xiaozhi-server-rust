@@ -29,7 +29,7 @@ pub(in crate::app::ws) async fn device_overlay_get(
     State(engines): State<Arc<Engines>>,
     Path(device_id): Path<String>,
 ) -> Response {
-    let Some(config_path) = &engines.config_path else {
+    let Some(config_path) = engines.config_path() else {
         return (StatusCode::BAD_REQUEST, json_msg(false, "server 以内置默认配置启动，无法读写设备 overlay（请用 --config 指定配置文件后重启）。", None)).into_response();
     };
     let Some(path) = device_overlay_path(config_path, &device_id) else {
@@ -61,7 +61,7 @@ pub(in crate::app::ws) async fn device_overlay_put(
     if let Err(msg) = validate_overlay(&raw) {
         return (StatusCode::BAD_REQUEST, json_msg(false, &msg, None)).into_response();
     }
-    let Some(config_path) = &engines.config_path else {
+    let Some(config_path) = engines.config_path() else {
         return (StatusCode::BAD_REQUEST, json_msg(false, "server 以内置默认配置启动，无法读写设备 overlay（请用 --config 指定配置文件后重启）。", None)).into_response();
     };
     let Some(path) = device_overlay_path(config_path, &device_id) else {
@@ -91,7 +91,7 @@ pub(in crate::app::ws) async fn device_overlay_delete(
     State(engines): State<Arc<Engines>>,
     Path(device_id): Path<String>,
 ) -> Response {
-    let Some(config_path) = &engines.config_path else {
+    let Some(config_path) = engines.config_path() else {
         return (StatusCode::BAD_REQUEST, json_msg(false, "server 以内置默认配置启动，无法读写设备 overlay（请用 --config 指定配置文件后重启）。", None)).into_response();
     };
     let Some(path) = device_overlay_path(config_path, &device_id) else {

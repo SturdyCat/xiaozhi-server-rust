@@ -80,7 +80,7 @@ fn preset_apply_reuses_merge_client_patch_semantics() {
     // 模拟 POST /api/config/presets/{name}/apply：复用 put_config 同款部分更新管线
     let preset_json = serde_json::to_value(&preset_cfg).expect("预设序列化");
     let applied = merge_client_patch(&current, &preset_json).expect("应用预设");
-    persist_config(base.to_str().unwrap(), &applied).expect("写回全局配置");
+    persist_config_file(base.to_str().unwrap(), &applied).expect("写回全局配置");
 
     // 重新读盘：被预设覆盖的字段生效，未提及字段保持基准（部分更新语义）
     let reloaded = Config::load(base.to_str().unwrap()).expect("重读全局配置");

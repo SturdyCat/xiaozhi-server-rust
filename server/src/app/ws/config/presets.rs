@@ -17,9 +17,7 @@ use crate::config::Config;
 use crate::config::overlay::{preset_path, presets_dir};
 use crate::engine::Engines;
 
-use super::{
-    config_revision, current_config, json_msg, json_msg_full, merge_client_patch, persist_config,
-};
+use super::{config_revision, current_config, json_msg, json_msg_full, merge_client_patch};
 use super::super::json_ok;
 use super::impact::save_impact;
 
@@ -30,7 +28,7 @@ use super::impact::save_impact;
 
 /// `GET /api/config/presets`：列出全部预设名。
 pub(in crate::app::ws) async fn presets_list(State(engines): State<Arc<Engines>>) -> Response {
-    let Some(config_path) = &engines.config_path else {
+    let Some(config_path) = engines.config_path() else {
         return (StatusCode::BAD_REQUEST, json_msg(false, "server 以内置默认配置启动，无法使用预设（请用 --config 指定配置文件后重启）。", None)).into_response();
     };
     let Some(dir) = presets_dir(config_path) else {
@@ -62,7 +60,7 @@ pub(in crate::app::ws) async fn preset_save(
         .unwrap_or("")
         .trim()
         .to_string();
-    let Some(config_path) = &engines.config_path else {
+    let Some(config_path) = engines.config_path() else {
         return (StatusCode::BAD_REQUEST, json_msg(false, "server 以内置默认配置启动，无法使用预设（请用 --config 指定配置文件后重启）。", None)).into_response();
     };
     let Some(preset_file) = preset_path(config_path, &name) else {
@@ -87,7 +85,7 @@ pub(in crate::app::ws) async fn preset_apply(
     State(engines): State<Arc<Engines>>,
     Path(name): Path<String>,
 ) -> Response {
-    let Some(config_path) = &engines.config_path else {
+    let Some(config_path) = engines.config_path() else {
         return (StatusCode::BAD_REQUEST, json_msg(false, "server 以内置默认配置启动，无法应用预设（请用 --config 指定配置文件后重启）。", None)).into_response();
     };
     let Some(preset_file) = preset_path(config_path, &name) else {
@@ -109,7 +107,7 @@ pub(in crate::app::ws) async fn preset_apply(
         Ok(c) => c,
         Err(e) => return (StatusCode::BAD_REQUEST, format!("应用预设失败: {e}")).into_response(),
     };
-    match persist_config(config_path, &body) {
+    match engines.config_store.persist(&body) {
         Ok(()) => {
             let impact = save_impact(&current, &body);
             let new_rev = config_revision(&body);
@@ -118,13 +116,13 @@ pub(in crate::app::ws) async fn preset_apply(
                 json_msg_full(
                     true,
                     &format!("已应用预设「{name}」到全局配置（新会话生效）。"),
-                    Some(config_path.as_str()),
+                    Some(config_path),
                     Some(&new_rev),
                     Some(&impact),
                 ),
             ).into_response()
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, json_msg(false, &format!("{e:#}"), Some(config_path.as_str()))).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, json_msg(false, &format!("{e:#}"), Some(config_path))).into_response(),
     }
 }
 
@@ -133,7 +131,7 @@ pub(in crate::app::ws) async fn preset_delete(
     State(engines): State<Arc<Engines>>,
     Path(name): Path<String>,
 ) -> Response {
-    let Some(config_path) = &engines.config_path else {
+    let Some(config_path) = engines.config_path() else {
         return (StatusCode::BAD_REQUEST, json_msg(false, "server 以内置默认配置启动，无法管理预设（请用 --config 指定配置文件后重启）。", None)).into_response();
     };
     let Some(preset_file) = preset_path(config_path, &name) else {

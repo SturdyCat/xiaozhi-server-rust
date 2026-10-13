@@ -1,9 +1,9 @@
 //! 固件托管的 **HTTP 层**（路由 + 四个处理器）。
 //!
-//! 拆出来的理由：`agents.md` §5.10 逻辑文件 ≤ 600 行；同时"存储/匹配"（父模块 `firmware.rs`）
+//! 拆出来的理由：逻辑文件 ≤ 600 行（见仓库根 `AGENTS.md`）；同时"存储/匹配"（父模块 `firmware.rs`）
 //! 与"HTTP 契约"（本模块）本来就是两件事——前者要能被单元测试直接调，后者才关心状态码与鉴权。
 //!
-//! 四个端点（契约见 `agents.md` §6.5）：
+//! 四个端点（契约见 `server/src/app/firmware/AGENTS.md`，原功能长文 §6）：
 //! - `POST /api/ota/firmware`：上传 app bin（body = 裸二进制；管理动作，需鉴权）；
 //! - `GET  /api/ota/firmware`：托管清单（管理页数据源）；
 //! - `GET  /api/ota/firmware/latest?project=&model=&board=`：设备下载（**不鉴权**）；

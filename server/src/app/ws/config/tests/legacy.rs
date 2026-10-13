@@ -133,7 +133,7 @@ voice = "xiaoyan"
 "#,
     )
     .unwrap();
-    persist_config(path.to_str().unwrap(), &cfg).unwrap();
+    persist_config_file(path.to_str().unwrap(), &cfg).unwrap();
     let loaded = Config::load(path.to_str().unwrap()).unwrap();
     assert_eq!(loaded.server.port, 8000);
     assert_eq!(loaded.tts.xfyun.voice, "xiaoyan");

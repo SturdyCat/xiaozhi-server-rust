@@ -14,7 +14,8 @@
 //! 固件发送/期望**小写** `type` 标签（`hello`/`listen`/`abort`…），故枚举用
 //! `rename_all = "snake_case"`（单词变体仍为小写，多单词如 `AsrTest` → `asr_test`）。
 //! 漏写会在运行时报 `unknown variant hello`，且 `cargo check` **无法发现**，
-//! 只有真实 WebSocket 客户端能暴露。详情与排查见 `../agents.md` §5.1。
+//! 只有真实 WebSocket 客户端能暴露。详情与排查见 `server/src/app/protocol/AGENTS.md`
+//! 与联调脚本 `server/tests/mock_client.py`（原 `agents.md` §5.1，长文已按逻辑拆分）。
 //!
 //! ## 二进制帧封装（权威）
 //!

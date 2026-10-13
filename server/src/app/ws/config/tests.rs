@@ -11,6 +11,14 @@ use crate::config::Config;
 use std::path::PathBuf;
 use uuid::Uuid;
 
+/// 写盘（P0 起统一经存储抽象；原 `ws::config::persist_config` 已搬入 `config::store`）。
+///
+/// 测试用文件后端，语义与搬移前**逐字节一致**（原子写 + EBUSY 原地回退 + 文案）。
+fn persist_config_file(path: &str, cfg: &Config) -> anyhow::Result<()> {
+    use crate::config::store::{ConfigStore, FileConfigStore};
+    FileConfigStore::new(path).persist(cfg)
+}
+
 /// 完整配置 fixture（**刻意写成 P4 之前的旧位置形态**）：`[tts] backend`/`model`/…、
 /// `[memory] backend`。它同时就是「旧 config.toml 原样可读」这条 P4 验收的回归用例
 /// （见 [`legacy_toml_fixture_migrates_to_convention`]）。
@@ -470,7 +478,7 @@ fn partial_update_survives_disk_roundtrip() {
         &full_test_config(),
         serde_json::json!({"llm": {"model": "m9"}, "tts": {"cache_entries": 5}}),
     );
-    persist_config(path.to_str().unwrap(), &merged).unwrap();
+    persist_config_file(path.to_str().unwrap(), &merged).unwrap();
     let loaded = Config::load(path.to_str().unwrap()).unwrap();
 
     assert_eq!(loaded.llm.model, "m9");

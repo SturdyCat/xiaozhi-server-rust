@@ -16,7 +16,6 @@
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use crate::config::Config;
 use crate::engine::Engines;
 use crate::plugins::llm::{build_llm, LlmEvent};
 use crate::plugins::prompt::{MemoryPosition, TurnPrompt};
@@ -54,30 +53,26 @@ impl BenchResult {
     }
 }
 
-/// 按磁盘最新配置读取 LLM 段；无配置文件或读盘失败时退回启动快照。
+/// 按配置来源的最新内容读取 LLM 段；无来源或读取失败时退回启动快照。
 fn load_disk_llm(engines: &Arc<Engines>) -> crate::plugins::llm::LlmConfig {
-    match &engines.config_path {
-        Some(p) => Config::load(p)
-            .map(|c| c.llm)
-            .unwrap_or_else(|e| {
-                tracing::warn!("内联 LLM 测试读盘配置失败（用启动配置）: {e}");
-                engines.config.llm.clone()
-            }),
-        None => engines.config.llm.clone(),
+    if engines.config_path().is_none() {
+        return engines.config.llm.clone(); // 内置默认配置：无来源可读
     }
+    engines.config_store.load().map(|c| c.llm).unwrap_or_else(|e| {
+        tracing::warn!("内联 LLM 测试读盘配置失败（用启动配置）: {e}");
+        engines.config.llm.clone()
+    })
 }
 
-/// 按磁盘最新配置读取 TTS 段；无配置文件或读盘失败时退回启动快照。
+/// 按配置来源的最新内容读取 TTS 段；无来源或读取失败时退回启动快照。
 fn load_disk_tts(engines: &Arc<Engines>) -> crate::plugins::tts::TtsConfig {
-    match &engines.config_path {
-        Some(p) => Config::load(p)
-            .map(|c| c.tts)
-            .unwrap_or_else(|e| {
-                tracing::warn!("内联 TTS 测试读盘配置失败（用启动配置）: {e}");
-                engines.config.tts.clone()
-            }),
-        None => engines.config.tts.clone(),
+    if engines.config_path().is_none() {
+        return engines.config.tts.clone(); // 内置默认配置：无来源可读
     }
+    engines.config_store.load().map(|c| c.tts).unwrap_or_else(|e| {
+        tracing::warn!("内联 TTS 测试读盘配置失败（用启动配置）: {e}");
+        engines.config.tts.clone()
+    })
 }
 
 /// LLM 连通性 + 首 token 延迟测量（单轮无历史）。

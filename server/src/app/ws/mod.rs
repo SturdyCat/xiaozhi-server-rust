@@ -36,8 +36,9 @@
 //! ## `/api/config` 读写语义
 //! - `GET`：若启动指定了配置文件则实时读盘，否则返回内存中的内置默认配置（/data/models 生产路径）。
 //! - `PUT`/`POST`：**部分更新**——只覆盖请求中出现的字段，未出现的保持现盘值
-//!   （显式 `null` = 清除该字段，回落 serde 默认值）；写回启动加载的配置文件
-//!   （TOML，**原注释会被覆盖丢失**）。内置默认启动、`config_path` 为 `None` 时返回 400。
+//!   （显式 `null` = 清除该字段，回落 serde 默认值）；写回启动加载的配置来源
+//!   （TOML，**原注释会被覆盖丢失**）。内置默认启动、存储后端
+//!   `location()` 为 `None`（[`crate::config::store::DefaultConfigStore`]）时返回 400。
 //! - 生效时机：TTS 引擎参数在**新会话**开始时按盘上配置热切换
 //!   （[`crate::engine::Engines::refresh_from_disk`]，经 `spawn_blocking`）；
 //!   ASR 模型、监听地址、token、管理页目录等仍需重启 server。

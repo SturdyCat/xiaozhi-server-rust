@@ -17,7 +17,14 @@
 //!（`XIAOZHI_CONFIG` → `--config` → 内置默认）；`GET/PUT /api/config` 的读写语义
 //! 见 `app/ws.rs`。本文件只负责结构与默认值。
 //!
-//! ## 配置约定（P4，见 `docs/plugin-architecture-unification.md` §3.3）
+//! **读写落点一律经存储抽象** [`store::ConfigStore`]（`main.rs` 装配后存入
+//! `Engines::config_store`）：文件后端 [`store::FileConfigStore`] = 今天的 TOML 行为
+//! （原子写 + 单文件 bind mount 的 EBUSY 回退），内置默认启动则是
+//! [`store::DefaultConfigStore`]（`location() == None` → `PUT /api/config` 400）。
+//! 不要在业务代码里直接 `Config::load(路径)` 或直接写盘——那条路径绕过了抽象，
+//! 也是"配置将来进 SQLite"（`server/src/config/store/AGENTS.md`，提案未落地）的前置条件。
+//!
+//! ## 配置约定（P4，见 `server/src/plugins/registry/AGENTS.md`；原 `docs/plugin-architecture-unification.md` §3.3）
 //!
 //! 1. **`engine` 键**：每个能力段用 `engine = "<实现 id>"` 选择实现，id 即注册表描述符 id
 //!    去掉 `"<cap>."` 前缀（`[tts] engine="kokoro"` ↔ 描述符 `tts.kokoro`）；
@@ -45,6 +52,9 @@ pub use crate::plugins::wakeup::WakeConfig;
 
 /// 每设备配置 overlay（白名单合并 / 落盘路径，见 `config/overlay.rs`）。
 pub mod overlay;
+
+/// 配置存储后端抽象（`ConfigStore` trait + 文件/默认两实现，见 `config/store.rs`）。
+pub mod store;
 
 /// 配置层「部分更新」合并（JSON 递归合并）。
 ///

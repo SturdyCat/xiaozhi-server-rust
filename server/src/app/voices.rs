@@ -114,15 +114,17 @@ pub fn spawn_startup_probe(engines: Arc<Engines>) {
 /// `GET /api/config` 已对密钥打码，前端表单里留空的字段 = "未修改，沿用已存凭据"，
 /// 因此"测试凭据"必须能逐字段回落到这里，否则用户不重填密钥就无法测试。
 fn tts_creds_raw(engines: &Engines) -> XfyunTtsConfig {
-    match &engines.config_path {
-        Some(p) => crate::config::Config::load(p)
-            .map(|c| c.tts.xfyun)
-            .unwrap_or_else(|e| {
-                tracing::warn!("发音人目录：读盘配置失败（用启动配置）: {e}");
-                engines.config.tts.xfyun.clone()
-            }),
-        None => engines.config.tts.xfyun.clone(),
+    if engines.config_path().is_none() {
+        return engines.config.tts.xfyun.clone(); // 内置默认配置：无来源可读
     }
+    engines
+        .config_store
+        .load()
+        .map(|c| c.tts.xfyun)
+        .unwrap_or_else(|e| {
+            tracing::warn!("发音人目录：读盘配置失败（用启动配置）: {e}");
+            engines.config.tts.xfyun.clone()
+        })
 }
 
 /// 三要素凭据：**优先读盘**（用户可能在启动后才保存）；读盘失败回退内存。

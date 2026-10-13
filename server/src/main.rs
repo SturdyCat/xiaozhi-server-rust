@@ -7,12 +7,13 @@
 //! ## 配置加载优先级（权威说明）
 //!
 //! 见 [`load_config_inner`]：
-//! 1. 环境变量 `XIAOZHI_CONFIG` 指向的 TOML 文件（成功则记录 `config_path`）；
+//! 1. 环境变量 `XIAOZHI_CONFIG` 指向的 TOML 文件（成功则装配文件存储后端）；
 //! 2. 否则命令行 `--config <path>`；
 //! 3. 两者都缺失或读取失败 → 回退 [`crate::config::Config::default()`]（/data/models 生产路径）。
 //!
 //! 任一级失败都告警后回退，保证进程总能起来；引擎在启动时构建，模型缺失会给出明确报错。
-//! 返回的 `(Config, Option<config_path>)` 中，`config_path` 为 `None` 表示用的是内置默认，
+//! 返回的 `(Config, Arc<dyn ConfigStore>)` 中，存储后端的 `location()` 为 `None`
+//! （[`crate::config::store::DefaultConfigStore`]）表示用的是内置默认，
 //! 此时 `PUT /api/config` 无法持久化（需以 `--config` 指定文件后重启）。
 //!
 //! 环境变量覆盖（**仅影响本次运行，不写回文件**）：
@@ -25,18 +26,21 @@ mod config;
 mod engine;
 mod plugins;
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use axum::serve;
 use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
 
+use crate::config::store::{ConfigStore, DefaultConfigStore, FileConfigStore};
 use crate::config::Config;
 use crate::engine::Engines;
 use crate::app::ws::router;
 
 fn main() -> Result<()> {
     // 配置在 runtime 构建前加载（worker_threads 需要它）。
-    let (config, config_path) = load_config();
+    let (config, config_store) = load_config();
 
     // tokio 多线程 runtime：worker 线程数由 [server].worker_threads 控制（默认 2），
     // 避免默认按 CPU 核数拉满，在 N5105 这类 4 核主机上挤占其他服务。
@@ -45,10 +49,10 @@ fn main() -> Result<()> {
         .worker_threads(workers)
         .enable_all()
         .build()?
-        .block_on(run(config, config_path))
+        .block_on(run(config, config_store))
 }
 
-async fn run(config: Config, config_path: Option<String>) -> Result<()> {
+async fn run(config: Config, config_store: Arc<dyn ConfigStore>) -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
@@ -61,15 +65,15 @@ async fn run(config: Config, config_path: Option<String>) -> Result<()> {
         config.server.worker_threads.max(1)
     );
 
-    let engines = Engines::new(&config, config_path)?;
+    let engines = Engines::new(&config, config_store)?;
     // 延迟/事件聚合（P1-1）：进程最早的订阅者——spawn 越早，broadcast 环形缓冲越不丢
     // 早期事件（LAGGED 只告警；聚合口径是近似值，见 app/metrics 模块注释）。
     tokio::spawn(crate::app::metrics::subscriber(
         engines.metrics.clone(),
         engines.event_bus.subscribe(),
     ));
-    // 配置来源可见性：把实际加载的文件路径打到启动日志（"改配置不生效"类问题第一现场）
-    match &engines.config_path {
+    // 配置来源可见性：把实际加载的配置来源打到启动日志（"改配置不生效"类问题第一现场）
+    match engines.config_path() {
         Some(p) => {
             if crate::app::ws::config_is_persistent(p) {
                 tracing::info!("配置文件：{p}（挂载卷上，持久化 ✓）");
@@ -117,9 +121,9 @@ async fn run(config: Config, config_path: Option<String>) -> Result<()> {
 }
 
 /// 配置加载优先级：`XIAOZHI_CONFIG` 环境变量 → `--config` 参数 → 内置默认（/data/models 生产路径）。
-/// 返回加载到的配置与（若有）配置文件路径，供 `PUT /api/config` 写回使用。
-fn load_config() -> (Config, Option<String>) {
-    let (mut config, path) = load_config_inner();
+/// 返回加载到的配置与配置**存储后端**（文件 / 内置默认），供 `PUT /api/config` 写回使用。
+fn load_config() -> (Config, Arc<dyn ConfigStore>) {
+    let (mut config, store) = load_config_inner();
     // [server].admin_dir 支持环境变量覆盖（Docker 镜像内置 XIAOZHI_ADMIN_DIR=/app/web，
     // 挂载的 config.toml 无需为容器单独改路径）。与 XIAOZHI_CONFIG 同语义：env 只影响
     // 本次运行的生效配置，不写回文件（GET /api/config 展示的仍是文件原值）。
@@ -128,13 +132,13 @@ fn load_config() -> (Config, Option<String>) {
             config.server.admin_dir = dir;
         }
     }
-    (config, path)
+    (config, store)
 }
 
-fn load_config_inner() -> (Config, Option<String>) {
+fn load_config_inner() -> (Config, Arc<dyn ConfigStore>) {
     if let Ok(p) = std::env::var("XIAOZHI_CONFIG") {
         if let Ok(c) = Config::load(&p) {
-            return (c, Some(p));
+            return (c, Arc::new(FileConfigStore::new(p)));
         }
         tracing::warn!("加载配置文件 {p} 失败，回退内置默认配置");
     }
@@ -142,9 +146,9 @@ fn load_config_inner() -> (Config, Option<String>) {
     if let Some(pos) = args.iter().position(|a| a == "--config") {
         if let Some(p) = args.get(pos + 1) {
             if let Ok(c) = Config::load(p) {
-                return (c, Some(p.clone()));
+                return (c, Arc::new(FileConfigStore::new(p.clone())));
             }
         }
     }
-    (Config::default(), None)
+    (Config::default(), Arc::new(DefaultConfigStore))
 }

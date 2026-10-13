@@ -12,7 +12,6 @@ use crate::app::prefetch::PreparedAudio;
 use crate::app::protocol::ServerMessage;
 use crate::app::session::{send_text, Session};
 use crate::app::transport::Transport;
-use crate::config::Config;
 use crate::plugins::llm::build_llm;
 use crate::plugins::tts::build_xfyun;
 
@@ -128,12 +127,13 @@ impl<'a, T: Transport> Session<'a, T> {
         // 引擎选择：带 vcn 覆盖时按**磁盘最新配置**（凭据以保存值为准）即时构建
         // 讯飞合成器（短连接、无模型加载，成本可忽略），本次合成用所选音色；
         // 未带 vcn 时用热切换后的默认引擎。
-        let disk_tts = match &self.engines.config_path {
-            Some(p) => Config::load(p).map(|c| c.tts).unwrap_or_else(|e| {
+        let disk_tts = if self.engines.config_path().is_none() {
+            self.engines.config.tts.clone() // 内置默认配置：无来源可读
+        } else {
+            self.engines.config_store.load().map(|c| c.tts).unwrap_or_else(|e| {
                 tracing::warn!("session {session_id} 测试合成读盘配置失败（用启动配置）: {e}");
                 self.engines.config.tts.clone()
-            }),
-            None => self.engines.config.tts.clone(),
+            })
         };
         let (tts, vcn_note) = match &vcn_override {
             Some(v) => {
@@ -328,12 +328,13 @@ impl<'a, T: Transport> Session<'a, T> {
         // 按**磁盘上最新配置**临时构建 LLM 客户端——引擎在启动时构建（engine.rs），
         // 改完配置无需重启即可验证刚保存的 api_base/api_key/model；未指定配置文件
         // （内置默认）或读盘失败时退回启动时的内存配置。
-        let llm_cfg = match &self.engines.config_path {
-            Some(p) => Config::load(p).map(|c| c.llm).unwrap_or_else(|e| {
+        let llm_cfg = if self.engines.config_path().is_none() {
+            self.engines.config.llm.clone() // 内置默认配置：无来源可读
+        } else {
+            self.engines.config_store.load().map(|c| c.llm).unwrap_or_else(|e| {
                 tracing::warn!("session {session_id} LLM 测试读配置失败（用启动配置）: {e}");
                 self.engines.config.llm.clone()
-            }),
-            None => self.engines.config.llm.clone(),
+            })
         };
         tracing::info!(
             "session {session_id} LLM 测试：model={} api_base={}",

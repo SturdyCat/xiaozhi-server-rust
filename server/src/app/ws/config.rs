@@ -1,17 +1,19 @@
 //! `/api/config` 读写端点组（含配置来源元信息）：
-//! - `GET`：启动指定了配置文件则实时读盘，否则返回内存内置默认配置；**密钥打码**
-//!   ——只回 `has_<field>` presence 标记，不回明文（见 [`SECRET_PATHS`]）。
+//! - `GET`：启动指定了配置文件则实时读盘（经 [`Engines::config_store`]），否则返回内存内置默认配置；
+//!   **密钥打码**——只回 `has_<field>` presence 标记，不回明文（见 [`SECRET_PATHS`]）。
 //! - `PUT/POST`：**部分更新**语义（未出现的字段保持、显式 `null` 清除、密钥空串 = 保留原值）；
-//!   写回启动加载的配置文件（TOML，原注释会覆盖丢失）；内置默认启动时 400。
+//!   写回启动加载的配置来源（TOML，原注释会覆盖丢失）；内置默认启动时 400。
 //!   响应带 `hot` / `hot_hint` / `changed_sections`：本次保存**实际**的生效档位
 //!   （见 [`impact`]，取自注册表字段元数据里最严格的一项）。
 //! - `GET /api/config/meta`：配置来源（路径 / 是否挂载卷持久化），排查"配置丢失去向"。
 //!
 //! 拆分子模块（原 `ws.rs`）：路由表与 WS 网关见 [`super`]。
+//!
+//! 存储后端抽象（P0）：读写与落点都经 [`Engines::config_store`]（[`crate::config::store`]），
+//! 本文件不再直接 `Config::load(路径)` / 直接写盘——这是"配置进 SQLite"的前置重构。
 
 use std::sync::Arc;
 
-use anyhow::Context;
 use axum::{
     extract::{Json, State},
     http::{header, StatusCode},
@@ -37,8 +39,8 @@ use impact::{save_impact, SaveImpact};
 /// `GET`（填表单）与 `PUT`（部分更新的基线）**共用**本函数：两者必须看到同一份"现值"，
 /// 否则会出现"表单显示 A、保存却按 B 合并"的错位。
 pub(crate) fn current_config(engines: &Engines) -> Config {
-    match &engines.config_path {
-        Some(p) => match Config::load(p) {
+    match engines.config_path() {
+        Some(p) => match engines.config_store.load() {
             Ok(c) => c,
             Err(e) => {
                 tracing::error!(
@@ -258,42 +260,6 @@ pub(super) async fn get_config(State(engines): State<Arc<Engines>>) -> Response 
     }
 }
 
-/// 配置持久化（PUT /api/config 共用）：序列化为 TOML 写回。
-///
-/// P4 起先 `normalize()`（幂等）再序列化：手搓/未规范化的内存配置若直接落盘，
-/// 会把 `[tts].engine` 写成空值、旧位置字段写回旧结构——那正是我们要消除的"保存即漂移"。
-///
-/// 写入策略两级：
-/// 1. **原子写**（首选）：写同目录临时文件 → `rename` 覆盖，避免写一半被杀导致配置损坏；
-/// 2. **原地写回退**：⚠️ compose 把 `config.toml` 以**单文件 bind mount** 挂进容器时，
-///    `rename` 跨挂载点必然失败（`EBUSY`，os error 16，实测）——此时回退直接覆写原文件
-///    （非原子，但挂载单文件的场景下这是唯一可行路径），并清理残留 tmp。
-pub(crate) fn persist_config(path: &str, cfg: &Config) -> anyhow::Result<()> {
-    let mut cfg = cfg.clone();
-    cfg.normalize();
-    let toml_str = toml::to_string_pretty(&cfg).context("序列化配置失败")?;
-    let tmp = format!("{}.{}.tmp", path, uuid::Uuid::new_v4());
-    let atomic = std::fs::write(&tmp, &toml_str).and_then(|()| std::fs::rename(&tmp, path));
-    if atomic.is_ok() {
-        return Ok(());
-    }
-    let atomic_err = atomic.unwrap_err();
-    let fallback = std::fs::write(path, &toml_str);
-    let _ = std::fs::remove_file(&tmp); // 清理 rename 失败残留的临时文件
-    if let Err(e) = fallback {
-        let hint = if e.kind() == std::io::ErrorKind::PermissionDenied {
-            "（配置文件或所在目录为只读/属主不符。请检查宿主挂载是否误加 :ro，或修正属主与权限后重启 server。）"
-        } else {
-            ""
-        };
-        anyhow::bail!("写入配置失败: {e}{hint}（原子写失败原因: {atomic_err}）");
-    }
-    tracing::warn!(
-        "配置已原地写入 {path}（挂载为单文件 bind mount，rename 原子替换不可用: {atomic_err}）"
-    );
-    Ok(())
-}
-
 /// 把管理页提交的 JSON **增量合并**到当前配置上（结构性修复，见
 /// `docs/plugin-architecture-unification.md` §1.7 bug-1 与 §7 风险 2）。
 ///
@@ -377,8 +343,8 @@ pub(super) async fn put_config(
             return (StatusCode::BAD_REQUEST, format!("配置 JSON 解析失败: {e}")).into_response();
         }
     };
-    let path = match &engines.config_path {
-        Some(p) => p.clone(),
+    let path = match engines.config_path() {
+        Some(p) => p.to_string(),
         None => {
             return (
                 StatusCode::BAD_REQUEST,
@@ -387,7 +353,7 @@ pub(super) async fn put_config(
                 .into_response()
         }
     };
-    match persist_config(&path, &body) {
+    match engines.config_store.persist(&body) {
         Ok(()) => {
             // 保存成功即回报**实际写入路径**——配置"看不到/丢失"类问题可由此一眼定位
             //（例如容器内路径与宿主机挂载不一致时，Toast 会显示真实路径）。
@@ -500,12 +466,12 @@ fn is_persistent_in(mountinfo: &str, path: &str) -> bool {
 
 /// GET /api/config/meta：配置来源元信息（macApp 配置页展示，排查"配置去哪了"）。
 pub(super) async fn config_meta(State(engines): State<Arc<Engines>>) -> Response {
-    let (path, loaded_from) = match &engines.config_path {
-        Some(p) => (Some(p.clone()), "file"),
-        None => (None, "default"),
+    let path = engines.config_path();
+    let (loaded_from, persistent) = match path {
+        Some(p) => ("file", Some(config_is_persistent(p))),
+        None => ("default", None),
     };
-    let persistent = path.as_deref().map(config_is_persistent);
-    let hint = match (&path, persistent) {
+    let hint = match (path, persistent) {
         (None, _) => "以内置默认配置运行，保存不会持久化（用 --config/XIAOZHI_CONFIG 指定文件后重启）",
         (Some(_), Some(false)) => "⚠️ 配置文件不在挂载卷上：重建容器会丢失（请挂载 ./server-data:/data 并设 XIAOZHI_CONFIG=/data/config.toml）",
         _ => "",

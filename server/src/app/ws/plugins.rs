@@ -22,9 +22,10 @@ pub(super) async fn list_plugins(State(engines): State<Arc<Engines>>) -> Respons
     let mut body = engines.host.capabilities_json();
     body["ok"] = serde_json::json!(true);
     // 配置来源一并带上：状态解读常需知道"这些值来自哪个文件、重启会不会丢"
+    let config_path = engines.config_path();
     body["config"] = serde_json::json!({
-        "path": engines.config_path,
-        "persistent": engines.config_path.as_deref().map(config_is_persistent),
+        "path": config_path,
+        "persistent": config_path.map(config_is_persistent),
     });
     json_ok(body)
 }

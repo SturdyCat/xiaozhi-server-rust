@@ -24,6 +24,7 @@
 //! ——管理页改配置保存后，无需重启即对**新会话**与测试台生效。
 
 use crate::plugins::asr::AsrEngine;
+use crate::config::store::ConfigStore;
 use crate::config::Config;
 use crate::plugins::host::{Phase, PluginHost};
 use crate::plugins::llm::{build_llm, Llm};
@@ -100,9 +101,9 @@ pub struct Engines {
     /// 推理调用点外（会话 / 预取 worker / 测试台共用）；见 `app/inference` 模块注释。
     pub inference: crate::app::inference::InferenceGates,
     pub config: Arc<Config>,
-    /// server 启动时实际加载的配置文件路径；为 `None` 表示用的是内置默认配置，
-    /// 此时 `PUT /api/config` 无法持久化（需以 `--config` 指定文件后重启）。
-    pub config_path: Option<String>,
+    /// 配置存储后端（读、写、落点三件事的唯一入口，见 [`crate::config::store`]）。
+    /// 读取/写回配置**一律**经它——不要直接 `Config::load(路径)`，否则换成 SQLite 后端时会被绕过。
+    pub config_store: Arc<dyn ConfigStore>,
 }
 
 impl Engines {
@@ -111,19 +112,19 @@ impl Engines {
     /// 装配经 [`PluginHost::boot`]：能力清单/前置校验/错误文案统一由注册表声明
     /// （原先 `engine.rs` 里手写的 VAD 路径、AIUI 三要素两处硬编码校验已迁入
     /// `plugins/registry/`（`impls.rs` 的 `validate_*`）声明，并支持**一次汇总多个问题**）。
-    pub fn new(config: &Config, config_path: Option<String>) -> Result<Arc<Self>> {
+    pub fn new(config: &Config, config_store: Arc<dyn ConfigStore>) -> Result<Arc<Self>> {
         let (host, booted) = PluginHost::boot(config)?;
         let tts_sig = capability_signature(config, Capability::Tts);
         let llm_sig = capability_signature(config, Capability::Llm);
         let memory_sig = capability_signature(config, Capability::Memory);
         let tts_cache = Arc::new(crate::app::tts_cache::TtsCache::new(config.tts.cache_entries));
-        // 持久化热句音频库的落盘目录：**配置文件所在目录**的 `hot-audio/`。
+        // 持久化热句音频库的落盘目录：**配置来源所在目录**的 `hot-audio/`。
         //
         // 为什么挂在配置目录下而不是固定路径：生产部署把配置放在挂载卷上
         //（docker-compose 的 `./server-data:/data` + `XIAOZHI_CONFIG=/data/config.toml`），
         // 跟着它走就自动落在持久卷里，容器重建不丢；而"配置没有文件路径"（内置默认配置、
         // 保存也不持久化）时落盘同样没有意义，此时直接禁用（与 `PUT /api/config` 返回 400 同源）。
-        let hot_audio_dir = config_path.as_deref().map(|p| {
+        let hot_audio_dir = config_store.location().map(|p| {
             std::path::Path::new(p)
                 .parent()
                 .unwrap_or_else(|| std::path::Path::new("."))
@@ -151,8 +152,16 @@ impl Engines {
             inject: crate::app::inject::Injector::new(),
             inference: crate::app::inference::InferenceGates::new(config),
             config: Arc::new(config.clone()),
-            config_path,
+            config_store,
         }))
+    }
+
+    /// 配置持久化落点（今天的 TOML 路径；将来 SQLite 后端为 DB 路径）。
+    ///
+    /// `None` = 内置默认配置启动 → `PUT /api/config` 与设备 overlay / 预设都无法持久化。
+    /// overlay / presets / hot-audio 的落点派生与"能否持久化"判定都读这里。
+    pub fn config_path(&self) -> Option<&str> {
+        self.config_store.location()
     }
 
     /// 当前生效的 LLM 引擎（每次调用取一次读锁后克隆 `Arc`，开销可忽略）。
@@ -193,7 +202,7 @@ impl Engines {
         if device_id.is_empty() || device_id == "unknown" {
             return global;
         }
-        let Some(config_path) = &self.config_path else {
+        let Some(config_path) = self.config_path() else {
             return global;
         };
         let Some(path) = crate::config::overlay::device_overlay_path(config_path, device_id) else {
@@ -265,10 +274,10 @@ impl Engines {
     /// 读盘解析 `[tts]`，签名变化才重建并替换；失败保持当前引擎并回报原因。
     /// **阻塞调用**（sherpa 重建可能加载模型数秒），调用方须包 `spawn_blocking`。
     pub fn refresh_tts_from_disk(&self) -> Result<(), String> {
-        let Some(path) = self.config_path.clone() else {
+        if self.config_path().is_none() {
             return Ok(()); // 内置默认配置，无可刷新
-        };
-        let fresh = match Config::load(&path) {
+        }
+        let fresh = match self.config_store.load() {
             Ok(c) => c,
             Err(e) => {
                 let msg = format!("读取配置失败（保持当前 TTS 引擎）: {e}");
@@ -291,10 +300,10 @@ impl Engines {
     /// 返回值 = 面向日志/调用方的告警文本（空 = 一切正常）。
     /// **阻塞调用**（sherpa 重建可能加载模型数秒），调用方须包 `spawn_blocking`。
     pub fn refresh_from_disk(&self) -> Vec<String> {
-        let Some(path) = self.config_path.clone() else {
+        if self.config_path().is_none() {
             return Vec::new(); // 内置默认配置，无可刷新
-        };
-        let fresh = match Config::load(&path) {
+        }
+        let fresh = match self.config_store.load() {
             Ok(c) => c,
             Err(e) => {
                 let msg = format!("读取配置失败（保持当前引擎）: {e}");
