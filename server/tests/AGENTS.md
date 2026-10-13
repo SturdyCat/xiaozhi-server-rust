@@ -34,3 +34,37 @@ cargo test --features sherpa      # 真实引擎路径单测（需 libopus / 模
 
 > 本机 cargo 不在 PATH 时：`export PATH="$HOME/.cargo/bin:$PATH"`；
 > 镜像 404 时追加 `--config 'source.ustc.registry="sparse+https://mirrors.ustc.edu.cn/crates.io-index/"'`。
+
+
+---
+
+## 服务端测试与回归
+
+> 本文为当前功能使用说明；实现细节以邻近源码、配置样例与测试为准。
+
+### 8. 测试与回归
+
+#### 单元自测（Rust）
+
+协议/音频/配置/插件/记忆/overlay/preset 各层均含 `#[cfg(test)]` 用例（二进制版本往返、密钥护栏与部分更新语义、overlay 白名单拒止、预设落盘往返、registry 护栏、VAD/ASR 桩等，全量 468+ 例）：
+
+```bash
+cd server && ~/.cargo/bin/cargo test
+```
+
+#### 协议联调（Python 测试台客户端）
+
+`tests/mock_client.py` 是**零第三方依赖**的 WebSocket 客户端（纯标准库实现 RFC 6455 帧），场景化回归：握手协商、`asr_test`/`tts_test`/`llm_test`、`abort` 打断后连接存活探针（fatal）、唤醒问候（容忍型）、多轮对话：
+
+```bash
+cd server && cargo run --release --features sherpa -- --config config.toml &
+python3 server/tests/mock_client.py        # 逐场景 PASS/WARNING，末尾汇总
+```
+
+可用参数：`--host 127.0.0.1 --port 8000 --token <bearer>`（`expected_token` 非空时传 `--token`）。
+
+---
+
+## 上级入口
+
+[上级 AGENTS](<../AGENTS.md>)

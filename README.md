@@ -2,7 +2,7 @@
 
 **小智（xiaozhi-esp32）语音服务端，纯 Rust 单二进制**：本地 ASR/TTS 离线推理（SenseVoice / Kokoro INT8）、Silero VAD 池化、OpenAI 兼容 LLM，WebSocket 协议严格对齐固件（v1/v2/v3 二进制 Opus 帧）。内置 Kuikly 多端管理台（Web 直开 + macOS 原生测试台）。为 N5105 级低功耗主机的 Docker 部署而生。
 
-> 架构与设计详见 [docs/architecture.md](./docs/architecture.md)；功能与配置详解见 [docs/features.md](./docs/features.md)。
+> 架构与设计详见 [docs/architecture.md](<docs/architecture.md>)；功能、配置与维护入口见 [docs/README.md](<docs/README.md>)。
 
 ---
 
@@ -36,11 +36,11 @@ curl http://127.0.0.1:8000/api/health              # => {"status":"ok",...}
 
 | 文档 | 内容 |
 |---|---|
-| [`docs/architecture.md`](./docs/architecture.md) | 模块划分、会话流水线、协议设计、部署架构与扩展指引 |
-| [`docs/features.md`](./docs/features.md) | 功能与配置详解、预设/overlay 落盘布局、HTTP API 一览、OTA 托管、测试台构建、测试回归 |
-| [`server/config.example.toml`](./server/config.example.toml) | 全部配置字段的行内注释（权威） |
-| [`docs/overall-implementation-plan.md`](./docs/overall-implementation-plan.md) | 路线图与交付状态 |
-| [`docs/p1-features-prd.md`](./docs/p1-features-prd.md) | 本期功能需求与验收标准 |
+| [`docs/architecture.md`](<docs/architecture.md>) | 模块划分、会话流水线、协议设计、部署架构与扩展指引 |
+| [`docs/README.md`](<docs/README.md>) | 文档索引：功能、配置、协议、管理台与模块维护入口 |
+| [`server/config.example.toml`](<server/config.example.toml>) | 全部配置字段的行内注释（权威） |
+| [`docs/overall-implementation-plan.md`](<docs/overall-implementation-plan.md>) | 路线图与交付状态 |
+| [`docs/p1-features-prd.md`](<docs/p1-features-prd.md>) | 本期功能需求与验收标准 |
 
 ---
 
@@ -73,4 +73,4 @@ curl http://127.0.0.1:8000/api/health              # => {"status":"ok",...}
 
 ## 许可证
 
-MIT（见 [`LICENSE`](./LICENSE)）。
+MIT（见 [`LICENSE`](<LICENSE>)）。

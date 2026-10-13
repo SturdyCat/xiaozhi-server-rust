@@ -174,7 +174,7 @@ ESP 类设备是受限端（MCU、opus 固定 60ms 帧、带宽有限），serve
   本节的 LLM 闭环在**独立 task** 里跑，届时按上面的 `pending_mcp: HashMap<id, oneshot>` 接入。
 - ✅ 第一个真实用例：指令闸门「退下」→ 告别语后 `tools/call` 调 `self.audio_listener.stop`
   （固件 `AddUserOnlyTool`），让设备**自己**结束聆听——音频通道保留、下次唤醒不重连；
-  设备不支持 / 未刷该工具 / 超时一律降级为断开本次会话（见 `agents.md` §5.2f）。
+  设备不支持 / 未刷该工具 / 超时一律降级为断开本次会话（指令闸门与降级路径见[会话维护](<../server/src/app/session/AGENTS.md>)；原 `agents.md` §5.2f 已随文档重组移除）。
 - ✅ **能力发现已落地**（2026-10-11，路线 A 的第一块可见能力）：会话开始时 `initialize` +
   `tools/list`（`withUserTools: true` 拉全量，靠 `annotations.audience` 标 `user_only`）→
   落 `app/mcp/registry.rs`（按 `device_id`，64 台上界）→ `GET /api/mcp/tools` →
