@@ -8,6 +8,8 @@
 - ASR 裸 acquire，不受上一轮 stale abort 影响；TTS acquire 感知 abort。缓存命中不过推理闸门；AIUI 云闭环、音色探测和模型热重建不混进本地闸门。
 - [LLM producer](<producer.rs>)与[分句器](<../splitter.rs>)旁挂 watchdog，LLM 静默时也能 flush 残句；不能把定时逻辑移回只在 token 到达时执行的回调。退出前先查 done/abort/通道关闭。
 - 阶段延迟由[事件记录器](<../events.rs>) first-only 标记，使用单调钟；[观测出口](<observe.rs>)统一发事件，[metrics](<../metrics.rs>)独立聚合，接口只增不改。
+- **轮次可归因**：`TurnTrace::new` 分配进程内唯一的 `turn_id`（一个 trace = 一轮），随事件负载与 `tracing` 的 `turn=` 字段流转；`grep turn=N` 能捞出整轮日志行，最后一行是分段摘要。首 token / 首句日志的判据取 `mark_*` 的返回值（是否首次写入），不要另设原子标志——那会与 first-only 语义漂移。`session_id` 在轮次内日志里不能丢：排查通常先按会话过滤再看轮次。
+- **文件规模**：[reply.rs](<reply.rs>)已到 600 行上限（§5.10），后续**观测类代码落[observe.rs](<observe.rs>)**（事件出口、轮次日志、id 取值口径都在那里），不要再往 reply.rs 加日志或分支。要挪现有的 `log_downlink` 等纯观测函数时，与下一个功能改动同批次做，别为结构整洁单独动一次。
 
 ## 指令、MCP 与唤醒
 

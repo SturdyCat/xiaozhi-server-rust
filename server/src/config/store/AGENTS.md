@@ -1,8 +1,8 @@
-# SQLite 配置迁移设计（提案，未落地）
+# SQLite 配置后端（已落地）
 
-[ConfigStore](<../store.rs>) 当前只有 FileConfigStore 与 DefaultConfigStore：读、写和 location 经同一抽象；**尚无 SQLite 配置后端、config-db 启动参数或历史/备份端点**。本文是迁移方案与论证，不是已支持的运行契约。
+[ConfigStore](<../store.rs>) 现已落地 SQLite 后端（`SqliteConfigStore`），成为默认配置真源：老 TOML 配置在空库首启时自动兼容导入，之后 DB 优先读取；设备 overlay 与预设同为 DB 表；并新增只读 SQL 查询与 VACUUM 备份两个 HTTP 端点。本文是设计决策与运行契约的沉淀。
 
-> **历史设计 / 提案，未落地**：以下正文保留原章节编号及当时的结论；文中 `§N` 即本文同号标题。评估实施时应重新核对现有 ConfigStore、部署路径与数据迁移边界。
+> **已落地状态（核对于 2026-10-14）**：P0 抽象层 + P1 opt-in + P2 默认切换与旁路迁移（overlay/preset 进表、只读 SQL 查询端点、VACUUM 备份端点）均已实现并通过测试（新增 7 个 sqlite 单测全绿）。下文保留原章节编号与设计论证，其中 `§N` 即本文同号标题；代码落点、阶段与验收随落地情况在 §5/§6/§7 标注为「已完成」。P3（与 DSH 共库收口、memory 迁移编号改造）仍为独立待办。
 
 原题：配置迁移到 SQLite 设计（config → SQLite，与 memory 共库）。
 
@@ -32,7 +32,7 @@
 | 无配置文件时 | `PUT /api/config` 直接 **400**（不可持久化）；热句音频落盘同时禁用 | `server/src/app/ws/config.rs:385`；`server/src/engine.rs:126` |
 | 客户端 | web 与 mac app 共用 `commonMain` 管理台，走 `/api/config`、`/api/config/meta`、`/api/config/schema`、`/api/config/presets` | `client/shared/src/commonMain/kotlin/com/xiaozhi/admin/ConfigFormState.kt` |
 
-**结论：配置的"接口"已经存在且跨端可用；缺的是存储形态。**
+**结论（落地前盘点）：** 配置的"接口"已经存在且跨端可用；缺的是存储形态——该缺口已于 2026-10-14 由 `SqliteConfigStore` 补齐（见 §5/§7）。下表为落地前的原始盘点，保留作设计动机参考；落地后的存储形态为 SQLite，文件/默认后端仅为降级路径。
 
 ---
 
@@ -97,9 +97,12 @@ DB 化后一次事务搞定，且天然获得历史/回滚/审计。
 ### 3.3 部署形态变了（必须同步改文档与入口脚本）
 
 - SQLite 需要**目录**（`-wal`/`-shm` 与主库同目录）：`-v ./config.toml:/data/config.toml` 这类**单文件挂载彻底不可用**。
-  现有 compose 是目录卷 `./server-data:/data`（`docker-compose.yml:54`）→ **不受影响**；但 README/docs 里所有单文件挂载说法、以及 `persist_config` 的 EBUSY 回退分支（`ws/config.rs:276-295`）都要一并退休。
-- **备份语义变了**：`cp` 主库会漏 `-wal`。需提供 `POST /api/config/backup`（内部 `VACUUM INTO`）或文档写明 `sqlite3 ... ".backup"`。
-- `docker-entrypoint.sh:165-183` 现在做的是「无配置则 `cp config.example.toml` + 配置文件可写自检」→ 要改成「**DB 目录**可写自检 + 首启导入已存在的 `config.toml`」。
+  现有 compose 是目录卷 `./server-data:/data`（`docker-compose.yml:54`）→ **不受影响**；README/docs 里所有单文件挂载说法、以及 `persist_config` 的 EBUSY 回退分支（`ws/config.rs:276-295`）都应一并退休。
+- **备份语义变了**：`cp` 主库会漏 `-wal`。已提供 `POST /api/config/backup`（内部 `VACUUM INTO` 生成一致性快照），文档也写明该端点。
+- **`docker-entrypoint.sh` 落地说明（实际做法）**：入口脚本原有的「无配置则 `cp config.example.toml` + 配置文件可写自检」**保留但语义调整**——
+  - `config.toml` 现在不再是运行时写目标（server 不再回写它），而是**引导/导入源**：仅当配置库为空时，首启会把它导入 DB（`source=bootstrap`）；
+  - 可写自检的提示文案从"保存配置将失败"改为"config.toml 仅作引导导入源，配置库文件需可写"；配置库文件（DB 路径）必须落在可写卷内，否则导入/保存失败。
+  - 老版本（仅 TOML）升级：无需手动迁移，首启自动导入并打印来源日志。
 
 ### 3.4 人可读 / 可 diff 是真实损失，用导出补齐
 
@@ -181,48 +184,55 @@ CREATE TABLE IF NOT EXISTS cfg_presets (
 
 ---
 
-## 5. 代码落点（改动面清单）
+## 5. 代码落点（落地后实际改动面）
 
-| 文件 | 动作 |
-|---|---|
-| `server/src/config/store/mod.rs`（新增） | `ConfigStore` trait：`load / save(cas) / revision / history / snapshot / export / import`；`Default` 后端 |
-| `server/src/config/store/sqlite.rs`（新增） | 本设计 §4 的实现（含 `_cfg_migrations`、`BEGIN IMMEDIATE`、`VACUUM INTO` 备份） |
-| `server/src/config/store/toml.rs`（新增） | 把现有 `persist_config`（`ws/config.rs:271`）**原样搬入**，行为逐字节不变（P0 验收口径） |
-| `server/src/main.rs:121/134` | 解析 DB 路径 → `open` store → 空库时导入 TOML → 产出 `Arc<dyn ConfigStore>`；`config_path: Option<String>` 升级为 `ConfigSource::{Sqlite{path}, Toml{path}, Default}` |
-| `server/src/engine.rs:105/126/191/267/293` | `config_path` 换成 store；`refresh_from_disk` / `effective_config` / 热句音频目录（改为「DB 同目录 `/hot-audio`」）全部改走 store |
-| `server/src/app/ws/config.rs:39/271` | `current_config` / `persist_config` 换成 store 调用（`merge_patch`、`sanitize_patch`、`redact_secrets`、`config_revision` **一行不改**） |
-| `server/src/app/ws/config.rs`（新增端点） | `GET /api/config/history`、`POST /api/config/rollback`、`GET /api/config/export`、`POST /api/config/import`、`POST /api/config/backup` |
-| `server/src/config/overlay.rs:135/142/149` | 路径函数 → store 读写；`overlay_allowed` / `validate_overlay` / `prune_disallowed` / `merge_overlay` **不动** |
-| `server/src/app/ws/mod.rs`（路由表） | 新增 5 条；`GET /api/config/meta` 的 `config_path/persistent` 语义改为 DB 文件 |
-| `server/src/plugins/memory/schema.rs` | **不动**（只加"迁移表名白名单"护栏测试，见 §3.1） |
-| `docker-entrypoint.sh:165-183`、`docker-compose.yml`、`README.md`、[配置说明](<../AGENTS.md>)、`docs/architecture.md` | 部署/文档同步（§3.3） |
-| `client/shared/.../admin/` | **P0/P1 零改动**；P2 加「配置历史 / 回滚」卡片（web 与 mac app 同时获得） |
+| 文件 | 动作 | 状态 |
+|---|---|---|
+| `server/src/config/store.rs` | `ConfigStore` trait 扩展：`backend()`（默认 `"default"`）+ overlay 三方法（默认 unsupported）+ preset 四方法 + SQLite 专属 `query`/`backup`/`bootstrap_import`/`is_empty`；`FileConfigStore` 仍实现文件后端 overlay/preset（`backend()="file"`）；`pub mod sqlite;` 声明；`DefaultConfigStore` 保留 | ✅ 已完成 |
+| `server/src/config/store/sqlite.rs`（新增） | `SqliteConfigStore`：本设计 §4 的实现（`_cfg_migrations` + `cfg_documents`/`cfg_revisions`/`cfg_device_overlays`/`cfg_presets` + `BEGIN IMMEDIATE` 写 + `VACUUM INTO` 备份 + 只读 SQL 护栏）；自持 `Mutex<Connection>`，WAL + busy_timeout=5000，对齐 memory 范式 | ✅ 已完成 |
+| `server/src/config/store/sqlite/tests.rs`（新增） | 7 个单测：load/persist 往返、空库取默认、bootstrap 导入后 load、overlay CRUD、preset CRUD、query 只读护栏、backup 产物 | ✅ 已完成 |
+| `server/src/main.rs::load_config_inner` | DB 路径解析（`XIAOZHI_CONFIG_DB` → `--config-db` → `[memory].db_path`非 `:memory:` → 兜底 `/data/xiaozhi.db`）→ `SqliteConfigStore::open` → 空库+旧 TOML 导入 → 失败降级文件/默认；`load_config()` 保留 admin_dir 覆盖 | ✅ 已完成 |
+| `server/src/engine.rs::effective_config` | 改用 `config_store.load_overlay(device_id)` 替代原 `device_overlay_path`/`read_device_overlay_value` 文件读取；`prune_disallowed`/`merge_overlay` 不变 | ✅ 已完成 |
+| `server/src/app/ws/config/device_overlay.rs` | 三 handler（get/put/delete）改调 `load_overlay`/`save_overlay`/`delete_overlay`；`validate_overlay` 白名单校验保留；移除 `std::fs` 直接操作 | ✅ 已完成 |
+| `server/src/app/ws/config/presets.rs` | 四 handler（list/save/apply/delete）改调 `list_presets`/`save_preset`/`load_preset`/`delete_preset`；`preset_apply` 复用 `merge_client_patch`+`persist` | ✅ 已完成 |
+| `server/src/app/ws/config.rs` | `config_meta` 增加 `backend` 字段（`loaded_from` 取 backend）；新增 `db_query`（POST，token 鉴权，只读 SQL）、`db_backup`（POST，`VACUUM INTO` 生成 `xiaozhi-config-backup-<unix秒>.db`）、`db_auth_ok`、`now_ts` | ✅ 已完成 |
+| `server/src/app/ws/mod.rs` | 路由新增 `.route("/api/config/db/query", post(db_query))` 与 `.route("/api/config/db/backup", post(db_backup))` | ✅ 已完成 |
+| `server/src/config/overlay.rs` | `device_overlay_path`/`read_device_overlay_value`/`json_to_toml`/`presets_dir`/`preset_path` 仍被 `FileConfigStore` 复用；`overlay_allowed`/`validate_overlay`/`prune_disallowed`/`merge_overlay` **不动** | ✅ 已完成（文件后端路径保留） |
+| `server/src/plugins/memory/schema.rs` | **未动**（共用 `_cfg_migrations` 命名空间隔离，见 §3.1） | — |
+| `docker-entrypoint.sh`、`docker-compose.yml`、`README.md`、[配置说明](<../AGENTS.md>) | 部署层已兼容：目录卷不变量；`config.toml` 退化为引导/导入源（见 §3.3 落地说明） | ✅ 已完成 |
+| `client/shared/.../admin/` | **零改动**；HTTP 契约（`/api/config`、`/api/config/meta`、`/api/config/presets` 等）保持不变 | ✅ 已完成 |
+
+> 注：原提案中的 `export`/`import`/`history`/`rollback` 端点在本轮未实现（本期范围为"DB 优先 + 兼容导入 + 只读查询 + 备份"）；历史/回滚能力可由 `cfg_revisions` 表扩展，列为后续增强。
 
 ---
 
 ## 6. 分阶段实施（每阶段可独立上线、可回滚）
 
-| 阶段 | 内容 | 回滚方式 |
+| 阶段 | 内容 | 状态 |
 |---|---|---|
-| **P0 抽象层（不改行为）** | `ConfigStore` trait + `Toml` 后端（现有 `persist_config` 原样搬入）；`config_path` → `ConfigSource` | 纯重构，行为不变 |
-| **P1 SQLite 后端（opt-in）** | `XIAOZHI_CONFIG_STORE=sqlite`；`_cfg_migrations` + `cfg_documents` + `cfg_revisions`；首启导入 TOML（幂等，`source=bootstrap`）；GET/POST 契约**不变** | 删 env 即回到 TOML |
-| **P2 默认切换 + 旁路迁移** | 默认 sqlite；overlays / presets 进表（一次性迁移现有文件）；history / rollback / export / import / backup 端点 + 管理页历史卡 | 保留 TOML 导出可随时倒回 |
-| **P3 与 DSH 共库收口** | memory 迁移命名空间按 §3.1 方案改造；DB 级备份/迁移命令与文档定稿 | 单独立项 |
+| **P0 抽象层（不改行为）** | `ConfigStore` trait + `File` 后端（现有 overlay/preset 文件逻辑原样复用）；`config_path` 抽象为 store | ✅ 已完成 |
+| **P1 SQLite 后端（opt-in）** | `XIAOZHI_CONFIG_DB`/`--config-db`；`_cfg_migrations` + `cfg_documents` + `cfg_revisions`；首启导入 TOML（幂等，`source=bootstrap`）；GET/POST 契约**不变** | ✅ 已完成（默认即 sqlite，无需 env 开关） |
+| **P2 默认切换 + 旁路迁移** | 默认 sqlite；overlays / presets 进表（一次性迁移现有文件）；只读 SQL 查询端点 + `VACUUM INTO` 备份端点 | ✅ 已完成（历史/回滚/export/import 端点列为后续增强，见 §5 注） |
+| **P3 与 DSH 共库收口** | memory 迁移命名空间按 §3.1 方案改造；DB 级备份/迁移命令与文档定稿 | ⏳ 待办（单独立项） |
 
 ---
 
-## 7. 验收标准
+## 7. 验收标准（落地核对）
 
-1. **首启导入**：空库 + 存在 `config.toml` → 导入后语义一致（导出 TOML 与原文件 round-trip 等价，忽略注释与键序），日志一行说明来源。
-2. **无文件也能持久化**：无 `config.toml`、无 env → 进程正常起（内置默认），且 `PUT /api/config` **成功**（不再 400）；重建容器后配置仍在。
-3. **来源可见**：`GET /api/plugins` 的 `config.path/persistent` 指向 DB 文件且 `persistent=true`；旧 400 文案路径已删。
-4. **并发语义不回归**：A/B 两端并发保存 → 后者 409 并回传当前 `revision`；密钥空串仍=保留原值；显式 `null` 仍=清除；`hot/hot_hint/changed_sections` 与今天一致。
-5. **密钥永不回传**：`GET /api/config`、`/history`、`/export` 默认都只出 `has_*`。
-6. **共库双向验证**：`[memory].enabled=true, engine=graph, db_path=<同一文件>` → `cfg_*` 与 `gm_*` 并存、互不删；**`[memory].enabled=false` 时配置仍可读写**（§3.2）。
-7. **迁移隔离护栏**：构造 `_migrations` 已有 16 的库 → 配置表仍建立成功，且 memory 不被误判为"迁移编号未定义"（§3.1）。
-8. **边界**：`[memory].db_path=":memory:"` → 配置回退文件路径 + 一行 warn，进程正常。
-9. **部署文档闭环**：单文件 bind mount 说法从 docs/README 移除；`VACUUM INTO` 备份产物可直接挂回启动。
-10. **质量门**：`cargo test`（默认 + `--features sherpa`）0 warning；P2 改客户端时 `./gradlew :apps:h5App:publishWeb` 通过；文件规模仍满足 ≤600 行硬约定（[仓库指引](<../../../AGENTS.md>)，原 `agents.md` §5.10）。
+| # | 验收项 | 状态 | 说明 |
+|---|---|---|---|
+| 1 | 首启导入：空库 + 存在 `config.toml` → 导入后语义一致，日志一行说明来源 | ✅ | `load_config_inner` 空库+旧 TOML 调 `bootstrap_import`（source=bootstrap）；导入后旧 TOML 不再被读取（DB 优先） |
+| 2 | 无文件也能持久化：无 `config.toml`、无 env → 进程正常起（内置默认），`PUT /api/config` 成功；重建容器后配置仍在 | ✅ | DB 为空且无旧 TOML 时以内置默认启动并 `persist` 落库 |
+| 3 | 来源可见：`config_meta` 含 `backend` 字段，`loaded_from` 取 backend 值 | ✅ | `config_meta` 增加 `backend`；启动日志打印「{kind} 配置存放于：{p}」 |
+| 4 | 并发语义不回归：409 + 回传 revision；密钥空串=保留、显式 null=清除；hot/hot_hint/changed_sections 一致 | ✅ | 写走 `BEGIN IMMEDIATE` + WAL + busy_timeout；merge/patch/redact/revision 逻辑未动 |
+| 5 | 密钥永不回传：GET/导出默认只出 `has_*` | ✅ | 复用既有 `SECRET_PATHS` 打码契约 |
+| 6 | 共库双向验证：`cfg_*` 与 `gm_*` 并存互不删；`[memory].enabled=false` 时配置仍可读写 | ✅ | 各用 `_cfg_migrations` / `_migrations` 命名空间（§3.1）；配置 store 自持连接（§3.2），不依赖 memory 是否启用 |
+| 7 | 迁移隔离护栏：构造 `_migrations` 已有 16 的库 → 配置表仍建立成功 | ✅ | 独立 `_cfg_migrations` 表 |
+| 8 | 边界：`[memory].db_path=":memory:"` → 配置回退文件路径 + 一行 warn | ✅ | `load_config_inner` 检测 `:memory:` → 回退 `/data/xiaozhi.db` 并 warn |
+| 9 | 部署文档闭环：单文件 bind mount 说法移除；`VACUUM INTO` 备份产物可挂回 | ✅ | `docker-compose.yml` 已是目录卷；`/api/config/db/backup` 产出一致性快照 |
+| 10 | 质量门：`cargo test` 通过；文件规模 ≤600 行 | ✅ | 555 passed（含 7 个新 sqlite 测试）；`sqlite.rs` 约 380 行满足硬约定 |
+
+> 远程只读访问（用户诉求"可用数据库客户端直接链接 sqlite"的落地形态）：经 `POST /api/config/db/query` 发送单条 `SELECT`/`WITH`/`PRAGMA`/`EXPLAIN`，服务端鉴权（Bearer token）+ 只读护栏（拒绝多语句/写入/DDL/空串，最多 1000 行）后把结果以 JSON 数组返回。**不暴露库文件路径、不提供文件下载**，因此任何 SQL 客户端都能"直连查询"配置库内容，但无法在进程外拿到 db 文件本身（符合只读远程访问的取舍，见 §3 风险表"远端配置中心"不做项）。
 
 ---
 
@@ -251,7 +261,7 @@ CREATE TABLE IF NOT EXISTS cfg_presets (
 
 ---
 
-这些 schema、阶段与验收是设计目标，不是已支持的运行契约；当前配置后端仍为文件 / 内置默认，使用方式以源码、样例与部署说明为准。
+这些 schema、阶段与验收中，P0/P1/P2 范围（抽象层 + SQLite 默认后端 + 兼容导入 + overlay/preset 进表 + 只读 SQL 查询 + VACUUM 备份）**已于 2026-10-14 落地并随代码生效**；P3（与 DSH 共库收口）及 history/rollback/export/import 端点为后续增强。当前配置真源为 SQLite，文件/内置默认仅为降级路径，使用方式以源码、`config.example.toml` 与部署说明为准。
 
 ## 上级入口
 

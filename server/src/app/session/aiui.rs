@@ -26,41 +26,44 @@ impl<'a, T: Transport> Session<'a, T> {
         let session_id = self.session_id.clone();
         for seg in segments {
             let trace = crate::app::events::TurnTrace::new(crate::app::events::ANCHOR_AIUI);
+            let turn = trace.turn_id();
             let pcm_i16 = f32_to_i16_16k(&seg, self.params.uplink_sr);
             let Some(aiui) = self.aiui.as_ref().map(Arc::clone) else {
                 continue;
             };
+            tracing::debug!(turn, "session {session_id} AIUI 轮次开始（锚点 aiui）");
             let t0 = std::time::Instant::now();
             let res = blocking_result(move || {
                 let mut g = aiui.lock().unwrap_or_else(|e| e.into_inner());
                 g.turn(&pcm_i16)
             })
             .await;
-            let turn = match res {
+            let turn_res = match res {
                 Ok(t) => t,
                 Err(e) => {
-                    tracing::warn!("session {session_id} AIUI 轮次失败: {e}");
+                    tracing::warn!(turn, "session {session_id} AIUI 轮次失败: {e}");
                     continue;
                 }
             };
-            if turn.stt.trim().is_empty() {
+            if turn_res.stt.trim().is_empty() {
                 continue; // 静音轮（云端 Silence 事件），同空识别结果处理
             }
             tracing::info!(
+                turn,
                 "session {session_id} AIUI 轮次完成：耗时 {}ms（识别 {} 字 / 回复 {} 字 / 音频 {} 字节）",
                 t0.elapsed().as_millis(),
-                turn.stt.chars().count(),
-                turn.reply.chars().count(),
-                turn.audio.len()
+                turn_res.stt.chars().count(),
+                turn_res.reply.chars().count(),
+                turn_res.audio.len()
             );
-            // 文本侧优先级管线（P0-4）：与级联流水线共用统一入口（记录 + 指令闸门）。
-            // 识别文本要等云端闭环回来才可见（本地没有 ASR 可拦），因此命中指令时只能
-            // "丢弃本轮云端回复"—但会话照样按指令断开（语义与级联流水线一致）。
-            match self.decide_user_text(&turn.stt).await {
-                UtteranceDecision::CommandStop => return,
+            // 文本侧优先级管线（P0-4）：与级联流水线共用统一入口（记录 + 规则 NLU）。
+            // 识别文本要等云端闭环回来才可见（本地没有 ASR 可拦），因此命中意图时只能
+            // "丢弃本轮云端回复"—但会话照样按意图处置（语义与级联流水线一致）。
+            match self.decide_user_text(&turn_res.stt, turn).await {
+                UtteranceDecision::NluStop => return,
                 UtteranceDecision::Respond => {
-                    if let Err(e) = self.aiui_downlink(&turn, &trace).await {
-                        tracing::warn!("session {session_id} AIUI 下行失败: {e}");
+                    if let Err(e) = self.aiui_downlink(&turn_res, &trace).await {
+                        tracing::warn!(turn, "session {session_id} AIUI 下行失败: {e}");
                     }
                 }
             }
@@ -151,6 +154,7 @@ impl<'a, T: Transport> Session<'a, T> {
         // 用"现在"记会失真成整轮耗时）；本轮结束 emit（interrupted 与级联同口径）。
         trace.mark_first_audio_at(first_frame_at);
         self.emit_turn_latency(trace, drain.interrupted);
+        self.log_turn_end(trace, drain.interrupted);
         if drain.tts_started {
             send_tts_state(self.transport, &self.session_id, "stop").await?;
         }

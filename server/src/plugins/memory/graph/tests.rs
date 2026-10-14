@@ -66,6 +66,7 @@ impl LlmProvider for FakeExtractor {
                 text,
                 tool_calls: Vec::new(),
                 usage: None,
+                cancelled: false,
             })
         })
     }

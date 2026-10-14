@@ -100,7 +100,8 @@ pub fn probe(cfg: &Config, cap: Capability) -> Option<ProbeReport> {
         | Capability::Firmware
         | Capability::Soul
         | Capability::Command
-        | Capability::Wake => None,
+        | Capability::Wake
+        | Capability::Nlu => None,
     }
 }
 

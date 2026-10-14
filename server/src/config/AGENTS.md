@@ -2,11 +2,12 @@
 
 ## 当前实现（以当前工作树为准）
 
-[入口](<../main.rs>)加载 TOML：`XIAOZHI_CONFIG` → `--config` → 内置默认；上一级读取失败继续回退，配置回退不意味着缺模型也能启动真实引擎。XIAOZHI_ADMIN_DIR 只覆盖本次运行，不写回文件，GET 配置仍显示文件原值。
+[入口](<../main.rs>)装配配置存储后端：`XIAOZHI_CONFIG`/`--config` 仅用于**兼容导入旧 TOML** 与读取 `[memory].db_path`；**真源是 SQLite 配置库**（`SqliteConfigStore`，见 [store](<store.rs>)），DB 路径解析优先级：`XIAOZHI_CONFIG_DB` → `--config-db` → `[memory].db_path` → `/data/xiaozhi.db`。空库且有旧 TOML 时由 `load_config_inner` **兼容导入**（`source=bootstrap`），导入后 DB 优先、旧 TOML 不再被读取。SQLite 打开失败则降级到文件/默认后端（保证进程总能起来）。XIAOZHI_ADMIN_DIR 只覆盖本次运行，不写回，GET 配置仍显示原值。
 
-[ConfigStore](<store.rs>)现有 FileConfigStore 与 DefaultConfigStore：读、写和 location 经同一抽象。**尚无 SQLite 配置后端、config-db 启动参数或历史/备份端点**；SQLite 方案见[迁移设计](<store/AGENTS.md>)，不能把提案写成现状。
+[ConfigStore](<store.rs>)现有 `SqliteConfigStore`（默认真源）、`FileConfigStore`（降级）与 `DefaultConfigStore`：读、写、overlay、预设、location 经同一抽象。**远端访问**：`POST /api/config/db/query` 提供只读 SQL 查询（用户可用数据库客户端形态远程查库），`POST /api/config/db/backup` 提供 `VACUUM INTO` 一致性备份。SQLite 迁移设计见[迁移设计](<store/AGENTS.md>)，**已于 2026-10-14 落地 P1 + 主配置/overlay/预设全进库**。
 
-- 文件后端实时读盘；解析失败是否回退由调用方决定。location=None 表示没有外部来源，配置保存返回 400，热句音频禁用磁盘持久化。
+- SQLite 后端：`cfg_documents`（整份 Config blob）+ `cfg_device_overlays` + `cfg_presets` + `cfg_revisions`（历史/回滚）。`location()` = DB 文件路径，用于挂载卷持久化判定与 hot-audio 落点派生。
+- 文件后端实时读盘（仅降级路径）；解析失败是否回退由调用方决定。location=None 表示没有外部来源，配置保存返回 400，热句音频禁用磁盘持久化。
 - TOML 先 normalize 再写同目录临时文件并 rename；单文件 bind mount 不能原子替换时回退原地写，风险与告警保留。生产推荐可写目录挂载。
 - 预设、overlay、hot-audio 跟配置来源目录派生；不要随意固定到容器层，容器重建会丢数据。memory 的实际路径以其配置为准，不假定所有路径必然同目录。
 

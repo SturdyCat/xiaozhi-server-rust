@@ -16,6 +16,15 @@
 //! 现在三层超时齐备（建连 / 整请求兜底 / **流空闲**），且所有错误都以
 //! [`LlmFailure`] 为根错误抛出——调用方按**分类**决定重试与降级，
 //! 不再需要解析错误字符串（`retry.rs` 的装饰器就靠这个）。
+//!
+//! ## 取消契约（本模块两条路径的共同纪律）
+//!
+//! `on_event` 返回 `false`（设备 abort 打断 / 承载断开）后：**停止读流、丢弃已累积的
+//! `tool_calls`、`cancelled = true`、不发 `Done`**，但**照常返回 `usage` 与部分文本**。
+//! 工具调用的下游是 MCP `tools/call`（控制音量、播放音乐……），属**不可回滚副作用**——
+//! 用户已经闭嘴，设备就不该再执行上一轮的指令。详见 [`LlmTurnResult`] 的类型文档。
+//!
+//! 取消**不是故障**：不归入 [`LlmFailure`]、不触发重试（重试一条被用户放弃的请求＝白烧 token）。
 
 use crate::app::sse::SseParser;
 use anyhow::Result;
@@ -164,10 +173,11 @@ impl LlmClient {
     /// 流式对话（Responses 协议）：逐块回传 [`LlmEvent`]，结束返回汇总 [`LlmTurnResult`]。
     ///
     /// - `on_event` 回调返回 `false` 表示**取消**（如设备 abort 打断）：立即停止读流，
-    ///   返回已累积的部分文本（不视为错误）。
+    ///   返回已累积的部分文本（不视为错误）。取消时的 `tool_calls` **一律丢弃**、
+    ///   `cancelled = true`（完整契约见 [`LlmTurnResult`] 的类型文档）。
     /// - `tools`：可选工具规格（来自设备 `features.mcp` 等）。非空时写入扁平 `tools[]`。
     /// - 按 `[llm].stream` 发 `stream:true` 并解析 SSE；若响应非 `text/event-stream` 或配置关闭，
-    ///   自动回退为整段解析（非 SSE 路径）。
+    ///   自动回退为整段解析（非 SSE 路径）——**两条路径遵守同一份取消契约**。
     async fn chat_stream_inner<'a>(
         &'a self,
         history: &'a [(String, String)],
@@ -252,14 +262,37 @@ impl LlmClient {
                 // 200 但什么都没有：归类为可重试的 EmptyResponse（而不是"成功但没说话"）
                 return Err(anyhow::Error::new(LlmFailure::EmptyResponse));
             }
-            if !text.is_empty() {
-                on_event(LlmEvent::Text(text.clone()));
+            // 取消契约与 SSE 路径**完全一致**（此前本路径直接丢弃 `on_event` 的返回值，
+            // 打断后照样把整段工具调用交出去——两条路径语义分裂正是缺陷的根因）：
+            // 任一事件被调用方拒绝即整轮取消，工具调用随之丢弃。
+            let mut cancelled = false;
+            if !text.is_empty() && !on_event(LlmEvent::Text(text.clone())) {
+                cancelled = true;
             }
-            for c in &calls {
-                on_event(LlmEvent::ToolCall(c.clone()));
+            if !cancelled {
+                for c in &calls {
+                    if !on_event(LlmEvent::ToolCall(c.clone())) {
+                        cancelled = true;
+                        break;
+                    }
+                }
+            }
+            if cancelled {
+                tracing::info!("LLM 非流式响应被调用方取消（丢弃 {} 个工具调用）", calls.len());
+                return Ok(LlmTurnResult {
+                    text,
+                    tool_calls: Vec::new(),
+                    usage,
+                    cancelled: true,
+                });
             }
             on_event(LlmEvent::Done);
-            return Ok(LlmTurnResult { text, tool_calls: calls, usage });
+            return Ok(LlmTurnResult {
+                text,
+                tool_calls: calls,
+                usage,
+                cancelled: false,
+            });
         }
 
         // SSE 流式：逐块喂入解析器，即时回传文本增量；回调返回 false 即取消（停止读流）。
@@ -294,26 +327,45 @@ impl LlmClient {
             }
         }
         let out = parser.finish();
-        if let Some(err) = out.error {
-            return Err(anyhow::Error::new(LlmFailure::Protocol(format!(
-                "流式响应错误: {err}"
-            ))));
-        }
         let usage = out.usage.as_ref().map(TokenUsage::from_responses_usage);
-        // 空回复（既无文本也无工具调用，且非取消）：归类为可重试失败，绝不静默成功
-        if !cancelled && out.text.trim().is_empty() && out.calls.is_empty() {
+        // ⚠️ **取消优先于错误**：触发取消的那一块里可能同时带着 `error` 事件（网络抖动 +
+        //   用户打断常常同时发生）。此时若先报`Protocol`，会话会把它当成"上游故障"——
+        //   走错误提示/兜底话术路径——而用户明明只是自己闭了嘴。打断不是故障。
+        //   错误信息不丢，降级为 warn 后按取消语义返回。
+        if let Some(err) = out.error {
+            if cancelled {
+                tracing::warn!("LLM 流被取消，且同一块内带有流式错误（按取消处理，不作失败）: {err}");
+            } else {
+                return Err(anyhow::Error::new(LlmFailure::Protocol(format!(
+                    "流式响应错误: {err}"
+                ))));
+            }
+        }
+        if cancelled {
+            // 取消契约（见 `LlmTurnResult`）：丢弃累积的工具调用——它们的下游是 MCP
+            // `tools/call` 这类**不可回滚的设备副作用**，用户已停止说话就不该再执行。
+            // usage / text 照常返回（钱花了、观测要用），但 `cancelled` 让下游能区分。
+            // 不发 `ToolCall`/`Done`：本分支已提前返回，不会走到下面那两处交付。
+            return Ok(LlmTurnResult {
+                text: out.text,
+                tool_calls: Vec::new(),
+                usage,
+                cancelled: true,
+            });
+        }
+        // 空回复（既无文本也无工具调用）：归类为可重试失败，绝不静默成功
+        if out.text.trim().is_empty() && out.calls.is_empty() {
             return Err(anyhow::Error::new(LlmFailure::EmptyResponse));
         }
-        if !cancelled {
-            for c in &out.calls {
-                on_event(LlmEvent::ToolCall(c.clone()));
-            }
-            on_event(LlmEvent::Done);
+        for c in &out.calls {
+            on_event(LlmEvent::ToolCall(c.clone()));
         }
+        on_event(LlmEvent::Done);
         Ok(LlmTurnResult {
             text: out.text,
             tool_calls: out.calls,
             usage,
+            cancelled: false,
         })
     }
 }

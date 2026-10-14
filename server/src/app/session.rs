@@ -1,9 +1,10 @@
 //! 每连接会话状态机与语音流水线。
 //!
 //! 两条路径（由 hello 的 `test` 参数区分）：
-//! - ESP 设备（正式流程）：上行 Opus → 解码 → VAD → ASR → stt → LLM → tts → 下行 Opus。
-//!   其中 ASR 与 LLM **之间**还有一道可选的指令闸门（`[command]`，见 [`command`] 子模块）：
-//!   识别到「退下/闭嘴/关闭」这类指令即说一句告别语（跳过 LLM），随后
+//! - ESP 设备（正式流程）：上行 Opus → 解码 → VAD → ASR → stt → NLU → LLM → tts → 下行 Opus。
+//!   其中 ASR 与 LLM **之间**有一道可选的**规则 NLU** 层（`[nlu]`，见 [`nlu`] 子模块；它"含有"
+//!   `[command]` 的 `end_session` 高危意图）：命中已知意图即本地执行、跳过 LLM；
+//!   **未知意图才放行给 LLM**。内置 `end_session`（退下/闭嘴/关闭）识别到即说一句告别语，随后
 //!   **通过 MCP 通知设备「结束聆听」**（见 [`mcp`] 子模块）——设备回到待唤醒、音频通道保留，
 //!   下次唤醒复用连接不重连；只有在设备不支持 MCP 或调用失败时才降级为断开本次会话。
 //! - macApp 测试台（hello 带 `test:true`）：`asr_test`/`tts_test`/`llm_test` 三种
@@ -24,14 +25,14 @@ use std::sync::{Arc, Mutex};
 
 use crate::app::audio::opus::OpusFrameDecoder;
 use crate::app::downlink::DownlinkPacer;
-use crate::app::events::TurnTrace;
+use crate::app::events::{TurnId, TurnTrace};
 use crate::app::protocol::{unwrap_uplink, BinVersion, ClientMessage, ServerMessage};
 use crate::app::transport::{IncomingFrame, Transport};
 use crate::config::Config;
 use crate::engine::Engines;
 use crate::plugins::aiui::FullChainEngine;
 use crate::plugins::asr::AsrEngine;
-use crate::plugins::command::CommandGate;
+use crate::plugins::nlu::NluEngine;
 use crate::plugins::wakeup::WakeGreeting;
 
 /// 一条用户话语在进入 LLM 前的决策结果（文本侧管线 P0-4 的 Stop 信号，见
@@ -39,9 +40,9 @@ use crate::plugins::wakeup::WakeGreeting;
 enum UtteranceDecision {
     /// 继续 Stage 3（LLM 流水线 / AIUI 下行）。
     Respond,
-    /// 指令闸门命中：副作用（告别语 + MCP 退下）**已在 Stage 2 内执行完**，
-    /// 外层段循环应终止——本批剩余语音段一并丢弃（用户已要求退下）。
-    CommandStop,
+    /// NLU 命中已知意图：副作用（告别语 + MCP 退下 / 本地指令应答）**已在 Stage 2 内执行完**，
+    /// 外层段循环应终止——本批剩余语音段一并丢弃（用户已要求退下 / 已本地消费）。
+    NluStop,
 }
 
 mod aiui;
@@ -133,9 +134,10 @@ pub struct Session<'a, T: Transport> {
     /// 下行节拍器：按帧长匀速下发（保护 ESP 解码队列，见 `downlink` 模块文档）。
     /// 一次回复内跨句共享时间表（句间无缝）；每轮回复开始时 reset。
     pacer: DownlinkPacer,
-    /// 语音指令闸门（`[command]`）：ASR → LLM 之间的拦截器。
-    /// 会话开始时按配置快照构造一次 = 注册表声明的 `next_session` 语义。
-    commands: CommandGate,
+    /// 规则 NLU 引擎（`[nlu]`，超集 `[command]`）：ASR → LLM 之间的本地意图识别层。
+    /// 命中已知意图即本地执行（不再送 LLM），未知意图才放行。会话开始时按配置快照构造一次 =
+    /// 注册表声明的 `next_session` 语义。
+    nlu: NluEngine,
     /// 指令要求断开本次会话（告别语已下发）：主循环收尾时主动关闭承载。
     close_requested: bool,
     /// 设备 hello 是否声明 `features.mcp`（最新固件硬编码 `true`；极老固件为 `false`）。
@@ -212,7 +214,7 @@ impl<'a, T: Transport> Session<'a, T> {
                 }
             }
         }
-        // 指令闸门命中（[command]）**且 MCP 未能让设备结束聆听**：降级为断开本次会话。
+        // NLU 命中 end_session **且 MCP 未能让设备结束聆听**：降级为断开本次会话。
         // （正常路径下设备已自己退出聆听，`close_requested` 为 false，会话继续留在通道上。）
         if self.close_requested {
             tracing::info!("session {} 按指令降级断开本次会话", self.session_id);
@@ -277,19 +279,24 @@ impl<'a, T: Transport> Session<'a, T> {
     /// 分段延迟（缺口②）：anchor=`inject`（文本到达时刻），无 asr/sentence 之前的
     /// 语音阶段——`asr_end_ms` 为 `None`，LLM 及之后各阶段照常采集。
     async fn handle_inject(&mut self, text: &str) {
+        let trace = TurnTrace::new(crate::app::events::ANCHOR_INJECT);
         tracing::info!(
+            turn = trace.turn_id(),
             "session {} 管理台注入文本（{} 字），走完整管线",
             self.session_id,
             text.chars().count()
         );
-        let trace = TurnTrace::new(crate::app::events::ANCHOR_INJECT);
-        match self.decide_user_text(text).await {
+        match self.decide_user_text(text, trace.turn_id()).await {
             // 副作用（告别语 + MCP 结束聆听 / close_requested 置位）已在闸门内执行完，
             // 主循环下一轮即按 close_requested 收尾——语义与语音触发的指令一致。
-            UtteranceDecision::CommandStop => {}
+            UtteranceDecision::NluStop => {}
             UtteranceDecision::Respond => {
                 if let Err(e) = self.stream_response(text, &trace).await {
-                    tracing::warn!("session {} 注入轮次流水线失败: {e}", self.session_id);
+                    tracing::warn!(
+                        turn = trace.turn_id(),
+                        "session {} 注入轮次流水线失败: {e}",
+                        self.session_id
+                    );
                 }
             }
         }
@@ -330,8 +337,15 @@ impl<'a, T: Transport> Session<'a, T> {
         }
         for seg in segments {
             // 分段延迟（缺口②）：锚点 = speech_end（VAD 切句、即将送 ASR 的时刻，
-            // 与 VAD 回调同 tick，误差微秒级）。
+            // 与 VAD 回调同 tick，误差微秒级）。trace 构造即分配本轮 `turn_id`
+            // （见 `app/events`），此后本轮所有日志与事件都带它。
             let trace = TurnTrace::new(crate::app::events::ANCHOR_SPEECH_END);
+            let turn = trace.turn_id();
+            tracing::debug!(
+                turn,
+                "session {session_id} 轮次开始（锚点 speech_end，{} 样本）",
+                seg.len()
+            );
             let t0 = std::time::Instant::now();
             let user_text = match Self::asr_recognize(
                 self.engines.asr.clone(),
@@ -343,7 +357,7 @@ impl<'a, T: Transport> Session<'a, T> {
             {
                 Ok(t) => t,
                 Err(e) => {
-                    tracing::warn!("ASR 识别失败: {e}");
+                    tracing::warn!(turn, "session {session_id} ASR 识别失败: {e}");
                     continue;
                 }
             };
@@ -352,16 +366,20 @@ impl<'a, T: Transport> Session<'a, T> {
             }
             trace.mark_asr_end();
             tracing::info!(
+                turn,
                 "session {session_id} 识别完成：耗时 {}ms（{} 字）",
                 t0.elapsed().as_millis(),
                 user_text.chars().count()
             );
             // 文本侧优先级管线（P0-4）：记录 → 指令闸门 → LLM（统一入口，见 decide_user_text）
-            match self.decide_user_text(&user_text).await {
-                UtteranceDecision::CommandStop => return, // 本批剩余语音段一并丢弃
+            match self.decide_user_text(&user_text, turn).await {
+                UtteranceDecision::NluStop => return, // 本批剩余语音段一并丢弃
                 UtteranceDecision::Respond => {
                     if let Err(e) = self.stream_response(&user_text, &trace).await {
-                        tracing::warn!("流水处理失败: {e}");
+                        tracing::warn!(
+                            turn,
+                            "session {session_id} 流水处理失败: {e}"
+                        );
                     }
                 }
             }
@@ -377,8 +395,9 @@ impl<'a, T: Transport> Session<'a, T> {
     ///
     /// 1. **记录**（`note_user_turn` + MessageAdded 事件）：优先级最低但**必须先做**——
     ///    被闸掉的话也是真实听到的话，记录不能丢；
-    /// 2. **指令闸门**（`[command]`，最高优先级，先于 LLM）：命中即**先执行副作用**
-    ///    （告别语 + MCP 让设备结束聆听）**再返回 Stop**，一次 LLM 都不调用；
+    /// 2. **规则 NLU**（`[nlu]`，超集 `[command]`，最高优先级，先于 LLM）：命中已知意图即
+    ///    **先执行副作用**（end_session：告别语 + MCP 让设备结束聆听 / 本地指令：应答）
+    ///    **再返回 Stop**，一次 LLM 都不调用；未知意图放行 LLM；
     /// 3. **响应**（调用方执行）：级联走 `stream_response`，AIUI 走 `aiui_downlink`。
     ///
     /// wakeup（`listen state=detect`）是独立消息类型（非 ASR 文本），优先级同样最高，
@@ -386,19 +405,18 @@ impl<'a, T: Transport> Session<'a, T> {
     ///
     /// ⚠️ AIUI 路径此前**缺用户话语记录**（管理页对话记录看不见 AIUI 听到什么），
     /// 统一入口后一并补齐（与级联流水线同一口径）。
-    async fn decide_user_text(&mut self, user_text: &str) -> UtteranceDecision {
+    ///
+    /// `turn_id` 显式传参（不藏字段）：用户轮与其后续助手轮次共享同一个轮次 id，
+    /// 订阅者据此把"用户问了什么"与"这一轮慢在哪一段"拼起来（见
+    /// [`crate::app::events::ServerEvent::MessageAdded`]）。
+    async fn decide_user_text(&mut self, user_text: &str, turn_id: TurnId) -> UtteranceDecision {
         // Stage 1：记录（注册表观测 + 事件总线叠加层，见 observe.rs / events.rs）
         self.note_user_turn(user_text);
-        self.engines.event_bus.emit(crate::app::events::ServerEvent::MessageAdded {
-            session_id: self.session_id.clone(),
-            device_id: self.device_id.clone(),
-            role: "user".to_string(),
-            text: user_text.to_string(),
-            elapsed_ms: None,
-        });
-        // Stage 2：指令闸门（ASR → LLM **之间**）：命中即告别语 + MCP 退下，零 LLM 调用
-        if self.handle_command_gate(user_text).await {
-            return UtteranceDecision::CommandStop;
+        self.emit_message_added(turn_id, "user", user_text, None);
+        // Stage 2：规则 NLU（ASR → LLM **之间**）：命中已知意图即本地执行（end_session 退下 /
+        // 本地指令应答），未知意图放行 LLM——零误判、可解释。
+        if self.handle_nlu_gate(user_text).await {
+            return UtteranceDecision::NluStop;
         }
         UtteranceDecision::Respond
     }

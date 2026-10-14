@@ -192,31 +192,33 @@ impl Engines {
     /// wakeup/command 话术、memory 召回参数），**永不触碰引擎签名**——叠加后各引擎的
     /// `signature_of` 不变，故共享 TTS/LLM/Memory 引擎仍按全局配置构建、不重建。
     ///
-    /// 无 `Device-Id`（unknown）/ 无 overlay 文件 / 内置默认配置 → 直接返回全局快照，
-    /// 与现状完全一致（零成本契约）。读盘失败（坏文件 / 越界字段）防御性回退全局。
+    /// 无 `Device-Id`（unknown）/ 无 overlay / 内置默认配置 → 直接返回全局快照，
+    /// 与现状完全一致（零成本契约）。读 overlay 失败（坏数据 / 越界字段）防御性回退全局。
     ///
     /// ⚠️ 会话开始时算一次存入 `Session.eff_config` 即可；overlay 是会话级生效，
     /// 运行中改 overlay 只对**下一次**会话生效（与全局部分更新同源）。
+    ///
+    /// overlay 存储经 [`crate::config::store::ConfigStore`]：SQLite 后端进 `cfg_device_overlays`
+    /// 表，文件后端落 `overlays/devices/<id>.toml`（两种后端语义一致）。
     pub fn effective_config(&self, device_id: &str) -> Arc<Config> {
         let global = self.host.config();
         if device_id.is_empty() || device_id == "unknown" {
             return global;
         }
-        let Some(config_path) = self.config_path() else {
-            return global;
-        };
-        let Some(path) = crate::config::overlay::device_overlay_path(config_path, device_id) else {
-            return global;
-        };
-        let Some(overlay) = crate::config::overlay::read_device_overlay_value(&path) else {
-            return global;
-        };
-        let mut overlay = overlay;
-        crate::config::overlay::prune_disallowed(&mut overlay);
-        match crate::config::overlay::merge_overlay(&global, &overlay) {
-            Ok(c) => Arc::new(c),
+        match self.config_store.load_overlay(device_id) {
+            Ok(Some(mut overlay)) => {
+                crate::config::overlay::prune_disallowed(&mut overlay);
+                match crate::config::overlay::merge_overlay(&global, &overlay) {
+                    Ok(c) => Arc::new(c),
+                    Err(e) => {
+                        tracing::warn!("合并设备 {device_id} overlay 失败，用全局配置: {e}");
+                        global
+                    }
+                }
+            }
+            Ok(None) => global,
             Err(e) => {
-                tracing::warn!("合并设备 {device_id} overlay 失败，用全局配置: {e}");
+                tracing::warn!("读取设备 {device_id} overlay 失败，用全局配置: {e}");
                 global
             }
         }

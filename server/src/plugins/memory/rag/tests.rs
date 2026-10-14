@@ -30,6 +30,7 @@ impl LlmProvider for FakeOkLlm {
                 text,
                 tool_calls: Vec::new(),
                 usage: None,
+                cancelled: false,
             })
         })
     }

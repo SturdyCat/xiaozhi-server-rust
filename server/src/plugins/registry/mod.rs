@@ -41,6 +41,7 @@ use crate::plugins::tts::TtsEngine;
 mod fields;
 mod fields_command;
 mod fields_context;
+mod fields_nlu;
 mod fields_wake;
 mod impls;
 mod projection;
@@ -93,6 +94,10 @@ pub enum Capability {
     /// 预制话术（默认「我在」），跳过 LLM 与正常回复；成品音频按音色持久化复用。
     /// 同样不是引擎，只按 `[wakeup].enabled` 开关。
     Wake,
+    /// 规则 NLU（`[nlu]`）：ASR → LLM **之间**的本地意图识别层，是 `[command]` 的超集。
+    /// 命中已知意图即本地执行（不再送 LLM），未知意图才放行给 LLM；无共享实例，
+    /// 每会话按配置快照构造 `NluEngine`（与 `[command]`/`[wakeup]` 同为"每会话有状态对象"模式）。
+    Nlu,
 }
 
 /// 全部能力（顺序即 UI 展示顺序）。
@@ -108,6 +113,7 @@ pub const ALL_CAPABILITIES: &[Capability] = &[
     Capability::Soul,
     Capability::Command,
     Capability::Wake,
+    Capability::Nlu,
 ];
 
 impl Capability {
@@ -125,6 +131,7 @@ impl Capability {
             Capability::Soul => "soul",
             Capability::Command => "command",
             Capability::Wake => "wakeup",
+            Capability::Nlu => "nlu",
         }
     }
 
@@ -141,6 +148,7 @@ impl Capability {
             Capability::Soul => "灵魂（人格档案）",
             Capability::Command => "指令闸门（ASR→LLM）",
             Capability::Wake => "唤醒问候语",
+            Capability::Nlu => "规则 NLU（意图+槽位）",
         }
     }
 
@@ -445,6 +453,7 @@ pub static REGISTRY: &[PluginDescriptor] = &[
     SOUL_PROFILE,
     COMMAND_GATE,
     WAKE_GREETING,
+    NLU_RULES,
 ];
 
 /// 按 id 查描述符。
@@ -479,7 +488,7 @@ pub fn configured_engine(cfg: &Config, cap: Capability) -> Option<String> {
         Capability::Llm => Some(cfg.llm.engine_id()),
         Capability::Memory => Some(cfg.memory.engine_id().to_string()),
         Capability::FullChain | Capability::Voices | Capability::Firmware | Capability::Soul
-        | Capability::Command | Capability::Wake => None,
+        | Capability::Command | Capability::Wake | Capability::Nlu => None,
     }
 }
 

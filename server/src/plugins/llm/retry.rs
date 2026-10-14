@@ -9,6 +9,12 @@
 //!    重试会让用户"听两遍前半句"。判据用**是否向调用方交付过文本**，而不是时间。
 //! 3. **只重试瞬时失败**：判定走 [`LlmFailure::retryable`]（具名分类），
 //!    不做字符串匹配——4xx（除 429）重试只是浪费预算。
+//!
+//! ## 取消不是失败
+//!
+//! `on_event` 返回 `false`（设备打断）后，provider 返回 `Ok(LlmTurnResult{ cancelled: true })`，
+//! 走上面的 `Ok` 分支直接透传，**不重试**：用户主动打断不是故障，重试一条他已放弃的
+//! 请求＝白烧 token。这条不变量由"取消不进 `LlmFailure`"保证，而非靠 `retryable()` 排除。
 
 use std::future::Future;
 use std::pin::Pin;
@@ -66,6 +72,11 @@ impl LlmProvider for RetryingLlm {
                     .chat_stream(history, user_text, prompt, tools, wrapper)
                     .await
                 {
+                    // `Ok` 一律直接返回，**包括被取消的轮次**（`cancelled = true`，见
+                    // `LlmTurnResult` 的取消契约）。取消不是故障，因此不可能也不应该重试：
+                    // 重试一条用户已经放弃的请求＝白烧 token + 白等 400ms 起退避。
+                    // 这也是把取消表达为 `Ok{.., cancelled}` 而非 `LlmFailure` 的原因之一——
+                    // 若归入失败分类，就得在 `retryable()` 里显式排除，漏一处就白烧一次。
                     Ok(out) => return Ok(out),
                     Err(e) => {
                         let failure = LlmFailure::classify(&e);

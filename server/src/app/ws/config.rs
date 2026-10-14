@@ -15,10 +15,11 @@
 use std::sync::Arc;
 
 use axum::{
-    extract::{Json, State},
-    http::{header, StatusCode},
+    extract::{Json, Query, State},
+    http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
+use std::collections::HashMap;
 
 use crate::config::Config;
 use crate::engine::Engines;
@@ -464,24 +465,133 @@ fn is_persistent_in(mountinfo: &str, path: &str) -> bool {
     false
 }
 
+/// 配置来源是否持久化判定（复用既有 mountinfo 解析）。
+fn meta_persistent(path: &str) -> bool {
+    config_is_persistent(path)
+}
+
 /// GET /api/config/meta：配置来源元信息（macApp 配置页展示，排查"配置去哪了"）。
 pub(super) async fn config_meta(State(engines): State<Arc<Engines>>) -> Response {
+    let backend = engines.config_store.backend();
     let path = engines.config_path();
     let (loaded_from, persistent) = match path {
-        Some(p) => ("file", Some(config_is_persistent(p))),
+        Some(p) => (backend, Some(meta_persistent(p))),
         None => ("default", None),
     };
     let hint = match (path, persistent) {
-        (None, _) => "以内置默认配置运行，保存不会持久化（用 --config/XIAOZHI_CONFIG 指定文件后重启）",
-        (Some(_), Some(false)) => "⚠️ 配置文件不在挂载卷上：重建容器会丢失（请挂载 ./server-data:/data 并设 XIAOZHI_CONFIG=/data/config.toml）",
+        (None, _) => "以内置默认配置运行，保存不会持久化（用 --config/XIAOZHI_CONFIG 指定配置文件后重启）",
+        (Some(_), Some(false)) => "⚠️ 配置库/文件不在挂载卷上：重建容器会丢失（请挂载 ./server-data:/data）",
         _ => "",
     };
     json_ok(serde_json::json!({
         "config_path": path,
+        "backend": backend,
         "loaded_from": loaded_from,
         "persistent": persistent,
         "hint": hint,
     }))
+}
+
+/// token 鉴权（复用 WS 网关的判定）：`expected_token` 为空则放行，否则要求
+/// `Authorization: Bearer <token>` 或 `?token=<token>`。返回 false = 未通过。
+fn db_auth_ok(engines: &Engines, headers: &HeaderMap, query: &HashMap<String, String>) -> bool {
+    if engines.config.server.expected_token.is_empty() {
+        return true;
+    }
+    crate::app::ws::auth_ok(headers, query, &engines.config.server)
+}
+
+/// `POST /api/config/db/query`：只读 SQL 查询（远程客户端访问 SQLite 的入口）。
+///
+/// 请求体 `{"sql": "SELECT ..."}`；仅允许单条 `SELECT` / `WITH` / `PRAGMA` / `EXPLAIN`，
+/// 返回行数组（每行 = 列名 → 值）。**需要 token 鉴权**（与 WS 同一套）。
+/// 写入/DDL 被拒绝——"远程查库"不等于"远程改库"。
+pub(super) async fn db_query(
+    State(engines): State<Arc<Engines>>,
+    headers: HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    if !db_auth_ok(&engines, &headers, &query) {
+        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+    }
+    let sql = match body.get("sql").and_then(|v| v.as_str()) {
+        Some(s) => s.to_string(),
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                "请求需含 \"sql\" 字段（如 {\"sql\":\"SELECT * FROM cfg_documents\"}）",
+            )
+                .into_response()
+        }
+    };
+    match engines.config_store.query(&sql) {
+        Ok(rows) => json_ok(serde_json::json!({
+            "rows": rows,
+            "count": rows.len(),
+        })),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            json_msg(false, &format!("{e:#}"), None),
+        )
+            .into_response(),
+    }
+}
+
+/// `POST /api/config/db/backup`：把配置库一致性快照备份到服务生成的路径
+///（`VACUUM INTO`，无需单独处理 `-wal`/`-shm`）。返回备份文件路径。
+///
+/// 备份路径固定生成在配置库同目录 `xiaozhi-config-backup-<时间戳>.db`；**需要 token 鉴权**。
+pub(super) async fn db_backup(
+    State(engines): State<Arc<Engines>>,
+    headers: HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
+) -> Response {
+    if !db_auth_ok(&engines, &headers, &query) {
+        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+    }
+    let Some(loc) = engines.config_store.location() else {
+        return (
+            StatusCode::BAD_REQUEST,
+            json_msg(false, "内置默认配置无数据库可备份（请用 SQLite 配置后端）。", None),
+        )
+            .into_response();
+    };
+    let parent = std::path::Path::new(loc)
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let ts = now_ts();
+    let dest = parent.join(format!("xiaozhi-config-backup-{ts}.db"));
+    let dest = match dest.to_str() {
+        Some(d) => d.to_string(),
+        None => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json_msg(false, "生成备份路径失败（路径含非 UTF-8 字符）。", None),
+            )
+                .into_response()
+        }
+    };
+    match engines.config_store.backup(&dest) {
+        Ok(()) => json_ok(serde_json::json!({
+            "backup_path": dest,
+            "note": "可将此文件用 sqlite3 / DBeaver / TablePlus 等数据库客户端直接打开查看或导出。",
+        })),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json_msg(false, &format!("备份数据库失败: {e:#}"), None),
+        )
+            .into_response(),
+    }
+}
+
+/// 备份文件名用的时间戳（Unix 秒，保证唯一且无需额外依赖）。
+fn now_ts() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    secs.to_string()
 }
 
 #[cfg(test)]

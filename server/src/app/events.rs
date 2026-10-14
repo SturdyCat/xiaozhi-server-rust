@@ -18,10 +18,34 @@
 //! 通道容量固定 1024。这是"慢消费者"容忍上限：订阅者处理不过来会丢最旧事件（LAGGED），
 //! 但发布者永不阻塞。P0 仅有调试订阅者，1024 足够；未来大盘若需零丢失，再评估换方案。
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use tokio::sync::broadcast;
+
+/// 轮次标识：进程内自增、从 1 开始的整数。
+///
+/// ## 为什么是 `u64` 而不是 UUID
+///
+/// - **长度**：一轮至少 6 条日志（轮次开始/ASR/首 token/首句/TTS 完成/轮次结束），
+///   UUID 的 36 字符在这些行里是纯格式化开销与纯噪声（本机是 N5105 + `cpus: "3.5"`）；
+/// - **可排序**：自增天然单调，`turn=3` 必早于 `turn=4`，把一轮日志 `sort` 出来时间线自洽；
+/// - **够用**：唯一性范围只需「进程内」，与现有观测面口径完全一致——`/api/metrics`
+///   明写「内存态，进程重启清零」，`registry` / `usage` 同理。把 id 做成跨进程唯一
+///   没有消费者；将来真要跨进程聚合，用 `(session_id, turn_id)` 组合即可
+///   （`session_id` 本身已是 uuid，见 `session/start.rs`）。
+///
+/// 取值从 **1** 起：`0` 留作「无轮次」哨兵，日志里出现 `turn=0` 一眼可辨为异常。
+pub type TurnId = u64;
+
+/// 进程级轮次自增计数器（`Relaxed` 即可：唯一性靠原子 RMW，不参与其他同步关系）。
+static NEXT_TURN_ID: AtomicU64 = AtomicU64::new(1);
+
+/// 分配下一个轮次标识（[`TurnTrace::new`] 的唯一入口，进程内唯一且单调递增）。
+fn next_turn_id() -> TurnId {
+    NEXT_TURN_ID.fetch_add(1, Ordering::Relaxed)
+}
 
 /// 轮次延迟锚点：`speech_end`（VAD 切句）| `inject`（管理台注入文本到达）|
 /// `canned`（兜底/问候/告别语入口）| `aiui`（全链路段落起点）。
@@ -68,14 +92,41 @@ impl TurnStages {
             first_audio_ms: None,
         }
     }
+
+    /// 分段的一行可读摘要（轮次结束日志用）：各阶段毫秒偏移，未发生的阶段显示 `-`。
+    ///
+    /// 存在的意义：`grep turn=3` 捞出一轮的所有日志行后，**最后一行就能直接回答
+    /// 「慢在哪一段」**，不必把 5 条 mark 日志的字段手工拼起来看。
+    pub fn summary(&self) -> String {
+        let ms = |v: Option<u64>| match v {
+            Some(x) => format!("{x}ms"),
+            None => "-".to_string(),
+        };
+        format!(
+            "asr={} llm首字={} 首句={} 首pcm={} 首帧={}",
+            ms(self.asr_end_ms),
+            ms(self.llm_first_token_ms),
+            ms(self.sentence_ready_ms),
+            ms(self.tts_first_pcm_ms),
+            ms(self.first_audio_ms),
+        )
+    }
 }
 
 /// 分段延迟记录器：`Arc` 共享，producer / 合成回调 / 发送端各自 mark。
+///
+/// ## 一个实例 = 一个轮次
+///
+/// 轮次标识在 [`TurnTrace::new`] 内部分配（见 [`next_turn_id`]），因此「一个 trace 就是一个
+/// 轮次」是**构造性保证**：轮次 id 随 `Arc` 一起流转，调用方不可能传错或漏传。
+/// 4 个构造点（speech_end / inject / canned / aiui）覆盖全部轮次入口。
 ///
 /// 各字段 mark 均 **first-only**（`None → Some` 才写，重复 mark 无效）、瞬时持锁
 ///（锁内无 await，`std::sync::Mutex` 足够）。时间口径见 [`TurnStages`]。
 /// 锚点语义随 [`TurnStages::anchor`] 快照带出（构造时写入，不在本结构单独存一份）。
 pub struct TurnTrace {
+    /// 本轮标识（构造时分配，此后不变）：事件负载与日志的公共归因键。
+    turn_id: TurnId,
     t0: Instant,
     inner: Mutex<TurnStages>,
 }
@@ -83,42 +134,54 @@ pub struct TurnTrace {
 impl TurnTrace {
     /// 以锚点语义创建（t0 = 调用时刻，调用方须在锚点事件发生的同 tick 内调用——
     /// 语音轮在 `recognize_segments` 每段循环入口，与 VAD 回调误差微秒级）。
+    ///
+    /// 顺带分配一个进程内唯一的 [`TurnId`]（本轮此后所有日志与事件都用它）。
     pub fn new(anchor: &'static str) -> Arc<Self> {
         Arc::new(Self {
+            turn_id: next_turn_id(),
             t0: Instant::now(),
             inner: Mutex::new(TurnStages::fresh(anchor)),
         })
     }
 
-    fn mark(
-        &self,
-        field: fn(&mut TurnStages) -> &mut Option<u64>,
-    ) {
+    /// 本轮标识（`Copy`，可随意复制进闭包/日志宏）。
+    pub fn turn_id(&self) -> TurnId {
+        self.turn_id
+    }
+
+    /// first-only mark；返回 `true` = **本次调用真正写入了**（即这是该阶段的首次 mark）。
+    ///
+    /// 返回值让「打首 token / 首句就绪日志」的判据与 mark **同源**：调用点不必另设一个
+    /// 原子标志（那种写法会与 first-only 语义各自漂移，一旦语义改动就出现「日志说到了、
+    /// 阶段却是 None」这类自相矛盾的观测）。
+    fn mark(&self, field: fn(&mut TurnStages) -> &mut Option<u64>) -> bool {
         let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let slot = field(&mut g);
-        if slot.is_none() {
-            *slot = Some(self.t0.elapsed().as_millis() as u64);
+        if slot.is_some() {
+            return false;
         }
+        *slot = Some(self.t0.elapsed().as_millis() as u64);
+        true
     }
 
-    /// ASR 识别完成（语音轮）。
-    pub fn mark_asr_end(&self) {
-        self.mark(|s| &mut s.asr_end_ms);
+    /// ASR 识别完成（语音轮）。返回是否首次写入（见 [`TurnTrace::mark`]）。
+    pub fn mark_asr_end(&self) -> bool {
+        self.mark(|s| &mut s.asr_end_ms)
     }
 
-    /// LLM 首个文本 token 到达。
-    pub fn mark_llm_first_token(&self) {
-        self.mark(|s| &mut s.llm_first_token_ms);
+    /// LLM 首个文本 token 到达。返回是否首次写入（见 [`TurnTrace::mark`]）。
+    pub fn mark_llm_first_token(&self) -> bool {
+        self.mark(|s| &mut s.llm_first_token_ms)
     }
 
-    /// 首个完整句子送 TTS。
-    pub fn mark_sentence_ready(&self) {
-        self.mark(|s| &mut s.sentence_ready_ms);
+    /// 首个完整句子送 TTS。返回是否首次写入（见 [`TurnTrace::mark`]）。
+    pub fn mark_sentence_ready(&self) -> bool {
+        self.mark(|s| &mut s.sentence_ready_ms)
     }
 
-    /// 首个非缓存句的首个 PCM 分片回调。
-    pub fn mark_tts_first_pcm(&self) {
-        self.mark(|s| &mut s.tts_first_pcm_ms);
+    /// 首个非缓存句的首个 PCM 分片回调。返回是否首次写入（见 [`TurnTrace::mark`]）。
+    pub fn mark_tts_first_pcm(&self) -> bool {
+        self.mark(|s| &mut s.tts_first_pcm_ms)
     }
 
     /// 首帧音频实际下发：按**传入的首帧时刻**计 elapsed（不是 mark 调用时刻）。
@@ -128,12 +191,16 @@ impl TurnTrace {
     /// 记出来的 first_audio 会系统性失真成"接近整轮耗时"。真实首帧时刻由
     /// 发送端（`downlink/sender.rs`）在首帧写线时填进 `first_frame_at` out-param，
     /// 这里消费它。`None`（未发出任何帧，如起跑闸即被打断）不 mark。
-    pub fn mark_first_audio_at(&self, at: Option<Instant>) {
-        let Some(at) = at else { return };
+    ///
+    /// 返回是否首次写入（见 [`TurnTrace::mark`]）。
+    pub fn mark_first_audio_at(&self, at: Option<Instant>) -> bool {
+        let Some(at) = at else { return false };
         let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        if g.first_audio_ms.is_none() {
-            g.first_audio_ms = Some(at.duration_since(self.t0).as_millis() as u64);
+        if g.first_audio_ms.is_some() {
+            return false;
         }
+        g.first_audio_ms = Some(at.duration_since(self.t0).as_millis() as u64);
+        true
     }
 
     /// 当前快照（emit 时取；读锁内纯拷贝）。
@@ -172,9 +239,16 @@ pub enum ServerEvent {
     },
     /// 一条消息入对话（用户说话 / 助手整轮下发完成）。`elapsed_ms` 仅助手轮次有
     /// （整轮耗时 LLM + 合成 + 下行），用户轮次为 `None`。
+    ///
+    /// `turn_id`：**用户轮次与其对应的助手轮次是同一个 `turn_id`**——它们同属一轮对话。
+    /// 类型是 `Option` 而非裸值：事件负载是**契约**（审计/大盘订阅者按需消费），
+    /// 契约不该被会话侧"目前总会传值"这种实现事实绑死；生产路径经
+    /// `session::observe::emit_message_added` 收敛，只会传 `Some`。
     MessageAdded {
         session_id: String,
         device_id: String,
+        /// 本条消息所属轮次（用户与其助手回复共享同一个值）。
+        turn_id: Option<TurnId>,
         role: String,
         text: String,
         elapsed_ms: Option<u64>,
@@ -183,6 +257,8 @@ pub enum ServerEvent {
     TtsRound {
         session_id: String,
         device_id: String,
+        /// 本轮标识（与同轮的 `TurnLatency` / `MessageAdded` 一致，可直接串联）。
+        turn_id: TurnId,
         sentences: u32,
         frames: u32,
         interrupted: bool,
@@ -197,9 +273,19 @@ pub enum ServerEvent {
     /// 一轮对话的分段延迟快照（缺口②）：各阶段相对锚点（speech_end/inject/canned/aiui）
     /// 的毫秒偏移，订阅者（`app/metrics`）聚合分位。`interrupted` = 本轮被打断。
     /// 兜底/问候/告别语各自成事件（anchor=canned），不与正常回复混窗。
+    ///
+    /// ## 计数契约（订阅者必须遵守）
+    ///
+    /// **一轮 = 恰好一条 `TurnLatency`**，因此每个阶段窗口每轮只进 **1 个样本**。
+    /// 这条事件里的 5 个阶段是同一轮的 5 次采样，**不是 5 轮**——订阅者若按"分段条数"
+    /// 计数，一轮就会灌 5 个样本进每个窗口，分位数被同一轮自身重复加权而失真。
+    /// 会话侧的保证来自 `stream_response` 的三个**互斥**结束分支（各自 emit 后即返回）；
+    /// 聚合侧的保证由 `app/metrics` 的测试钉死。
     TurnLatency {
         session_id: String,
         device_id: String,
+        /// 本轮标识：把这一组分段归因到具体某轮（配合 `tracing` 的 `turn=` 字段定位现场）。
+        turn_id: TurnId,
         stages: TurnStages,
         interrupted: bool,
     },

@@ -43,10 +43,10 @@ fn every_implemented_capability_has_an_impl() {
 /// 2. `REGISTRY` 里某描述符指向一个不在清单里的能力（反向缺失）。
 #[test]
 fn capability_registry_is_complete_and_consistent() {
-    // (1) 变体数硬约束：当前 Capability 共 11 个变体。
+    // (1) 变体数硬约束：当前 Capability 共 12 个变体。
     assert_eq!(
         ALL_CAPABILITIES.len(),
-        11,
+        12,
         "新增 Capability 变体须同步加入 ALL_CAPABILITIES 并改此断言"
     );
     // (2) 清单无重复。
@@ -391,6 +391,63 @@ fn command_gate_is_optional_and_hot_reloadable() {
         vec!["enabled", "keywords", "match_mode", "max_chars", "reply"],
         "{keys:?}"
     );
+}
+
+/// 规则 NLU（`[nlu]`）的注册表语义护栏（与指令闸门 `[command]` 同构）。
+///
+/// 它同样有"必须"：① 默认不选中（加插件不许改变现有部署行为）；
+/// ② 启用后必须**新会话生效**且**字段档位有出处**；③ 坏配置（启用但意图无模板）只降级、不阻止启动。
+/// 额外一条：启用 + 声明了意图却没给模板 = 永远命中不了 = 静默失效，必须被拦下并说清修法。
+#[test]
+fn nlu_rules_is_optional_and_hot_reloadable() {
+    let mut cfg = Config::default();
+    assert!(!cfg.nlu.enabled, "规则 NLU 默认必须关闭");
+    assert_eq!(active_impl(&cfg, Capability::Nlu), None);
+    assert!(
+        !Capability::Nlu.required() && !Capability::Nlu.fatal_if_enabled(),
+        "可选能力：坏配置只降级，不阻止启动"
+    );
+
+    // 启用（无意图）即选中；默认无意图应通过校验（不静默失效）。
+    cfg.nlu.enabled = true;
+    assert_eq!(active_impl(&cfg, Capability::Nlu), Some("nlu.rules"));
+    let d = find("nlu.rules").expect("应注册 nlu.rules");
+    (d.validate)(&cfg).unwrap_or_else(|e| panic!("默认（无意图）应通过校验: {e:#}"));
+    assert_eq!(d.hot, HotReload::NextSession);
+    // 字段级档位：enabled 是"新会话生效"（POST /api/config 的 hot 据此判定）
+    assert_eq!(
+        field_hot(&["nlu", "enabled"]),
+        Some(HotReload::NextSession)
+    );
+    assert_eq!(section_hot("nlu"), HotReload::NextSession);
+
+    // 启用但意图模板为空 = 永远命中不了：必须能被说成"配置问题"（而不是静默不拦）
+    cfg.nlu.intents.push(crate::plugins::nlu::IntentDef {
+        name: "control_light".into(),
+        ..Default::default()
+    });
+    let err = (d.validate)(&cfg).unwrap_err().to_string();
+    assert!(err.contains("templates"), "{err}");
+    // 补上模板后即通过
+    cfg.nlu.intents[0].templates.push("把{room}的灯{action}".into());
+    (d.validate)(&cfg).unwrap_or_else(|e| panic!("补上模板后应通过: {e:#}"));
+
+    // schema 必须把这张卡的顶层字段暴露出去（管理页「NLU」页签的数据源）
+    let v = schema_json();
+    let nlu = v["capabilities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["id"] == "nlu")
+        .expect("schema 应包含 nlu 能力");
+    let keys: Vec<&str> = nlu["implementations"][0]["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|f| f["key"].as_str())
+        .collect();
+    // intents/slots 为嵌套数组，不登记为扁平字段（见 fields_nlu.rs 说明）
+    assert_eq!(keys, vec!["enabled"], "{keys:?}");
 }
 
 /// P1-7 漂移护栏：`[memory].engine` 的合法取值必须与注册表 memory.* 实现一一对应

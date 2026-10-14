@@ -7,19 +7,27 @@
 //! ④ 正常标点出句与流结束 flush 不受 watchdog 影响。
 //!
 //! 不用实现细节断言（如数任务数），全部断言"通道里有没有句子"这一可观测行为。
+//!
+//! ⑤ **打断后句子不再进入通道**（含流结束时的残句 flush）：取消契约在producer 层的落地，
+//!    见 [`crate::plugins::llm::LlmTurnResult`] 的类型文档。
+//!
+//! ⑥ **一轮的日志都带同一个 `turn=`**（轮次级可归因）：用真实 `tracing` 订阅器捕获
+//!    首 token / 首句就绪两条日志的结构化字段，断言它们等于该 `TurnTrace` 的 `turn_id`。
+//!    这里选 producer 作为切入点，因为它是**唯一能在无引擎环境下跑通真实日志路径**的
+//!    轮次环节（`Session` 需要真实 VAD 模型才能构造，见 `wakeup/tests.rs` 的说明）。
 
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::Result;
 
-use super::spawn_llm_producer;
+use super::{spawn_llm_producer, ProducerTurn};
 use crate::app::events::{TurnTrace, ANCHOR_SPEECH_END};
 use crate::plugins::llm::{
-    LlmEvent, LlmProvider, LlmTurnResult, ToolSpec,
+    LlmEvent, LlmProvider, LlmTurnResult, ToolCall, ToolSpec,
 };
 use crate::plugins::prompt::TurnPrompt;
 
@@ -66,6 +74,11 @@ fn trace() -> Arc<TurnTrace> {
     TurnTrace::new(ANCHOR_SPEECH_END)
 }
 
+/// 轮次上下文（`session_id` 只进日志，测试里固定值即可）。
+fn turn_ctx(t: Arc<TurnTrace>) -> ProducerTurn {
+    ProducerTurn { trace: t, session_id: "s1".to_string() }
+}
+
 fn abort() -> Arc<AtomicBool> {
     Arc::new(AtomicBool::new(false))
 }
@@ -90,7 +103,7 @@ async fn zero_wait_disables_watchdog_no_residual_during_pause() {
         "用户问句".into(),
         prompt(),
         abort(),
-        trace(),
+        turn_ctx(trace()),
         Duration::ZERO, // 0 = 关闭定时 flush（回退现行为）
     );
     let mut rx = producer.sentences;
@@ -129,7 +142,7 @@ async fn short_wait_flushes_residual_during_pause() {
         "用户问句".into(),
         prompt(),
         abort(),
-        trace(),
+        turn_ctx(trace()),
         Duration::from_millis(50),
     );
     let mut rx = producer.sentences;
@@ -166,7 +179,7 @@ async fn watchdog_residual_marks_sentence_ready() {
         "用户问句".into(),
         prompt(),
         abort(),
-        t.clone(),
+        turn_ctx(t.clone()),
         Duration::from_millis(60),
     );
     let mut rx = producer.sentences;
@@ -202,7 +215,7 @@ async fn punctuated_sentence_still_immediate() {
         "用户问句".into(),
         prompt(),
         abort(),
-        trace(),
+        turn_ctx(trace()),
         Duration::from_millis(500), // 远大于挂起 → watchdog 不该抢在标点前出句
     );
     let mut rx = producer.sentences;
@@ -217,4 +230,291 @@ async fn punctuated_sentence_still_immediate() {
         .expect("通道不应关闭");
     assert_eq!(second, "尾巴");
     let _ = producer.result.await;
+}
+
+/// 打断的假 LLM：吐一段**无标点**的半句 → 停一下 → 让调用方置位 abort（模拟设备打断）
+/// → 再吐一段 → 收工。
+///
+///刻意让打断发生在"半句已累积但尚未成句"的时刻：此时 `splitter` 里躺着残句，
+/// 流结束时的 flush **本会**把它推进通道——这正是要验证被取消轮不再外送的那一句。
+/// 另外它在收工前递一个工具调用，用来验证**回调拒绝之后连事件都不再递**
+/// （引擎侧丢弃 `tool_calls` 的前置条件）。
+struct AbortingLlm {
+    prefix: &'static str,
+    hold: Duration,
+    tail: &'static str,
+}
+
+impl LlmProvider for AbortingLlm {
+    fn chat_stream<'a>(
+        &'a self,
+        _history: &'a [(String, String)],
+        _user_text: &'a str,
+        _prompt: &'a TurnPrompt,
+        _tools: Option<&'a [ToolSpec]>,
+        mut on_event: Box<dyn FnMut(LlmEvent) -> bool + Send + 'a>,
+    ) -> Pin<Box<dyn Future<Output = Result<LlmTurnResult>> + Send + 'a>> {
+        Box::pin(async move {
+            on_event(LlmEvent::Text(self.prefix.to_string()));
+            tokio::time::sleep(self.hold).await;
+            if !self.tail.is_empty() {
+                on_event(LlmEvent::Text(self.tail.to_string()));
+            }
+            on_event(LlmEvent::ToolCall(ToolCall {
+                id: "call_1".into(),
+                name: "set_volume".into(),
+                arguments: "{\"level\":80}".into(),
+            }));
+            on_event(LlmEvent::Done);
+            Ok(LlmTurnResult::default())
+        })
+    }
+}
+
+/// **打断回归（集成视角）**：abort 置位 → 回调返 `false` → 句子**不再进入通道**。
+///
+/// 覆盖两条外送路径：
+/// 1. 打断后的增量文本（回调首行就查 abort，直接拒收）；
+/// 2. 流结束时splitter 里的**残句 flush** —— 这条以前是无条件外送的，等于打断后
+///    还在为已被否决的这一轮做 TTS 合成，并把 `sentence_ready` 记成一个并不存在的时刻。
+#[tokio::test]
+async fn abort_stops_sentences_from_entering_channel() {
+    let llm: crate::plugins::llm::Llm = Arc::new(AbortingLlm {
+        prefix: "打断前累积的半句",
+        hold: Duration::from_millis(150),
+        tail: "打断后的内容",
+    });
+    let flag = abort();
+    // 打断时刻由假 LLM 的 `hold` 结束那一刻决定：这里让 abort 在 hold 期间由测试置位。
+    let aborter = flag.clone();
+    let trigger = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        aborter.store(true, std::sync::atomic::Ordering::Release);
+    });
+    let trace = trace();
+    let producer = spawn_llm_producer(
+        llm,
+        Vec::new(),
+        "用户问句".into(),
+        prompt(),
+        flag,
+        turn_ctx(trace.clone()),
+        Duration::ZERO, // 关掉 watchdog：只考察回调与 flush 两条路径
+    );
+    let mut rx = producer.sentences;
+    // 打断后 producer 不再推句：通道应收工关闭，且**没有**任何句子
+    let leaked = tokio::time::timeout(Duration::from_millis(400), rx.recv())
+        .await
+        .expect("打断后不应再有句子进入通道（含流结束残句 flush）");
+    assert!(
+        leaked.is_none(),
+        "打断后泄漏了一句：{leaked:?}——已被用户否决的这一轮不该继续占用 TTS 合成"
+    );
+    // 假 LLM 仍会递工具调用；provider 层必须把它当作"回调已拒绝"而不当成有效意图。
+    // 真实 provider 会把 tool_calls 丢空（见plugins/llm/openai.rs 的取消契约），
+    // 这里断言的是 producer 不依赖它——通道与观测都干净即可。
+    let _ = producer
+        .result
+        .await
+        .expect("任务不 panic")
+        .expect("取消不是错误");
+    trigger.await.expect("打断触发任务不 panic");
+    // 取消轮的观测语义：不应把`sentence_ready` 记成一个并不存在的时刻
+    let snap = trace.snapshot();
+    assert!(
+        snap.sentence_ready_ms.is_none(),
+        "取消轮不该mark sentence_ready（半句从未真正就绪），实测 {:?}",
+        snap.sentence_ready_ms
+    );
+}
+
+// ───────────────────────── 轮次级可归因：日志带 turn= ─────────────────────────
+
+/// 捕获到的一条日志：只取本测试关心的消息文本与 `turn` 结构化字段。
+#[derive(Clone, Debug)]
+struct CapturedLog {
+    message: String,
+    turn: Option<u64>,
+}
+
+/// 把 `tracing` 事件字段抄进 `Vec` 的极简订阅器。
+///
+/// 为什么自己写而不引测试工具：项目**零新增依赖**是硬约束（不引入新观测栈），
+/// 而 `tracing` 的 [`tracing::Subscriber`] trait 本身足够实现这个断言。
+struct CaptureSubscriber(Arc<Mutex<Vec<CapturedLog>>>);
+
+impl CaptureSubscriber {
+    fn new() -> (Self, Arc<Mutex<Vec<CapturedLog>>>) {
+        let sink: Arc<Mutex<Vec<CapturedLog>>> = Arc::new(Mutex::new(Vec::new()));
+        (Self(Arc::clone(&sink)), sink)
+    }
+}
+
+/// 字段访问器：`message` 收文本、`turn` 收 u64（`turn = 7` 走 `record_u64`）。
+struct TurnFieldVisitor<'a> {
+    log: &'a mut CapturedLog,
+}
+
+impl tracing::field::Visit for TurnFieldVisitor<'_> {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        if field.name() == "message" {
+            self.log.message = format!("{value:?}");
+        }
+    }
+
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        if field.name() == "message" {
+            self.log.message = value.to_string();
+        }
+    }
+
+    fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
+        if field.name() == "turn" {
+            self.log.turn = Some(value);
+        }
+    }
+}
+
+impl tracing::Subscriber for CaptureSubscriber {
+    fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+
+    fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+
+    fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+
+    fn event(&self, event: &tracing::Event<'_>) {
+        let mut log = CapturedLog { message: String::new(), turn: None };
+        event.record(&mut TurnFieldVisitor { log: &mut log });
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).push(log);
+    }
+
+    fn enter(&self, _span: &tracing::span::Id) {}
+
+    fn exit(&self, _span: &tracing::span::Id) {}
+}
+
+/// 单线程 runtime + **在闭包内 `block_on`** 跑完整一轮，把捕获订阅器装在当前线程上。
+///
+/// 两个细节缺一不可：
+/// - `tracing::subscriber::with_default` 只在**闭包同步执行期间**生效，因此 future
+///   必须在闭包里被真正 poll（`block_on`），不能把 future 返回出来再 await；
+/// - 必须用 current-thread runtime：producer 的回调/flush 跑在 `tokio::spawn` 出的
+///   任务里，多线程 runtime 会把它们调度到别的线程，而线程局部订阅器在那里不可见。
+fn capture_turn_logs<F, Fut>(run_turn: F) -> Vec<CapturedLog>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<Vec<String>>>,
+{
+    let (subscriber, sink) = CaptureSubscriber::new();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("current-thread runtime 可构建");
+    let outcome = tracing::subscriber::with_default(subscriber, || rt.block_on(run_turn()));
+    outcome.expect("本轮 producer 正常收工");
+    let logs = sink.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    logs
+}
+
+/// 跑完一整轮 producer 并收齐全部句子（通道关闭 = 任务体已跑完，收尾日志已打出）。
+async fn drain_one_turn(
+    llm: crate::plugins::llm::Llm,
+    trace: Arc<TurnTrace>,
+    flush_wait: Duration,
+) -> anyhow::Result<Vec<String>> {
+    let producer = spawn_llm_producer(
+        llm,
+        Vec::new(),
+        "用户问句".into(),
+        prompt(),
+        abort(),
+        turn_ctx(trace),
+        flush_wait,
+    );
+    let mut rx = producer.sentences;
+    let mut sentences = Vec::new();
+    while let Ok(Some(s)) = tokio::time::timeout(Duration::from_secs(2), rx.recv()).await {
+        sentences.push(s);
+    }
+    producer.result.await??;
+    Ok(sentences)
+}
+
+/// **一轮的关键节点日志都带同一个 `turn_id`**。
+///
+/// 跑一整轮 producer（首 token → 首句就绪 → 收工残句），断言这些日志的 `turn`
+/// 结构化字段都等于该 [`TurnTrace`] 的 `turn_id`。这是「`grep turn=3` 能捞出整轮
+/// 日志行」的可执行证据：字段是结构化字段而非拼进消息的字符串前缀，因此按 `turn=3`
+/// 过滤不会被消息文案里的相似文本误命中，也不会因文案改写而失效。
+#[test]
+fn all_turn_logs_carry_the_same_turn_id() {
+    let trace = trace();
+    let expected_turn = trace.turn_id();
+
+    let logs = capture_turn_logs(|| {
+        drain_one_turn(
+            Arc::new(HangingLlm {
+                prefix: "第一句有标点。",
+                hold: Duration::from_millis(20),
+                tail: "尾巴",
+                punct: true,
+            }),
+            trace,
+            // 远大于 hold：不走 watchdog 路径，只验回调出句 + 收工残句两条日志
+            Duration::from_millis(500),
+        )
+    });
+
+    let messages: Vec<&str> = logs.iter().map(|l| l.message.as_str()).collect();
+    // 两条关键节点日志都必须真实发出（否则下面的逐条断言会空转通过）
+    assert!(
+        messages.iter().any(|m| m.contains("LLM 首 token")),
+        "应记录首 token 日志，实际捕获：{messages:?}"
+    );
+    assert!(
+        messages.iter().any(|m| m.contains("首句就绪")),
+        "应记录首句就绪日志，实际捕获：{messages:?}"
+    );
+    for l in &logs {
+        assert_eq!(
+            l.turn,
+            Some(expected_turn),
+            "日志「{}」的 turn 字段应为 {expected_turn}（一轮内所有日志同一个轮次号），实测 {:?}",
+            l.message,
+            l.turn
+        );
+    }
+}
+
+/// 反向断言：轮次内**不得**出现缺 `turn` 字段的日志——那类行会被 `grep turn=N` 漏掉，
+/// 正是本任务要消灭的"日志带了 session 但不带轮次"的形态。
+#[test]
+fn no_turn_log_line_is_missing_the_turn_field() {
+    let logs = capture_turn_logs(|| {
+        drain_one_turn(
+            Arc::new(HangingLlm {
+                prefix: "有标点的首句。",
+                hold: Duration::from_millis(10),
+                tail: "",
+                punct: false,
+            }),
+            trace(),
+            Duration::ZERO,
+        )
+    });
+
+    assert!(!logs.is_empty(), "本测试应至少捕获到一条轮次内日志（否则断言空转）");
+    for l in &logs {
+        assert!(
+            l.turn.is_some(),
+            "轮次内的日志「{}」缺少 turn 字段——grep turn=N 会漏掉它",
+            l.message
+        );
+    }
 }

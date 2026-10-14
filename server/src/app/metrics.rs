@@ -10,6 +10,16 @@
 //! - **分段延迟**（缺口②）：`TurnLatency` 事件的各阶段偏移各自入窗（同窗口大小），
 //!   `/api/metrics` 的 `latency` 节只增不改（老字段原样保留）。
 //!
+//! ## 计数口径：轮次，不是事件、也不是分段
+//!
+//! 本订阅者**不按事件条数、也不按分段条数**计数，一律**按轮次**：
+//!
+//! - `turns` 与整轮耗时窗口只由 `MessageAdded{role == "assistant"}` 驱动（每轮恰好一条）；
+//! - 一条 `TurnLatency` 带 5 个阶段，但它们**分属 5 个独立窗口**，每轮每窗口只 +1。
+//!
+//! 加 `turn_id` 字段不改变以上任何一条：`turn_id` 只用于把分段归因到具体某轮（诊断与日志
+//! 串联），**不参与**任何计数或入窗。回归测试见 `tests.rs`。
+//!
 //! ## 订阅时序
 //!
 //! `main.rs` 在 `Engines::new` 之后、`axum::serve` 之前 spawn [`subscriber`]——进程最早
@@ -107,6 +117,9 @@ impl Metrics {
             ServerEvent::SessionStart { .. } => g.sessions_started += 1,
             ServerEvent::SessionEnd { .. } => g.sessions_ended += 1,
             ServerEvent::MessageAdded { role, elapsed_ms, .. } => {
+                // 轮次计数与整轮耗时样本的**唯一来源**：只有 `role == "assistant"` 的
+                // MessageAdded 才算"一轮"（用户那条只是同一轮的另一半，见 `turn_id`）。
+                // `TurnLatency` **绝不**参与这两个计数——否则一轮会被记成多轮。
                 if role == "assistant" {
                     g.turns += 1;
                     if let Some(ms) = elapsed_ms {
@@ -130,6 +143,14 @@ impl Metrics {
                 g.last_error = Some(message.clone());
             }
             ServerEvent::TurnLatency { stages, .. } => {
+                // ⚠️ **按轮次计数，不是按分段计数**（本任务最高回归风险处）：
+                // 一轮 = 恰好一条 `TurnLatency`，它带的 5 个阶段是同一轮的 5 次采样。
+                // 下面每个 `Some(ms)` 各推 **1 个**样本进**各自的**窗口——一轮共推 5 个
+                // 样本，但分属 5 个不同窗口，因此**每个窗口每轮只 +1**。
+                // 若改成"一个事件往每个窗口推 5 次"或"按分段条数累加 turns"，同一轮就会
+                // 被自身重复加权，分位数彻底失真。回归测试见 `tests.rs` 的
+                // `stages_of_one_turn_count_as_one_sample_per_window`。
+                //
                 // 分窗口径（QA Round 1 拍板）：仅语音/注入轮入窗——canned（兜底/问候/
                 // 告别，常走缓存零合成）与 aiui（云端闭环，本地无中间里程碑）与
                 // 正常语音轮的延迟结构完全不同，混窗会系统性拉低语音轮分位。

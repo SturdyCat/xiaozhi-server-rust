@@ -1,6 +1,18 @@
 # TTFA 分段延迟指标维护
 
-本模块维护被动式阶段延迟采集：[events.rs](<../events.rs>) 定义 `TurnLatency`/`TurnStages`/`TurnTrace` 与字段命名，[观测出口](<../session/observe.rs>) 统一 emit，[metrics.rs](<../metrics.rs>) 独立聚合，`/api/metrics` 只增不改。实际字段与分位以[源码](<../metrics.rs>)、[测试](<tests.rs>)和端点 JSON 为准。
+本模块维护被动式阶段延迟采集：[events.rs](<../events.rs>) 定义 `TurnLatency`/`TurnStages`/`TurnTrace`/`TurnId` 与字段命名，[观测出口](<../session/observe.rs>)统一 emit，[metrics.rs](<../metrics.rs>)独立聚合，`/api/metrics` 只增不改。实际字段与分位以[源码](<../metrics.rs>)、[测试](<tests.rs>)和端点 JSON 为准。
+
+## 当前口径（先读这段）
+
+- **一轮 = 恰好一条 `TurnLatency`**：它带的 5 个阶段是同一轮的 5 次采样，分属 5 个独立窗口，
+  每轮每窗口只 +1。订阅者若按"分段条数"计数，一轮会被灌 5 个样本，分位数被同一轮重复加权而失真。
+  回归测试：`tests.rs::stages_of_one_turn_count_as_one_sample_per_window`。
+- **`turns` 与整轮耗时窗口只由 `MessageAdded{role == "assistant"}` 驱动**；用户那条只是同一轮的
+  另一半（共享同一个 `turn_id`），不额外计轮。`TurnLatency` 绝不参与轮次计数。
+- **`turn_id` 是纯诊断字段**：只用于把分段归因到具体某轮 + 串联 `tracing` 日志，
+  **不参与**任何计数或入窗，也不新增 `/api/metrics` 投影字段。回归测试：
+  `tests.rs::turn_id_does_not_affect_aggregation`。
+- 分窗口径：仅 `speech_end` / `inject` 入窗；`canned` / `aiui` 不与语音轮混窗。
 
 > **历史设计 / 实施记录**：以下为原《三项缺口实施方案（gap-implementation-design）》§2，保留原章节编号及当时的结论，不代表所有提案均已落地。
 > 文中 `§N` 指原长文对应章节，完整历史记录见[三项缺口设计](<../../../../docs/gap-implementation-design.md>)；当前行为先读本文件、源码与测试。

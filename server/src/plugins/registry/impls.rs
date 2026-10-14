@@ -12,6 +12,7 @@ use crate::plugins::tts::{build_kokoro, build_xfyun};
 use super::fields::*;
 use super::fields_command::COMMAND_FIELDS;
 use super::fields_context::{MEMORY_FIELDS, SOUL_FIELDS};
+use super::fields_nlu::NLU_FIELDS;
 use super::fields_wake::WAKE_FIELDS;
 use super::{Built, Capability, HotReload, PluginDescriptor, Requirement};
 
@@ -58,6 +59,9 @@ fn sel_command(cfg: &Config) -> bool {
 }
 fn sel_wake(cfg: &Config) -> bool {
     cfg.wakeup.enabled
+}
+fn sel_nlu(cfg: &Config) -> bool {
+    cfg.nlu.enabled || !cfg.nlu.intents.is_empty()
 }
 
 // ---- 未知 engine 校验（P4 约定：静默回退默认是最糟的失败模式，必须报错并给可选值）----
@@ -131,6 +135,25 @@ fn sig_command(cfg: &Config) -> String {
 
 fn sig_wake(cfg: &Config) -> String {
     cfg.wakeup.signature()
+}
+/// NLU 无共享实例（每会话按快照构造 `NluEngine`），签名只用于状态上报与热切换判定。
+/// 涵盖 enabled + 意图数 + 槽位数 + 每个意图的模板原文（模板改动必须触发重建）。
+fn sig_nlu(cfg: &Config) -> String {
+    let mut s = format!(
+        "{}|{}|{}",
+        cfg.nlu.enabled,
+        cfg.nlu.intents.len(),
+        cfg.nlu.slots.len()
+    );
+    for it in &cfg.nlu.intents {
+        s.push('|');
+        s.push_str(&it.name);
+        for t in &it.templates {
+            s.push('|');
+            s.push_str(t);
+        }
+    }
+    s
 }
 
 // ---- 校验（错误文案必须含「怎么修」）----
@@ -277,6 +300,22 @@ fn validate_wake(cfg: &Config) -> Result<()> {
              成品帧，缓存被关掉时音频**无法落盘**（每次唤醒都会重新合成）。\
              请把 [tts].cache_entries 设为大于 0（推荐 256），或把 [wakeup].persist 改为 false。"
         );
+    }
+    Ok(())
+}
+
+/// NLU 的硬条件：启用且声明了意图时，意图必须有模板（否则永远命中不了 = 静默失效）。
+fn validate_nlu(cfg: &Config) -> Result<()> {
+    if cfg.nlu.enabled {
+        for it in &cfg.nlu.intents {
+            if it.templates.is_empty() {
+                anyhow::bail!(
+                    "[nlu] 意图「{}」已声明但 templates 为空：请至少填一个模板（如 [\"把{{room}}的灯{{action}}\"]），\
+                     或暂时把 [nlu].enabled 改回 false。",
+                    it.name
+                );
+            }
+        }
     }
     Ok(())
 }
@@ -567,4 +606,25 @@ pub const WAKE_GREETING: PluginDescriptor = PluginDescriptor {
     build: None,
     warn_if: None,
     selected: sel_wake,
+};
+
+/// 规则 NLU（`[nlu]`）：ASR → LLM **之间**的本地意图识别层，是 `[command]` 的超集。
+///
+/// **可选能力**：默认 `enabled=false` 时不选中、零开销、行为与加它之前完全一致；
+/// 坏配置（启用但意图无模板）只降级（`Degraded`），绝不阻止启动——语音服务照常。
+/// 无共享实例：每会话按配置快照构造 `NluEngine`（与 `[command]`/`[wakeup]` 同为"每会话有状态对象"模式）。
+pub const NLU_RULES: PluginDescriptor = PluginDescriptor {
+    id: "nlu.rules",
+    capability: Capability::Nlu,
+    display: "规则 NLU（意图+槽位，替代送 LLM）",
+    local: true,
+    hot: HotReload::NextSession,
+    requires: &[],
+    fields_path: &["nlu"],
+    fields: NLU_FIELDS,
+    signature: sig_nlu,
+    validate: validate_nlu,
+    build: None,
+    warn_if: None,
+    selected: sel_nlu,
 };

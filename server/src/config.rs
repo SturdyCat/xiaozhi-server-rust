@@ -18,11 +18,13 @@
 //! 见 `app/ws.rs`。本文件只负责结构与默认值。
 //!
 //! **读写落点一律经存储抽象** [`store::ConfigStore`]（`main.rs` 装配后存入
-//! `Engines::config_store`）：文件后端 [`store::FileConfigStore`] = 今天的 TOML 行为
-//! （原子写 + 单文件 bind mount 的 EBUSY 回退），内置默认启动则是
+//! `Engines::config_store`）：SQLite 后端 [`store::sqlite::SqliteConfigStore`] 为**默认真源**
+//! （整份配置 + 设备 overlay + 预设进库，并提供只读 SQL 查询与备份），文件后端
+//! [`store::FileConfigStore`] 仅在 SQLite 打开失败时的降级路径，内置默认启动则是
 //! [`store::DefaultConfigStore`]（`location() == None` → `PUT /api/config` 400）。
 //! 不要在业务代码里直接 `Config::load(路径)` 或直接写盘——那条路径绕过了抽象，
-//! 也是"配置将来进 SQLite"（`server/src/config/store/AGENTS.md`，提案未落地）的前置条件。
+//! 也绕过了"老 TOML 配置兼容导入 / DB 优先"的装配逻辑（见 `main.rs::load_config_inner` 与
+//! `server/src/config/store/AGENTS.md`）。
 //!
 //! ## 配置约定（P4，见 `server/src/plugins/registry/AGENTS.md`；原 `docs/plugin-architecture-unification.md` §3.3）
 //!
@@ -43,6 +45,7 @@ use std::path::Path;
 pub use crate::plugins::aiui::AiuiConfig;
 pub use crate::plugins::asr::AsrConfig;
 pub use crate::plugins::command::CommandConfig;
+pub use crate::plugins::nlu::NluConfig;
 pub use crate::plugins::llm::LlmConfig;
 pub use crate::plugins::memory::MemoryConfig;
 pub use crate::plugins::soul::SoulConfig;
@@ -152,6 +155,12 @@ pub struct Config {
     /// 跳过 LLM 与正常回复。默认关闭。
     #[serde(default)]
     pub command: CommandConfig,
+    /// 规则 NLU（`[nlu]`）：ASR → LLM **之间**的本地意图识别层，是 `[command]` 的**超集**。
+    /// 它"含有" `end_session`（退下/闭嘴/关闭，配置仍落在 `[command]` 段、向后兼容），
+    /// 并允许在此定义更多带槽位的本地命令意图（如「把{room}的灯{action}」）。
+    /// 命中即本地执行（不再送 LLM），**未知意图才放行给 LLM**。默认关闭。
+    #[serde(default)]
+    pub nlu: NluConfig,
     /// 唤醒问候语（`[wakeup]`）：设备唤醒（固件上报 `listen state=detect`）时**立刻**说一句
     /// 预制话术（默认「我在」），跳过 LLM 与正常回复；成品音频按音色持久化复用，
     /// 稳态下每次唤醒零 LLM、零 TTS。默认关闭。
@@ -407,6 +416,7 @@ impl Default for Config {
             soul: SoulConfig::default(),
             memory: MemoryConfig::default(),
             command: CommandConfig::default(),
+            nlu: NluConfig::default(),
             wakeup: WakeConfig::default(),
         };
         c.normalize();

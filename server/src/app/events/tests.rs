@@ -1,7 +1,8 @@
 //! `server/src/app/events.rs` 的单元测试：`TurnTrace` 的时间口径与 first-only 语义
 //!（QA Round 1 阻塞 1 的行为级回归——`mark_first_audio_at` 必须按**传入时刻**计
-//! elapsed，而不是 mark 调用时刻）。
+//! elapsed，而不是 mark 调用时刻），以及轮次标识 `turn_id` 的生成/一致性契约。
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::{TurnStages, TurnTrace, ANCHOR_INJECT, ANCHOR_SPEECH_END};
@@ -89,4 +90,95 @@ fn turn_stages_is_cloneable_snapshot() {
     let a: TurnStages = trace.snapshot();
     let _b = a.clone(); // Clone 派生（emit 路径依赖）
     assert_eq!(a.anchor, ANCHOR_SPEECH_END);
+}
+
+/// 轮次 id 单调递增且互不相同（进程内唯一）。
+///
+/// 断言用「严格递增」而不是具体数值：计数器是**进程级**的，本文件里的其他测试也会
+/// 分配 id，具体值随并行执行顺序而变——但递增关系在任何顺序下都成立。
+#[test]
+fn turn_ids_are_strictly_increasing_and_distinct() {
+    let ids: Vec<u64> = (0..8).map(|_| TurnTrace::new(ANCHOR_SPEECH_END).turn_id()).collect();
+    for w in ids.windows(2) {
+        assert!(
+            w[1] > w[0],
+            "轮次 id 必须严格递增（可排序性是选 u64 自增的理由之一），实测 {} → {}",
+            w[0],
+            w[1]
+        );
+    }
+    // 唯一性：8 个 id 两两不同（严格递增已蕴含，这里显式钉住意图）
+    let mut sorted = ids.clone();
+    sorted.sort_unstable();
+    sorted.dedup();
+    assert_eq!(sorted.len(), ids.len(), "轮次 id 必须互不相同");
+}
+
+/// id 从 1 起（0 留作「无轮次」哨兵，日志里出现 `turn=0` 一眼可辨为异常）。
+#[test]
+fn turn_id_never_zero() {
+    for _ in 0..64 {
+        assert_ne!(TurnTrace::new(ANCHOR_SPEECH_END).turn_id(), 0, "0 是哨兵值");
+    }
+}
+
+/// 轮次内一致：同一个 trace 无论 mark 多少次、快照取几次，id 恒定；
+/// 不同锚点（= 不同轮次）拿到不同 id。
+#[test]
+fn turn_id_is_stable_within_a_turn() {
+    let trace = TurnTrace::new(ANCHOR_SPEECH_END);
+    let id = trace.turn_id();
+    // 反复读取 + 夹着 mark 读取：id 必须不变（否则一轮的日志会散成多个 turn=）
+    for _ in 0..3 {
+        assert_eq!(trace.turn_id(), id, "id 在轮内必须恒定");
+        trace.mark_asr_end();
+        trace.mark_llm_first_token();
+        let _ = trace.snapshot();
+    }
+    assert_eq!(trace.turn_id(), id);
+    // 克隆共享同一个轮次（producer/预取/发送端各自持一份 Arc）
+    let cloned: Arc<TurnTrace> = Arc::clone(&trace);
+    assert_eq!(cloned.turn_id(), id, "Arc 克隆不得改变轮次");
+    assert_eq!(cloned.turn_id(), trace.turn_id());
+}
+
+/// mark 返回「是否首次写入」——这是首 token / 首句日志的判据（与 first-only 同源）。
+#[test]
+fn mark_reports_first_write_only_once() {
+    let t = TurnTrace::new(ANCHOR_SPEECH_END);
+    assert!(t.mark_asr_end(), "首次 mark 必须返回 true");
+    assert!(!t.mark_asr_end(), "重复 mark 必须返回 false");
+    assert!(t.mark_llm_first_token());
+    assert!(!t.mark_llm_first_token());
+    assert!(t.mark_sentence_ready());
+    assert!(!t.mark_sentence_ready());
+    assert!(t.mark_tts_first_pcm());
+    assert!(!t.mark_tts_first_pcm());
+    // `mark_first_audio_at(None)` 不算一次写入（未发出任何帧）
+    assert!(!t.mark_first_audio_at(None), "None 不该被当成首次写入");
+    assert!(t.mark_first_audio_at(Some(Instant::now())));
+    assert!(!t.mark_first_audio_at(Some(Instant::now())), "重复 mark 返回 false");
+}
+
+/// 轮次摘要：已发生的阶段带毫秒值，未发生的显示 `-`（不能读成 0）。
+///
+/// 这行摘要就是 `grep turn=N` 之后回答「慢在哪一段」的那一行，故钉住其形状。
+#[test]
+fn summary_marks_missing_stages_with_dash() {
+    let trace = TurnTrace::new(ANCHOR_SPEECH_END);
+    let empty = trace.snapshot().summary();
+    for stage in ["asr=", "llm首字=", "首句=", "首pcm=", "首帧="] {
+        assert!(empty.contains(stage), "摘要应含阶段 {stage}，实测 {empty}");
+    }
+    assert_eq!(empty.matches('-').count(), 5, "未发生的 5 个阶段都该是 -：{empty}");
+
+    trace.mark_asr_end();
+    std::thread::sleep(Duration::from_millis(15));
+    trace.mark_llm_first_token();
+    let got = trace.snapshot().summary();
+    assert_eq!(got.matches('-').count(), 3, "已 mark 的 2 个阶段不再显示 -：{got}");
+    assert!(
+        got.contains("llm首字=1") || got.contains("llm首字=2"),
+        "已发生的阶段应带实际毫秒值：{got}"
+    );
 }

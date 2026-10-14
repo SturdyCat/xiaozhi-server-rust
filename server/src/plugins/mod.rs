@@ -31,18 +31,24 @@
 //! 三者的产物经 [`prompt::TurnPrompt`] 交给 LLM（`instructions` = 稳定前缀，
 //! 记忆块按 `inject_position` 插入 `input[]`）。
 //!
-//! ## 指令闸门（`[command]`）
+//! ## 指令闸门（`[command]`）与 NLU 规则引擎（`[nlu]`）
 //!
 //! [`command`] 是 ASR → LLM **之间**的一道拦截（不是上下文生产者，也调不到 LLM）：
 //! 识别文本归一化后按指令词表匹配（`exact` 默认 / `contains` 可选），命中即由会话层
 //! 说一句告别语，再用 MCP 让设备自己结束聆听（设备不支持 MCP 时降级为断开本次会话）。
 //! 默认关闭，关闭时零开销、行为与加它之前完全一致。
+//!
+//! [`nlu`] 是 [`command`] 的**超集**：它"含有" `end_session`（退下/闭嘴/关闭）这一内置高危意图
+//! （配置仍落在 `[command]` 段，向后兼容），并允许在 `[nlu]` 段定义更多带槽位的本地命令意图。
+//! NLU 识别到已知意图即执行其 `action`（不再送 LLM）；**未知意图才放行给 LLM**。
+//! 匹配是规则式的（字面锚点 + 槽位表，确定性），与 command 的安全模型一脉相承。
 
 pub mod aiui;
 pub mod asr;
 pub mod command;
 pub mod health;
 pub mod host;
+pub mod nlu;
 pub mod llm;
 pub mod memory;
 pub mod prompt;

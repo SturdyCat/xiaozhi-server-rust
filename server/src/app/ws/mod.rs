@@ -75,9 +75,7 @@ mod plugins;
 mod registry;
 mod soul;
 mod usage;
-use config::{
-    config_meta, get_config, put_config,
-};
+use config::{config_meta, db_backup, db_query, get_config, put_config};
 use config::device_overlay::{device_overlay_delete, device_overlay_get, device_overlay_put};
 use config::presets::{preset_apply, preset_delete, preset_save, presets_list};
 use health::engines_health;
@@ -146,6 +144,9 @@ pub fn router(engines: Arc<Engines>) -> Router {
         // 能力清单 + 状态（enabled/phase/last_error）与字段元数据（配置页据此校验/提示）
         .route("/api/plugins", get(list_plugins))
         .route("/api/config/schema", get(config_schema))
+        // 远程客户端访问 SQLite 配置库：只读 SQL 查询（需 token）+ 一致性备份（VACUUM INTO）
+        .route("/api/config/db/query", axum::routing::post(db_query))
+        .route("/api/config/db/backup", axum::routing::post(db_backup))
         // 内联配置测试（P0-2）：LLM/TTS/VAD 延迟测量（HTTP 直调，按磁盘最新配置 ad-hoc
         // 构建引擎，不要求 is_test WS 会话；与 WS 测试台并存，测量核心见 app::bench_api）
         .route("/api/test/llm", axum::routing::post(bench_api::test_llm))

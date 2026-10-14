@@ -143,14 +143,38 @@ pub enum LlmEvent {
 }
 
 /// 一轮对话的汇总结果（已收齐全部文本与工具调用）。
+///
+/// ## 取消契约（`on_event` 返回 `false` 时，**两条实现路径都必须遵守**）
+///
+/// 调用方在 `on_event` 里返回 `false` = **取消**（设备 abort 打断 / 承载断开）。
+/// 引擎必须把"取消"如实反映在返回值上，否则下游无从区分"这一轮正常说完了"与
+/// "这一轮被用户掐了"——历史上正是这里出的缺陷：
+///
+/// - [`Self::cancelled`] = `true`：**唯一**的取消信号。下游判断"这轮不算数"只看它。
+/// - [`Self::tool_calls`] **恒为空**：取消前累积到的工具调用**一律丢弃**。
+///   工具调用的下游是 MCP（`tools/call` → 控制设备音量/播放音乐/开关灯），是**不可回滚的
+///   外部副作用**；用户已经停止说话，设备就不该再执行上一轮的指令。
+///   这条约束由**引擎层**保证，而不是靠每个调用方"记得先查 abort"——
+///   阶段三的 MCP 闭环跑在独立 task 上，与会话的 `abort` 标志没有共享关系。
+/// - 不发 [`LlmEvent::Done`]（流没正常走完）。
+/// - **仍然返回 [`Self::usage`] 与已累积的 [`Self::text`]**：令牌已经花了，统计不能丢；
+///   半句文本也要用于观测（"被打断的这一轮同样发生过"）。二者都**不是**有效意图。
+/// - 取消**不是**故障，因此**不**归入 [`LlmFailure`]、**不**触发 [`RetryingLlm`] 重试
+///   （重试一条已被用户放弃的请求＝白烧 token）。
+///
+/// 未知事件类型（非流式回退路径）同样适用：调用方已经不想要的响应，不能靠返回值交付副作用。
 #[derive(Debug, Clone, Default)]
 pub struct LlmTurnResult {
     pub text: String,
     /// 阶段三（MCP 工具闭环）消费；当前聚合路径仅用 `text`。
+    /// ⚠️ 取消轮**恒为空**（见类型文档的取消契约）——执行前无需再查 `abort`。
     #[allow(dead_code)]
     pub tool_calls: Vec<ToolCall>,
     /// 本轮令牌用量（上游未返回时为 `None`）。用于回答"记忆/灵魂注入让 prompt 长了多少"。
+    /// 取消轮**照常上报**（钱已经花了）。
     pub usage: Option<TokenUsage>,
+    /// 本轮是否被调用方取消（`on_event` 返回过 `false`）。`false` = 正常走完。
+    pub cancelled: bool,
 }
 
 /// LLM 提供方 trait：文本对话 + 可选工具规格，流式回传 [`LlmEvent`]。
@@ -162,7 +186,12 @@ pub struct LlmTurnResult {
 /// （[`crate::plugins::memory`]）因此可以在**不改 provider** 的前提下接入。
 pub trait LlmProvider: Send + Sync {
     /// `on_event` 回调返回 `false` 表示**取消**（如设备 abort 打断）：实现应立即停止
-    /// 并返回已累积的部分文本（不视为错误）。
+    /// 并返回已累积的部分文本（**不视为错误**），且必须遵守
+    /// [`LlmTurnResult`] 的**取消契约**——尤其是 `tool_calls` 恒为空、
+    /// `cancelled = true`、不发 [`LlmEvent::Done`]。
+    ///
+    /// 取消**不得**用 [`LlmFailure`] 表达（用户主动打断不是故障，见
+    /// [`failure::retryable`]：`Cancelled` 一旦可重试就是白烧 token）。
     fn chat_stream<'a>(
         &'a self,
         history: &'a [(String, String)],

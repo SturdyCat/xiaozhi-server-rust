@@ -8,6 +8,10 @@ use crate::plugins::llm::failure::TokenUsage;
 use std::sync::atomic::AtomicU32;
 
 /// 可编程的假 provider：按脚本失败/成功，并记录被调用次数。
+///
+/// 遵守 `LlmTurnResult` 的**取消契约**：回调返 `false` 即整轮取消——工具调用丢空、
+/// `cancelled = true`、不发 `Done`。这条纪律让本文件能测"取消不重试"而不必
+/// 断言实现细节。
 struct FakeLlm {
     calls: AtomicU32,
     /// 前 N 次调用失败（503，可重试）。
@@ -57,15 +61,41 @@ impl LlmProvider for FakeLlm {
                 };
                 return Err(anyhow::Error::new(f));
             }
-            on_event(LlmEvent::Text("最终回答".into()));
+            // 取消检测（与 openai.rs 同一套纪律）：任一事件被拒绝即整轮取消
+            let cancelled = !on_event(LlmEvent::Text("最终回答".into()));
+            if cancelled {
+                return Ok(LlmTurnResult {
+                    text: "最终回答".into(),
+                    tool_calls: Vec::new(),
+                    usage: Some(TokenUsage::default()),
+                    cancelled: true,
+                });
+            }
             on_event(LlmEvent::Done);
             Ok(LlmTurnResult {
                 text: "最终回答".into(),
                 tool_calls: Vec::new(),
                 usage: Some(TokenUsage::default()),
+                cancelled: false,
             })
         })
     }
+}
+
+/// `on_event` 一律拒绝（= 立刻取消），用于测取消路径不被重试。
+async fn run_cancelling(inner: Arc<FakeLlm>) -> (Result<LlmTurnResult>, u32) {
+    let llm: Llm = Arc::new(RetryingLlm::new(inner.clone()));
+    let history: Vec<(String, String)> = Vec::new();
+    let out = llm
+        .chat_stream(
+            &history,
+            "你好",
+            &TurnPrompt::default(),
+            None,
+            Box::new(|_| false),
+        )
+        .await;
+    (out, inner.calls.load(Ordering::SeqCst))
 }
 
 async fn run(inner: Arc<FakeLlm>) -> (Result<LlmTurnResult>, u32, String) {
@@ -131,4 +161,20 @@ async fn retries_are_bounded() {
     let (out, calls, _) = run(fake).await;
     assert!(out.is_err());
     assert_eq!(calls, MAX_RETRIES + 1);
+}
+
+/// **取消绝不重试**：被调用方取消的一轮（`cancelled = true`，见 `LlmTurnResult` 取消契约）
+/// 必须原样透传、且只调用 provider **一次**。
+///
+/// 为什么这条值得钉死：用户已经闭嘴了，重试这条被放弃的请求＝白烧 token + 白等 400ms 起退避。
+/// 该不变量由"取消表达为 `Ok{.., cancelled}` 而非 `LlmFailure`"保证（`Ok` 分支直接 return），
+/// 本测试防止将来有人"顺手"把它改成失败分类、或给 `Ok` 分支加上重试逻辑。
+#[tokio::test]
+async fn cancelled_turn_is_not_retried() {
+    let fake = Arc::new(FakeLlm::new(0)); // 首次即成功：取消发生在成功轮里，任何重试都会体现为 calls > 1
+    let (out, calls) = run_cancelling(fake).await;
+    let out = out.expect("取消不是错误，应透传为 Ok");
+    assert!(out.cancelled, "取消标记必须原样透传给下游");
+    assert!(out.tool_calls.is_empty(), "取消轮不得携带工具调用");
+    assert_eq!(calls, 1, "取消轮不得重试（会白烧 token）");
 }

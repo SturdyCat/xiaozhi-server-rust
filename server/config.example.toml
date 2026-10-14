@@ -181,6 +181,29 @@ reply = "好的，我先退下了。"          # 命中后先说这句，再用 
                                     # 下次唤醒不重连）；设备不支持 MCP 或调用失败时降级为断开本次会话。
                                     # 留空 = 不说告别语（仍执行结束聆听）。
 
+# ===== 规则 NLU（`[nlu]`）：ASR → LLM **之间**的本地意图识别层，是 `[command]` 的**超集** =====
+# 默认关闭。识别文本先过本地规则引擎：命中已知意图即本地执行（**不再送大模型**），
+# 只有未知意图才放行给 LLM。它"含有" `[command]` 的 end_session（退下/闭嘴/关闭，配置仍在上段），
+# 并允许在此定义更多带槽位的本地指令意图（如「把{room}的灯{action}」）。
+# 设计原则：确定性优先——漏触发（该拦没拦）远好过误触发（把正常请求当指令断线），
+# 因此模板用字面锚点 + 封闭槽位值表约束，结果可单测、可解释、零误判概率。
+# ⚠️ `intents` / `slots` 是**嵌套数组结构**（通用 schema 无法用单个输入框表达），请直接书写此段：
+#   - `intents` 每项含 `name` / `templates`（含 {slot} 占位）/ `action`（`kind` + `reply`）；
+#     `action.kind = "end_session"` 走「说告别语 + MCP 结束聆听」；其余 kind 为本地指令（只说 reply、不送 LLM）。
+#   - `slots` 每项含 `name` / `values`（封闭值表，用于校验与抽取）/ `optional`（空槽位是否允许）。
+#   改完保存后**新会话**生效（与 [command]/[wakeup] 一致）。
+[nlu]
+enabled = false                     # true = 启用规则 NLU（自定义意图）；end_session 仍由 [command] 决定。
+# 示例（取消注释即可启用一条"控制灯"的本地指令）：
+# intents = [
+#   { name = "control_light", templates = ["把{room}的灯{action}"],
+#     action = { kind = "local_command", reply = "好的，已为你{action}{room}的灯" } },
+# ]
+# slots = [
+#   { name = "room", values = ["客厅", "卧室"], optional = false },
+#   { name = "action", values = ["打开", "关闭"], optional = false },
+# ]
+
 [wakeup]
 enabled = false                     # true = 启用唤醒问候语
 greeting = "我在"                    # 设备唤醒（固件上报 listen state=detect）时立刻说这句，
@@ -290,3 +313,31 @@ docs_dir = "/data/rag-docs"         # ⚠️ 放挂载卷内；扫描 txt/md 文
 chunk_size = 512                    # 分块字符数（保守分块，中文场景可用）
 chunk_overlap = 64                  # 相邻分块重叠字符数
 top_k = 4                           # 每次召回最多注入几个分块（受 recall_max_tokens 硬上限约束）
+
+# ===== SQLite 配置库（2026-10-14 起为默认配置真源）=====
+# 配置现在默认存进 SQLite（与 memory 共用同一 db 文件，或独立文件），不再以
+# config.toml 为运行时真源。config.toml 退化为「引导 / 导入源」：空库首启时若
+# 检测到旧 config.toml 会自动导入（source=bootstrap），导入后即成为真源、旧 TOML
+# 不再被读取；之后所有保存、设备 overlay、预设都落库。
+#
+# 配置库路径解析优先级（唯一权威，见 server/src/main.rs::load_config_inner）：
+#   1. 环境变量 XIAOZHI_CONFIG_DB        （容器/测试注入，优先级最高）
+#   2. 启动参数       --config-db <path>
+#   3. 本文件 [memory].db_path            （即上方值；与记忆共用同一文件；
+#                                          :memory: 或空串 → 跳过）
+#   4. 兜底           /data/xiaozhi.db    （当上述都无效时）
+#
+# 因此默认情况下配置库 = /data/memory.db（与记忆同文件）；若要配置与记忆分库，
+# 设 XIAOZHI_CONFIG_DB 或 --config-db 指向别的路径即可。
+#
+# ⚠️ 必须放在挂载卷内（与 memory 同约束，见上方 volumes），否则重建容器即丢全部配置。
+# ⚠️ 老版本（仅 TOML）升级无需手动迁移：首启自动导入，日志会打印来源。
+# ⚠️ DB 打开失败时进程**不崩**：自动降级为读文件 config.toml（若存在）或内置默认。
+#
+# 远程只读访问（用数据库客户端"直连"查看配置库内容）：
+#   POST /api/config/db/query   Bearer token 鉴权；请求体 {"sql":"SELECT ..."}；
+#                               仅允许单条 SELECT/WITH/PRAGMA/EXPLAIN，最多 1000 行；
+#                               不暴露库文件路径、不支持远程改库（只读护栏）。
+#   POST /api/config/db/backup  VACUUM INTO 生成一致性快照 xiaozhi-config-backup-<unix秒>.db。
+#   表清单：cfg_documents（配置文档）/ cfg_revisions（历史）/ cfg_device_overlays（设备覆盖）/ cfg_presets（预设）。
+
