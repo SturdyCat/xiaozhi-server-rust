@@ -26,9 +26,7 @@ use anyhow::Result;
 
 use super::{spawn_llm_producer, ProducerTurn};
 use crate::app::events::{TurnTrace, ANCHOR_SPEECH_END};
-use crate::plugins::llm::{
-    LlmEvent, LlmProvider, LlmTurnResult, ToolCall, ToolSpec,
-};
+use crate::plugins::llm::{LlmEvent, LlmProvider, LlmTurnResult, ToolCall, ToolSpec};
 use crate::plugins::prompt::TurnPrompt;
 
 /// 可编程的假 LLM：先把 `prefix` 一次性吐给回调（模拟半句无标点输出），
@@ -74,9 +72,13 @@ fn trace() -> Arc<TurnTrace> {
     TurnTrace::new(ANCHOR_SPEECH_END)
 }
 
-/// 轮次上下文（`session_id` 只进日志，测试里固定值即可）。
+/// 轮次上下文（`session_id` 只进日志，测试里固定值即可；工具目录按需另测）。
 fn turn_ctx(t: Arc<TurnTrace>) -> ProducerTurn {
-    ProducerTurn { trace: t, session_id: "s1".to_string() }
+    ProducerTurn {
+        trace: t,
+        session_id: "s1".to_string(),
+        tools: None,
+    }
 }
 
 fn abort() -> Arc<AtomicBool> {
@@ -389,7 +391,10 @@ impl tracing::Subscriber for CaptureSubscriber {
     fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
 
     fn event(&self, event: &tracing::Event<'_>) {
-        let mut log = CapturedLog { message: String::new(), turn: None };
+        let mut log = CapturedLog {
+            message: String::new(),
+            turn: None,
+        };
         event.record(&mut TurnFieldVisitor { log: &mut log });
         self.0.lock().unwrap_or_else(|e| e.into_inner()).push(log);
     }
@@ -509,7 +514,10 @@ fn no_turn_log_line_is_missing_the_turn_field() {
         )
     });
 
-    assert!(!logs.is_empty(), "本测试应至少捕获到一条轮次内日志（否则断言空转）");
+    assert!(
+        !logs.is_empty(),
+        "本测试应至少捕获到一条轮次内日志（否则断言空转）"
+    );
     for l in &logs {
         assert!(
             l.turn.is_some(),

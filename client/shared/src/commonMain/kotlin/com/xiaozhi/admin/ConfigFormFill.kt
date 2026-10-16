@@ -125,6 +125,8 @@ internal fun ConfigFormState.fill(obj: JSONObject) {
     cmd.fill(obj)
     // [wakeup]（唤醒问候语）：映射集中在 ConfigWakeupState
     wake.fill(obj)
+    // [nlu]（技能级联）：映射集中在 ConfigNluState（含 intents/slots 嵌套数组）
+    nlu.fill(obj)
 }
 
 /**

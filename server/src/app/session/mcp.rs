@@ -56,7 +56,10 @@ impl std::fmt::Display for McpCallError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             McpCallError::Unsupported => {
-                write!(f, "设备 hello 未声明 features.mcp（老固件），本次会话不启用 MCP")
+                write!(
+                    f,
+                    "设备 hello 未声明 features.mcp（老固件），本次会话不启用 MCP"
+                )
             }
             McpCallError::Timeout(d) => write!(f, "等待设备 MCP 响应超时（{}ms）", d.as_millis()),
             McpCallError::Closed => write!(f, "等待设备 MCP 响应期间承载断开"),
@@ -191,9 +194,7 @@ pub(super) async fn discover_tools<T: Transport>(
 
     // 2) notifications/initialized：协议要求的收尾通知（无 id、不等回包）。
     // 固件对 notifications/* 直接 return，所以发失败也不影响设备——记 warn 即可。
-    if let Err(e) =
-        send_mcp(transport, session_id, discovery::initialized_notification()).await
-    {
+    if let Err(e) = send_mcp(transport, session_id, discovery::initialized_notification()).await {
         tracing::warn!("session {session_id} 发送 notifications/initialized 失败: {e}");
     }
 
@@ -213,8 +214,12 @@ pub(super) async fn discover_tools<T: Transport>(
             break;
         }
         let id = take_id(next_id);
-        if let Err(e) =
-            send_mcp(transport, session_id, discovery::tools_list(id, &cursor, true)).await
+        if let Err(e) = send_mcp(
+            transport,
+            session_id,
+            discovery::tools_list(id, &cursor, true),
+        )
+        .await
         {
             out.error = Some(format!("tools/list 下发失败: {e}"));
             break;
@@ -308,9 +313,13 @@ impl<'a, T: Transport> Session<'a, T> {
             return Err(McpCallError::Unsupported);
         }
         let id = take_id(&mut self.mcp_next_id);
-        send_mcp(self.transport, &self.session_id, mcp::tools_call(id, name, arguments))
-            .await
-            .map_err(|e| McpCallError::Send(e.to_string()))?;
+        send_mcp(
+            self.transport,
+            &self.session_id,
+            mcp::tools_call(id, name, arguments),
+        )
+        .await
+        .map_err(|e| McpCallError::Send(e.to_string()))?;
 
         let (result, deferred) =
             await_tool_reply(self.transport, id, mcp::DEFAULT_CALL_TIMEOUT).await;

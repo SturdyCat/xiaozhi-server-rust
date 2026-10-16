@@ -248,6 +248,7 @@ fun ViewContainer<*, *>.renderConfigSection(
         "tts" -> ttsConfigCard(form, ctx)
         "llm" -> llmConfigCard(form, ctx)
         "command" -> commandConfigCard(form)
+        "nlu" -> nluConfigCard(form)
         "wakeup" -> wakeupConfigCard(form)
         "aiui" -> aiuiConfigCard(form)
         "soul" -> soulConfigCard(form, ctx)

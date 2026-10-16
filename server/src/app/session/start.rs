@@ -12,7 +12,7 @@ use crate::app::events::ServerEvent;
 use crate::app::transport::Transport;
 use crate::engine::Engines;
 use crate::plugins::aiui::{AiuiSession, FullChainEngine};
-use crate::plugins::nlu::NluEngine;
+use crate::plugins::skill::SkillRegistry;
 use crate::plugins::wakeup::WakeGreeting;
 
 use super::{Session, SessionParams};
@@ -75,9 +75,15 @@ pub async fn run_session<T: Transport>(
     } else {
         None
     };
-    // 规则 NLU 引擎快照：会话开始时取一次（= 注册表声明的 next_session 语义）。
-    // 未启用时是恒不命中的空引擎，零开销、零行为变化。数据源用每设备生效配置。
-    let nlu = NluEngine::new(&eff_config.command, &eff_config.nlu);
+    // 技能目录快照：会话开始时取一次（= 注册表声明的 next_session 语义）。
+    // `[command]` + `[nlu]` 统一编译（规则 + 轻量模型两级）；全关时空目录，零开销。
+    // 数据源用每设备生效配置。
+    let skills = SkillRegistry::new(&eff_config.command, &eff_config.nlu);
+    if skills.active() {
+        tracing::info!(
+            "session {session_id} 技能级联已启用：规则 + 轻量模型两级本地识别先于 LLM（设备 {device_id}）"
+        );
+    }
     // 唤醒问候语快照：同上（next_session 语义）。数据源用每设备生效配置。
     let wake = WakeGreeting::new(&eff_config.wakeup);
     // 登记设备与会话（管理页「设备 / 会话 / 对话记录 / 概览」的数据源）。
@@ -135,12 +141,16 @@ pub async fn run_session<T: Transport>(
         abort: Arc::new(AtomicBool::new(false)),
         aiui,
         pacer: DownlinkPacer::new(params.downlink_lead_ms as u64),
-        nlu,
+        skills,
         close_requested: false,
         mcp_enabled: mcp,
         mcp_next_id: 1,
         wake,
-        inject_rx: if _inject_guard.is_some() { Some(inject_rx) } else { None },
+        inject_rx: if _inject_guard.is_some() {
+            Some(inject_rx)
+        } else {
+            None
+        },
     };
     session.run().await
 }

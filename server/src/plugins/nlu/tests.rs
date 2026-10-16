@@ -31,6 +31,7 @@ fn control_light_engine() -> NluEngine {
                 ..Default::default()
             },
         }],
+        ..NluConfig::default()
     };
     NluEngine::new(&CommandConfig::default(), &nlu)
 }
@@ -62,9 +63,7 @@ fn template_fails_when_slot_value_not_in_list() {
 #[test]
 fn template_normalization_tolerates_punctuation_and_particles() {
     let eng = control_light_engine();
-    let m = eng
-        .parse("把，卧室，的灯关闭！")
-        .expect("标点应被归一化掉");
+    let m = eng.parse("把，卧室，的灯关闭！").expect("标点应被归一化掉");
     assert_eq!(m.slots.get("room").map(String::as_str), Some("卧室"));
     assert_eq!(m.slots.get("action").map(String::as_str), Some("关闭"));
 
@@ -77,7 +76,9 @@ fn template_normalization_tolerates_punctuation_and_particles() {
 fn prefix_and_suffix_are_ignored() {
     // 语音识别常多说"请"/"谢谢"，模板不强制消费全文。
     let eng = control_light_engine();
-    let m = eng.parse("请帮我把卧室的灯关闭谢谢").expect("前后缀应被容忍");
+    let m = eng
+        .parse("请帮我把卧室的灯关闭谢谢")
+        .expect("前后缀应被容忍");
     assert_eq!(m.intent, "control_light");
     assert_eq!(m.slots.get("room").map(String::as_str), Some("卧室"));
 }
@@ -96,6 +97,7 @@ fn optional_slot_allows_empty() {
             templates: vec!["播放{singer}的歌".into()],
             ..Default::default()
         }],
+        ..NluConfig::default()
     };
     let eng = NluEngine::new(&CommandConfig::default(), &nlu);
     // "播放的歌" → singer 为空，optional 允许。
@@ -147,8 +149,45 @@ fn unknown_intent_returns_none() {
 #[test]
 fn inactive_engine_never_matches() {
     // command 关闭 且 无自定义意图 → 完全不拦。
+    // 「是否有技能可拦」由 `SkillRegistry::active`（目录非空）判定；引擎层的可观测契约：
+    // 全关时任何文本都不命中（包括高危的 end_session 词）。
     let eng = NluEngine::new(&CommandConfig::default(), &NluConfig::default());
-    assert!(!eng.active());
     assert_eq!(eng.parse("退下"), None);
     assert_eq!(eng.parse("把卧室的灯关闭"), None);
+}
+
+/// —— `template.rs` 的解析测试（自内联块外置，AGENTS.md §5.10 无例外口径）——
+
+#[test]
+fn template_parses_lit_slot_lit_slot() {
+    let t = parse_template("把{room}的灯{action}");
+    assert_eq!(
+        t.tokens,
+        vec![
+            template::Tok::Lit("把".into()),
+            template::Tok::Slot("room".into()),
+            template::Tok::Lit("的灯".into()),
+            template::Tok::Slot("action".into()),
+        ]
+    );
+}
+
+#[test]
+fn template_normalizes_literals_and_strips_punctuation() {
+    // 字面里的标点应被归一化掉，槽位名不受影响
+    let t = parse_template("打开{room}的灯！");
+    assert_eq!(
+        t.tokens,
+        vec![
+            template::Tok::Lit("打开".into()),
+            template::Tok::Slot("room".into()),
+            template::Tok::Lit("的灯".into()),
+        ]
+    );
+}
+
+#[test]
+fn template_trailing_slot_without_literal() {
+    let t = parse_template("{content}");
+    assert_eq!(t.tokens, vec![template::Tok::Slot("content".into())]);
 }

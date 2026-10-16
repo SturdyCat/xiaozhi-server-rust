@@ -36,7 +36,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::app::events::TurnTrace;
-use crate::app::splitter::{SentenceSplitter, spawn_flush_watchdog};
+use crate::app::splitter::{spawn_flush_watchdog, SentenceSplitter};
 use crate::plugins::llm::{Llm, LlmEvent, LlmTurnResult};
 use crate::plugins::prompt::TurnPrompt;
 
@@ -60,6 +60,8 @@ pub(super) struct ProducerTurn {
     pub trace: Arc<TurnTrace>,
     /// 会话 id：只进日志文案，不参与任何判定。
     pub session_id: String,
+    /// 本轮可用的技能工具（`execute_skill`，来自技能目录）；`None` = 纯聊天不声明工具。
+    pub tools: Option<Vec<crate::plugins::llm::ToolSpec>>,
 }
 
 /// 读 LLM 流 → 按句切分（含定时 flush watchdog）→ unbounded channel。
@@ -78,7 +80,11 @@ pub(super) fn spawn_llm_producer(
     turn_ctx: ProducerTurn,
     flush_wait: Duration,
 ) -> LlmProducer {
-    let ProducerTurn { trace, session_id } = turn_ctx;
+    let ProducerTurn {
+        trace,
+        session_id,
+        tools,
+    } = turn_ctx;
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
     // 共享 splitter：回调 feed（切句）与 watchdog take_expired（定时出残句）共用。
     let shared = Arc::new(Mutex::new(SentenceSplitter::new()));
@@ -96,10 +102,7 @@ pub(super) fn spawn_llm_producer(
             // 只在**真正首次** mark 时记日志：判据取自 mark 的返回值，与 first-only
             // 语义同源（不会打出"第 7 次首句就绪"这种自相矛盾的观测）。
             if trace_watch.mark_sentence_ready() {
-                tracing::info!(
-                    turn,
-                    "session {sid} 首句就绪（定时 flush 残句）"
-                );
+                tracing::info!(turn, "session {sid} 首句就绪（定时 flush 残句）");
             }
         });
         spawn_flush_watchdog(
@@ -130,7 +133,7 @@ pub(super) fn spawn_llm_producer(
                 &history,
                 &user,
                 &prompt,
-                None,
+                tools.as_deref(),
                 Box::new(move |event| {
                     if abort.load(Ordering::Relaxed) {
                         cancelled_cb.store(true, Ordering::Release);
@@ -173,7 +176,10 @@ pub(super) fn spawn_llm_producer(
         finished.notify_waiters();
         result
     });
-    LlmProducer { sentences: rx, result }
+    LlmProducer {
+        sentences: rx,
+        result,
+    }
 }
 
 #[cfg(test)]

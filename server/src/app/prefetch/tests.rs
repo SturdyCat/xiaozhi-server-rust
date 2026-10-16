@@ -77,10 +77,11 @@ impl TtsEngine for MockTts {
         chunk_cb: TtsChunkCallback,
     ) -> Result<()> {
         self.calls.fetch_add(1, Ordering::SeqCst);
-        self.log
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push(("synth_start", text.to_string(), Instant::now()));
+        self.log.lock().unwrap_or_else(|e| e.into_inner()).push((
+            "synth_start",
+            text.to_string(),
+            Instant::now(),
+        ));
         std::thread::sleep(self.startup);
         if self.fail {
             anyhow::bail!("mock 合成失败");
@@ -94,10 +95,11 @@ impl TtsEngine for MockTts {
             }
             std::thread::sleep(self.chunk_gap);
         }
-        self.log
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push(("synth_end", text.to_string(), Instant::now()));
+        self.log.lock().unwrap_or_else(|e| e.into_inner()).push((
+            "synth_end",
+            text.to_string(),
+            Instant::now(),
+        ));
         Ok(())
     }
 
@@ -119,8 +121,17 @@ fn sentences(items: &[&str]) -> mpsc::UnboundedReceiver<String> {
     rx
 }
 
-fn resolver(tts: Arc<MockTts>, cache_key: u64) -> impl FnMut(&str) -> SentenceSource + Send + 'static {
-    move |_s: &str| SentenceSource { tts: tts.clone(), cache_key, speed: 1.0, speaker: 0 }
+fn resolver(
+    tts: Arc<MockTts>,
+    cache_key: u64,
+) -> impl FnMut(&str) -> SentenceSource + Send + 'static {
+    move |_s: &str| SentenceSource {
+        tts: tts.clone(),
+        cache_key,
+        hot_audio_key: None,
+        speed: 1.0,
+        speaker: 0,
+    }
 }
 
 fn abort_flag() -> Arc<AtomicBool> {
@@ -148,16 +159,15 @@ fn budget() -> Arc<DownloadBudget> {
 async fn prefetch_starts_next_synthesis_before_current_finishes_playing() {
     let log: Log = Arc::new(Mutex::new(Vec::new()));
     let tts = Arc::new(MockTts::new(log.clone()));
-    let mut prepared =
-        spawn_sentence_prefetch(
-            abort_flag(),
-            Arc::new(TtsCache::new(16)),
-            budget(),
-            gate(1),
-            None,
-            resolver(tts.clone(), 1),
-            sentences(&["A", "B"]),
-        );
+    let mut prepared = spawn_sentence_prefetch(
+        abort_flag(),
+        Arc::new(TtsCache::new(16)),
+        budget(),
+        gate(1),
+        None,
+        resolver(tts.clone(), 1),
+        sentences(&["A", "B"]),
+    );
 
     // 第一句的成品立刻可取（预取 worker 不与消费者同步）
     let first = prepared.recv().await.expect("应取到第一句");
@@ -260,7 +270,11 @@ async fn prefetch_stops_on_abort() {
         !texts.contains(&"C".to_string()),
         "打断后不得再往下合成新句子，实测投递 {texts:?}"
     );
-    assert!(tts.calls() <= 2, "打断后最多只允许在飞的一句，实测 {} 次合成", tts.calls());
+    assert!(
+        tts.calls() <= 2,
+        "打断后最多只允许在飞的一句，实测 {} 次合成",
+        tts.calls()
+    );
     assert!(
         tts.cancelled.load(Ordering::SeqCst) >= 1,
         "进行中的合成应被回调取消（回调返回 false → 引擎立即收尾）"
@@ -275,16 +289,15 @@ async fn prefetch_cache_hit_delivers_encoded_frames() {
     let cache = Arc::new(TtsCache::new(16));
     let frames = vec![vec![1u8, 2], vec![3u8], vec![4u8, 5, 6]];
     cache.insert(42, frames.clone());
-    let mut prepared =
-        spawn_sentence_prefetch(
-            abort_flag(),
-            cache,
-            budget(),
-            gate(1),
-            None,
-            resolver(tts.clone(), 42),
-            sentences(&["好的"]),
-        );
+    let mut prepared = spawn_sentence_prefetch(
+        abort_flag(),
+        cache,
+        budget(),
+        gate(1),
+        None,
+        resolver(tts.clone(), 42),
+        sentences(&["好的"]),
+    );
     let item = prepared.recv().await.expect("应取到缓存命中项");
     assert_eq!(item.text, "好的");
     assert_eq!(item.cache_key, 42);
@@ -311,9 +324,14 @@ async fn prefetch_reports_failed_synthesis() {
         resolver(tts.clone(), 1),
         sentences(&["会失败的句子"]),
     );
-    let item = prepared.recv().await.expect("失败也要投递（调用方据此跳过缓存）");
+    let item = prepared
+        .recv()
+        .await
+        .expect("失败也要投递（调用方据此跳过缓存）");
     match item.audio {
-        PreparedAudio::Stream { mut chunks, done, .. } => {
+        PreparedAudio::Stream {
+            mut chunks, done, ..
+        } => {
             assert!(chunks.recv().await.is_none(), "失败句不应有分片");
             assert!(!done.await.expect("done 应有值"), "合成失败必须上报 false");
         }
@@ -337,7 +355,9 @@ async fn prefetch_reports_successful_synthesis() {
     );
     let item = prepared.recv().await.expect("应取到成品");
     match item.audio {
-        PreparedAudio::Stream { mut chunks, done, .. } => {
+        PreparedAudio::Stream {
+            mut chunks, done, ..
+        } => {
             let mut n = 0;
             while chunks.recv().await.is_some() {
                 n += 1;
@@ -374,11 +394,18 @@ fn download_budget_pauses_at_limit_and_resumes_on_release() {
     assert!(!waiter.is_finished(), "积压到预算时必须暂停下载");
 
     b.release(200); // 消费一片 → 额度归还
-    assert!(waiter.join().expect("线程正常结束"), "额度归还后下载必须立刻恢复");
+    assert!(
+        waiter.join().expect("线程正常结束"),
+        "额度归还后下载必须立刻恢复"
+    );
     assert_eq!(b.queued_ms(), 200);
     // 限速等待在**等到之后**记账（未完成/被打断的等待不记账——那说明本轮已结束）
     let after = b.stats();
-    assert!(after.throttle_ms >= 40, "限速等待必须被记账，实测 {}ms", after.throttle_ms);
+    assert!(
+        after.throttle_ms >= 40,
+        "限速等待必须被记账，实测 {}ms",
+        after.throttle_ms
+    );
     assert_eq!(after.throttle_events, 1, "一次等待只记一次事件");
     assert_eq!(after.peak_ms, 200, "峰值水位 = 实际积压");
 }
@@ -387,7 +414,10 @@ fn download_budget_pauses_at_limit_and_resumes_on_release() {
 #[test]
 fn download_budget_admits_oversized_single_chunk() {
     let b = DownloadBudget::new(100);
-    assert!(b.reserve(5_000, &AtomicBool::new(false), &|| false), "单片超预算也必须放行");
+    assert!(
+        b.reserve(5_000, &AtomicBool::new(false), &|| false),
+        "单片超预算也必须放行"
+    );
     assert_eq!(b.queued_ms(), 5_000);
 }
 
@@ -408,7 +438,8 @@ fn pcm_chunk_drop_returns_quota_on_every_path() {
     // ② 接收端被整个丢弃（打断 / 本轮结束）：通道里残留的分片照样归还
     let (tx, rx) = mpsc::channel::<PcmChunk>(4);
     assert!(b.reserve(50, &abort, &|| false));
-    tx.try_send(PcmChunk::budgeted(vec![0.0; 10], 50, b.clone())).expect("入队");
+    tx.try_send(PcmChunk::budgeted(vec![0.0; 10], 50, b.clone()))
+        .expect("入队");
     assert_eq!(b.queued_ms(), 50);
     drop(rx);
     assert_eq!(b.queued_ms(), 0, "接收端被丢弃也必须归还额度");
@@ -441,7 +472,10 @@ fn reserve_gives_up_on_abort() {
     assert!(!b.reserve(100, &abort, &|| false), "已打断 → 不得再等额度");
     // 读端关闭同样立刻放弃（不必等 abort）
     let abort2 = AtomicBool::new(false);
-    assert!(!b.reserve(100, &abort2, &|| true), "读端关闭 → 不得再等额度");
+    assert!(
+        !b.reserve(100, &abort2, &|| true),
+        "读端关闭 → 不得再等额度"
+    );
 }
 
 /// **端到端**：预算把"上游下载"摁住，但**不丢片、不乱序、内存有界**。
@@ -486,3 +520,47 @@ async fn download_budget_bounds_pipeline_without_losing_chunks() {
 }
 
 mod gates;
+
+#[tokio::test]
+async fn persistent_hit_skips_synthesis_and_inference_gate() {
+    use crate::app::hot_audio::{HotAudioKey, HotAudioStore};
+    let dir = std::env::temp_dir().join(format!("xz-prefetch-{}", uuid::Uuid::new_v4()));
+    let key = HotAudioKey::from_session(&crate::config::Config::default(), 24_000, 60, "普通回答");
+    let frames = vec![vec![1, 2], vec![3]];
+    let store = Arc::new(HotAudioStore::new(Some(dir.clone())));
+    assert!(store.put(&key, &frames));
+    let cache = Arc::new(TtsCache::with_store(8, store));
+    let tts = Arc::new(MockTts::new(Arc::new(Mutex::new(Vec::new()))));
+    let shared_gate = gate(1);
+    let held = shared_gate
+        .acquire_with_abort(&AtomicBool::new(false))
+        .await
+        .unwrap();
+    let mut rx = spawn_sentence_prefetch(
+        abort_flag(),
+        cache.clone(),
+        budget(),
+        shared_gate,
+        None,
+        {
+            let tts = tts.clone();
+            move |_| SentenceSource {
+                tts: tts.clone(),
+                cache_key: key.mem_key(),
+                hot_audio_key: Some(key.clone()),
+                speed: 1.0,
+                speaker: 0,
+            }
+        },
+        sentences(&["普通回答"]),
+    );
+    let item = tokio::time::timeout(Duration::from_secs(1), rx.recv())
+        .await
+        .expect("磁盘命中不能等待已被占满的推理闸门")
+        .unwrap();
+    assert!(matches!(item.audio, PreparedAudio::Cached(ref f) if **f == frames));
+    assert_eq!(tts.calls(), 0);
+    drop(held);
+    drop(rx);
+    let _ = std::fs::remove_dir_all(dir);
+}

@@ -100,7 +100,11 @@ async fn unrelated_text_frames_are_deferred_in_order() {
     ]);
     let (result, deferred) = await_tool_reply(&mut t, 7, Duration::from_millis(200)).await;
     assert_eq!(result.unwrap().id, 7);
-    assert_eq!(deferred.len(), 2, "非本次响应的文本帧必须原样交回调用方，不能丢");
+    assert_eq!(
+        deferred.len(),
+        2,
+        "非本次响应的文本帧必须原样交回调用方，不能丢"
+    );
     assert!(deferred[0].contains("listen"), "{}", deferred[0]);
     assert!(deferred[1].contains("abort"), "{}", deferred[1]);
 }
@@ -111,7 +115,11 @@ async fn wrong_id_is_deferred_and_the_matching_one_wins() {
     let mut t = MockTransport::new(vec![reply_frame(1), reply_frame(2)]);
     let (result, deferred) = await_tool_reply(&mut t, 2, Duration::from_millis(200)).await;
     assert_eq!(result.unwrap().id, 2);
-    assert_eq!(deferred.len(), 1, "id 不匹配的响应应被留下交调用方按普通消息处理");
+    assert_eq!(
+        deferred.len(),
+        1,
+        "id 不匹配的响应应被留下交调用方按普通消息处理"
+    );
     assert!(deferred[0].contains("\"id\":1"), "{}", deferred[0]);
 }
 
@@ -170,7 +178,11 @@ async fn device_error_reply_is_a_normal_result() {
     let reply = result.expect("设备拒绝是正常响应，不是传输错误");
     assert_eq!(reply.id, 5);
     assert!(!reply.succeeded());
-    assert!(reply.summary().contains("Unknown tool"), "{}", reply.summary());
+    assert!(
+        reply.summary().contains("Unknown tool"),
+        "{}",
+        reply.summary()
+    );
 }
 
 #[tokio::test]
@@ -252,13 +264,13 @@ fn sent_payloads(t: &MockTransport) -> Vec<serde_json::Value> {
 #[tokio::test]
 async fn discovery_walks_initialize_then_pages_of_tools_list() {
     let mut t = MockTransport::new(vec![
-        result_frame(
-            1,
-            server_info(),
-        ),
+        result_frame(1, server_info()),
         result_frame(
             2,
-            tools_page(&["self.audio_speaker.set_volume"], Some("self.lamp.turn_on")),
+            tools_page(
+                &["self.audio_speaker.set_volume"],
+                Some("self.lamp.turn_on"),
+            ),
         ),
         result_frame(3, tools_page(&["self.lamp.turn_on", "self.reboot"], None)),
     ]);
@@ -541,8 +553,14 @@ async fn discovery_to_registry_to_endpoint_json_is_one_chain() {
     assert_eq!(d["online"], true);
     assert_eq!(d["tool_count"], 3, "两页合并");
     assert_eq!(d["ai_tool_count"], 1, "只有 set_volume 对 AI 可见");
-    assert_eq!(d["user_tool_count"], 2, "audio_listener.stop 与 reboot 是 user_only");
-    assert!(d["age_ms"].as_u64().unwrap() < 5_000, "刚探测完，age 应该很小");
+    assert_eq!(
+        d["user_tool_count"], 2,
+        "audio_listener.stop 与 reboot 是 user_only"
+    );
+    assert!(
+        d["age_ms"].as_u64().unwrap() < 5_000,
+        "刚探测完，age 应该很小"
+    );
     assert_eq!(d["error"], serde_json::Value::Null);
     // 工具本身：界面要显示的 name / signature / description 都在
     let tools = d["tools"].as_array().unwrap();

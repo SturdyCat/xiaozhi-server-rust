@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use crate::plugins::nlu::template::{Tok, Template};
+use crate::plugins::nlu::template::{Template, Tok};
 
 /// 在 `hay` 中查找 `needle` 子序列的起始 char 索引，无则返回 None。
 fn find_subseq(hay: &[char], needle: &[char]) -> Option<usize> {
@@ -97,6 +97,23 @@ pub fn match_template(
                             }
                             match found {
                                 Some((s, e)) => {
+                                    // 两条安全闸（模糊包含的代价控制，与轻量模型层同口径）：
+                                    // ① 歧义：剩余文本里还能找到**其他**值表成员
+                                    //   （「打开还是关闭」）→ 不猜，交给 LLM；
+                                    // ② 否定：值出现**之前**的前缀含否定词（「别打开」）
+                                    //   → 方向性副作用宁可漏，不可反。
+                                    let others = values
+                                        .unwrap()
+                                        .iter()
+                                        .filter(|v| {
+                                            let vc: Vec<char> = v.chars().collect();
+                                            find_subseq(&chars[cur..], &vc).is_some()
+                                        })
+                                        .count();
+                                    let prefix: String = chars[cur..s].iter().collect();
+                                    if others > 1 || super::contains_negation(&prefix) {
+                                        return None;
+                                    }
                                     let value: String = chars[s..e].iter().collect();
                                     result.insert(name.clone(), value);
                                     cur = e;

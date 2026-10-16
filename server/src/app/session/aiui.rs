@@ -14,7 +14,7 @@ use crate::app::protocol::ServerMessage;
 use crate::app::transport::Transport;
 use crate::plugins::aiui::FullChainTurn;
 
-use super::{Session, blocking_result, f32_to_i16_16k, send_text, UtteranceDecision};
+use super::{blocking_result, f32_to_i16_16k, send_text, Session, UtteranceDecision};
 
 impl<'a, T: Transport> Session<'a, T> {
     /// AIUI 全链路：每段 = 一轮 oneshot 交互（识别 + 大模型 + 合成在 AIUI 云端闭环）。
@@ -124,15 +124,21 @@ impl<'a, T: Transport> Session<'a, T> {
         });
         let (done_tx, done_rx) = tokio::sync::oneshot::channel::<bool>();
         let _ = done_tx.send(true); // 云端音频已完整在手：视为"合成正常结束"
-        let (sink, source) =
-            new_reservoir(self.params.downlink_buffer_ms, self.params.downlink_frame_ms);
+        let (sink, source) = new_reservoir(
+            self.params.downlink_buffer_ms,
+            self.params.downlink_frame_ms,
+        );
         let filler = spawn_single_sentence_filler(
             self.abort.clone(),
             self.engines.tts_cache.clone(),
             self.params,
             sink,
             turn.stt.clone(),
-            PreparedAudio::Stream { sr: 16000, chunks: chunk_rx, done: done_rx },
+            PreparedAudio::Stream {
+                sr: 16000,
+                chunks: chunk_rx,
+                done: done_rx,
+            },
             0, // AIUI 全链路回传音频不入缓存（音频由云端给定，同句不保证可复现）
         );
         let mut first_frame_at = None;

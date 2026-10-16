@@ -9,11 +9,55 @@
 ## 项目特色
 
 - 🎙️ **完全本地语音链路** —— SenseVoice 识别 + Kokoro 合成 + Silero 切段全部离线（CPU 推理），仅 LLM 走 HTTP；下行缓冲三段式（水库 + 起跑闸）保证长回复不断音。
-- 🧠 **智能上下文，可插拔、默认零成本** —— 记忆三后端（图记忆 / 纯存储 / **本地文档 RAG**，词法检索零外网零向量库）、灵魂人格预设、唤醒问候（稳态零 LLM 零 TTS）、指令闸门（**MCP 工具清单驱动**，老固件自动降级）——不开启时行为与裸服务端完全一致。
+- ⚡ **三级技能级联** —— 规则模板 → 本地轻量模型打分 → 云 LLM，本地命中即执行、零外网零 LLM；LLM 仅能以 `execute_skill` 白名单回环；固定应答文本落盘（`hot-audio/`）跨重启复用，稳态零合成。
+- 🧠 **智能上下文，可插拔、默认零成本** —— 记忆三后端（图记忆 / 纯存储 / **本地文档 RAG**，词法检索零外网零向量库）、灵魂人格预设、唤醒问候（稳态零 LLM 零 TTS）——不开启时行为与裸服务端完全一致。
 - 🎛️ **配置即产品** —— schema 驱动 + 热生效三粒度 + 密钥打码护栏 + 部分更新/乐观并发；**配置预设**一键快照回滚；**每设备 overlay** 白名单个性化（这台设备换音色/语速/人格，其他设备不受影响）。
 - 🩺 **状态可自诊** —— 11 个能力健康自检（坏了显示原因与怎么修）、延迟大盘 p50/p95、设备/会话/对话/用量面板、设备消息注入、LLM/TTS/VAD 内联连通性测试。
 - 📦 **运维闭环** —— OTA 固件按「功能 × 型号」托管分发（元数据自动识别，防发错包变砖）、模型自动下载、可选 Bearer 鉴权。
 - 💻 **双端管理** —— Web 管理台（浏览器直开）+ macOS 原生测试台（麦克风采集 + Opus 播放，端到端语音验收）。
+
+---
+
+## 系统框架
+
+```mermaid
+flowchart LR
+    ESP[ESP32 设备<br/>Opus 上行 / 音频下行]
+    ADMIN[Kuikly 管理台<br/>Web + macOS 测试台]
+
+    subgraph srv[Rust 服务端 · 单二进制]
+        GW[HTTP / WS 网关<br/>固件协议 v1/v2/v3 · 静态管理页]
+        subgraph sess[每连接会话流水线]
+            VAD[Silero VAD 实例池] --> ASR[SenseVoice 本地 ASR]
+            ASR --> NLU{技能级联 skill/}
+            NLU -->|① 规则模板命中| ACT[本地执行<br/>告别语 / reply / MCP 工具派发]
+            NLU -->|② 轻量模型达阈值| ACT
+            NLU -->|③ 都未命中| LLM[Responses API 流式云 LLM]
+            LLM -. execute_skill 白名单回环 .-> NLU
+            ACT -->|应答文本| TTS[Kokoro 分句预取]
+            LLM --> TTS
+            TTS --> HOT[(hot-audio/<br/>固定文本持久缓存)]
+        end
+        DOWN[下行三段缓冲<br/>起跑闸 + 水库 + 实时 pacing]
+        REG[插件注册表<br/>ASR/TTS/LLM/VAD 可换实现 · 热生效]
+        CTX[灵魂人格 + 记忆<br/>graph / store / RAG]
+        OBS[健康自检 · 延迟大盘 · 用量 · OTA]
+    end
+
+    ESP <-->|WS: JSON + Opus| GW
+    ADMIN -->|HTTP 配置 / 观测| GW
+    GW --> VAD
+    TTS --> DOWN
+    DOWN -->|sentence / audio 帧| ESP
+    CTX -. 有预算注入 .-> LLM
+    REG -. 构建与热刷新 .-> VAD
+    REG -.-> ASR
+    REG -.-> TTS
+    REG -.-> LLM
+    OBS -. 事件订阅 .-> sess
+```
+
+> 启用 `[aiui]` 时切换为云端 ASR + LLM + TTS 闭环，本地流水线与人格/记忆不参与；AIUI 与本地级联互斥。细节见[架构概览](<docs/architecture.md>)。
 
 ---
 
@@ -50,8 +94,8 @@ curl http://127.0.0.1:8000/api/health              # => {"status":"ok",...}
 .
 ├── Dockerfile / docker-compose.yml / docker-entrypoint.sh   # 部署编排
 ├── server/                      # Rust 服务端
-│   ├── src/                    # main/config(含 overlay)/engine + app/(session/ws/protocol/events/pipeline/metrics)
-│   │                           # + plugins/(asr/tts/llm/vad/aiui/memory/soul/command/wakeup/mcp + registry/health)
+│   ├── src/                    # main/config(含 overlay)/engine + app/(session/ws/protocol/downlink/events/metrics + mcp/firmware/hot_audio 等)
+│   │                           # + plugins/(asr/tts/llm/vad/aiui/memory/soul/nlu/command/skill/wakeup + registry/health/prompt)
 │   ├── config.example.toml     # 配置字段权威说明
 │   └── tests/mock_client.py    # 场景化协议联调（多轮 + abort + 唤醒问候）
 └── client/                      # Kuikly 多端管理台

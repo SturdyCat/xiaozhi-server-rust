@@ -1,4 +1,4 @@
-use super::projection::{ADVANCED_KEYS, full_field_key};
+use super::projection::{full_field_key, ADVANCED_KEYS};
 use super::*;
 
 /// 注册表 id 必须命名空间唯一（`<capability>.<impl>`）。
@@ -52,7 +52,11 @@ fn capability_registry_is_complete_and_consistent() {
     // (2) 清单无重复。
     let mut seen = std::collections::HashSet::new();
     for &cap in ALL_CAPABILITIES {
-        assert!(seen.insert(cap.id()), "ALL_CAPABILITIES 重复能力: {}", cap.id());
+        assert!(
+            seen.insert(cap.id()),
+            "ALL_CAPABILITIES 重复能力: {}",
+            cap.id()
+        );
     }
     // (3) 反向：注册表每条描述符的能力都必须在清单内，且已实现能力必须有实现。
     for d in REGISTRY {
@@ -89,7 +93,10 @@ fn advanced_keys_exist_in_registry() {
         }
     }
     for k in ADVANCED_KEYS {
-        assert!(all_keys.contains(*k), "ADVANCED_KEYS 中 {k} 不存在于注册表字段");
+        assert!(
+            all_keys.contains(*k),
+            "ADVANCED_KEYS 中 {k} 不存在于注册表字段"
+        );
     }
 }
 
@@ -147,7 +154,12 @@ fn context_capabilities_validate_and_report_hot() {
             continue;
         }
         (d.validate)(&cfg).unwrap_or_else(|e| panic!("{} 校验应通过: {e:#}", d.id));
-        assert_eq!(d.hot, HotReload::NextSession, "{} 应声明为 next_session", d.id);
+        assert_eq!(
+            d.hot,
+            HotReload::NextSession,
+            "{} 应声明为 next_session",
+            d.id
+        );
         assert!(
             d.requires.is_empty() || d.capability == Capability::Memory,
             "{} 不应把上游依赖声明为硬前置（坏掉只降级）",
@@ -415,10 +427,7 @@ fn nlu_rules_is_optional_and_hot_reloadable() {
     (d.validate)(&cfg).unwrap_or_else(|e| panic!("默认（无意图）应通过校验: {e:#}"));
     assert_eq!(d.hot, HotReload::NextSession);
     // 字段级档位：enabled 是"新会话生效"（POST /api/config 的 hot 据此判定）
-    assert_eq!(
-        field_hot(&["nlu", "enabled"]),
-        Some(HotReload::NextSession)
-    );
+    assert_eq!(field_hot(&["nlu", "enabled"]), Some(HotReload::NextSession));
     assert_eq!(section_hot("nlu"), HotReload::NextSession);
 
     // 启用但意图模板为空 = 永远命中不了：必须能被说成"配置问题"（而不是静默不拦）
@@ -429,7 +438,9 @@ fn nlu_rules_is_optional_and_hot_reloadable() {
     let err = (d.validate)(&cfg).unwrap_err().to_string();
     assert!(err.contains("templates"), "{err}");
     // 补上模板后即通过
-    cfg.nlu.intents[0].templates.push("把{room}的灯{action}".into());
+    cfg.nlu.intents[0]
+        .templates
+        .push("把{room}的灯{action}".into());
     (d.validate)(&cfg).unwrap_or_else(|e| panic!("补上模板后应通过: {e:#}"));
 
     // schema 必须把这张卡的顶层字段暴露出去（管理页「NLU」页签的数据源）
@@ -447,7 +458,11 @@ fn nlu_rules_is_optional_and_hot_reloadable() {
         .filter_map(|f| f["key"].as_str())
         .collect();
     // intents/slots 为嵌套数组，不登记为扁平字段（见 fields_nlu.rs 说明）
-    assert_eq!(keys, vec!["enabled"], "{keys:?}");
+    assert_eq!(
+        keys,
+        vec!["enabled", "model_threshold", "model_margin"],
+        "{keys:?}"
+    );
 }
 
 /// P1-7 漂移护栏：`[memory].engine` 的合法取值必须与注册表 memory.* 实现一一对应
@@ -503,7 +518,11 @@ fn memory_backend_values_match_registry_impls() {
         let cfg: crate::plugins::memory::MemoryConfig =
             toml::from_str(&format!("engine = \"{v}\"")).expect(v);
         let serialized = serde_json::to_string(&cfg.engine).unwrap();
-        assert_eq!(serialized.as_str(), format!("\"{v}\""), "engine 序列化应回环: {v}");
+        assert_eq!(
+            serialized.as_str(),
+            format!("\"{v}\""),
+            "engine 序列化应回环: {v}"
+        );
     }
 }
 

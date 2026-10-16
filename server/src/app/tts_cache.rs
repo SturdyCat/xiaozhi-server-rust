@@ -1,53 +1,63 @@
-//! TTS 结果内存缓存（LRU，按条目数）：把合成+重采样+Opus 编码后的**下行帧序列**
-//! 按句缓存，命中时零合成延迟、直接经 [`crate::app::downlink::DownlinkPacer`]
-//! 按 ESP 实时节奏下发（帧同样先进 `app::downlink::reservoir` 水库，见该模块文档）
-//! ——高频短句（"好的""我在""已打开"等）首字延迟从数百 ms（甚至本地 Kokoro 的数秒）
-//! 降到一次预充突发（~lead_ms）。
+//! 两级 TTS 成品缓存：内存 LRU + [`HotAudioStore`] 持久化已编码下行 Opus 帧。
 //!
-//! ## 缓存层级的选择：缓存**编码后帧**而非 PCM
-//! 缓存 PCM 还要每次重采样+编码（有 CPU 成本），且与下行参数耦合在解码端；
-//! 直接缓存 Opus 帧负载（未加二进制协议头，发送时才 [`wrap_downlink`]）：
-//! 命中路径零计算。因此缓存键必须包含影响编码结果的一切参数：
-//! 引擎签名（backend/模型/音色凭据）、speaker、speed、下行采样率、帧长——
-//! 任一变化键即不同，天然不会串用旧音频。
-//!
-//! 键经哈希混淆（std `DefaultHasher`）：引擎签名含讯飞密钥，**不可明文**
-//! 进日志/内存键名。容量按条目数（`[tts].cache_entries`，0=关闭），超限逐最旧。
+//! 所有生产文本都可登记身份；`get_async` 先查内存，再在 `spawn_blocking` 读盘并暖内存。
+//! 只有完整、成功且未被中断的句子可调用 `insert_async`，异步落盘结束后才返回。
+//! 同步 `get` / `insert` 保留为纯内存 API（兼容既有 wakeup 暖缓存与单测）。
+//! 命中仍经水库、背压和回复级节拍器发送，不改变流式合成或 ESP pacing。
+//! 测试台强制真合成不登记身份；AIUI 云闭环返回的音频发生合成后才到服务端，
+//! 本地缓存无法撤销云端已经发生的合成，调用方只缓存可复现的独立 TTS 文本。
 
 use std::collections::{HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
 
-/// 一句缓存音频：已编码的下行 Opus 帧负载序列（**不含**二进制协议头）。
+use crate::app::hot_audio::{
+    HotAudioIdentity, HotAudioKey, HotAudioStore, MAX_ENTRY_BYTES, MAX_FRAMES,
+};
+
+/// 一句缓存音频：已编码的下行 Opus 帧负载序列（不含二进制协议头）。
 #[derive(Debug, Clone)]
 pub struct CachedAudio {
     pub opus_frames: Arc<Vec<Vec<u8>>>,
 }
 
-/// 进程级 TTS 缓存（跨会话共享，放 [`crate::engine::Engines`]）。
+/// 进程级共享缓存；容量 0 禁用两级缓存。磁盘错误一律按 miss / 写入失败降级。
 pub struct TtsCache {
-    /// 容量（条目数）；0 = 完全禁用（get 恒 None、insert 丢弃）。
     capacity: usize,
     inner: Mutex<Inner>,
+    store: Option<Arc<HotAudioStore>>,
+    /// 许可在进入 blocking 池前获取，避免无界堆积 blocking IO 任务。
+    io_gate: Arc<tokio::sync::Semaphore>,
 }
 
 #[derive(Default)]
 struct Inner {
     map: HashMap<u64, CachedAudio>,
-    /// 插入顺序（LRU 逐出用；get 命中移到队尾）。
     order: VecDeque<u64>,
+    /// 只保存固定长度的哈希投影，不保留任意长原文或含凭据的引擎签名。
+    identities: HashMap<u64, HotAudioIdentity>,
+    identity_order: VecDeque<u64>,
 }
 
 impl TtsCache {
+    /// 纯内存缓存（测试及无持久化需求的调用点）。
     pub fn new(capacity: u32) -> Self {
         Self {
             capacity: capacity as usize,
             inner: Mutex::new(Inner::default()),
+            store: None,
+            io_gate: Arc::new(tokio::sync::Semaphore::new(1)),
         }
     }
 
-    /// 缓存键（哈希混淆）：引擎签名 + speaker + speed + 下行采样率 + 帧长 + 文本。
-    /// 引擎签名含凭据字段，哈希后不落明文（**不要**把返回值外的组成项打日志）。
+    pub fn with_store(capacity: u32, store: Arc<HotAudioStore>) -> Self {
+        Self {
+            store: Some(store),
+            ..Self::new(capacity)
+        }
+    }
+
+    /// 缓存键包含全部编码输入；不得记录原始引擎签名（含凭据）。
     pub fn make_key(
         engine_signature: &str,
         speaker: i32,
@@ -66,9 +76,32 @@ impl TtsCache {
         h.finish()
     }
 
-    /// 查缓存；命中时把该条目标记为最近使用（LRU touch）。
+    /// 登记当句身份后，既有 u64 键即可用于读盘/写盘。登记表独立有界（至少容纳
+    /// 1024 个近期身份），不随音频 LRU 淘汰，给正在预取/编码的句子留出窗口。
+    pub fn register_identity(&self, key: HotAudioKey) {
+        if self.capacity == 0 || self.store.is_none() {
+            return;
+        }
+        let mem_key = key.mem_key();
+        if mem_key == 0 {
+            return;
+        }
+        let identity = HotAudioIdentity::from_key(&key);
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(pos) = inner.identity_order.iter().position(|k| *k == mem_key) {
+            inner.identity_order.remove(pos);
+        } else if inner.identities.len() >= self.capacity.max(1024) {
+            if let Some(oldest) = inner.identity_order.pop_front() {
+                inner.identities.remove(&oldest);
+            }
+        }
+        inner.identities.insert(mem_key, identity);
+        inner.identity_order.push_back(mem_key);
+    }
+
+    /// 纯内存查找并 touch LRU；0 是流水线“不缓存”的保留键。
     pub fn get(&self, key: u64) -> Option<CachedAudio> {
-        if self.capacity == 0 {
+        if self.capacity == 0 || key == 0 {
             return None;
         }
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
@@ -80,25 +113,101 @@ impl TtsCache {
         Some(hit)
     }
 
-    /// 插入（超容量逐最旧；容量 0 丢弃）。同键覆盖并保持原插入位次刷新。
+    /// 内存 miss 才读盘，所有磁盘 IO 在 blocking 池内；读失败不影响合成回退。
+    pub async fn get_async(&self, key: u64) -> Option<CachedAudio> {
+        if let Some(hit) = self.get(key) {
+            return Some(hit);
+        }
+        if self.capacity == 0 || key == 0 {
+            return None;
+        }
+        let store = self.store.as_ref()?.clone();
+        let identity = self.identity(key)?;
+        let permit = self.io_gate.clone().acquire_owned().await.ok()?;
+        if let Some(hit) = self.get(key) {
+            return Some(hit);
+        }
+        let frames = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            store.get_identity(&identity)
+        })
+        .await
+        .ok()??;
+        let hit = CachedAudio {
+            opus_frames: Arc::new(frames),
+        };
+        self.insert_memory(key, hit.clone());
+        Some(hit)
+    }
+
+    /// 纯内存插入：不执行 IO（用于已有持久化命中后的暖缓存）。
     pub fn insert(&self, key: u64, frames: Vec<Vec<u8>>) {
-        if self.capacity == 0 || frames.is_empty() {
+        self.insert_memory(
+            key,
+            CachedAudio {
+                opus_frames: Arc::new(frames),
+            },
+        );
+    }
+
+    /// 完整成功句的唯一生产写入入口。保留 Arc 帧序列，落盘不再复制整句；等待
+    /// blocking 写入结束，不留 detached 任务。磁盘不可写仍保留内存成品。
+    pub async fn insert_async(&self, key: u64, frames: Vec<Vec<u8>>) {
+        let audio = CachedAudio {
+            opus_frames: Arc::new(frames),
+        };
+        if !self.insert_memory(key, audio.clone()) {
             return;
         }
+        let (Some(store), Some(identity)) = (self.store.as_ref().cloned(), self.identity(key))
+        else {
+            return;
+        };
+        let Ok(permit) = self.io_gate.clone().acquire_owned().await else {
+            return;
+        };
+        if let Err(e) = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            store.put_identity(&identity, &audio.opus_frames)
+        })
+        .await
+        {
+            tracing::warn!("TTS 缓存写盘任务失败（保留内存缓存）: {e}");
+        }
+    }
+
+    fn identity(&self, key: u64) -> Option<HotAudioIdentity> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .identities
+            .get(&key)
+            .cloned()
+    }
+
+    fn insert_memory(&self, key: u64, audio: CachedAudio) -> bool {
+        if self.capacity == 0
+            || key == 0
+            || audio.opus_frames.is_empty()
+            || audio.opus_frames.len() > MAX_FRAMES
+            || audio.opus_frames.iter().map(Vec::len).sum::<usize>() > MAX_ENTRY_BYTES
+        {
+            return false;
+        }
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        if inner.map.len() >= self.capacity && !inner.map.contains_key(&key) {
+        if let Some(pos) = inner.order.iter().position(|k| *k == key) {
+            inner.order.remove(pos);
+        } else if inner.map.len() >= self.capacity {
             if let Some(oldest) = inner.order.pop_front() {
                 inner.map.remove(&oldest);
             }
         }
-        if inner.map.insert(key, CachedAudio { opus_frames: Arc::new(frames) }).is_none() {
-            inner.order.push_back(key);
-        }
+        inner.map.insert(key, audio);
+        inner.order.push_back(key);
+        true
     }
 
-    /// 当前条目数（观测/测试用）。
-    /// 清空缓存（**必需**）：TTS 引擎热切换后，缓存里是**旧引擎**产出的下行音频
-    /// （音色/采样率/语言可能都不同），继续命中会播出上一个引擎的声音。
+    /// 热切换只清内存成品，身份与磁盘保留；新引擎/参数具有不同身份，不会串音。
     pub fn clear(&self) {
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         inner.map.clear();
@@ -106,10 +215,13 @@ impl TtsCache {
     }
 
     pub fn len(&self) -> usize {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).map.len()
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .map
+            .len()
     }
 
-    /// 恒 false（`len` 只在观测时用，无空判场景；保留 API 对称性）。
     #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.len() == 0

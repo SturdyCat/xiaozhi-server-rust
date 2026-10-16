@@ -54,7 +54,10 @@ impl TtsEngine for ConcurrencyTrackingTts {
 async fn inference_gate_serializes_concurrent_synthesis() {
     let live = Arc::new(AtomicUsize::new(0));
     let max_live = Arc::new(AtomicUsize::new(0));
-    let tts = Arc::new(ConcurrencyTrackingTts { live: live.clone(), max_live: max_live.clone() });
+    let tts = Arc::new(ConcurrencyTrackingTts {
+        live: live.clone(),
+        max_live: max_live.clone(),
+    });
     // 两个会话共享**同一把** 1 许可闸门（进程级语义：GateHandle clone 即共享）
     let shared_gate = gate(1);
 
@@ -66,7 +69,13 @@ async fn inference_gate_serializes_concurrent_synthesis() {
             budget(),
             g,
             None,
-            move |_s: &str| SentenceSource { tts: tts.clone(), cache_key: 0, speed: 1.0, speaker: 0 },
+            move |_s: &str| SentenceSource {
+                tts: tts.clone(),
+                cache_key: 0,
+                hot_audio_key: None,
+                speed: 1.0,
+                speaker: 0,
+            },
             sentences(&["句一"]),
         )
     };
@@ -94,7 +103,10 @@ async fn inference_gate_serializes_concurrent_synthesis() {
 async fn inference_gate_allows_parallel_when_permits_allow() {
     let live = Arc::new(AtomicUsize::new(0));
     let max_live = Arc::new(AtomicUsize::new(0));
-    let tts = Arc::new(ConcurrencyTrackingTts { live: live.clone(), max_live: max_live.clone() });
+    let tts = Arc::new(ConcurrencyTrackingTts {
+        live: live.clone(),
+        max_live: max_live.clone(),
+    });
     let shared_gate = gate(2);
     let mk = |g: crate::app::inference::GateHandle| {
         let tts = tts.clone();
@@ -104,7 +116,13 @@ async fn inference_gate_allows_parallel_when_permits_allow() {
             budget(),
             g,
             None,
-            move |_s: &str| SentenceSource { tts: tts.clone(), cache_key: 0, speed: 1.0, speaker: 0 },
+            move |_s: &str| SentenceSource {
+                tts: tts.clone(),
+                cache_key: 0,
+                hot_audio_key: None,
+                speed: 1.0,
+                speaker: 0,
+            },
             sentences(&["句一"]),
         )
     };

@@ -4,8 +4,7 @@
 //! `GET /api/plugins` 的实现列表投影与 `GET /api/config/schema` 的字段元数据投影。
 
 use super::{
-    ALL_CAPABILITIES, APP_SECTION_HOT, FieldKind, FieldSchema, capability_common_fields,
-    impls_of,
+    capability_common_fields, impls_of, FieldKind, FieldSchema, ALL_CAPABILITIES, APP_SECTION_HOT,
 };
 
 // ============================================================

@@ -1,4 +1,4 @@
-//! 各实现的**选择 / 签名 / 校验 / 构建**与描述符常量。
+//! 各实现的**选择 / 签名 / 构建**与描述符常量（校验文案见 `validate.rs`）。
 //!
 //! 每个实现 = 本文件里几个私有 fn + 一个 `pub const PluginDescriptor`；
 //! 新增实现 = 此处加 1 条（字段元数据表放 `fields.rs`）。
@@ -14,6 +14,11 @@ use super::fields_command::COMMAND_FIELDS;
 use super::fields_context::{MEMORY_FIELDS, SOUL_FIELDS};
 use super::fields_nlu::NLU_FIELDS;
 use super::fields_wake::WAKE_FIELDS;
+use super::validate::{
+    validate_aiui, validate_asr, validate_command, validate_llm, validate_memory, validate_nlu,
+    validate_soul, validate_tts_kokoro, validate_tts_xfyun, validate_vad, validate_wake,
+    warn_llm, warn_memory,
+};
 use super::{Built, Capability, HotReload, PluginDescriptor, Requirement};
 
 // ---- 选中判定（P4：统一按 `engine` 键 = 描述符 id 去掉 "<cap>." 前缀）----
@@ -136,12 +141,14 @@ fn sig_command(cfg: &Config) -> String {
 fn sig_wake(cfg: &Config) -> String {
     cfg.wakeup.signature()
 }
-/// NLU 无共享实例（每会话按快照构造 `NluEngine`），签名只用于状态上报与热切换判定。
-/// 涵盖 enabled + 意图数 + 槽位数 + 每个意图的模板原文（模板改动必须触发重建）。
+/// NLU 无共享实例（每会话按快照构造技能目录），签名只用于状态上报与热切换判定。
+/// 涵盖 enabled + 阈值 + 意图数 + 槽位数 + 每个意图的模板原文（模板/阈值改动必须触发重建）。
 fn sig_nlu(cfg: &Config) -> String {
     let mut s = format!(
-        "{}|{}|{}",
+        "{}|{}|{}|{}|{}",
         cfg.nlu.enabled,
+        cfg.nlu.model_threshold,
+        cfg.nlu.model_margin,
         cfg.nlu.intents.len(),
         cfg.nlu.slots.len()
     );
@@ -154,170 +161,6 @@ fn sig_nlu(cfg: &Config) -> String {
         }
     }
     s
-}
-
-// ---- 校验（错误文案必须含「怎么修」）----
-
-fn validate_asr(cfg: &Config) -> Result<()> {
-    if !cfg!(feature = "sherpa") {
-        anyhow::bail!(
-            "本二进制未启用 `sherpa` feature：SenseVoice ASR 需要 --features sherpa 编译（Docker 镜像已内置）。"
-        );
-    }
-    if cfg.asr.model.trim().is_empty() {
-        anyhow::bail!(
-            "[asr].model 未配置：请填 SenseVoice INT8 模型路径（如 /data/models/SenseVoiceSmall/model.int8.onnx）。\
-             容器内缺失模型时入口脚本会自动下载；离线环境请先预置到挂载卷。"
-        );
-    }
-    Ok(())
-}
-
-fn validate_vad(cfg: &Config) -> Result<()> {
-    // 仅 sherpa 构建需要真实模型（未启用 feature 时用占位实现，见 plugins/vad/mod.rs）
-    #[cfg(feature = "sherpa")]
-    if cfg.vad.model.trim().is_empty() {
-        anyhow::bail!(
-            "[vad].model 未配置：请填 Silero VAD 模型路径（如 /data/models/silero_vad.onnx）。\
-             容器内缺失模型时入口脚本会自动下载；离线环境请先预置到挂载卷。"
-        );
-    }
-    let _ = cfg;
-    Ok(())
-}
-
-fn validate_tts_xfyun(cfg: &Config) -> Result<()> {
-    let x = &cfg.tts.xfyun;
-    if x.app_id.trim().is_empty() || x.api_key.trim().is_empty() || x.api_secret.trim().is_empty() {
-        anyhow::bail!(
-            "[tts].engine=\"xfyun\" 需要 [tts.xfyun] 的 app_id / api_key / api_secret（讯飞开放平台「在线语音合成」控制台获取）。"
-        );
-    }
-    Ok(())
-}
-
-/// Kokoro 的硬条件：`[tts.kokoro]` 的模型/音色数据/词表路径必须非空
-/// （P4 前这些字段在 `[tts]` 本体，`normalize()` 已负责搬家）。
-fn validate_tts_kokoro(cfg: &Config) -> Result<()> {
-    if !cfg!(feature = "sherpa") {
-        anyhow::bail!(
-            "本二进制未启用 `sherpa` feature：本地 Kokoro TTS 需要 --features sherpa 编译；\
-             或把 [tts].engine 切到在线服务商（如 xfyun）。"
-        );
-    }
-    let k = &cfg.tts.kokoro;
-    let missing: Vec<&str> = [
-        ("model", k.model.as_str()),
-        ("voices", k.voices.as_str()),
-        ("tokens", k.tokens.as_str()),
-        ("data_dir", k.data_dir.as_str()),
-    ]
-    .iter()
-    .filter(|(_, v)| v.trim().is_empty())
-    .map(|(n, _)| *n)
-    .collect();
-    if !missing.is_empty() {
-        anyhow::bail!(
-            "[tts.kokoro] 缺少必要路径 {:?}：请填 Kokoro INT8 模型包内的对应文件路径\
-             （默认 /data/models/Kokoro/…；容器内缺失模型时入口脚本会自动下载）。若配置写在旧位置 \
-             `[tts].model`，保存一次即自动迁移到 `[tts.kokoro]`。",
-            missing
-        );
-    }
-    Ok(())
-}
-
-fn validate_llm(cfg: &Config) -> Result<()> {
-    // 硬条件：地址缺失无法调用（保留既有行为：密钥为空**不**阻止启动，见 warn_llm）
-    if cfg.llm.api_base.trim().is_empty() {
-        anyhow::bail!(
-            "[llm].api_base 未配置：请填 OpenAI 兼容 **Responses API** 地址（如 https://api.example.com/v1/responses）。"
-        );
-    }
-    Ok(())
-}
-
-/// LLM 软性问题：密钥为空 —— 服务照常启动，但每次对话都会在上游 401/403。
-/// 状态上报为 `Degraded`（而不是静默），且热刷新时**不会**用空密钥覆盖正在工作的引擎。
-fn warn_llm(cfg: &Config) -> Option<String> {
-    if cfg.llm.api_key.trim().is_empty() {
-        Some(
-            "[llm].api_key 为空：每次对话都会在上游报 401/403；在管理页填入密钥即可（新会话生效）"
-                .into(),
-        )
-    } else {
-        None
-    }
-}
-
-fn validate_aiui(cfg: &Config) -> Result<()> {
-    if cfg.aiui.enabled
-        && (cfg.aiui.appid.trim().is_empty()
-            || cfg.aiui.api_key.trim().is_empty()
-            || cfg.aiui.api_secret.trim().is_empty())
-    {
-        anyhow::bail!(
-            "[aiui].enabled 需要 appid / api_key / api_secret（AIUI 平台应用三要素）；\
-             不想用全链路模式就把 enabled 改回 false。"
-        );
-    }
-    Ok(())
-}
-
-fn validate_memory(cfg: &Config) -> Result<()> {
-    cfg.memory.validate()
-}
-
-/// 记忆的软性问题：**没有 embedding**（当前为本地词法召回）、抽取路由缺凭据等。
-/// 这些都不是错误 —— 记忆照常工作，只是能力受限，必须让 UI 能说出来（对齐 DSH 的
-/// 「`enabled` 与实际激活态分开上报」），否则用户只会得到"开了没用"的结论。
-fn warn_memory(cfg: &Config) -> Option<String> {
-    cfg.memory.warning(&cfg.llm)
-}
-
-fn validate_soul(cfg: &Config) -> Result<()> {
-    cfg.soul.validate()
-}
-
-/// 指令闸门的硬条件：启用时词表不得为空。
-/// （词表为空 = 闸门不拦任何话——不致命但必须能被 `/api/plugins` 说成 `Degraded`，
-/// 否则用户会得到"配了没用"的静默失败。）
-fn validate_command(cfg: &Config) -> Result<()> {
-    cfg.command.validate()
-}
-
-/// `[wakeup]` 校验：段内自洽（[`crate::plugins::wakeup::WakeConfig::validate`]）
-/// **加上**一处跨段矛盾检查。
-///
-/// 跨段那条是刻意的：持久化复用靠"内存 TTS 缓存承载成品帧"实现（合成完 → 从缓存取出 → 落盘），
-/// 所以 `[tts].cache_entries = 0` 时**落盘会静默失效**（写不进去、下次还得重新合成）。
-/// 静默失效是本仓库最忌讳的失败模式，因此在这里直接拦下并说清修法。
-fn validate_wake(cfg: &Config) -> Result<()> {
-    cfg.wakeup.validate()?;
-    if cfg.wakeup.active() && cfg.wakeup.persist && cfg.tts.cache_entries == 0 {
-        anyhow::bail!(
-            "[wakeup].persist = true 但 [tts].cache_entries = 0：持久化复用依赖内存缓存承载\
-             成品帧，缓存被关掉时音频**无法落盘**（每次唤醒都会重新合成）。\
-             请把 [tts].cache_entries 设为大于 0（推荐 256），或把 [wakeup].persist 改为 false。"
-        );
-    }
-    Ok(())
-}
-
-/// NLU 的硬条件：启用且声明了意图时，意图必须有模板（否则永远命中不了 = 静默失效）。
-fn validate_nlu(cfg: &Config) -> Result<()> {
-    if cfg.nlu.enabled {
-        for it in &cfg.nlu.intents {
-            if it.templates.is_empty() {
-                anyhow::bail!(
-                    "[nlu] 意图「{}」已声明但 templates 为空：请至少填一个模板（如 [\"把{{room}}的灯{{action}}\"]），\
-                     或暂时把 [nlu].enabled 改回 false。",
-                    it.name
-                );
-            }
-        }
-    }
-    Ok(())
 }
 
 // ---- 构建入口 ----

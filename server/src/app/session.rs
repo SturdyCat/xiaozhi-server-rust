@@ -1,10 +1,11 @@
 //! 每连接会话状态机与语音流水线。
 //!
 //! 两条路径（由 hello 的 `test` 参数区分）：
-//! - ESP 设备（正式流程）：上行 Opus → 解码 → VAD → ASR → stt → NLU → LLM → tts → 下行 Opus。
-//!   其中 ASR 与 LLM **之间**有一道可选的**规则 NLU** 层（`[nlu]`，见 [`nlu`] 子模块；它"含有"
-//!   `[command]` 的 `end_session` 高危意图）：命中已知意图即本地执行、跳过 LLM；
-//!   **未知意图才放行给 LLM**。内置 `end_session`（退下/闭嘴/关闭）识别到即说一句告别语，随后
+//! - ESP 设备（正式流程）：上行 Opus → 解码 → VAD → ASR → stt → **技能级联** → tts → 下行 Opus。
+//!   其中 ASR 与 LLM **之间**是本地技能目录（`[nlu]`+`[command]`，见 [`crate::plugins::skill`]）：
+//!   **规则命中 → 轻量模型打分达阈值**两级都在本地执行、跳过 LLM；都未命中才放行给云 LLM——
+//!   LLM 若识别为技能（`execute_skill` 工具调用）同样回到目录校验执行，否则正常聊天走 TTS。
+//!   内置 `end_session`（退下/闭嘴/关闭）识别到即说一句告别语，随后
 //!   **通过 MCP 通知设备「结束聆听」**（见 [`mcp`] 子模块）——设备回到待唤醒、音频通道保留，
 //!   下次唤醒复用连接不重连；只有在设备不支持 MCP 或调用失败时才降级为断开本次会话。
 //! - macApp 测试台（hello 带 `test:true`）：`asr_test`/`tts_test`/`llm_test` 三种
@@ -32,7 +33,7 @@ use crate::config::Config;
 use crate::engine::Engines;
 use crate::plugins::aiui::FullChainEngine;
 use crate::plugins::asr::AsrEngine;
-use crate::plugins::nlu::NluEngine;
+use crate::plugins::skill::SkillRegistry;
 use crate::plugins::wakeup::WakeGreeting;
 
 /// 一条用户话语在进入 LLM 前的决策结果（文本侧管线 P0-4 的 Stop 信号，见
@@ -134,10 +135,11 @@ pub struct Session<'a, T: Transport> {
     /// 下行节拍器：按帧长匀速下发（保护 ESP 解码队列，见 `downlink` 模块文档）。
     /// 一次回复内跨句共享时间表（句间无缝）；每轮回复开始时 reset。
     pacer: DownlinkPacer,
-    /// 规则 NLU 引擎（`[nlu]`，超集 `[command]`）：ASR → LLM 之间的本地意图识别层。
-    /// 命中已知意图即本地执行（不再送 LLM），未知意图才放行。会话开始时按配置快照构造一次 =
-    /// 注册表声明的 `next_session` 语义。
-    nlu: NluEngine,
+    /// 技能目录（`[nlu]` + `[command]` 的统一编译，见 [`crate::plugins::skill`]）：
+    /// ASR → LLM 之间的本地识别层。规则 / 轻量模型两级命中即本地执行（不再送 LLM），
+    /// 未命中才放行；云 LLM 侧的 `execute_skill` 工具调用也回到这份目录校验执行。
+    /// 会话开始时按配置快照构造一次 = 注册表声明的 `next_session` 语义。
+    skills: SkillRegistry,
     /// 指令要求断开本次会话（告别语已下发）：主循环收尾时主动关闭承载。
     close_requested: bool,
     /// 设备 hello 是否声明 `features.mcp`（最新固件硬编码 `true`；极老固件为 `false`）。
@@ -241,11 +243,17 @@ impl<'a, T: Transport> Session<'a, T> {
         // ⚠️ 放在最末：VAD flush 与告别语排空期间设备仍在线上。
         // 事件总线（P0-5 叠加层）：会话结束。刻意**不**塞进 registry 的 SessionGuard::Drop
         // ——观测面（registry）不反向依赖事件层，两者解耦（见 `app/events` 模块注释）。
-        self.engines.event_bus.emit(crate::app::events::ServerEvent::SessionEnd {
-            session_id: self.session_id.clone(),
-            device_id: self.device_id.clone(),
-            reason: if self.close_requested { "command".to_string() } else { "closed".to_string() },
-        });
+        self.engines
+            .event_bus
+            .emit(crate::app::events::ServerEvent::SessionEnd {
+                session_id: self.session_id.clone(),
+                device_id: self.device_id.clone(),
+                reason: if self.close_requested {
+                    "command".to_string()
+                } else {
+                    "closed".to_string()
+                },
+            });
         self.engines
             .mcp
             .mark_offline(&self.device_id, &self.session_id);
@@ -376,10 +384,7 @@ impl<'a, T: Transport> Session<'a, T> {
                 UtteranceDecision::NluStop => return, // 本批剩余语音段一并丢弃
                 UtteranceDecision::Respond => {
                     if let Err(e) = self.stream_response(&user_text, &trace).await {
-                        tracing::warn!(
-                            turn,
-                            "session {session_id} 流水处理失败: {e}"
-                        );
+                        tracing::warn!(turn, "session {session_id} 流水处理失败: {e}");
                     }
                 }
             }
@@ -395,9 +400,11 @@ impl<'a, T: Transport> Session<'a, T> {
     ///
     /// 1. **记录**（`note_user_turn` + MessageAdded 事件）：优先级最低但**必须先做**——
     ///    被闸掉的话也是真实听到的话，记录不能丢；
-    /// 2. **规则 NLU**（`[nlu]`，超集 `[command]`，最高优先级，先于 LLM）：命中已知意图即
-    ///    **先执行副作用**（end_session：告别语 + MCP 让设备结束聆听 / 本地指令：应答）
-    ///    **再返回 Stop**，一次 LLM 都不调用；未知意图放行 LLM；
+    /// 2. **本地技能级联**（`[nlu]`+`[command]` 统一目录，最高优先级，先于 LLM）：
+    ///    规则命中即执行；规则未命中再过轻量模型打分（达阈值也执行）——两级都命中
+    ///    **先执行副作用**（end_session：告别语 + MCP 让设备结束聆听 / 本地指令：应答或
+    ///    设备工具派发）**再返回 Stop**，一次 LLM 都不调用；都未命中放行 LLM，
+    ///    LLM 若以 `execute_skill` 工具调用回提技能，同样回到该目录校验执行；
     /// 3. **响应**（调用方执行）：级联走 `stream_response`，AIUI 走 `aiui_downlink`。
     ///
     /// wakeup（`listen state=detect`）是独立消息类型（非 ASR 文本），优先级同样最高，
@@ -413,14 +420,13 @@ impl<'a, T: Transport> Session<'a, T> {
         // Stage 1：记录（注册表观测 + 事件总线叠加层，见 observe.rs / events.rs）
         self.note_user_turn(user_text);
         self.emit_message_added(turn_id, "user", user_text, None);
-        // Stage 2：规则 NLU（ASR → LLM **之间**）：命中已知意图即本地执行（end_session 退下 /
-        // 本地指令应答），未知意图放行 LLM——零误判、可解释。
-        if self.handle_nlu_gate(user_text).await {
+        // Stage 2：本地技能级联（规则 → 轻量模型）：命中即本地执行（end_session 退下 /
+        // 本地指令应答或设备工具派发），两级都未命中放行 LLM——确定性优先、可解释。
+        if self.handle_skill_gate(user_text).await {
             return UtteranceDecision::NluStop;
         }
         UtteranceDecision::Respond
     }
-
 
     async fn handle_text(&mut self, text: &str) -> anyhow::Result<()> {
         let session_id = self.session_id.clone();
@@ -528,7 +534,6 @@ impl<'a, T: Transport> Session<'a, T> {
         self.recognize_segments(segments).await;
     }
 }
-
 
 /// 协议层发送：`ServerMessage` 序列化后交承载下发（错误映射在承载实现内完成）。
 pub(crate) async fn send_text<T: Transport>(

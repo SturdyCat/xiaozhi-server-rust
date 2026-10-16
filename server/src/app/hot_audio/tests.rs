@@ -46,7 +46,9 @@ fn 跨实例可读_模拟进程重启() {
     // 实例 A 写（随后丢弃 = 进程退出，内存缓存消失）
     assert!(HotAudioStore::new(Some(dir.clone())).put(&k, &f));
     // 实例 B 读：只有磁盘这一条路
-    let got = HotAudioStore::new(Some(dir.clone())).get(&k).expect("重启后应命中");
+    let got = HotAudioStore::new(Some(dir.clone()))
+        .get(&k)
+        .expect("重启后应命中");
     assert_eq!(got, f);
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -195,9 +197,16 @@ fn 凭据不落盘() {
 fn 超出上限被淘汰() {
     let dir = tmp_dir();
     let store = HotAudioStore::new(Some(dir.clone()));
+    std::fs::create_dir_all(&dir).unwrap();
     for i in 0..(MAX_FILES + 5) {
-        assert!(store.put(&key_of(&format!("句{i}")), &frames(1)));
+        let key = key_of(&format!("句{i}"));
+        std::fs::write(
+            dir.join(format!("{:016x}.hot", key.file_id())),
+            encode(&key, &frames(1)),
+        )
+        .unwrap();
     }
+    assert!(store.put(&key_of("触发回收"), &frames(1)));
     let n = std::fs::read_dir(&dir)
         .unwrap()
         .filter_map(|e| e.ok())
@@ -212,5 +221,88 @@ fn 超出上限被淘汰() {
         .count();
     assert_eq!(tmp, 0, "临时文件必须已被 rename 消费");
 
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn 旧版wakeup文件仍可命中() {
+    let key = key_of("我在");
+    let mut raw = encode(&key, &frames(2));
+    raw.truncate(raw.len() - 8);
+    raw[8..12].copy_from_slice(&1u32.to_le_bytes());
+    assert_eq!(decode(&raw, &key.header()).unwrap(), frames(2));
+}
+
+#[test]
+fn 校验和拒绝负载损坏和尾随垃圾() {
+    let key = key_of("普通生产文本");
+    let mut raw = encode(&key, &frames(2));
+    raw[52] ^= 1;
+    assert!(decode(&raw, &key.header()).is_err());
+    let mut raw = encode(&key, &frames(2));
+    raw.push(0);
+    assert!(decode(&raw, &key.header()).is_err());
+}
+
+#[test]
+fn 拒绝非法帧与超限句子() {
+    let store = HotAudioStore::new(Some(tmp_dir()));
+    let key = key_of("文本");
+    assert!(!store.put(&key, &[vec![]]));
+    assert!(!store.put(&key, &[vec![1; MAX_FRAME_LEN as usize + 1]]));
+    assert!(!store.put(&key, &vec![vec![1]; MAX_FRAMES + 1]));
+    let mut raw = encode(&key, &frames(1));
+    raw[44..48].copy_from_slice(&u32::MAX.to_le_bytes());
+    assert!(decode(&raw, &key.header()).is_err());
+}
+
+#[test]
+fn 目录跟随配置来源或记忆库() {
+    assert_eq!(
+        cache_dir(Some("/volume/config.toml"), "/other/memory.db"),
+        PathBuf::from("/volume/hot-audio")
+    );
+    assert_eq!(
+        cache_dir(None, "/volume/memory.db"),
+        PathBuf::from("/volume/hot-audio")
+    );
+    assert_eq!(cache_dir(None, "memory.db"), PathBuf::from("./hot-audio"));
+    assert_eq!(
+        cache_dir(Some("config.toml"), "/other/memory.db"),
+        PathBuf::from("./hot-audio")
+    );
+}
+
+#[test]
+fn 旧文件名投影保持稳定() {
+    let key = HotAudioKey {
+        engine_sig: "sig".into(),
+        speaker: 0,
+        speed: 1.0,
+        downlink_sr: 24_000,
+        downlink_frame_ms: 60,
+        text: "我在".into(),
+    };
+    assert_eq!(key.file_id(), 0x2237_c04a_4f6a_80a6);
+}
+
+#[test]
+fn 总字节上限也会回收() {
+    let dir = tmp_dir();
+    std::fs::create_dir_all(&dir).unwrap();
+    // sparse 文件只占逻辑大小，验证字节上限不需要真正写 512MB。
+    for i in 0..2 {
+        let path = dir.join(format!("oversize{i}.hot"));
+        std::fs::File::create(path)
+            .unwrap()
+            .set_len(MAX_TOTAL_BYTES)
+            .unwrap();
+    }
+    evict_overflow(&dir);
+    let bytes: u64 = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().metadata().unwrap().len())
+        .sum();
+    assert!(bytes <= MAX_TOTAL_BYTES);
     let _ = std::fs::remove_dir_all(&dir);
 }

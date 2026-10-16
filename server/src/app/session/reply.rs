@@ -6,8 +6,8 @@
 //! LLM 生产者（读流 + 分句 + 定时 flush watchdog）进一步抽到 [`producer`]——
 //! 本文件只保留编排层（prompt 组装 / 历史与计量 / 兜底与观测）。
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::app::downlink::{
@@ -19,8 +19,8 @@ use crate::app::protocol::ServerMessage;
 use crate::app::transport::Transport;
 use crate::plugins::prompt::TurnPrompt;
 
-use super::producer::{LlmProducer, spawn_llm_producer};
-use super::{Session, FALLBACK_REPLY, send_text};
+use super::producer::{spawn_llm_producer, LlmProducer};
+use super::{send_text, Session, FALLBACK_REPLY};
 
 /// 一次回复的下行结果（供日志与兜底判定）。
 #[derive(Debug, Default, Clone, Copy)]
@@ -110,7 +110,10 @@ impl<'a, T: Transport> Session<'a, T> {
                     o.failed
                 );
             }
-            match memory.maintain(crate::plugins::memory::MaintainOpts::periodic()).await {
+            match memory
+                .maintain(crate::plugins::memory::MaintainOpts::periodic())
+                .await
+            {
                 Ok(m) if m.ran => tracing::info!(
                     "session {sid} 记忆维护：隔离释放 {} / 保留策略处理 {}（dry_run={}）",
                     m.released,
@@ -170,14 +173,23 @@ impl<'a, T: Transport> Session<'a, T> {
         // ⚠️ 仅**全局**生效：`llm.sentence_flush_ms` 不在设备 overlay 白名单
         // （`config/overlay.rs` 的 llm 段只放行 system_prompt/max_history）。
         let flush_wait = Duration::from_millis(self.eff_config.llm.sentence_flush_ms as u64);
-        // 生产者：读 LLM 流 → 按句切分（+ watchdog）→ channel
-        let LlmProducer { sentences: rx, result: producer } = spawn_llm_producer(
+        // 生产者：读 LLM 流 → 按句切分（+ watchdog）→ channel。
+        // 技能目录非空才声明 `execute_skill` 工具（纯聊天不传 tools：省 token、收误触发面）。
+        let tools = self.skills.tools();
+        let LlmProducer {
+            sentences: rx,
+            result: producer,
+        } = spawn_llm_producer(
             self.engines.llm(),
             self.history.clone(),
             user_text.to_string(),
             prompt,
             self.abort.clone(),
-            super::producer::ProducerTurn { trace: trace.clone(), session_id: session_id.clone() },
+            super::producer::ProducerTurn {
+                trace: trace.clone(),
+                session_id: session_id.clone(),
+                tools: (!tools.is_empty()).then_some(tools),
+            },
             flush_wait,
         );
 
@@ -215,11 +227,13 @@ impl<'a, T: Transport> Session<'a, T> {
                 // 也是此前运行期失败全部只 warn! 的老问题）。一个字都还没下发时，用一句
                 // 兜底话术回应；已经出过声就不再补充（避免"说完半句又道歉"）。
                 self.note_error(format!("LLM 调用失败（{}）", failure.category()));
-                self.engines.event_bus.emit(crate::app::events::ServerEvent::Error {
-                    session_id: self.session_id.clone(),
-                    device_id: self.device_id.clone(),
-                    message: format!("LLM 调用失败（{}）", failure.category()),
-                });
+                self.engines
+                    .event_bus
+                    .emit(crate::app::events::ServerEvent::Error {
+                        session_id: self.session_id.clone(),
+                        device_id: self.device_id.clone(),
+                        message: format!("LLM 调用失败（{}）", failure.category()),
+                    });
                 // 分段延迟：失败轮照样 emit（锚点轮次发生了就是发生了）
                 self.emit_turn_latency(trace, interrupted);
                 self.log_turn_end(trace, interrupted);
@@ -239,11 +253,13 @@ impl<'a, T: Transport> Session<'a, T> {
             Err(e) => {
                 tracing::warn!(turn, "session {session_id} LLM 任务异常: {e}");
                 self.note_error(format!("LLM 任务异常: {e}"));
-                self.engines.event_bus.emit(crate::app::events::ServerEvent::Error {
-                    session_id: self.session_id.clone(),
-                    device_id: self.device_id.clone(),
-                    message: format!("LLM 任务异常: {e}"),
-                });
+                self.engines
+                    .event_bus
+                    .emit(crate::app::events::ServerEvent::Error {
+                        session_id: self.session_id.clone(),
+                        device_id: self.device_id.clone(),
+                        message: format!("LLM 任务异常: {e}"),
+                    });
                 self.emit_turn_latency(trace, interrupted);
                 self.log_turn_end(trace, interrupted);
                 if !interrupted && frames_total == 0 {
@@ -262,6 +278,9 @@ impl<'a, T: Transport> Session<'a, T> {
         // 令牌计量：回答"成本多少 / 记忆与灵魂让上下文长了多少"。
         // ⚠️ 取消轮（`cancelled`）**照常计量**：上游已收款，统计不能因打断而丢。
         self.engines.usage.record(&session_id, llm_out.usage);
+        // 技能回接（级联末级 → 本地执行）：实现与本地闸门共用同一执行出口，见
+        // `command.rs::execute_llm_tool_calls`。取消轮 `tool_calls` 恒为空（取消契约）。
+        self.execute_llm_tool_calls(&llm_out.tool_calls, turn).await;
         // 观测：这一轮"问了什么、答了什么、整轮多久"（管理页「对话记录」）。
         // 刻意**不**受 `interrupted` 影响：被打断的这轮同样是发生过的一轮，
         // 记录里丢掉它会让界面上的对话与用户记忆对不上。
@@ -283,15 +302,17 @@ impl<'a, T: Transport> Session<'a, T> {
         // 耗时远大于音频 = 中间被供数拖住了（结合下面的队列余量日志定位是谁慢）。
         let audio_ms = frames_total as u64 * self.params.downlink_frame_ms.max(1) as u64;
         // 事件总线（P0-5 叠加层）：一轮 TTS 下行完成（句数/帧数/是否打断/音频时长，供大盘聚合）。
-        self.engines.event_bus.emit(crate::app::events::ServerEvent::TtsRound {
-            session_id: self.session_id.clone(),
-            device_id: self.device_id.clone(),
-            turn_id: turn,
-            sentences: sentences_done as u32,
-            frames: frames_total as u32,
-            interrupted,
-            audio_ms,
-        });
+        self.engines
+            .event_bus
+            .emit(crate::app::events::ServerEvent::TtsRound {
+                session_id: self.session_id.clone(),
+                device_id: self.device_id.clone(),
+                turn_id: turn,
+                sentences: sentences_done as u32,
+                frames: frames_total as u32,
+                interrupted,
+                audio_ms,
+            });
         tracing::info!(
             turn,
             "session {session_id} 本轮完成：耗时 {}ms / 音频 {audio_ms}ms（{frames_total} 帧）/ LLM 输出 {} 字 / {} 个工具调用，下发 {sentences_done} 句{}",
@@ -331,7 +352,11 @@ impl<'a, T: Transport> Session<'a, T> {
     /// 自建 trace），但这条日志属于"原轮次发生了什么"的因果链，故记原轮次的 id。
     async fn speak_fallback(&mut self, text: &str, parent_turn: TurnId) -> anyhow::Result<()> {
         self.speak_canned(text).await?;
-        tracing::info!(turn = parent_turn, "session {} 已下发兜底话术", self.session_id);
+        tracing::info!(
+            turn = parent_turn,
+            "session {} 已下发兜底话术",
+            self.session_id
+        );
         Ok(())
     }
 
@@ -353,7 +378,11 @@ impl<'a, T: Transport> Session<'a, T> {
         self.abort.store(false, Ordering::Relaxed);
         let trace = TurnTrace::new(crate::app::events::ANCHOR_CANNED);
         let turn = trace.turn_id();
-        tracing::info!(turn, "session {} 下发预制话术（锚点 canned）: {text}", self.session_id);
+        tracing::info!(
+            turn,
+            "session {} 下发预制话术（锚点 canned）: {text}",
+            self.session_id
+        );
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
         let _ = tx.send(text.to_string());
         drop(tx); // 只有一句 → 关掉句子流，预取 worker 处理完即退出
@@ -361,7 +390,11 @@ impl<'a, T: Transport> Session<'a, T> {
         let t0 = Instant::now();
         match self.drain_prepared(prepared, download, t0, &trace).await {
             Ok(o) if o.sentences == 0 => {
-                tracing::warn!(turn, "session {} 话术未下发任何音频: {text}", self.session_id);
+                tracing::warn!(
+                    turn,
+                    "session {} 话术未下发任何音频: {text}",
+                    self.session_id
+                );
             }
             Ok(_) => {}
             Err(e) => tracing::warn!(turn, "session {} 话术下发失败: {e}", self.session_id),
@@ -393,8 +426,7 @@ impl<'a, T: Transport> Session<'a, T> {
         let engines = self.engines.clone();
         let params = self.params;
         let eff_config = self.eff_config.clone();
-        let download =
-            crate::app::prefetch::DownloadBudget::new(self.params.download_buffer_ms);
+        let download = crate::app::prefetch::DownloadBudget::new(self.params.download_buffer_ms);
         // 首个非缓存句的首个 PCM 分片 → mark_tts_first_pcm（first-only 用原子标志，
         // 避免每分片加锁；缓存命中句不走合成回调，天然不触发——与"缓存轮该阶段为
         // None"的口径一致）
@@ -428,6 +460,9 @@ impl<'a, T: Transport> Session<'a, T> {
                 SentenceSource {
                     tts: engines.tts(),
                     cache_key: key.mem_key(),
+                    // 完整身份：预取 worker 据此登记热音频（磁盘持久化，跨重启复用）。
+                    // `register_identity` 内部校验 `mem_key == cache_key`，漂移即不登记。
+                    hot_audio_key: Some(key.clone()),
                     speed: key.speed,
                     speaker: key.speaker,
                 }
@@ -456,8 +491,10 @@ impl<'a, T: Transport> Session<'a, T> {
         let session_id = self.session_id.clone();
         let turn = trace.turn_id();
         // 水库容量与起跑闸都取**会话级快照**（`[audio]` 是 restart_only，会话内不变）
-        let (sink, source) =
-            new_reservoir(self.params.downlink_buffer_ms, self.params.downlink_frame_ms);
+        let (sink, source) = new_reservoir(
+            self.params.downlink_buffer_ms,
+            self.params.downlink_frame_ms,
+        );
         let filler = spawn_reservoir_filler(
             self.abort.clone(),
             self.engines.tts_cache.clone(),
@@ -496,105 +533,5 @@ impl<'a, T: Transport> Session<'a, T> {
             frames: drain.frames,
             interrupted: drain.interrupted,
         })
-    }
-
-    /// 每轮下行汇总日志：① 设备解码队列余量最低估计（断音现场证据）；
-    /// ② 水库水位/背压/饥饿（上游供数速度——判断"该调大水库还是该治上游"）；
-    /// ③ 下载缓冲水位/限速（TTS 流下载是否被预算压住）；
-    /// ④ **本轮吞吐**（音频时长 / 播放窗口）：< 1.0× 即上游持续慢于实时。
-    ///
-    /// 四条全部带 `turn=`：它们是"这一轮慢在哪一段"的**下半程**证据（与 `observe.rs`
-    /// 的 `log_turn_end` 上半程摘要配对），`grep turn=N` 一次捞全。
-    fn log_downlink(
-        &self,
-        session_id: &str,
-        turn: TurnId,
-        drain: &crate::app::downlink::ReservoirDrain,
-        download: &crate::app::prefetch::DownloadBudget,
-        first_frame_at: Option<Instant>,
-    ) {
-        let stats = self.pacer.stats();
-        let res = drain.reservoir;
-        let frame_ms = self.params.downlink_frame_ms.max(1) as i64;
-        let lead = self.params.downlink_lead_ms as i64;
-        // 安全上限随设备队列包数与帧长而定（见 `[audio].downlink_queue_packets`）
-        let cap = self.engines.live_config().audio.max_lead_ms();
-        match stats.queue_min_ms {
-            Some(depth) if depth < frame_ms => tracing::warn!(
-                turn,
-                "session {session_id} 本轮下行**断音**：设备解码队列余量最低估计 {depth}ms（< 1 帧 {frame_ms}ms）\
-                 ，真空 {} 次（最长 {}ms），抖动缓冲 {lead}ms。——上游供数慢于播放（LLM 出句 / TTS 合成 RTF）\
-                 或网络抖动；可上调 [audio].downlink_lead_ms（当前安全上限 {cap}ms，受设备解码队列包数×帧长限制，\
-                 想更深必须先放大固件 MAX_DECODE_PACKETS_IN_QUEUE）、或调大 [audio].downlink_buffer_ms / \
-                 downlink_buffer_start_ms（服务器侧水库），或降低合成耗时",
-                stats.vacuum_events,
-                stats.max_vacuum_ms
-            ),
-            Some(depth) => tracing::info!(
-                turn,
-                "session {session_id} 本轮下行平顺：设备解码队列余量最低估计 {depth}ms，真空 {} 次（最长 {}ms）",
-                stats.vacuum_events,
-                stats.max_vacuum_ms
-            ),
-            None => tracing::debug!(turn, "session {session_id} 本轮下行过短，未采集队列余量"),
-        }
-        tracing::info!(
-            turn,
-            "session {session_id} 本轮水库：容量 {}ms（峰值水位 {}ms / {}KB），起跑闸等待 {}ms（水位 {}ms），\
-             背压 {}ms，上游断供 {} 次（累计 {}ms）{}",
-            res.cap_ms,
-            res.peak_ms,
-            res.peak_bytes / 1024,
-            res.gate_ms,
-            res.gate_depth_ms,
-            res.backpressure_ms,
-            res.starve_events,
-            res.starve_ms,
-            if res.starve_ms > 0 {
-                "——上游供数慢于播放：调大 [audio].downlink_buffer_ms / downlink_buffer_start_ms 可再吸收一段"
-            } else {
-                ""
-            }
-        );
-        // ③ 下载缓冲（PCM）：预算 = 上游 PCM 积压上限；限速等待 > 0 = 服务端按预算压住了下载
-        //    速率（上游下载快于消费，内存因此有界——这正是"根据缓存需要控制下载流速"）
-        let dl = download.stats();
-        tracing::info!(
-            turn,
-            "session {session_id} 本轮下载缓冲：预算 {}ms（峰值水位 {}ms），下载限速等待 {}ms / {} 次{}",
-            dl.budget_ms,
-            dl.peak_ms,
-            dl.throttle_ms,
-            dl.throttle_events,
-            if dl.throttle_ms > 0 {
-                "——TTS 流下载快于消费，已按预算压住（内存有界）"
-            } else {
-                ""
-            }
-        );
-        // ④ 本轮吞吐：音频时长 / **播放窗口**（首帧 → 末帧，TTFA 不计入）。
-        //    < 1.0× 说明上游**持续**慢于实时：缺口是累积的，缓冲只能推迟断音、不能消除
-        //    （见 `config::AudioConfig::downlink_buffer_ms` 文档的"所需缓冲"公式）。
-        let audio_ms = drain.frames as u64 * self.params.downlink_frame_ms.max(1) as u64;
-        if let Some(first) = first_frame_at {
-            let window_ms = first.elapsed().as_millis() as u64;
-            if window_ms > 0 && audio_ms > 0 {
-                let rate = audio_ms as f64 / window_ms as f64;
-                if rate < 0.98 {
-                    tracing::warn!(
-                        turn,
-                        "session {session_id} 本轮吞吐：音频 {audio_ms}ms / 播放窗口 {window_ms}ms ≈ {rate:.2}× 实时\
-                         ——上游**持续**慢于播放，缓冲只能把断音往后推、不能消除。根治方向：提高 [tts].speed\
-                         （音频变短，直接缩小缺口）、换更快的 LLM/TTS，或把 [audio].downlink_buffer_start_ms\
-                         调大（先攒后播：要整轮不断音需攒 ≈ (1/{rate:.2} − 1) × {audio_ms}ms）"
-                    );
-                } else {
-                    tracing::info!(
-                        turn,
-                        "session {session_id} 本轮吞吐：音频 {audio_ms}ms / 播放窗口 {window_ms}ms ≈ {rate:.2}× 实时（上游跟得上播放）"
-                    );
-                }
-            }
-        }
     }
 }

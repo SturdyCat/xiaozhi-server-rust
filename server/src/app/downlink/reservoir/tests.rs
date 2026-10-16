@@ -38,7 +38,10 @@ fn abort_flag() -> Arc<AtomicBool> {
 #[tokio::test]
 async fn push_preserves_order_and_tracks_depth() {
     let (sink, mut source) = new_reservoir(600, 60); // 容量 10 帧
-    assert!(sink.push(DownlinkItem::SentenceStart("你好".to_string())).await);
+    assert!(
+        sink.push(DownlinkItem::SentenceStart("你好".to_string()))
+            .await
+    );
     assert!(sink.push(DownlinkItem::Frame(vec![1])).await);
     assert!(sink.push(DownlinkItem::Frame(vec![2, 2])).await);
     assert_eq!(source.depth_frames(), 2, "句首通知不占帧水位");
@@ -85,9 +88,12 @@ async fn full_reservoir_backpressures_producer() {
     }
     let depth_before = source.depth_frames();
     assert!(
-        tokio::time::timeout(Duration::from_millis(50), sink.push(DownlinkItem::Frame(vec![9])))
-            .await
-            .is_err(),
+        tokio::time::timeout(
+            Duration::from_millis(50),
+            sink.push(DownlinkItem::Frame(vec![9]))
+        )
+        .await
+        .is_err(),
         "水库满时 push 必须等待（这就是背压：不再无界合成/占内存）"
     );
     assert_eq!(
@@ -98,9 +104,12 @@ async fn full_reservoir_backpressures_producer() {
     // 读端取走一项 → 空间释放 → 入队成功
     assert!(source.recv().await.is_some());
     assert!(
-        tokio::time::timeout(Duration::from_millis(200), sink.push(DownlinkItem::Frame(vec![9])))
-            .await
-            .is_ok(),
+        tokio::time::timeout(
+            Duration::from_millis(200),
+            sink.push(DownlinkItem::Frame(vec![9]))
+        )
+        .await
+        .is_ok(),
         "腾出空间后 push 应立即成功"
     );
 }
@@ -114,13 +123,20 @@ async fn filler_pushes_sentence_start_first_and_caches_complete_sentence() {
     let (chunk_tx, chunk_rx) = mpsc::channel(4);
     let (done_tx, done_rx) = oneshot::channel::<bool>();
     // 24k/60ms → 1440 样本/帧；2880 样本 = 2 整帧
-    chunk_tx.send(PcmChunk::unbudgeted(vec![0.1f32; 2880])).await.expect("灌入 PCM");
+    chunk_tx
+        .send(PcmChunk::unbudgeted(vec![0.1f32; 2880]))
+        .await
+        .expect("灌入 PCM");
     drop(chunk_tx);
     done_tx.send(true).expect("标记合成正常结束");
     sentence_tx
         .send(PreparedSentence {
             text: "你好".to_string(),
-            audio: PreparedAudio::Stream { sr: 24000, chunks: chunk_rx, done: done_rx },
+            audio: PreparedAudio::Stream {
+                sr: 24000,
+                chunks: chunk_rx,
+                done: done_rx,
+            },
             cache_key: 7,
         })
         .await
@@ -131,7 +147,10 @@ async fn filler_pushes_sentence_start_first_and_caches_complete_sentence() {
     assert!(matches!(source.recv().await, Some(DownlinkItem::SentenceStart(t)) if t == "你好"));
     assert!(matches!(source.recv().await, Some(DownlinkItem::Frame(_))));
     assert!(matches!(source.recv().await, Some(DownlinkItem::Frame(_))));
-    assert!(source.recv().await.is_none(), "句子流结束 → 抽空后 recv 返回 None");
+    assert!(
+        source.recv().await.is_none(),
+        "句子流结束 → 抽空后 recv 返回 None"
+    );
     filler.await.expect("填充任务正常收尾");
 
     let hit = cache.get(7).expect("完整句应写入结果缓存");
@@ -146,13 +165,20 @@ async fn filler_skips_cache_for_incomplete_sentence() {
     let (sentence_tx, sentence_rx) = mpsc::channel(1);
     let (chunk_tx, chunk_rx) = mpsc::channel(4);
     let (done_tx, done_rx) = oneshot::channel::<bool>();
-    chunk_tx.send(PcmChunk::unbudgeted(vec![0.1f32; 2880])).await.expect("灌入 PCM");
+    chunk_tx
+        .send(PcmChunk::unbudgeted(vec![0.1f32; 2880]))
+        .await
+        .expect("灌入 PCM");
     drop(chunk_tx);
     done_tx.send(false).expect("标记合成失败");
     sentence_tx
         .send(PreparedSentence {
             text: "你好".to_string(),
-            audio: PreparedAudio::Stream { sr: 24000, chunks: chunk_rx, done: done_rx },
+            audio: PreparedAudio::Stream {
+                sr: 24000,
+                chunks: chunk_rx,
+                done: done_rx,
+            },
             cache_key: 9,
         })
         .await
@@ -202,7 +228,9 @@ async fn filler_exits_when_reader_dropped() {
     drop(source); // 发送端放弃
     let (chunk_tx, chunk_rx) = mpsc::channel(1);
     let (done_tx, done_rx) = oneshot::channel::<bool>();
-    chunk_tx.try_send(PcmChunk::unbudgeted(vec![0.1f32; 2880])).expect("预置分片");
+    chunk_tx
+        .try_send(PcmChunk::unbudgeted(vec![0.1f32; 2880]))
+        .expect("预置分片");
     let _ = done_tx.send(true);
     let filler = spawn_single_sentence_filler(
         abort_flag(),
@@ -210,7 +238,11 @@ async fn filler_exits_when_reader_dropped() {
         params(),
         sink,
         "你好".to_string(),
-        PreparedAudio::Stream { sr: 24000, chunks: chunk_rx, done: done_rx },
+        PreparedAudio::Stream {
+            sr: 24000,
+            chunks: chunk_rx,
+            done: done_rx,
+        },
         0,
     );
     tokio::time::timeout(Duration::from_secs(1), filler)
@@ -263,7 +295,11 @@ async fn filler_returns_download_quota_per_chunk() {
     sentence_tx
         .send(PreparedSentence {
             text: "你好".to_string(),
-            audio: PreparedAudio::Stream { sr: 24000, chunks: chunk_rx, done: done_rx },
+            audio: PreparedAudio::Stream {
+                sr: 24000,
+                chunks: chunk_rx,
+                done: done_rx,
+            },
             cache_key: 0,
         })
         .await
@@ -274,5 +310,154 @@ async fn filler_returns_download_quota_per_chunk() {
     while source.recv().await.is_some() {}
     filler.await.expect("填充任务正常收尾");
     assert_eq!(budget.queued_ms(), 0, "消费完分片后额度必须归零");
-    assert!(cache.get(0).is_none(), "cache_key == 0 的流式句子不得入缓存");
+    assert!(
+        cache.get(0).is_none(),
+        "cache_key == 0 的流式句子不得入缓存"
+    );
+}
+
+#[test]
+fn cache_collection_is_bounded_without_stopping_streaming() {
+    let mut frames = vec![vec![1]];
+    let mut bytes = MAX_ENTRY_BYTES;
+    let mut cacheable = true;
+    collect_frame(&[2], &mut frames, &mut bytes, &mut cacheable);
+    assert!(!cacheable);
+    assert!(frames.is_empty());
+    assert_eq!(bytes, 0);
+    collect_frame(&[3], &mut frames, &mut bytes, &mut cacheable);
+    assert!(frames.is_empty(), "超限后只停止缓存副本收集");
+}
+
+#[tokio::test]
+async fn abort_while_waiting_for_synthesis_result_never_caches() {
+    use crate::app::hot_audio::{HotAudioKey, HotAudioStore};
+    let dir = std::env::temp_dir().join(format!("xz-reservoir-{}", uuid::Uuid::new_v4()));
+    let store = Arc::new(HotAudioStore::new(Some(dir.clone())));
+    let cache = Arc::new(TtsCache::with_store(8, store.clone()));
+    let key = HotAudioKey::from_session(&crate::config::Config::default(), 24_000, 60, "晚到打断");
+    cache.register_identity(key.clone());
+    let abort = abort_flag();
+    let (sink, mut source) = new_reservoir(600, 60);
+    let (chunk_tx, chunk_rx) = mpsc::channel(1);
+    let (done_tx, done_rx) = oneshot::channel();
+    chunk_tx
+        .send(PcmChunk::unbudgeted(vec![0.1; 2880]))
+        .await
+        .unwrap();
+    drop(chunk_tx);
+    let filler = spawn_single_sentence_filler(
+        abort.clone(),
+        cache.clone(),
+        params(),
+        sink,
+        "晚到打断".into(),
+        PreparedAudio::Stream {
+            sr: 24000,
+            chunks: chunk_rx,
+            done: done_rx,
+        },
+        key.mem_key(),
+    );
+    assert!(matches!(
+        source.recv().await,
+        Some(DownlinkItem::SentenceStart(_))
+    ));
+    for _ in 0..2 {
+        assert!(matches!(source.recv().await, Some(DownlinkItem::Frame(_))));
+    }
+    abort.store(true, Ordering::Relaxed);
+    done_tx.send(true).unwrap();
+    filler.await.unwrap();
+    assert!(cache.get(key.mem_key()).is_none());
+    assert!(store.get(&key).is_none());
+    assert!(!dir.exists(), "晚到打断不应创建磁盘缓存");
+}
+
+/// 默认 feature 编码器返回空占位帧；完整持久化链路需要真实 Opus 编码。
+#[cfg(feature = "sherpa")]
+#[tokio::test]
+async fn complete_production_sentence_persists_and_restarts() {
+    use crate::app::hot_audio::{HotAudioKey, HotAudioStore};
+    let dir = std::env::temp_dir().join(format!("xz-reservoir-{}", uuid::Uuid::new_v4()));
+    let store = Arc::new(HotAudioStore::new(Some(dir.clone())));
+    let cache = Arc::new(TtsCache::with_store(8, store.clone()));
+    let key = HotAudioKey::from_session(
+        &crate::config::Config::default(),
+        24_000,
+        60,
+        "完整普通回答",
+    );
+    cache.register_identity(key.clone());
+    let (sink, mut source) = new_reservoir(600, 60);
+    let (chunk_tx, chunk_rx) = mpsc::channel(1);
+    let (done_tx, done_rx) = oneshot::channel();
+    chunk_tx
+        .send(PcmChunk::unbudgeted(vec![0.1; 2880]))
+        .await
+        .unwrap();
+    drop(chunk_tx);
+    done_tx.send(true).unwrap();
+    let filler = spawn_single_sentence_filler(
+        abort_flag(),
+        cache.clone(),
+        params(),
+        sink,
+        key.text.clone(),
+        PreparedAudio::Stream {
+            sr: 24000,
+            chunks: chunk_rx,
+            done: done_rx,
+        },
+        key.mem_key(),
+    );
+    while source.recv().await.is_some() {}
+    filler.await.unwrap();
+    drop(cache);
+    let restarted = TtsCache::with_store(8, store);
+    restarted.register_identity(key.clone());
+    let hit = restarted
+        .get_async(key.mem_key())
+        .await
+        .expect("完整普通句重启后命中");
+    assert_eq!(hit.opus_frames.len(), 2);
+    assert!(hit.opus_frames.iter().all(|f| !f.is_empty()));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn failed_synthesis_never_creates_persistent_entry() {
+    use crate::app::hot_audio::{HotAudioKey, HotAudioStore};
+    let dir = std::env::temp_dir().join(format!("xz-reservoir-{}", uuid::Uuid::new_v4()));
+    let store = Arc::new(HotAudioStore::new(Some(dir.clone())));
+    let cache = Arc::new(TtsCache::with_store(8, store.clone()));
+    let key = HotAudioKey::from_session(&crate::config::Config::default(), 24_000, 60, "失败句");
+    cache.register_identity(key.clone());
+    let (sink, mut source) = new_reservoir(600, 60);
+    let (chunk_tx, chunk_rx) = mpsc::channel(1);
+    let (done_tx, done_rx) = oneshot::channel();
+    chunk_tx
+        .send(PcmChunk::unbudgeted(vec![0.1; 2880]))
+        .await
+        .unwrap();
+    drop(chunk_tx);
+    done_tx.send(false).unwrap();
+    let filler = spawn_single_sentence_filler(
+        abort_flag(),
+        cache.clone(),
+        params(),
+        sink,
+        "失败句".into(),
+        PreparedAudio::Stream {
+            sr: 24000,
+            chunks: chunk_rx,
+            done: done_rx,
+        },
+        key.mem_key(),
+    );
+    while source.recv().await.is_some() {}
+    filler.await.unwrap();
+    assert!(cache.get(key.mem_key()).is_none());
+    assert!(store.get(&key).is_none());
+    assert!(!dir.exists());
 }

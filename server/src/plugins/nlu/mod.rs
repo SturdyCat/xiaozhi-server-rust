@@ -22,18 +22,18 @@
 //! 锚点之间的子串作为槽位候选，用对应槽位表（封闭枚举）校验/抽取。
 //! 开放槽位（无值表）取锚点后到结尾的剩余文本，留作扩展。
 
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 use crate::plugins::command::{normalize_utterance, CommandConfig, CommandGate};
 
 mod matcher;
-mod template;
+pub(crate) mod template;
 #[cfg(test)]
 mod tests;
 
-pub use template::{parse_template, Template};
 use matcher::match_template;
+pub use template::{parse_template, Template};
 
 /// 槽位表：命名的值集合，用于模板槽位校验/抽取。
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -75,7 +75,7 @@ pub struct IntentMatch {
 }
 
 /// `[nlu]` 配置段：自定义意图 + 槽位表。
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct NluConfig {
     /// 总开关。默认 **false**：关闭时本段不产生任何意图（end_session 仍由 `[command]` 决定），
     /// 行为与加本插件之前完全一致（零开销、零行为变化）。
@@ -85,6 +85,35 @@ pub struct NluConfig {
     pub intents: Vec<IntentDef>,
     #[serde(default)]
     pub slots: Vec<SlotList>,
+    /// 轻量模型阶段的接受阈值（第二级识别）：规则未命中后，本地打分 ≥ 此值且领先次高分
+    /// [`Self::model_margin`] 才执行；否则放行 LLM。取值 [0,1]；1.0 = 实际关闭该阶段。
+    /// 默认 0.9：漏触发优于误触发（与规则层同一安全口径）。
+    #[serde(default = "default_model_threshold")]
+    pub model_threshold: f32,
+    /// 轻量模型阶段的领先幅度：最高分与**其他技能**最高分的差值下限（防相近指令歧义）。
+    #[serde(default = "default_model_margin")]
+    pub model_margin: f32,
+}
+
+impl Default for NluConfig {
+    /// 手写而非 `derive`：`f32` 的 derive 默认是 `0.0`——那会让"阈值 0 + 边际 0"把
+    /// 轻量模型层变成"沾边就执行"。默认值必须与 serde default 函数同源（单一权威）。
+    fn default() -> Self {
+        NluConfig {
+            enabled: false,
+            intents: Vec::new(),
+            slots: Vec::new(),
+            model_threshold: default_model_threshold(),
+            model_margin: default_model_margin(),
+        }
+    }
+}
+
+fn default_model_threshold() -> f32 {
+    0.9
+}
+fn default_model_margin() -> f32 {
+    0.1
 }
 
 /// 配置层意图定义（模板为字符串形式）。
@@ -112,6 +141,14 @@ pub(crate) fn norm(s: &str) -> String {
         .collect::<String>()
 }
 
+/// 否定词表：封闭槽位间隙出现即整条弃权（方向性副作用宁可漏给 LLM，不可反向执行）。
+pub(crate) const NEGATION_CUES: [&str; 6] = ["别", "不要", "不用", "不准", "不可以", "不能"];
+
+/// 文本是否含否定词（规则层与轻量模型层共用同一张表，防两层口径漂移）。
+pub(crate) fn contains_negation(s: &str) -> bool {
+    NEGATION_CUES.iter().any(|c| s.contains(c))
+}
+
 /// 编译后的 NLU 引擎：持有 end_session 闸门（`[command]`）+ 自定义意图（`[nlu]`）+ 槽位表。
 #[derive(Debug, Clone)]
 pub struct NluEngine {
@@ -132,8 +169,11 @@ impl NluEngine {
                 .iter()
                 .map(|s| (s.name.clone(), s.values.iter().map(|v| norm(v)).collect()))
                 .collect();
-            let slot_optional: HashMap<String, bool> =
-                nlu.slots.iter().map(|s| (s.name.clone(), s.optional)).collect();
+            let slot_optional: HashMap<String, bool> = nlu
+                .slots
+                .iter()
+                .map(|s| (s.name.clone(), s.optional))
+                .collect();
             let intents: Vec<Intent> = nlu
                 .intents
                 .iter()
@@ -160,11 +200,6 @@ impl NluEngine {
             slot_values,
             slot_optional,
         }
-    }
-
-    /// 引擎是否真的在拦（end_session 活跃 或 定义了生效的自定义意图）。
-    pub fn active(&self) -> bool {
-        self.end_session.is_active() || !self.intents.is_empty()
     }
 
     /// 解析识别文本：命中返回 `IntentMatch`，未命中（未知意图）返回 `None`（调用方放行给 LLM）。

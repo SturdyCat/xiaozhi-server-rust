@@ -485,9 +485,5 @@ pub(super) const CONTEXT_COMMON_FIELDS: &[(
         &["memory", "extractor"],
         MEMORY_EXTRACTOR_FIELDS,
     ),
-    (
-        Capability::Memory,
-        &["memory", "rag"],
-        MEMORY_RAG_FIELDS,
-    ),
+    (Capability::Memory, &["memory", "rag"], MEMORY_RAG_FIELDS),
 ];

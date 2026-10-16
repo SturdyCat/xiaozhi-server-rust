@@ -74,6 +74,10 @@ object ConfigSections {
         ),
         SectionDescriptor("tts", 90, "TTS", "voice", listOf("语音合成", "音色", "tts", "合成", "发音人")),
         SectionDescriptor("command", 100, "指令", "voice", listOf("指令", "退下", "闭嘴", "command", "拦截")),
+        SectionDescriptor(
+            "nlu", 105, "技能", "voice",
+            listOf("技能", "意图", "槽位", "模板", "级联", "nlu", "skill"),
+        ),
         SectionDescriptor("wakeup", 110, "唤醒", "voice", listOf("唤醒", "问候", "wakeup", "我在")),
         // —— 智能体（上下文生产者）——
         SectionDescriptor("soul", 120, "灵魂", "agent", listOf("人格", "灵魂", "人设", "soul", "角色")),

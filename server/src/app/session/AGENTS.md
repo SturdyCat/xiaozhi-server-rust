@@ -9,15 +9,15 @@
 - [LLM producer](<producer.rs>)与[分句器](<../splitter.rs>)旁挂 watchdog，LLM 静默时也能 flush 残句；不能把定时逻辑移回只在 token 到达时执行的回调。退出前先查 done/abort/通道关闭。
 - 阶段延迟由[事件记录器](<../events.rs>) first-only 标记，使用单调钟；[观测出口](<observe.rs>)统一发事件，[metrics](<../metrics.rs>)独立聚合，接口只增不改。
 - **轮次可归因**：`TurnTrace::new` 分配进程内唯一的 `turn_id`（一个 trace = 一轮），随事件负载与 `tracing` 的 `turn=` 字段流转；`grep turn=N` 能捞出整轮日志行，最后一行是分段摘要。首 token / 首句日志的判据取 `mark_*` 的返回值（是否首次写入），不要另设原子标志——那会与 first-only 语义漂移。`session_id` 在轮次内日志里不能丢：排查通常先按会话过滤再看轮次。
-- **文件规模**：[reply.rs](<reply.rs>)已到 600 行上限（§5.10），后续**观测类代码落[observe.rs](<observe.rs>)**（事件出口、轮次日志、id 取值口径都在那里），不要再往 reply.rs 加日志或分支。要挪现有的 `log_downlink` 等纯观测函数时，与下一个功能改动同批次做，别为结构整洁单独动一次。
+- **文件规模**：[reply.rs](<reply.rs>)是回复编排层（LLM 工具回接在[command.rs](<command.rs>)、观测在[observe.rs](<observe.rs>)），当前 ~540 行仍有余量，但**观测类代码一律落[observe.rs](<observe.rs>)**（事件出口、轮次日志、id 取值口径都在那里），不要再往 reply.rs 加日志或分支。
 
 ## 指令、MCP 与唤醒
 
-- [指令闸门](<command.rs>)在 ASR→LLM 之间命中后不调 LLM；AIUI 只能在云端结果回来后丢弃回复。归一化 exact 与 max_chars 两道保险不可互替，空词表不拦截。
+- [技能级联](<command.rs>)在 ASR→LLM 之间两级本地识别（规则 → 轻量模型），命中即执行不调 LLM；都未命中才放行 LLM，LLM 的 `execute_skill` 工具调用回 `execute_llm_tool_calls` 经同一目录校验执行。AIUI 只能在云端结果回来后丢弃回复。`[command]` 归一化 exact 与 max_chars 两道保险不可互替，空词表不拦截。
 - 告别语前清 stale abort；顺序是告别音频 → `tts stop` → MCP stop-listening。失败降级置 close_requested，由主循环跳过 VAD flush、排空后 close；不要分支直接 drop socket。
 - MCP 主循环内调用必须同任务抽帧，否则等自己投递响应会死锁。能力发现保留上行音频，退下等待则丢弃残留音频；其他文本帧按序补派发。详细契约见[MCP 说明](<../mcp/AGENTS.md>)。
 - [唤醒问候](<wakeup.rs>)挂 `listen detect`，不是 listen start 或 ASR；每次 detect 均问候，不能设“每会话一次”。复用 `speak_canned` 和原下行路径，跳过 LLM。
-- 热句内存→磁盘→真合成三级复用，共用[HotAudioKey](<../hot_audio.rs>)；磁盘命中暖入内存。键含引擎签名/音色/语速/音频参数/文本，含凭据的签名绝不写日志；磁盘用稳定 file_id 和参数头校验。
+- 热音频内存→磁盘→真合成三级复用，共用[HotAudioKey](<../hot_audio.rs>)；生产预取路径逐句登记完整身份（`SentenceSource.hot_audio_key`），完整句合成成功经 `insert_async` 落盘，磁盘命中经 `get_async` 暖入内存。键含引擎签名/音色/语速/音频参数/文本，含凭据的签名绝不写日志；磁盘用稳定 file_id 和参数头校验；测试台等不可复现路径填 `None`。
 - persist 要求 TTS 缓存开启且配置来源有路径；问候语应短，避免主循环等待播放期间拖住用户第一句话。
 
 [下行维护](<../downlink/AGENTS.md>) · [推理设计记录](<../inference/AGENTS.md>) · [延迟设计记录](<../metrics/AGENTS.md>) · [残句设计记录](<#3-缺口③sentencesplitter-定时-flush>)

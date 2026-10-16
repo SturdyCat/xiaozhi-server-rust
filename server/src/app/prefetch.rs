@@ -57,6 +57,7 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::{mpsc, oneshot};
 
+use crate::app::hot_audio::HotAudioKey;
 use crate::app::tts_cache::TtsCache;
 use crate::plugins::tts::TtsEngine;
 
@@ -203,12 +204,20 @@ pub(crate) struct PcmChunk {
 impl PcmChunk {
     /// 流式路径：已 [`DownloadBudget::reserve`] 过额度，Drop 时归还。
     pub(crate) fn budgeted(pcm: Vec<f32>, ms: u64, budget: Arc<DownloadBudget>) -> Self {
-        Self { pcm, ms, budget: Some(budget) }
+        Self {
+            pcm,
+            ms,
+            budget: Some(budget),
+        }
     }
 
     /// 一次性回传路径（AIUI 全链路 / 测试台）：音频已在内存，不占下载缓冲。
     pub(crate) fn unbudgeted(pcm: Vec<f32>) -> Self {
-        Self { pcm, ms: 0, budget: None }
+        Self {
+            pcm,
+            ms: 0,
+            budget: None,
+        }
     }
 }
 
@@ -282,6 +291,8 @@ pub(crate) struct PreparedSentence {
 pub(crate) struct SentenceSource {
     pub tts: Arc<dyn TtsEngine>,
     pub cache_key: u64,
+    /// 生产独立 TTS 的完整身份；测试台强制合成等不可复用路径填 None。
+    pub hot_audio_key: Option<HotAudioKey>,
     pub speed: f32,
     pub speaker: i32,
 }
@@ -334,9 +345,25 @@ where
             if abort.load(Ordering::Relaxed) {
                 break;
             }
-            let SentenceSource { tts, cache_key, speed, speaker } = resolve(&sentence);
-            // 缓存命中：零合成，直接把已编码帧按原顺序投递（**不过闸门**）
-            if let Some(hit) = cache.get(cache_key) {
+            let SentenceSource {
+                tts,
+                cache_key,
+                hot_audio_key,
+                speed,
+                speaker,
+            } = resolve(&sentence);
+            if let Some(identity) = hot_audio_key {
+                if cache_key != 0 && identity.mem_key() == cache_key {
+                    cache.register_identity(identity);
+                }
+            }
+            // 先内存、再 blocking 读盘；命中均零合成、不过推理闸门。
+            let hit = cache.get_async(cache_key).await;
+            // 等 IO 期间也可能已打断/消费者关闭，不再启动新合成或投递旧轮音频。
+            if abort.load(Ordering::Relaxed) || tx.is_closed() {
+                break;
+            }
+            if let Some(hit) = hit {
                 tracing::debug!("TTS 缓存命中（预取 {} 帧）", hit.opus_frames.len());
                 let item = PreparedSentence {
                     text: sentence,
@@ -391,7 +418,11 @@ where
             });
             let item = PreparedSentence {
                 text: sentence,
-                audio: PreparedAudio::Stream { sr, chunks: chunk_rx, done: done_rx },
+                audio: PreparedAudio::Stream {
+                    sr,
+                    chunks: chunk_rx,
+                    done: done_rx,
+                },
                 cache_key,
             };
             if tx.send(item).await.is_err() {

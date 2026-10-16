@@ -45,6 +45,7 @@ mod fields_nlu;
 mod fields_wake;
 mod impls;
 mod projection;
+mod validate;
 use fields::CAPABILITY_COMMON_FIELDS;
 use fields_context::CONTEXT_COMMON_FIELDS;
 pub use impls::*;
@@ -246,7 +247,8 @@ const APP_SECTION_HOT: &[(&str, HotReload)] = &[
 /// 未登记返回 `None`（调用方逐级回退到 [`section_hot`]）。
 pub fn field_hot(path: &[&str]) -> Option<HotReload> {
     let (key, parents) = path.split_last()?;
-    let matches_path = |fp: &[&str]| fp.len() == parents.len() && fp.iter().zip(parents).all(|(a, b)| a == b);
+    let matches_path =
+        |fp: &[&str]| fp.len() == parents.len() && fp.iter().zip(parents).all(|(a, b)| a == b);
     for (_, fp, fields) in CAPABILITY_COMMON_FIELDS.iter().chain(CONTEXT_COMMON_FIELDS) {
         if matches_path(fp) {
             if let Some(f) = fields.iter().find(|f| f.key == *key) {
@@ -487,8 +489,13 @@ pub fn configured_engine(cfg: &Config, cap: Capability) -> Option<String> {
         Capability::Tts => Some(cfg.tts.engine_id()),
         Capability::Llm => Some(cfg.llm.engine_id()),
         Capability::Memory => Some(cfg.memory.engine_id().to_string()),
-        Capability::FullChain | Capability::Voices | Capability::Firmware | Capability::Soul
-        | Capability::Command | Capability::Wake | Capability::Nlu => None,
+        Capability::FullChain
+        | Capability::Voices
+        | Capability::Firmware
+        | Capability::Soul
+        | Capability::Command
+        | Capability::Wake
+        | Capability::Nlu => None,
     }
 }
 

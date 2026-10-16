@@ -181,23 +181,33 @@ reply = "好的，我先退下了。"          # 命中后先说这句，再用 
                                     # 下次唤醒不重连）；设备不支持 MCP 或调用失败时降级为断开本次会话。
                                     # 留空 = 不说告别语（仍执行结束聆听）。
 
-# ===== 规则 NLU（`[nlu]`）：ASR → LLM **之间**的本地意图识别层，是 `[command]` 的**超集** =====
-# 默认关闭。识别文本先过本地规则引擎：命中已知意图即本地执行（**不再送大模型**），
-# 只有未知意图才放行给 LLM。它"含有" `[command]` 的 end_session（退下/闭嘴/关闭，配置仍在上段），
-# 并允许在此定义更多带槽位的本地指令意图（如「把{room}的灯{action}」）。
+# ===== 技能级联（`[nlu]` + `[command]`）：ASR → LLM **之间**的本地识别层 =====
+# 默认关闭。识别文本按三级级联处理：**规则模板命中 → 本地轻量模型打分 → 云 LLM 兜底**：
+#   1) 规则：模板锚点 + 封闭槽位值表确定性命中（零误判），命中即本地执行、不送大模型；
+#   2) 轻量模型：规则未命中时本地打分（零外网），达到 model_threshold 且领先
+#      model_margin 也直接执行（容忍「帮我把客厅的灯打开一下」这类口语化说法；
+#      含否定词/多值歧义的槽位不执行、交 LLM）；
+#   3) 云 LLM：前两级都未命中才调用；LLM 识别为技能时会以 `execute_skill` 工具调用
+#      回到本目录校验执行，否则正常聊天走 TTS。
+# 它"含有" `[command]` 的 end_session（退下/闭嘴/关闭，配置仍在上段），
+# 并允许在此定义更多带槽位的本地指令（如「把{room}的灯{action}」）。
 # 设计原则：确定性优先——漏触发（该拦没拦）远好过误触发（把正常请求当指令断线），
-# 因此模板用字面锚点 + 封闭槽位值表约束，结果可单测、可解释、零误判概率。
+# 因此模板用字面锚点 + 封闭槽位值表约束，结果可单测、可解释。
 # ⚠️ `intents` / `slots` 是**嵌套数组结构**（通用 schema 无法用单个输入框表达），请直接书写此段：
 #   - `intents` 每项含 `name` / `templates`（含 {slot} 占位）/ `action`（`kind` + `reply`）；
-#     `action.kind = "end_session"` 走「说告别语 + MCP 结束聆听」；其余 kind 为本地指令（只说 reply、不送 LLM）。
+#     `action.kind = "end_session"` 走「说告别语 + MCP 结束聆听」；
+#     `kind = "mcp:<设备工具名>"` 说完 reply 后把槽位作为参数派发到**设备声明的**同名 MCP 工具；
+#     其余 kind 为本地应答（只说 reply、不送 LLM）。
 #   - `slots` 每项含 `name` / `values`（封闭值表，用于校验与抽取）/ `optional`（空槽位是否允许）。
 #   改完保存后**新会话**生效（与 [command]/[wakeup] 一致）。
 [nlu]
-enabled = false                     # true = 启用规则 NLU（自定义意图）；end_session 仍由 [command] 决定。
+enabled = false                     # true = 启用技能级联（自定义技能）；end_session 仍由 [command] 决定。
+model_threshold = 0.9               # 轻量模型接受阈值（0~1；1.0 = 关闭该级）。越高越保守。
+model_margin = 0.1                  # 最高分需领先其他技能的幅度（防「开灯/关灯」歧义误触发）。
 # 示例（取消注释即可启用一条"控制灯"的本地指令）：
 # intents = [
 #   { name = "control_light", templates = ["把{room}的灯{action}"],
-#     action = { kind = "local_command", reply = "好的，已为你{action}{room}的灯" } },
+#     action = { kind = "mcp:mcp_light_control", reply = "好的，已为你{action}{room}的灯" } },
 # ]
 # slots = [
 #   { name = "room", values = ["客厅", "卧室"], optional = false },

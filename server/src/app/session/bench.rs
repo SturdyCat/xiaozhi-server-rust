@@ -130,10 +130,14 @@ impl<'a, T: Transport> Session<'a, T> {
         let disk_tts = if self.engines.config_path().is_none() {
             self.engines.config.tts.clone() // 内置默认配置：无来源可读
         } else {
-            self.engines.config_store.load().map(|c| c.tts).unwrap_or_else(|e| {
-                tracing::warn!("session {session_id} 测试合成读盘配置失败（用启动配置）: {e}");
-                self.engines.config.tts.clone()
-            })
+            self.engines
+                .config_store
+                .load()
+                .map(|c| c.tts)
+                .unwrap_or_else(|e| {
+                    tracing::warn!("session {session_id} 测试合成读盘配置失败（用启动配置）: {e}");
+                    self.engines.config.tts.clone()
+                })
         };
         let (tts, vcn_note) = match &vcn_override {
             Some(v) => {
@@ -206,10 +210,9 @@ impl<'a, T: Transport> Session<'a, T> {
         // 失败经 tts_test 结果回报测试台（不再静默）。
         // 与正常会话走**同一个下载缓冲**（按预算控制下载流速，见 `app::prefetch`）。
         let download = crate::app::prefetch::DownloadBudget::new(self.params.download_buffer_ms);
-        let (tx, chunk_rx) =
-            tokio::sync::mpsc::channel::<crate::app::prefetch::PcmChunk>(
-                crate::app::prefetch::PREFETCH_PCM_SLOTS,
-            );
+        let (tx, chunk_rx) = tokio::sync::mpsc::channel::<crate::app::prefetch::PcmChunk>(
+            crate::app::prefetch::PREFETCH_PCM_SLOTS,
+        );
         let (done_tx, done_rx) = tokio::sync::oneshot::channel::<bool>();
         let text_c = text.clone();
         let abort_c = self.abort.clone();
@@ -231,15 +234,21 @@ impl<'a, T: Transport> Session<'a, T> {
         });
         // 测试台单次合成也走**同一条**下行链路（水库 + 节拍器；保护 ESP/一致行为）
         self.pacer.reset();
-        let (sink, source) =
-            new_reservoir(self.params.downlink_buffer_ms, self.params.downlink_frame_ms);
+        let (sink, source) = new_reservoir(
+            self.params.downlink_buffer_ms,
+            self.params.downlink_frame_ms,
+        );
         let filler = spawn_single_sentence_filler(
             self.abort.clone(),
             self.engines.tts_cache.clone(),
             self.params,
             sink,
             text.clone(),
-            PreparedAudio::Stream { sr: tts_sr, chunks: chunk_rx, done: done_rx },
+            PreparedAudio::Stream {
+                sr: tts_sr,
+                chunks: chunk_rx,
+                done: done_rx,
+            },
             0, // 测试台测的是真实合成，不走缓存
         );
         let mut first_frame_at = None;
@@ -331,10 +340,14 @@ impl<'a, T: Transport> Session<'a, T> {
         let llm_cfg = if self.engines.config_path().is_none() {
             self.engines.config.llm.clone() // 内置默认配置：无来源可读
         } else {
-            self.engines.config_store.load().map(|c| c.llm).unwrap_or_else(|e| {
-                tracing::warn!("session {session_id} LLM 测试读配置失败（用启动配置）: {e}");
-                self.engines.config.llm.clone()
-            })
+            self.engines
+                .config_store
+                .load()
+                .map(|c| c.llm)
+                .unwrap_or_else(|e| {
+                    tracing::warn!("session {session_id} LLM 测试读配置失败（用启动配置）: {e}");
+                    self.engines.config.llm.clone()
+                })
         };
         tracing::info!(
             "session {session_id} LLM 测试：model={} api_base={}",

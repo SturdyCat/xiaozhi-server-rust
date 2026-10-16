@@ -40,12 +40,13 @@
 //! - **打断**：读端被丢弃（或 `abort` 置位）→ `push` 返回 `false` → 填充任务立刻收尾，
 //!   不再白合成/白编码本轮剩余音频。
 
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use tokio::sync::{mpsc, Notify};
+use tokio::sync::{Notify, mpsc};
 
+use crate::app::hot_audio::{MAX_ENTRY_BYTES, MAX_FRAMES};
 use crate::app::prefetch::{PREFETCH_SENTENCES, PreparedAudio, PreparedSentence};
 use crate::app::session::SessionParams;
 use crate::app::tts_cache::TtsCache;
@@ -209,7 +210,10 @@ pub(crate) fn new_reservoir(cap_ms: u32, frame_ms: u32) -> (ReservoirSink, Reser
     let (tx, rx) = mpsc::channel::<DownlinkItem>(cap_items);
     let shared = Arc::new(ReservoirShared::new(cap_frames, frame_ms));
     (
-        ReservoirSink { tx, shared: shared.clone() },
+        ReservoirSink {
+            tx,
+            shared: shared.clone(),
+        },
         ReservoirSource { rx, shared },
     )
 }
@@ -224,7 +228,12 @@ impl ReservoirSink {
         // 若在 send 之后才自增，读端的自减会先发生 → 水位计数下溢成天文数字
         // （起跑闸会误判"水库已满"，观测也全错）。失败/取消由 `PushGuard` 回滚。
         self.shared.on_push(frames, bytes);
-        let guard = PushGuard { shared: &self.shared, frames, bytes, committed: false };
+        let guard = PushGuard {
+            shared: &self.shared,
+            frames,
+            bytes,
+            committed: false,
+        };
         let t = Instant::now();
         if self.tx.send(item).await.is_err() {
             return false; // guard 析构即回滚记账
@@ -384,7 +393,11 @@ pub(crate) fn spawn_single_sentence_filler(
     let (tx, rx) = mpsc::channel::<PreparedSentence>(1);
     // 容量 1 且此刻为空 → 必然成功；失败只可能是逻辑错误（不应发生）
     if tx
-        .try_send(PreparedSentence { text, audio, cache_key })
+        .try_send(PreparedSentence {
+            text,
+            audio,
+            cache_key,
+        })
         .is_err()
     {
         tracing::warn!("单句水库填充入队失败（容量 1 却拒收，视为内部错误）");
@@ -401,7 +414,11 @@ async fn push_sentence(
     abort: &AtomicBool,
     sentence: PreparedSentence,
 ) -> bool {
-    let PreparedSentence { text, audio, cache_key } = sentence;
+    let PreparedSentence {
+        text,
+        audio,
+        cache_key,
+    } = sentence;
     // 句首通知先入队：顺序即播出顺序（发送端据此在音频前下发 sentence_start）
     if !sink.push(DownlinkItem::SentenceStart(text.clone())).await {
         return false;
@@ -418,17 +435,24 @@ async fn push_sentence(
             }
             true
         }
-        PreparedAudio::Stream { sr, mut chunks, done } => {
-            let mut framer = match StreamingFramer::new(sr, params.downlink_sr, params.downlink_frame_ms)
-            {
-                Ok(f) => f,
-                Err(e) => {
-                    tracing::warn!("建立 Opus 分帧器失败（本句丢弃，{text}）: {e:#}");
-                    let _ = done.await;
-                    return true; // 单句失败不终止整轮（与旧实现一致：只丢这一句）
-                }
-            };
+        PreparedAudio::Stream {
+            sr,
+            mut chunks,
+            done,
+        } => {
+            let mut framer =
+                match StreamingFramer::new(sr, params.downlink_sr, params.downlink_frame_ms) {
+                    Ok(f) => f,
+                    Err(e) => {
+                        tracing::warn!("建立 Opus 分帧器失败（本句丢弃，{text}）: {e:#}");
+                        drop(chunks); // 停止上游，不能持接收端等待已被背压的合成退出
+                        let _ = done.await;
+                        return true; // 单句失败不终止整轮（与旧实现一致：只丢这一句）
+                    }
+                };
             let mut collected: Vec<Vec<u8>> = Vec::new();
+            let mut collected_bytes = 0usize;
+            let mut cacheable = cache_key != 0;
             let mut intact = true;
             while let Some(chunk) = chunks.recv().await {
                 if abort.load(Ordering::Relaxed) {
@@ -445,9 +469,12 @@ async fn push_sentence(
                         for frame in frames {
                             // 帧仅在写 TTS 缓存时需要副本；cache_key == 0（不可复现/测试台）
                             // 的句子永远不写缓存，克隆纯属白费（下行是每帧都走的热路径）。
-                            if cache_key != 0 {
-                                collected.push(frame.clone());
-                            }
+                            collect_frame(
+                                &frame,
+                                &mut collected,
+                                &mut collected_bytes,
+                                &mut cacheable,
+                            );
                             if !sink.push(DownlinkItem::Frame(frame)).await {
                                 return false;
                             }
@@ -464,9 +491,7 @@ async fn push_sentence(
             if intact {
                 match framer.finish() {
                     Ok(Some(tail)) => {
-                        if cache_key != 0 {
-                            collected.push(tail.clone());
-                        }
+                        collect_frame(&tail, &mut collected, &mut collected_bytes, &mut cacheable);
                         if !sink.push(DownlinkItem::Frame(tail)).await {
                             return false;
                         }
@@ -481,12 +506,34 @@ async fn push_sentence(
             // 完整句才入缓存（引擎正常结束 + 未被中断 + 编码全程成功）。
             // `cache_key == 0` = 该句**不入缓存**（AIUI 云端回传音频不可复现 / 测试台直连合成，
             // 与旧实现传 `cache_sink: None` 同义；`make_key` 是 64 位哈希，真实键撞 0 可忽略）。
-            if intact && cache_key != 0 && matches!(done.await, Ok(true)) && !collected.is_empty() {
-                cache.insert(cache_key, collected);
+            drop(chunks); // 编码失败/打断时解除上游背压，避免等待 done 死锁
+            if intact
+                && cacheable
+                && matches!(done.await, Ok(true))
+                && !abort.load(Ordering::Relaxed)
+                && !sink.tx.is_closed()
+                && !collected.is_empty()
+            {
+                cache.insert_async(cache_key, collected).await;
             }
             true
         }
     }
+}
+
+/// 缓存副本单句有界；超限只停止收集，不丢帧、不破坏实时流式下行。
+fn collect_frame(frame: &[u8], frames: &mut Vec<Vec<u8>>, bytes: &mut usize, cacheable: &mut bool) {
+    if !*cacheable {
+        return;
+    }
+    if frames.len() >= MAX_FRAMES || bytes.saturating_add(frame.len()) > MAX_ENTRY_BYTES {
+        *cacheable = false;
+        frames.clear();
+        *bytes = 0;
+        return;
+    }
+    *bytes += frame.len();
+    frames.push(frame.to_vec());
 }
 
 #[cfg(test)]

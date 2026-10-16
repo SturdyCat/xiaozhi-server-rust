@@ -68,10 +68,12 @@ pub struct Engines {
     ///
     /// `Arc`：预取 worker（独立 task）也要读写它，见 [`crate::app::prefetch`]。
     pub tts_cache: Arc<crate::app::tts_cache::TtsCache>,
-    /// 持久化**热句**音频库（唤醒问候语这类高频固定句的成品音频，跨进程复用）。
+    /// 持久化**热音频**库（可复现合成的完整句成品音频，跨进程复用）。
     ///
-    /// 与 `tts_cache` 的分工见 [`crate::app::hot_audio`]：内存缓存"什么都能装"，
-    /// 这里只存**显式点名**的热句，因此有界、可预期、且能在容器重建后仍然命中。
+    /// 与 `tts_cache` 的分工见 [`crate::app::hot_audio`]：内存缓存"什么都能装"且每进程
+    /// 一份；这里落盘的是**生产预取路径逐句登记身份**的完整句——配置固定文本（唤醒问候语 /
+    /// 告别语 / 技能应答 / 兜底话术）复用率最高，普通回复同样入缓存。AIUI 云闭环与测试台
+    /// 直连合成不可复现，不落盘。有界（文件数 / 总量 / 单句上限）、可预期、容器重建后仍命中。
     pub hot_audio: Arc<crate::app::hot_audio::HotAudioStore>,
     /// 令牌用量计量（全局 + 按会话；`GET /api/usage`）。回答"记忆注入让 prompt 长了多少"。
     pub usage: crate::app::usage::UsageMeter,
@@ -117,20 +119,13 @@ impl Engines {
         let tts_sig = capability_signature(config, Capability::Tts);
         let llm_sig = capability_signature(config, Capability::Llm);
         let memory_sig = capability_signature(config, Capability::Memory);
-        let tts_cache = Arc::new(crate::app::tts_cache::TtsCache::new(config.tts.cache_entries));
-        // 持久化热句音频库的落盘目录：**配置来源所在目录**的 `hot-audio/`。
-        //
-        // 为什么挂在配置目录下而不是固定路径：生产部署把配置放在挂载卷上
-        //（docker-compose 的 `./server-data:/data` + `XIAOZHI_CONFIG=/data/config.toml`），
-        // 跟着它走就自动落在持久卷里，容器重建不丢；而"配置没有文件路径"（内置默认配置、
-        // 保存也不持久化）时落盘同样没有意义，此时直接禁用（与 `PUT /api/config` 返回 400 同源）。
-        let hot_audio_dir = config_store.location().map(|p| {
-            std::path::Path::new(p)
-                .parent()
-                .unwrap_or_else(|| std::path::Path::new("."))
-                .join("hot-audio")
-        });
-        let hot_audio = Arc::new(crate::app::hot_audio::HotAudioStore::new(hot_audio_dir));
+        // 跟随配置来源的持久卷；无来源时复用 memory.db_path 的父目录，
+        // 不把生产音频写到硬编码的容器层路径。与 wakeup 共用旧 hot-audio/ 格式。
+        let hot_audio_dir = crate::app::hot_audio::cache_dir(config_store.location(), &config.memory.db_path);
+        let hot_audio = Arc::new(crate::app::hot_audio::HotAudioStore::new(Some(hot_audio_dir)));
+        let tts_cache = Arc::new(crate::app::tts_cache::TtsCache::with_store(
+            config.tts.cache_entries, hot_audio.clone(),
+        ));
         Ok(Arc::new(Self {
             asr: booted.asr,
             tts: RwLock::new(booted.tts),

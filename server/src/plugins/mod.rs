@@ -54,6 +54,7 @@ pub mod memory;
 pub mod prompt;
 pub mod registry;
 pub mod soul;
+pub mod skill;
 pub mod tts;
 pub mod vad;
 pub mod wakeup;
