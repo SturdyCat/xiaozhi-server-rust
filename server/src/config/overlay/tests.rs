@@ -2,7 +2,7 @@
 mod overlay_tests {
     use crate::config::Config;
     use crate::config::overlay::{
-        device_overlay_path, json_to_toml, merge_overlay, overlay_allowed, preset_path,
+        merge_overlay, overlay_allowed,
         validate_overlay,
     };
 
@@ -120,28 +120,5 @@ mod overlay_tests {
         assert_eq!(merged.tts.engine, global.tts.engine);
         assert_eq!(merged.llm.model, global.llm.model);
         assert_eq!(merged.memory.engine, global.memory.engine);
-    }
-
-    #[test]
-    fn device_overlay_path_rejects_traversal() {
-        assert!(device_overlay_path("/data/config.toml", "../evil").is_none());
-        assert!(device_overlay_path("/data/config.toml", "a/b").is_none());
-        let p = device_overlay_path("/data/config.toml", "AA:BB:CC").unwrap();
-        assert!(p.ends_with("overlays/devices/AA:BB:CC.toml"));
-    }
-
-    #[test]
-    fn preset_path_sanitizes() {
-        assert!(preset_path("/data/config.toml", "../x").is_none());
-        let p = preset_path("/data/config.toml", "night").unwrap();
-        assert!(p.ends_with("presets/night.toml"));
-    }
-
-    #[test]
-    fn json_to_toml_roundtrip_whitelisted() {
-        let v = serde_json::json!({"tts": {"speaker": 5, "speed": 1.1}});
-        let toml_str = json_to_toml(&v).unwrap();
-        let back: serde_json::Value = toml::from_str(&toml_str).unwrap();
-        assert_eq!(back["tts"]["speaker"].as_i64(), Some(5));
     }
 }

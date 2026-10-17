@@ -14,7 +14,7 @@
 //! - `--features sherpa`：本地 Kokoro / Silero VAD 可用，走真实合成/检测路径。
 
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::engine::Engines;
 use crate::plugins::llm::{build_llm, LlmEvent};
@@ -299,5 +299,132 @@ pub async fn bench_vad(engines: &Arc<Engines>) -> BenchResult {
         }
         Ok(Err((build_ms, e))) => BenchResult::err(build_ms, Some(engine_name), e),
         Err(e) => BenchResult::err(0, Some(engine_name), format!("VAD 测试任务异常: {e}")),
+    }
+}
+
+/// 模型列表结果（`POST /api/test/llm/models`）。
+#[derive(serde::Serialize)]
+pub struct ModelsResult {
+    /// `"ok"` | `"error"`。
+    pub state: &'static str,
+    /// 模型 id 列表（排序去重）。
+    pub models: Vec<String>,
+    pub elapsed_ms: u64,
+    /// 错误文案（`state="error"` 时填充）。
+    pub error: Option<String>,
+}
+
+/// 由 Responses API 端点推导 `/models` 列表地址：`…/v1/responses` → `…/v1/models`；
+/// 已以 `/models` 结尾则原样使用；其余结构直接追加 `/models`。
+fn models_url(api_base: &str) -> String {
+    let b = api_base.trim().trim_end_matches('/');
+    if let Some(stripped) = b.strip_suffix("/responses") {
+        format!("{stripped}/models")
+    } else if b.ends_with("/models") {
+        b.to_string()
+    } else {
+        format!("{b}/models")
+    }
+}
+
+/// 拉取上游模型列表（OpenAI 兼容 `GET {base}/models`）。
+///
+/// 与 [`bench_llm`] 同口径：读磁盘最新 `[llm]` 配置，请求里的 `api_base` / `api_key`
+/// 仅本次覆盖（绝不写日志明文、绝不持久化）；`api_key` 为空时多数本地网关
+/// （ollama/llama.cpp 等）允许匿名访问，故不强制非空。
+pub async fn llm_models(
+    engines: &Arc<Engines>,
+    api_base: Option<&str>,
+    api_key: Option<&str>,
+) -> ModelsResult {
+    let t0 = Instant::now();
+    let mut cfg = load_disk_llm(engines);
+    if let Some(b) = api_base {
+        if !b.trim().is_empty() {
+            cfg.api_base = b.to_string();
+        }
+    }
+    if let Some(k) = api_key {
+        // ⚠️ 仅本次 ad-hoc 使用，绝不打印、绝不持久化。
+        if !k.trim().is_empty() {
+            cfg.api_key = k.to_string();
+        }
+    }
+    if cfg.api_base.trim().is_empty() {
+        return ModelsResult {
+            state: "error",
+            models: vec![],
+            elapsed_ms: 0,
+            error: Some("[llm].api_base 为空".into()),
+        };
+    }
+    let url = models_url(&cfg.api_base);
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
+    let mut req = client.get(&url);
+    let key = cfg.api_key.trim();
+    if !key.is_empty() {
+        req = req.bearer_auth(key);
+    }
+    let elapsed = t0.elapsed().as_millis() as u64;
+    match req.send().await {
+        Ok(resp) => {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            if !status.is_success() {
+                let body: String = body.chars().take(300).collect();
+                return ModelsResult {
+                    state: "error",
+                    models: vec![],
+                    elapsed_ms: elapsed,
+                    error: Some(format!("HTTP {}：{body}", status.as_u16())),
+                };
+            }
+            match serde_json::from_str::<serde_json::Value>(&body) {
+                Ok(v) => {
+                    // OpenAI 形状 `{"data":[{"id":…}]}`；兼容 `{"models":[…]}`（字符串或
+                    // {"name"/"id":…}，ollama 原生 /api/tags 形状）。
+                    let mut models: Vec<String> = Vec::new();
+                    let items = v
+                        .get("data")
+                        .and_then(|d| d.as_array())
+                        .or_else(|| v.get("models").and_then(|m| m.as_array()));
+                    if let Some(items) = items {
+                        for it in items {
+                            let id = if let Some(s) = it.as_str() {
+                                Some(s.to_string())
+                            } else {
+                                it.get("id")
+                                    .and_then(|x| x.as_str())
+                                    .or_else(|| it.get("name").and_then(|x| x.as_str()))
+                                    .map(|s| s.to_string())
+                            };
+                            if let Some(id) = id {
+                                if !id.is_empty() {
+                                    models.push(id);
+                                }
+                            }
+                        }
+                    }
+                    models.sort();
+                    models.dedup();
+                    ModelsResult { state: "ok", models, elapsed_ms: elapsed, error: None }
+                }
+                Err(e) => ModelsResult {
+                    state: "error",
+                    models: vec![],
+                    elapsed_ms: elapsed,
+                    error: Some(format!("响应非 JSON：{e}")),
+                },
+            }
+        }
+        Err(e) => ModelsResult {
+            state: "error",
+            models: vec![],
+            elapsed_ms: elapsed,
+            error: Some(format!("请求失败：{e}")),
+        },
     }
 }

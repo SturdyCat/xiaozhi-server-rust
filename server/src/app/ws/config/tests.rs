@@ -6,17 +6,27 @@ mod presets;
 mod secrets;
 
 // 预设管线（P1-5 R3-8）测试依赖的纯函数（handler 委托给它们，避免单测里构造会加载模型的完整 `Engines`）。
-use crate::config::overlay::{preset_path, presets_dir};
+use crate::config::store::sqlite::SqliteConfigStore;
+use crate::config::store::ConfigStore;
 use crate::config::Config;
 use std::path::PathBuf;
 use uuid::Uuid;
 
-/// 写盘（P0 起统一经存储抽象；原 `ws::config::persist_config` 已搬入 `config::store`）。
-///
-/// 测试用文件后端，语义与搬移前**逐字节一致**（原子写 + EBUSY 原地回退 + 文案）。
+/// 写库（统一经存储抽象）。测试用 SQLite 后端：`path` 即 db 文件（临时目录内）。
 fn persist_config_file(path: &str, cfg: &Config) -> anyhow::Result<()> {
-    use crate::config::store::{ConfigStore, FileConfigStore};
-    FileConfigStore::new(path).persist(cfg)
+    SqliteConfigStore::open(path)?.persist(cfg)
+}
+
+/// 测试辅助：从 SQLite 配置库读回 Config（对应旧 `Config::load(路径)` 的角色）。
+pub(super) fn store_load(path: &std::path::Path) -> anyhow::Result<Config> {
+    SqliteConfigStore::open(path.to_str().unwrap())?.load()
+}
+
+/// 测试辅助：在临时目录开一个配置库，返回 (库路径, store)。
+fn sqlite_store(dir: &PathBuf, name: &str) -> (PathBuf, std::sync::Arc<SqliteConfigStore>) {
+    let path = dir.join(format!("{name}.db"));
+    let store = SqliteConfigStore::open(path.to_str().unwrap()).expect("打开测试配置库");
+    (path, store)
 }
 
 /// 完整配置 fixture（**刻意写成 P4 之前的旧位置形态**）：`[tts] backend`/`model`/…、
@@ -467,19 +477,19 @@ fn new_p6_sections_are_not_reset_by_old_client_patch() {
     assert_eq!(saved.memory.inject_position, "before_history");
 }
 
-/// 部分更新合并后写盘 → 重新解析：未提及的段与提及的段都要保真。
+/// 部分更新合并后写库 → 重读：未提及的段与提及的段都要保真。
 #[test]
 fn partial_update_survives_disk_roundtrip() {
     let dir = std::env::temp_dir().join(format!("xz_cfg_{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("config.toml");
+    let path = dir.join("data.db");
 
     let merged = simulate_put(
         &full_test_config(),
         serde_json::json!({"llm": {"model": "m9"}, "tts": {"cache_entries": 5}}),
     );
     persist_config_file(path.to_str().unwrap(), &merged).unwrap();
-    let loaded = Config::load(path.to_str().unwrap()).unwrap();
+    let loaded = store_load(&path).unwrap();
 
     assert_eq!(loaded.llm.model, "m9");
     assert_eq!(loaded.tts.cache_entries, 5);

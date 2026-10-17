@@ -117,6 +117,9 @@ impl SkillRegistry {
         nlu: &NluConfig,
         bert: Option<Arc<dyn BertClassify>>,
     ) -> Self {
+        // 内置提醒技能合并（见 [`NluConfig::with_builtins`]）：规则/模型/LLM 目录三处同源。
+        let merged = nlu.with_builtins();
+        let nlu = &merged;
         let mut definitions = Vec::new();
         if command.active() {
             definitions.push(Definition {
@@ -370,11 +373,13 @@ pub fn validate(command: &CommandConfig, nlu: &NluConfig) -> Result<()> {
     if !nlu.enabled {
         return Ok(());
     }
+    // 与运行时同源：校验对象 = 配置意图 ⊕ 内置提醒技能（重名配置覆盖内置后仍唯一）。
+    let merged = nlu.with_builtins();
     let mut names = BTreeSet::new();
     if command.active() {
         names.insert("end_session".to_string());
     }
-    for def in &nlu.intents {
+    for def in &merged.intents {
         if def.name.trim().is_empty() || !names.insert(def.name.clone()) {
             bail!(
                 "[nlu].intents 技能名称为空或重复：{}，请使用唯一名称",

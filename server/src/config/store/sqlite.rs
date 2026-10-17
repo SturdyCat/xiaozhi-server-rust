@@ -73,6 +73,18 @@ impl SqliteConfigStore {
         }))
     }
 
+    /// 首次安装自举：空库时把内置默认配置落库（`source = "bootstrap"`），保证 Docker
+    /// 首次启动后 `data.db` 里就有一份可审计、可回滚的默认配置，而非等到首次保存才落库。
+    /// 返回是否执行了自举（库非空则不动任何数据，返回 `false`）。
+    pub fn bootstrap_default_if_empty(&self) -> Result<bool> {
+        if !self.is_empty() {
+            return Ok(false);
+        }
+        self.write_doc(&Config::default(), "bootstrap")
+            .context("空配置库自举写入默认配置失败")?;
+        Ok(true)
+    }
+
     /// 取锁（中毒后继续用：单条 SQL 失败不该让配置能力永久不可用）。
     fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
         self.conn.lock().unwrap_or_else(|e| e.into_inner())
@@ -186,10 +198,6 @@ impl ConfigStore for SqliteConfigStore {
 
     fn persist(&self, cfg: &Config) -> Result<()> {
         self.write_doc(cfg, "save")
-    }
-
-    fn bootstrap_import(&self, cfg: &Config) -> Result<()> {
-        self.write_doc(cfg, "bootstrap")
     }
 
     fn is_empty(&self) -> bool {

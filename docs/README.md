@@ -43,6 +43,7 @@
 | 第二、三轮设计 | [MCP 清单驱动与本地 RAG](<p2-round2-design.md>)、[配置预设与设备 overlay](<p3-round3-design.md>) |
 | 架构和代码分析 | [架构优化分析](<architecture-optimization-analysis.md>)、[代码简化分析](<code-simplification-analysis.md>) |
 | ESP 兼容与流水线性能 | [ESP 兼容与延迟计划](<esp-compat-and-latency-plan.md>) |
+| TinyBERT NLU 自动训练流水线 | [训练流水线方案](<tinybert-nlu-train-pipeline.md>)（设计稿，未实施） |
 
 ## 文档维护规则
 

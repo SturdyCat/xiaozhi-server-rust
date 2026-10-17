@@ -338,6 +338,48 @@ class ConfigFormState(private val scope: PagerScope) {
     }
 
     // ============================================================
+    // LLM 模型在线列表（POST /api/test/llm/models：服务端代理 GET {base}/models，
+    // 密钥不下发浏览器/客户端；api_base/api_key 非空时仅本次覆盖）
+    // ============================================================
+    var llmModelsBusy by scope.observable(false)
+    var llmModelsMsg by scope.observable("")
+    // Pair<id, label>，与 TTS 发音人下拉同构
+    val llmModelOptions: ObservableList<Pair<String, String>> by scope.observableList()
+
+    fun fetchLlmModels(ctx: Pager) {
+        if (llmModelsBusy) return
+        llmModelsBusy = true
+        llmModelsMsg = ""
+        val body = JSONObject()
+        if (llmApiBase.isNotBlank()) body.put("api_base", llmApiBase.trim())
+        if (llmApiKey.isNotBlank()) body.put("api_key", llmApiKey.trim())
+        val headers = JSONObject().apply { put("Content-Type", "application/json") }
+        network(ctx).httpRequest("$serverBase/api/test/llm/models", true, body, headers) { data, success, errorMsg, resp ->
+            llmModelsBusy = false
+            val ok = success && (resp.statusCode == null || resp.statusCode in 200..299)
+            val state = data?.optString("state", "") ?: ""
+            val err = data?.optString("error", "")?.takeIf { it.isNotEmpty() } ?: (errorMsg ?: "")
+            if (!ok || state != "ok") {
+                llmModelOptions.clear()
+                llmModelsMsg = "获取失败：${err.ifEmpty { "HTTP ${resp.statusCode}" }}"
+                return@httpRequest
+            }
+            val arr = data?.optJSONArray("models")
+            llmModelOptions.clear()
+            val n = arr?.length() ?: 0
+            for (i in 0 until n) {
+                val m = arr?.optString(i, "") ?: ""
+                if (m.isNotEmpty()) llmModelOptions.add(m to m)
+            }
+            llmModelsMsg = if (llmModelOptions.isEmpty()) {
+                "上游未返回模型（检查 api_base 是否为 OpenAI 兼容端点）"
+            } else {
+                "✓ ${llmModelOptions.size} 个模型，可在下方下拉选择或直接手输"
+            }
+        }
+    }
+
+    // ============================================================
     // TTS 引擎注册表（本地 / 远程两组；未来新增引擎/供应商只改这里 + 服务端）
     // ============================================================
     // 本地模型引擎（离线推理，凭据字段 = 模型路径等）。

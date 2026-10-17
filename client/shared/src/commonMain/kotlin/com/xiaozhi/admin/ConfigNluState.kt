@@ -1,11 +1,13 @@
 package com.xiaozhi.admin
 
+import com.tencent.kuikly.core.pager.Pager
 import com.tencent.kuikly.core.base.PagerScope
 import com.tencent.kuikly.core.nvi.serialization.json.JSONArray
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.reactive.collection.ObservableList
 import com.tencent.kuikly.core.reactive.handler.observable
 import com.tencent.kuikly.core.reactive.handler.observableList
+import com.tencent.kuikly.core.timer.setTimeout
 
 /**
  * 「技能级联」（`[nlu]`）的表单状态。
@@ -195,6 +197,75 @@ class NluSectionState(private val scope: PagerScope) {
                     s.optional = o.optBoolean("optional", false).toString()
                     slots.add(s)
                 }
+            }
+        }
+    }
+
+    // ============================================================
+    // NLU 模型训练（POST /api/nlu/model/build + GET 轮询状态）
+    // ============================================================
+
+    /** true = 有一次训练在途（启动请求已发出且尚未终态），按钮置灰防重复点击。 */
+    var buildBusy by scope.observable(false)
+    /// 用户可见的进度/结果一行话（空串 = 不显示）。
+    var buildMsg by scope.observable("")
+    /// 服务端最新 state（idle / running / success / failed），随轮询更新。
+    var buildPhase by scope.observable("")
+    /// 服务端返回的训练日志尾部（running 时滚动展示，失败时给原因）。
+    var buildLog by scope.observable("")
+
+    /**
+     * 启动一次训练。服务端异步执行（立即返回）：基于当前技能定义（内置三个提醒技能 +
+     * 自定义 intents）在宿主 docker 里微调并导出 ONNX int8 三件套。
+     */
+    fun startBuildModel(ctx: Pager, baseUrl: String) {
+        if (buildBusy) return
+        buildBusy = true
+        buildMsg = "正在启动训练…"
+        network(ctx).requestPost("$baseUrl/api/nlu/model/build", JSONObject()) { data, success, errorMsg, resp ->
+            val code = resp.statusCode
+            val ok = success && (code == null || code in 200..299)
+            if (ok) {
+                buildPhase = "running"
+                buildMsg = "训练已启动（拉取中文底座 + 微调 + ONNX 导出，约数分钟）…"
+                pollBuildStatus(ctx, baseUrl, 0)
+            } else {
+                buildBusy = false
+                val serverErr = data?.optString("error", "") ?: ""
+                buildMsg = "启动失败: " + serverErr.ifEmpty { errorMsg.ifEmpty { "HTTP $code" } }
+            }
+        }
+    }
+
+    /** 轮询训练状态（2s 一次，至多 150 次 ≈ 5 分钟；服务端终态 success/failed 停止）。 */
+    private fun pollBuildStatus(ctx: Pager, baseUrl: String, attempts: Int) {
+        if (attempts > 150) {
+            buildBusy = false
+            buildMsg = "轮询超时（训练可能仍在进行，稍后重新打开本页查看）"
+            return
+        }
+        getJson(ctx, "$baseUrl/api/nlu/model/build") { ok, data, message ->
+            if (!ok) {
+                buildBusy = false
+                buildMsg = "状态查询失败: $message"
+                return@getJson
+            }
+            buildPhase = data.optString("state", "")
+            buildLog = data.optString("log_tail", "")
+            when (buildPhase) {
+                "running" -> {
+                    ctx.setTimeout(2000) { pollBuildStatus(ctx, baseUrl, attempts + 1) }
+                }
+                "success" -> {
+                    buildBusy = false
+                    val dir = data.optString("output_dir", "")
+                    buildMsg = "✅ 训练完成，产物在 $dir（把 bert 三件套指过去并启用即可生效）"
+                }
+                "failed" -> {
+                    buildBusy = false
+                    buildMsg = "❌ 训练失败（原因见下方日志）"
+                }
+                else -> { buildBusy = false; buildMsg = "" }
             }
         }
     }

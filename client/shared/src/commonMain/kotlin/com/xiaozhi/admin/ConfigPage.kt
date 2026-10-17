@@ -104,7 +104,8 @@ class ConfigPage : Pager() {
                 }
             })
 
-            // 配置改为「左侧分组导航 + 右侧单 section」两栏布局（替代 14 个平铺 tab）
+            // 配置采用三级导航：一级侧边栏（壳）→ 二级横向 tabs → 三级纵向子菜单 + section 内容
+            // （布局与官方 Tabs 用法见 ConfigTabs.kt，分区常量见 ConfigSections.kt）
             renderConfigLayout(
                 ctx.form,
                 ctx.plugins,

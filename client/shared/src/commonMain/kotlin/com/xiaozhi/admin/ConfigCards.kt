@@ -4,11 +4,10 @@ import com.tencent.kuikly.core.base.ViewContainer
 import com.tencent.kuikly.core.directives.vfor
 import com.tencent.kuikly.core.directives.vif
 import com.tencent.kuikly.core.pager.Pager
-import com.tencent.kuikly.core.reactive.handler.observable
 import com.tencent.kuikly.core.base.Border
 import com.tencent.kuikly.core.base.BorderStyle
 import com.tencent.kuikly.core.views.Input
-import com.tencent.kuikly.core.views.Scroller
+import com.tencent.kuikly.core.views.TextInputState
 import com.tencent.kuikly.core.views.Text
 import com.tencent.kuikly.core.views.View
 
@@ -38,7 +37,7 @@ private val SECTION_TO_CAPABILITY: Map<String, String> = mapOf(
  * 闭包内读取才被跟踪）。[CapabilityRow] 本身是不可变快照，meta 整表替换（clear + add）时
  * 列表被观察、触发重渲染。
  */
-private fun sectionCapability(meta: PluginMetaState, sectionId: String): CapabilityRow? {
+internal fun sectionCapability(meta: PluginMetaState, sectionId: String): CapabilityRow? {
     val capId = SECTION_TO_CAPABILITY[sectionId] ?: return null
     for (r in meta.requiredRows) if (r.id == capId) return r
     for (r in meta.optionalRows) if (r.id == capId) return r
@@ -81,121 +80,6 @@ private fun ViewContainer<*, *>.sectionReadinessBanner(meta: PluginMetaState, se
 }
 
 /**
- * 配置页主体（P5 → 重组为「左侧分组导航 + 右侧单 section」两栏布局，替代原先 14 个平铺 tab）。
- *
- * ## 为什么从 tab 改成两栏导航
- *
- * 14 个平铺 tab 既挤占横向空间、又无法体现"这些配置属于哪条链路"的层次，用户反映"无从下手"。
- * 改为 macOS 系统设置式的**左侧分组导航**（服务与接入 / 语音与对话 / 智能体）+ 顶部**搜索框**，
- * 右侧只渲染当前选中的单个 section——既压缩了导航密度，又让"Server 属于服务接入、TTS 属于语音链路"
- * 一目了然。所有 `*ConfigCard` / `overviewCard` / `mcpToolsCard` / `otaCard` 内容函数原样复用，
- * 只是从"全部塞进 PageList"变为"按选中按需渲染"。
- *
- * 数据源语义不变：`meta` 总览只读、`mcp` 工具只读、`ota` 固件（不写 `/api/config`）、`toast` 弹结果。
- *
- * ⚠️ Kuikly DSL 约束（与渲染扩展同源）：`ViewBuilder` 接收者由调用点推断，渲染扩展必须在
- * 目标容器闭包内**非限定**调用，否则节点会逃逸到根容器导致布局错乱。
- */
-fun ViewContainer<*, *>.renderConfigLayout(
-    form: ConfigFormState,
-    meta: PluginMetaState,
-    health: EngineHealthState,
-    mcp: McpToolsState,
-    ota: OtaState,
-    toast: ToastState,
-    ctx: Pager,
-) {
-    View {
-        attr {
-            flex(1f)
-            flexDirectionRow()
-        }
-
-        // ===== 左侧：搜索 + 分组导航 =====
-        View {
-            attr {
-                width(220f)
-                flexDirectionColumn()
-                backgroundColor(AdminColors.sidebarBg)
-                paddingTop(AdminSpace.md)
-            }
-            // 搜索框（绑定 form.configSearch：空 = 分组展示 / 非空 = 平铺命中项）
-            configSearchField(form)
-            Scroller {
-                attr {
-                    flex(1f)
-                    paddingLeft(AdminSpace.sm)
-                    paddingRight(AdminSpace.sm)
-                    paddingBottom(AdminSpace.lg)
-                }
-                // 搜索态：平铺命中项（无分组标题）
-                vif({ form.configSearch.isNotBlank() }) {
-                    val hits = ConfigSections.search(form.configSearch)
-                    if (hits.isEmpty()) {
-                        textNote("没有匹配「${form.configSearch}」的配置项", micro = true)
-                    } else {
-                        for (d in hits) {
-                            sidebarItem(
-                                d.label,
-                                isSelected = { form.configSection == d.id },
-                                showDot = { sectionCapability(meta, d.id)?.phase in setOf("failed", "degraded") },
-                                onClick = { form.configSection = d.id },
-                            )
-                        }
-                    }
-                }
-                // 分组态：置顶项 + 三个分组
-                vif({ form.configSearch.isBlank() }) {
-                    for (d in ConfigSections.pinned) {
-                        sidebarItem(
-                            d.label,
-                            isSelected = { form.configSection == d.id },
-                            showDot = { sectionCapability(meta, d.id)?.phase in setOf("failed", "degraded") },
-                            onClick = { form.configSection = d.id },
-                        )
-                    }
-                    for ((gid, glabel) in ConfigSections.groups) {
-                        configGroupHeader(glabel)
-                        for (d in ConfigSections.sectionsIn(gid)) {
-                            sidebarItem(
-                                d.label,
-                                isSelected = { form.configSection == d.id },
-                                showDot = { sectionCapability(meta, d.id)?.phase in setOf("failed", "degraded") },
-                                onClick = { form.configSection = d.id },
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        // 左栏右侧 1px 分隔
-        View {
-            attr {
-                width(1f)
-                backgroundColor(AdminColors.divider)
-            }
-        }
-
-        // ===== 右侧：当前选中的单个 section =====
-        View {
-            attr {
-                flex(1f)
-                flexDirectionColumn()
-                backgroundColor(AdminColors.windowBg)
-            }
-            opsScroller {
-                // ⚠️ 用 vfor 包一层：configSection 是多选一（boolean 不会翻转），普通闭包不会随它重渲染；
-                // vfor 监测到列表元素变化会重建该唯一项，从而切到对应 section 内容（否则点击导航不刷新右侧）。
-                vfor({ form.configSectionList }) { sectionId ->
-                    renderConfigSection(form, meta, health, mcp, ota, toast, ctx, sectionId)
-                }
-            }
-        }
-    }
-}
-
-/**
  * 渲染单个配置 section（按 id 分发到既有卡片函数）。
  * 把 renderForm 里"全部 14 页塞进 PageList"的 `when` 收敛为"按需渲染一个"，
  * 卡片函数本身零改动、零重复。
@@ -210,52 +94,61 @@ fun ViewContainer<*, *>.renderConfigSection(
     ctx: Pager,
     id: String,
 ) {
-    // 改动影响高亮：上次保存的 hot 投影到当前 section 头部（仅确有非即时影响时显示）
-    vif({ form.saveImpactNote.isNotEmpty() }) {
-        textNote(form.saveImpactNote, tone = "warn", micro = true)
-        View { attr { height(AdminSpace.sm) } }
-    }
-    // 编辑对象横幅（P1-5）：设备个性化目标时显示（全局模式不渲染）
-    editTargetBanner(form, toast, ctx)
-    // 就绪度徽标：对应能力 phase 偏离（degraded/failed）时显示状态 + 原因（位于 section 卡片上方）
-    sectionReadinessBanner(meta, id)
-    when (id) {
-        // 总览：能力总览卡（配置级状态）之下接能力健康卡（运行期探测合并结论，P1-6）
-        "overview" -> {
-            overviewCard(meta, ctx)
-            engineHealthCard(health, ctx) { section -> form.configSection = section }
+    // ⚠️ vfor 项闭包必须且仅能创建一个孩子节点（2.29.1 起严格校验，多个根节点直接抛
+    // "vfor creator闭包内必须需要且仅一个孩子节点"），所以 section 的全部内容
+    // （影响提示 / 横幅 / when 分支的多张卡）统一收进这一个列容器。
+    View {
+        attr {
+            flex(1f)
+            flexDirectionColumn()
         }
-        // 预设（P1-5）：快照 / 应用 / 删除全局配置；设备个性化模式下不可用
-        "presets" -> {
-            vif({ form.editDeviceId.isEmpty() }) {
-                presetCard(form, ctx)
+        // 改动影响高亮：上次保存的 hot 投影到当前 section 头部（仅确有非即时影响时显示）
+        vif({ form.saveImpactNote.isNotEmpty() }) {
+            textNote(form.saveImpactNote, tone = "warn", micro = true)
+            View { attr { height(AdminSpace.sm) } }
+        }
+        // 编辑对象横幅（P1-5）：设备个性化目标时显示（全局模式不渲染）
+        editTargetBanner(form, toast, ctx)
+        // 就绪度徽标：对应能力 phase 偏离（degraded/failed）时显示状态 + 原因（位于 section 卡片上方）
+        sectionReadinessBanner(meta, id)
+        when (id) {
+            // 总览：能力总览卡（配置级状态）之下接能力健康卡（运行期探测合并结论，P1-6）
+            "overview" -> {
+                overviewCard(meta, ctx)
+                engineHealthCard(health, ctx) { section -> form.configSection = section }
             }
-            vif({ form.editDeviceId.isNotEmpty() }) {
-                groupedCard("预设") {
-                    textNote(
-                        "预设仅作用于全局配置；当前正在编辑设备的个性化配置，请先点顶部「返回全局」再管理预设。",
-                        micro = true,
-                    )
+            // 预设（P1-5）：快照 / 应用 / 删除全局配置；设备个性化模式下不可用
+            "presets" -> {
+                vif({ form.editDeviceId.isEmpty() }) {
+                    presetCard(form, ctx)
+                }
+                vif({ form.editDeviceId.isNotEmpty() }) {
+                    groupedCard("预设") {
+                        textNote(
+                            "预设仅作用于全局配置；当前正在编辑设备的个性化配置，请先点顶部「返回全局」再管理预设。",
+                            micro = true,
+                        )
+                    }
                 }
             }
-        }
-        "mcp" -> mcpToolsCard(mcp, ctx)
-        "ota" -> otaCard(ota, toast, ctx)
-        "server" -> serverConfigCard(form)
-        "audio" -> audioConfigCard(form)
-        "asr" -> asrConfigCard(form)
-        "vad" -> vadConfigCard(form, ctx)
-        "tts" -> ttsConfigCard(form, ctx)
-        "llm" -> llmConfigCard(form, ctx)
-        "command" -> commandConfigCard(form)
-        "nlu" -> nluConfigCard(form)
-        "wakeup" -> wakeupConfigCard(form)
-        "aiui" -> aiuiConfigCard(form)
-        "soul" -> soulConfigCard(form, ctx)
-        "memory" -> memoryConfigCard(form, ctx)
-        // 未注册内容不要静默留白（"新加了 section 却忘了写内容"会表现成点进去什么都没有）
-        else -> groupedCard("未知配置页") {
-            textNote("管理页没有为 section「$id」注册内容（请检查 ConfigSections.all）。")
+            "mcp" -> mcpToolsCard(mcp, ctx)
+            "ota" -> otaCard(ota, toast, ctx)
+            "server" -> serverConfigCard(form)
+            "audio" -> audioConfigCard(form)
+            "asr" -> asrConfigCard(form)
+            "vad" -> vadConfigCard(form, ctx)
+            "tts" -> ttsConfigCard(form, ctx)
+            "llm" -> llmConfigCard(form, ctx)
+            "command" -> commandConfigCard(form)
+            "nlu" -> nluConfigCard(form, ctx)
+            "wakeup" -> wakeupConfigCard(form)
+            "aiui" -> aiuiConfigCard(form)
+            "soul" -> soulConfigCard(form, ctx)
+            "memory" -> memoryConfigCard(form, ctx)
+            // 未注册内容不要静默留白（"新加了 section 却忘了写内容"会表现成点进去什么都没有）
+            else -> groupedCard("未知配置页") {
+                textNote("管理页没有为 section「$id」注册内容（请检查 ConfigSections.all）。")
+            }
         }
     }
 }
@@ -283,10 +176,17 @@ fun ViewContainer<*, *>.configSearchField(form: ConfigFormState) {
                 backgroundColor(AdminColors.transparent)
                 fontSize(AdminType.body)
                 color(AdminColors.textPrimary)
-                text(form.configSearch)
+                // textInputState 通道防受控回写闪烁（约束见 AdminFormControls.labeledField）
+                textInputState { TextInputState(text = form.configSearch) }
                 placeholder("搜索配置项…")
             }
-            event { textDidChange { params -> form.configSearch = params.text } }
+            event {
+                textInputStateChange { state ->
+                    if (state.compositionStart == TextInputState.NO_COMPOSITION && state.text != form.configSearch) {
+                        form.configSearch = state.text
+                    }
+                }
+            }
         }
     }
 }
@@ -640,6 +540,29 @@ fun ViewContainer<*, *>.llmConfigCard(form: ConfigFormState, ctx: Pager) {
         // 密钥不回传明文（服务端打码）：已配置时提示"留空则不修改"
         labeledField("api_key", { form.llmApiKey }, { form.llmApiKey = it; form.markDirty() }, secretHint(form.llmApiKeyConfigured))
         labeledField("model", { form.llmModel }, { form.llmModel = it; form.markDirty() })
+        // ===== 模型在线列表：服务端代理 GET {base}/models；可下拉选，也可继续手输 =====
+        actionRow {
+            secondaryButton("获取模型列表", loading = { form.llmModelsBusy }) { form.fetchLlmModels(ctx) }
+        }
+        vif({ form.llmModelsMsg.isNotEmpty() }) {
+            textNote(form.llmModelsMsg, tone = if (form.llmModelsMsg.startsWith("✓")) "tertiary" else "warn", micro = true)
+        }
+        vif({ form.llmModelOptions.isNotEmpty() }) {
+            dropdownField(
+                label = "模型（在线列表）",
+                currentLabel = { form.llmModel.ifEmpty { "点击选择模型" } },
+                options = { form.llmModelOptions },
+                selectedId = { form.llmModel },
+                isOpen = { form.isDropdownOpen("llm_model") },
+                onToggle = { form.toggleDropdown("llm_model") },
+                onSelect = { m ->
+                    if (m != form.llmModel) {
+                        form.llmModel = m
+                        form.markDirty()
+                    }
+                },
+            )
+        }
         // 系统提示词是散文输入：官方 TextArea 多行（此前用单行 Input 输不了换行）
         labeledTextArea("system_prompt", { form.llmSystemPrompt }, { form.llmSystemPrompt = it; form.markDirty() }, height = 100f)
         labeledField("temperature", { form.llmTemperature }, { form.llmTemperature = it; form.markDirty() })

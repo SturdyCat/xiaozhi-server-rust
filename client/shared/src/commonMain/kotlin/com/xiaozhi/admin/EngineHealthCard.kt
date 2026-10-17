@@ -148,7 +148,11 @@ fun ViewContainer<*, *>.engineHealthCard(health: EngineHealthState, ctx: Pager, 
             }
         }
         vfor({ health.rows }) { row ->
-            healthCardRow(row, onJumpSection)
+            // 单一根容器包裹：vfor 项闭包只允许生成一个孩子（healthCardRow 内部含分隔线，
+            // 2.29.1 起严格校验会直接抛异常），行内布局（含行尾分隔线）保持不变
+            View {
+                healthCardRow(row, onJumpSection)
+            }
         }
         textNote("健康 = 配置校验（plan）与本地探测（模型文件 / 记忆目录可写）的合并结论；与「能力总览」同源。", micro = true)
     }

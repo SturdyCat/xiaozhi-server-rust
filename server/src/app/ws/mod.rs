@@ -35,10 +35,9 @@
 //!
 //! ## `/api/config` 读写语义
 //! - `GET`：若启动指定了配置文件则实时读盘，否则返回内存中的内置默认配置（/data/models 生产路径）。
-//! - `PUT`/`POST`：**部分更新**——只覆盖请求中出现的字段，未出现的保持现盘值
-//!   （显式 `null` = 清除该字段，回落 serde 默认值）；写回启动加载的配置来源
-//!   （TOML，**原注释会被覆盖丢失**）。内置默认启动、存储后端
-//!   `location()` 为 `None`（[`crate::config::store::DefaultConfigStore`]）时返回 400。
+//! - `PUT`/`POST`：**部分更新**——只覆盖请求中出现的字段，未出现的保持库内现值
+//!   （显式 `null` = 清除该字段，回落 serde 默认值）；写回 SQLite 配置库
+//!   （`data.db`）。配置库不可用（`location()` 为 `None`）时返回 400。
 //! - 生效时机：TTS 引擎参数在**新会话**开始时按盘上配置热切换
 //!   （[`crate::engine::Engines::refresh_from_disk`]，经 `spawn_blocking`）；
 //!   ASR 模型、监听地址、token、管理页目录等仍需重启 server。
@@ -68,6 +67,7 @@ mod config;
 mod health;
 mod mcp;
 mod memory;
+mod nlu_build;
 // 延迟/事件聚合（P1-1）：只读投影，数据源 app::metrics（事件总线订阅者）
 mod metrics;
 mod ota;
@@ -82,6 +82,7 @@ use health::engines_health;
 use mcp::mcp_tools;
 use memory::{memory_clear, memory_maintain, memory_rag_reindex, memory_recall, memory_status};
 use metrics::metrics_snapshot;
+use nlu_build::{build_status, start_build};
 // 插件维护
 pub(crate) use config::config_is_persistent;
 use ota::ota;
@@ -150,6 +151,7 @@ pub fn router(engines: Arc<Engines>) -> Router {
         // 内联配置测试（P0-2）：LLM/TTS/VAD 延迟测量（HTTP 直调，按磁盘最新配置 ad-hoc
         // 构建引擎，不要求 is_test WS 会话；与 WS 测试台并存，测量核心见 app::bench_api）
         .route("/api/test/llm", axum::routing::post(bench_api::test_llm))
+        .route("/api/test/llm/models", axum::routing::post(bench_api::test_llm_models))
         .route("/api/test/tts", axum::routing::post(bench_api::test_tts))
         .route("/api/test/vad", axum::routing::post(bench_api::test_vad))
         // 记忆：状态 / 测试召回 / 立即维护 / 清空（"记忆开了没用"的当场验证入口）
@@ -192,6 +194,10 @@ pub fn router(engines: Arc<Engines>) -> Router {
         .route("/api/metrics", get(metrics_snapshot))
         // 设备 MCP 工具：按设备列出会话开始时探测到的工具清单（回答"这台设备能被 AI 指挥做什么"）
         .route("/api/mcp/tools", get(mcp_tools))
+        .route(
+            "/api/nlu/model/build",
+            get(build_status).post(start_build),
+        )
         // 小智固件的 OTA 引导端点（带/不带尾斜杠都注册：固件配置的 URL 以 / 结尾）。
         // ⚠️ 所有接口必须在 /api 之下（接口规范），固件 OTA_URL 指到 /api/ota/ 即可——
         // 该地址完全可配置，无需对齐官方服务器的 /xiaozhi/ota/ 路径。

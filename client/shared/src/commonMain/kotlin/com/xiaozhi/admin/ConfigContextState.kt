@@ -56,7 +56,7 @@ class ContextSectionState(private val scope: PagerScope) {
     // ===== [memory] 图记忆 =====
     var memoryEnabled by scope.observable("false")
     var memoryBackend by scope.observable("graph")
-    var memoryDbPath by scope.observable("/data/memory.db")
+    var memoryDbPath by scope.observable("/data/data.db")
     var memoryDbBusyTimeoutMs by scope.observable("5000")
     var memoryRecallEnabled by scope.observable("true")
     var memoryExtractionEnabled by scope.observable("true")

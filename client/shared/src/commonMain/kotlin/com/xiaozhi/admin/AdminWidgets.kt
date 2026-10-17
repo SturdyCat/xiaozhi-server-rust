@@ -96,7 +96,7 @@ fun ViewContainer<*, *>.dropdownField(
                             borderRadius(AdminShape.radiusSm)
                         }
                         vfor(options) { opt ->
-                            val selected = opt.first == selectedId()
+                            // 选中态渲染在下方 vif/attr 闭包内读 observable（builder 顶层读取不被跟踪）
                             View {
                                 attr {
                                     height(44f)

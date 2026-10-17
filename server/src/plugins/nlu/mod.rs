@@ -214,6 +214,71 @@ pub(crate) fn norm(s: &str) -> String {
         .collect::<String>()
 }
 
+/// 内置提醒技能（硬编码默认意图，`[nlu].enabled` 时与配置意图合并生效）：
+/// `reminder_countdown`（倒计时）/ `reminder_schedule`（定时）/ `reminder_repeat`（循环定时）。
+/// 槽位全部开放（时间/内容是自然语言表达，不设封闭值表）；动作均为 `reply` 本地应答——
+/// 这组技能当前用于跑通「技能定义 → 模型训练 → BERT 识别」的完整链路，
+/// 真正的定时派发后续按 `mcp:` 动作接入。
+pub(crate) fn builtin_defs() -> (Vec<IntentDef>, Vec<SlotList>) {
+    let open = |name: &str| SlotList {
+        name: name.to_string(),
+        values: Vec::new(),
+        optional: false,
+    };
+    let intents = vec![
+        IntentDef {
+            name: "reminder_countdown".into(),
+            templates: vec![
+                "{delay}后提醒我{task}".into(),
+                "过{delay}提醒我{task}".into(),
+                "{delay}之后提醒我{task}".into(),
+            ],
+            action: ActionDef {
+                kind: "reply".into(),
+                reply: "好的，到点我会提醒你。".into(),
+            },
+        },
+        IntentDef {
+            name: "reminder_schedule".into(),
+            templates: vec!["{time}提醒我{task}".into()],
+            action: ActionDef {
+                kind: "reply".into(),
+                reply: "好的，已设好定时提醒。".into(),
+            },
+        },
+        IntentDef {
+            name: "reminder_repeat".into(),
+            templates: vec![
+                "每隔{repeat}提醒我{task}".into(),
+                "{repeat}提醒我{task}".into(),
+            ],
+            action: ActionDef {
+                kind: "reply".into(),
+                reply: "好的，循环提醒已设置。".into(),
+            },
+        },
+    ];
+    let slots = vec![open("delay"), open("time"), open("repeat"), open("task")];
+    (intents, slots)
+}
+
+impl NluConfig {
+    /// 配置意图 ⊕ 内置提醒技能（内置在前、被配置同名者跳过；槽位同名同理）。
+    /// 规则引擎 / 技能目录 / 模型训练导出三处共用同一份合并结果——训练标签与运行时技能名
+    /// 必然一致，`bert_label_map` 缺省同名直配即可。
+    pub fn with_builtins(&self) -> NluConfig {
+        let (mut intents, mut slots) = builtin_defs();
+        intents.retain(|b| !self.intents.iter().any(|d| d.name == b.name));
+        slots.retain(|b| !self.slots.iter().any(|d| d.name == b.name));
+        let mut merged = self.clone();
+        intents.extend(self.intents.iter().cloned());
+        merged.intents = intents;
+        slots.extend(self.slots.iter().cloned());
+        merged.slots = slots;
+        merged
+    }
+}
+
 /// 否定词表：封闭槽位间隙出现即整条弃权（方向性副作用宁可漏给 LLM，不可反向执行）。
 pub(crate) const NEGATION_CUES: [&str; 6] = ["别", "不要", "不用", "不准", "不可以", "不能"];
 
@@ -234,6 +299,9 @@ pub struct NluEngine {
 impl NluEngine {
     /// 按两处配置快照构造：`command`（end_session 来源，向后兼容）+ `nlu`（自定义意图）。
     pub fn new(command: &CommandConfig, nlu: &NluConfig) -> Self {
+        // 内置提醒技能合并（见 [`NluConfig::with_builtins`]）：与配置意图同一管道编译。
+        let merged = nlu.with_builtins();
+        let nlu = &merged;
         let end_session = CommandGate::new(command);
         // 自定义意图受 `[nlu].enabled` 总开关约束：关闭时视为无意图（end_session 仍由 command 决定）。
         let (intents, slot_values, slot_optional) = if nlu.enabled {

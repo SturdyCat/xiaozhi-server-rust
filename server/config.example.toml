@@ -1,5 +1,7 @@
-# xiaozhi-server-rust 配置样例
-# 复制为 config.toml 并按需修改；或使用环境变量 XIAOZHI_CONFIG 指向本文件。
+# xiaozhi-server-rust 配置字段样例（参考文档，不再作为运行时配置文件）。
+# 配置真源是 SQLite 配置库（XIAOZHI_CONFIG_DB → --config-db → /data/data.db）：
+# 空库以内置默认启动并落库，改配置走管理页 / PUT /api/config（写库）。
+# 本文件仅 enumerates 全部可配字段及默认值/注释，供初始化与查阅。
 
 [server]
 # 监听端口：服务器永远监听 0.0.0.0，仅端口可配（外部可达性由端口映射/防火墙决定）
@@ -205,10 +207,13 @@ reply = "好的，我先退下了。"          # 命中后先说这句，再用 
 #   需服务端以 `--features nlu` 构建（默认构建不含 ONNX 依赖）；打开后规则未命中的文本
 #   先过 TinyBERT 推理，置信度 ≥ bert_threshold 即按标签映射执行技能（空槽位交 LLM 补齐），
 #   否则照常放行。模型/词表/标签路径与标签映射是嵌套高级配置，直接书写：
+#   三件套无需手工准备：`[nlu] enabled = true` 后在管理台点「生成 NLU 模型」
+#   （POST /api/nlu/model/build），服务端用内置训练器在宿主 docker 里基于当前技能
+#   （内置三个提醒技能 + 自定义 intents）自动训练并导出，产物落在 <数据目录>/models/nlu/。
 # bert_enabled = false
-# bert_model = "models/tinybert-intent.onnx"   # ONNX 模型（建议 max_len=64、含 token_type_ids）
-# bert_vocab = "models/vocab.txt"              # 配套 tokenizer 词表
-# bert_labels = "models/labels.txt"            # 每行一个标签，顺序 = 模型输出 logits 顺序
+# bert_model = "models/nlu/model.onnx"         # ONNX 模型（int8 量化，max_len=64）
+# bert_vocab = "models/nlu/tokenizer.json"     # ⚠️ 是 HuggingFace tokenizer.json，不是 vocab.txt 原文
+# bert_labels = "models/nlu/labels.txt"        # 每行一个标签，顺序 = 模型输出 logits 顺序
 # bert_threshold = 0.75                        # 0~1，越高越保守
 # bert_num_threads = 1                         # ONNX Runtime 会话线程数
 # bert_max_len = 64                            # 分词截断长度，须与模型导出一致
@@ -305,7 +310,7 @@ examples = []                       # 风格范例：每条一组 Q/A（锁风�
 [memory]
 enabled = false                     # true = 启用记忆
 engine = "graph"                    # graph = 内置图记忆 | store = 纯存储（只存原文不抽取不召回，先积累再决定）| rag = 本地文档 RAG（词法检索，零外网）| none = 保留配置但不生效（旧键 backend 仍可读）
-db_path = "/data/memory.db"         # ⚠️ 必须放在挂载卷内，否则重建容器即丢全部记忆（graph/store/rag 共用，切后端数据不丢）
+db_path = "/data/data.db"        # ⚠️ 必须放在挂载卷内，否则重建容器即丢全部记忆（graph/store/rag 共用，切后端数据不丢）；与配置库共用同一文件
 db_busy_timeout_ms = 5000           # SQLite 写锁等待（与 DSH 桌面端共用同一库文件时才需调大）
 recall_enabled = true               # false = 只写不读（先积累数据）
 extraction_enabled = true           # false = 只存原文、不调用辅助模型（没有摘要可召回）
@@ -337,25 +342,20 @@ chunk_size = 512                    # 分块字符数（保守分块，中文场
 chunk_overlap = 64                  # 相邻分块重叠字符数
 top_k = 4                           # 每次召回最多注入几个分块（受 recall_max_tokens 硬上限约束）
 
-# ===== SQLite 配置库（2026-10-14 起为默认配置真源）=====
-# 配置现在默认存进 SQLite（与 memory 共用同一 db 文件，或独立文件），不再以
-# config.toml 为运行时真源。config.toml 退化为「引导 / 导入源」：空库首启时若
-# 检测到旧 config.toml 会自动导入（source=bootstrap），导入后即成为真源、旧 TOML
-# 不再被读取；之后所有保存、设备 overlay、预设都落库。
+# ===== SQLite 配置库（唯一配置真源；外置 config.toml 文件配置逻辑已移除）=====
+# 配置存进 SQLite（与 memory 共用同一 db 文件，或独立文件）；所有保存、设备
+# overlay、预设都落库。空库首启以内置默认启动并落库，改配置走管理页 / PUT /api/config。
 #
 # 配置库路径解析优先级（唯一权威，见 server/src/main.rs::load_config_inner）：
 #   1. 环境变量 XIAOZHI_CONFIG_DB        （容器/测试注入，优先级最高）
 #   2. 启动参数       --config-db <path>
-#   3. 本文件 [memory].db_path            （即上方值；与记忆共用同一文件；
-#                                          :memory: 或空串 → 跳过）
-#   4. 兜底           /data/xiaozhi.db    （当上述都无效时）
+#   3. 兜底           /data/data.db    （当上述都无效时）
 #
-# 因此默认情况下配置库 = /data/memory.db（与记忆同文件）；若要配置与记忆分库，
+# 因此默认情况下配置库 = /data/data.db（与记忆同文件）；若要配置与记忆分库，
 # 设 XIAOZHI_CONFIG_DB 或 --config-db 指向别的路径即可。
 #
 # ⚠️ 必须放在挂载卷内（与 memory 同约束，见上方 volumes），否则重建容器即丢全部配置。
-# ⚠️ 老版本（仅 TOML）升级无需手动迁移：首启自动导入，日志会打印来源。
-# ⚠️ DB 打开失败时进程**不崩**：自动降级为读文件 config.toml（若存在）或内置默认。
+# ⚠️ DB 打开失败时进程**启动即失败退出**（配置是必需能力，无降级路径）。
 #
 # 远程只读访问（用数据库客户端"直连"查看配置库内容）：
 #   POST /api/config/db/query   Bearer token 鉴权；请求体 {"sql":"SELECT ..."}；

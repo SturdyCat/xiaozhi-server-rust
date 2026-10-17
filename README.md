@@ -64,14 +64,14 @@ flowchart LR
 ## 快速开始（Docker）
 
 ```bash
-cp server/config.example.toml server-data/config.toml   # 填 expected_token / llm.api_key
+mkdir -p server-data
 docker compose up -d --build                       # 首启自动从 GitHub Release 下载模型包到 ./server-data
 curl http://127.0.0.1:8000/api/health              # => {"status":"ok",...}
 ```
 
-浏览器打开 `http://<host>:8000/` 即管理台（配置 / 预设 / 设备个性化 / 健康自检 / OTA）。
+浏览器打开 `http://<host>:8000/` 即管理台（配置 / 预设 / 设备个性化 / 健康自检 / OTA）；配置存于 SQLite 配置库 `server-data/data.db`，首次在管理台填写 `expected_token` / `llm.api_key` 并保存（字段参考 `server/config.example.toml`）。
 
-裸机运行：`cd server && cargo run --release --features sherpa -- --config config.toml`（需本地模型 + libopus）。
+裸机运行：`cd server && cargo run --release --features sherpa -- --config-db /host/data/data.db`（需本地模型 + libopus；配置存于 SQLite 配置库，字段参考 `server/config.example.toml`）。
 协议联调：`python3 server/tests/mock_client.py`。
 
 ---

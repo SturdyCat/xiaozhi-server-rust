@@ -131,7 +131,7 @@ fun ViewContainer<*, *>.benchNluPage(
             }
         },
         right = {
-            nluConfigCard(form)
+            nluConfigCard(form, ctx)
         },
     )
 }

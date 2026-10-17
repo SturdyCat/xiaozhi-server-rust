@@ -160,25 +160,17 @@ case "$AUTO" in
     ;;
 esac
 
-# 配置引导（bootstrap）：配置真源已迁移到 SQLite（见 config.example.toml 的
-# 「SQLite 配置库」段）。本段生成的 config.toml 不再是运行时写目标，而是「引导 /
-# 导入源」——仅当配置库为空时，server 首启会把它导入 DB（source=bootstrap），之后
-# DB 优先。因此即使不生成 config.toml，server 也会以内置默认启动并落库
-# （PUT /api/config 可持久化），无需担心 400。
-CFG="${XIAOZHI_CONFIG:-}"
-if [ -n "$CFG" ] && [ ! -e "$CFG" ] && [ -f /app/config.example.toml ]; then
-  mkdir -p "$(dirname "$CFG")"
-  cp /app/config.example.toml "$CFG"
-  echo "[entrypoint] 已生成默认配置 $CFG（仅作首启导入源；配置真源为 SQLite，见 config.example.toml）"
-fi
+# 配置真源为 SQLite（XIAOZHI_CONFIG_DB 或 /data/data.db）；外置 config.toml 文件
+# 配置逻辑已移除——无需生成任何 TOML，配置库为空时 server 以内置默认启动并落库
+# （PUT /api/config 可持久化，或经管理页修改）。字段含义参考 /app/config.example.toml。
 
 # 配置库目录可写自检（健壮性）：配置与记忆默认都落在挂载卷内（/data 或
-# XIAOZHI_CONFIG_DB 指向处），只读/属主不对会导致首启导入失败或保存报 500——
+# XIAOZHI_CONFIG_DB 指向处），只读/属主不对会导致保存配置报 500——
 # 启动即暴露，而不是等用户保存失败。
-DB_FILE="${XIAOZHI_CONFIG_DB:-/data/xiaozhi.db}"
+DB_FILE="${XIAOZHI_CONFIG_DB:-/data/data.db}"
 DB_DIR="$(dirname "$DB_FILE")"
 if [ ! -w "$DB_DIR" ]; then
-  echo "[entrypoint] ⚠️ 配置库目录 $DB_DIR 不可写：配置将无法落库（首启导入/保存会失败）。" >&2
+  echo "[entrypoint] ⚠️ 配置库目录 $DB_DIR 不可写：配置将无法落库（保存会失败）。" >&2
   echo "[entrypoint]    请检查宿主挂载（勿加 :ro）与目录权限后重启容器。" >&2
 fi
 # 显式指定库文件且已存在但不可写时，单独提示。

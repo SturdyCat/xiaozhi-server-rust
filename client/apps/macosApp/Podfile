@@ -23,7 +23,11 @@ end
 
 # 仅 arm64：排除 x86_64 架构（Catalyst 只在 Apple Silicon Mac 运行）；
 # 并允许各 Pod 以 Mac Catalyst 变体构建（否则只出 iOS 产物，App 链接时找不到库）。
+def patch_textarea_marked_text(_installer)
+end
+
 post_install do |installer|
+  patch_textarea_marked_text(installer)
   installer.pods_project.targets.each do |t|
     t.build_configurations.each do |config|
       config.build_settings['SUPPORTS_MACCATALYST'] = 'YES'

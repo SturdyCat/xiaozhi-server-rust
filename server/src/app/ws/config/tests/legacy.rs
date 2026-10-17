@@ -118,7 +118,7 @@ fn wrapper_keys_are_stripped_before_persist() {
 fn persist_config_roundtrip() {
     let dir = std::env::temp_dir().join(format!("xz_cfg_{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("config.toml");
+    let path = dir.join("data.db");
     let cfg: Config = toml::from_str(
         r#"
 [server]
@@ -133,11 +133,14 @@ voice = "xiaoyan"
 "#,
     )
     .unwrap();
+    // 与 put_config 管线一致：写库前先 normalize（旧 `backend` 搬到 `engine`）
+    let mut cfg = cfg;
+    cfg.normalize();
     persist_config_file(path.to_str().unwrap(), &cfg).unwrap();
-    let loaded = Config::load(path.to_str().unwrap()).unwrap();
+    let loaded = store_load(&path).unwrap();
     assert_eq!(loaded.server.port, 8000);
     assert_eq!(loaded.tts.xfyun.voice, "xiaoyan");
-    // `persist_config` 会先 normalize：旧 `backend` 落盘为 `engine`，值不丢
+    // normalize 已把旧 `backend` 搬到规范位置 `engine`，值不丢
     assert_eq!(loaded.tts.engine, "xfyun");
     std::fs::remove_dir_all(&dir).unwrap();
 }

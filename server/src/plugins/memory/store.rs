@@ -26,7 +26,7 @@ pub(super) use rag_index::{BuildSummary, RagSearchHit};
 pub fn open(cfg: &MemoryConfig) -> Result<Arc<Store>> {
     let path = cfg.db_path.trim();
     if path.is_empty() {
-        anyhow::bail!("[memory].db_path 为空：请填一个可写路径（默认 /data/memory.db）。");
+        anyhow::bail!("[memory].db_path 为空：请填一个可写路径（默认 /data/data.db）。");
     }
     if path != ":memory:" {
         if let Some(dir) = std::path::Path::new(path).parent() {

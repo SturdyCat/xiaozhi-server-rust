@@ -262,7 +262,7 @@ class AdminPage : Pager() {
                         opsScroller { renderOpsMetrics(ctx.metrics, ctx) }
                     }
                     vif({ ctx.selectedSection == "config" }) {
-                        // 配置改为「左侧分组导航 + 右侧单 section」两栏布局（替代 14 个平铺 tab）
+                        // 配置采用三级导航：一级侧边栏 → 二级横向 tabs → 三级纵向子菜单 + 内容
                         renderConfigLayout(
                             ctx.form,
                             ctx.plugins,

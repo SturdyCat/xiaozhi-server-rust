@@ -86,7 +86,7 @@ impl<'de> Deserialize<'de> for MemoryBackend {
 }
 
 fn default_db_path() -> String {
-    "/data/memory.db".into()
+    "/data/data.db".into()
 }
 fn default_busy_timeout() -> u64 {
     5000
@@ -150,7 +150,7 @@ pub struct MemoryConfig {
     /// 未知值由 [`MemoryBackend`] 的自定义 `Deserialize` 报中文错误。
     #[serde(default, alias = "backend")]
     pub engine: MemoryBackend,
-    /// SQLite 库路径。容器部署请放在挂载卷内（如 /data/memory.db），否则重建容器即丢。
+    /// SQLite 库路径（默认 /data/data.db，与配置库共用同一文件）。容器部署请放在挂载卷内，否则重建容器即丢。
     #[serde(default = "default_db_path")]
     pub db_path: String,
     /// SQLite 写锁等待（与 DSH 进程共用同一 db 文件时尤其重要）。
@@ -357,7 +357,7 @@ impl MemoryConfig {
             return Ok(());
         }
         if self.db_path.trim().is_empty() {
-            anyhow::bail!("[memory].db_path 为空：请填可写路径（容器建议 /data/memory.db，并在 compose 挂载卷）。");
+            anyhow::bail!("[memory].db_path 为空：请填可写路径（容器建议 /data/data.db，并在 compose 挂载卷）。");
         }
         if self.engine == MemoryBackend::None {
             anyhow::bail!("[memory].enabled = true 但 engine = \"none\"：要么改成 \"graph\"，要么把 enabled 改为 false。");

@@ -37,7 +37,7 @@ pub(super) const MEMORY_FIELDS: &[FieldSchema] = &[
         key: "db_path",
         label: "库文件路径",
         kind: FieldKind::Path,
-        default_hint: "/data/memory.db",
+        default_hint: "/data/data.db",
         help: "⚠️ 必须放在挂载卷内，否则重建容器即丢全部记忆。",
         hot: HotReload::NextSession,
         required: true,

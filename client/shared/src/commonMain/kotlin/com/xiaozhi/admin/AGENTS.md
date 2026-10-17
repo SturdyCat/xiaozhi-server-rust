@@ -32,7 +32,7 @@
 
 管理台是 **Kuikly 多端工程**（`client/`），逻辑在 `client/shared/commonMain` 跨端复用；web 构建产物由 server 在 `/` 静态托管。
 
-默认落地页 **管理台**（`@Page("admin")`）：左侧分组导航 + 搜索 + 右侧单 section：
+默认落地页 **管理台**（`@Page("admin")`）：一级纵向侧边栏；「配置」section 内为三级导航——二级横向 tabs（总览/预设/三分组）→ 三级纵向子菜单 + 右侧内容（布局见 `ConfigTabs.kt`，分区常量见 `ConfigSections.kt`）：
 
 | Section | 数据源 | 回答什么问题 |
 |---|---|---|
@@ -57,6 +57,7 @@
 | `GET/PUT/DELETE /api/devices/{id}/overlay` | 每设备白名单增量（POST = PUT、`POST .../overlay/delete` = DELETE 别名，供 Kuikly 客户端使用） |
 | `GET/POST /api/config/presets`、`POST .../{name}/apply`、`DELETE/POST .../{name}/delete` | 预设：列出 / 快照当前 / 应用 / 删除 |
 | `POST /api/test/{llm,tts,vad}` | 内联连通性与首包延迟测试（按磁盘最新配置 ad-hoc 建引擎，无需麦克风，Web 可用） |
+| `POST /api/test/llm/models` | 拉取上游模型列表（服务端代理 OpenAI 兼容 `GET {base}/models`；请求可带 api_base/api_key 仅本次覆盖，密钥不下发客户端） |
 | `GET /api/memory/status`、`POST /api/memory/{recall,maintain,clear,rag/reindex}` | 记忆状态 / 手动试召回 / 立即维护 / 清空 / RAG 索引重建 |
 | `GET /api/soul/presets`、`POST /api/soul/preview` | 人格预设清单 / 最终提示词预览 |
 | `POST /api/devices/{id}/inject` | 设备消息注入（文本作为用户话语走完整管线） |

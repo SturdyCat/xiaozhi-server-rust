@@ -1,11 +1,11 @@
-//! 服务配置：从 TOML 文件加载（`Config::load`），默认值即生产路径。
+//! 服务配置：结构与默认值（真源是 SQLite 配置库 `data.db`，加载见 `main.rs::load_config_inner`）。
 //!
 //! ## 引擎与默认值
 //!
 //! - **无 mock**：ASR 恒为 SenseVoice（sherpa-onnx）、TTS 恒为 Kokoro（sherpa-onnx）、
 //!   LLM 恒为 OpenAI 兼容 HTTP（Responses API）。`--features sherpa` 是运行真实引擎的
 //!   前提，未启用时引擎构建直接报错（不再有 mock 回退）。
-//! - 默认（无 `--config`）即 [`Config::default()`]：模型路径指向 `/data/models/...`
+//! - 空库启动即 [`Config::default()`]：模型路径指向 `/data/models/...`
 //!   （与 `config.example.toml`、容器挂载一致），LLM 需填 `api_base`/`api_key`。
 //! - 旧配置文件里残留的 `backend = "..."` / `[tts].model` 等旧位置写法会被
 //!   [`Config::normalize`] 读懂并搬到规范位置（管理页保存一次即写成新 schema）；
@@ -13,18 +13,11 @@
 //!
 //! ## 加载优先级与持久化
 //!
-//! 配置从哪来、能否被管理页写回，由 `main.rs` 的 `load_config` 决定
-//!（`XIAOZHI_CONFIG` → `--config` → 内置默认）；`GET/PUT /api/config` 的读写语义
-//! 见 `app/ws.rs`。本文件只负责结构与默认值。
-//!
-//! **读写落点一律经存储抽象** [`store::ConfigStore`]（`main.rs` 装配后存入
-//! `Engines::config_store`）：SQLite 后端 [`store::sqlite::SqliteConfigStore`] 为**默认真源**
-//! （整份配置 + 设备 overlay + 预设进库，并提供只读 SQL 查询与备份），文件后端
-//! [`store::FileConfigStore`] 仅在 SQLite 打开失败时的降级路径，内置默认启动则是
-//! [`store::DefaultConfigStore`]（`location() == None` → `PUT /api/config` 400）。
-//! 不要在业务代码里直接 `Config::load(路径)` 或直接写盘——那条路径绕过了抽象，
-//! 也绕过了"老 TOML 配置兼容导入 / DB 优先"的装配逻辑（见 `main.rs::load_config_inner` 与
-//! `server/src/config/store/AGENTS.md`）。
+//! 配置真源由 `main.rs` 的 `load_config` 装配：**唯一后端是 SQLite 配置库 `data.db`**
+//!（[`store::sqlite::SqliteConfigStore`]；整份配置 + 设备 overlay + 预设进库，并提供只读
+//! SQL 查询与备份）。外置 config.toml 文件配置逻辑已移除，SQLite 打不开则启动失败。
+//! 不要在业务代码里直接读盘或写盘——读写一律经 [`store::ConfigStore`] 抽象
+//! （见 `main.rs::load_config_inner` 与 `server/src/config/store/AGENTS.md`）。
 //!
 //! ## 配置约定（P4，见 `server/src/plugins/registry/AGENTS.md`；原 `docs/plugin-architecture-unification.md` §3.3）
 //!
@@ -39,7 +32,6 @@
 //! 断言"每个声明的 engine id 都必须有对应描述符"。
 
 use serde::{Deserialize, Serialize};
-use std::path::Path;
 
 // 引擎子配置段随插件走（定义在各插件 mod.rs），此处转发以维持 `crate::config::*` 路径稳定：
 pub use crate::plugins::aiui::AiuiConfig;
@@ -425,17 +417,6 @@ impl Default for Config {
 }
 
 impl Config {
-    /// 读取并解析 TOML 配置文件。
-    pub fn load(path: &str) -> anyhow::Result<Config> {
-        let text = std::fs::read_to_string(Path::new(path))
-            .map_err(|e| anyhow::anyhow!("读取配置文件 {path} 失败: {e}"))?;
-        let mut cfg: Config = toml::from_str(&text)
-            .map_err(|e| anyhow::anyhow!("解析配置文件 {path} 失败: {e}"))?;
-        // 旧写法（[tts].model / backend / [memory].backend…）在此搬到规范位置（幂等）。
-        cfg.normalize();
-        Ok(cfg)
-    }
-
     /// **配置规范化**（P4）：`engine` 键补全 + 旧位置字段搬到 `[<cap>.<id>]` 私有段。
     ///
     /// 幂等，且**只在配置入口调用**（[`Self::load`] / [`Self::default`] /

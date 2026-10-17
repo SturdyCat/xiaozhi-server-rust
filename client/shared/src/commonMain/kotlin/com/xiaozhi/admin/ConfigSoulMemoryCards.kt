@@ -265,7 +265,7 @@ fun ViewContainer<*, *>.memoryConfigCard(form: ConfigFormState, ctx: Pager) {
             }
             dividerH()
             // ===== 召回参数 =====
-            labeledField("db_path（库文件，须在挂载卷内）", { sm.memoryDbPath }, { sm.memoryDbPath = it; form.markDirty() }, "/data/memory.db")
+            labeledField("db_path（库文件，须在挂载卷内）", { sm.memoryDbPath }, { sm.memoryDbPath = it; form.markDirty() }, "/data/data.db")
             labeledField("scope_prefix（作用域前缀）", { sm.memoryScopePrefix }, { sm.memoryScopePrefix = it; form.markDirty() }, "xiaozhi")
             labeledField("fresh_turn_count（近况轮数）", { sm.memoryFreshTurnCount }, { sm.memoryFreshTurnCount = it; form.markDirty() }, "5")
             // ===== 高级（检索预算与库运维调优，默认折叠；P0-1）=====

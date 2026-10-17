@@ -1,4 +1,4 @@
-//! `SqliteConfigStore` 单元测试：round-trip、兼容导入、overlay/preset CRUD、
+//! `SqliteConfigStore` 单元测试：round-trip、overlay/preset CRUD、
 //! 只读查询护栏、备份、空库判定。
 
 use std::sync::Arc;
@@ -40,14 +40,24 @@ fn empty_store_loads_default() {
 }
 
 #[test]
-fn bootstrap_import_then_load() {
+fn bootstrap_default_if_empty_idempotent() {
     let (store, path) = tmp_store("bootstrap");
-    let mut cfg = Config::default();
-    cfg.server.port = 9999;
-    store.bootstrap_import(&cfg).unwrap();
+    // 空库 → 首次自举写入默认配置（source="bootstrap"）
+    assert!(store.bootstrap_default_if_empty().unwrap());
     assert!(!store.is_empty());
     let loaded = store.load().unwrap();
-    assert_eq!(loaded.server.port, 9999);
+    assert_eq!(loaded.server.port, Config::default().server.port);
+    // 非空库 → 幂等：不再写入，返回 false
+    assert!(!store.bootstrap_default_if_empty().unwrap());
+    // 自举留下的初始版本可追溯（cfg_revisions 有 source="bootstrap" 一行）
+    let n: i64 = store
+        .query("SELECT COUNT(*) AS n FROM cfg_revisions WHERE source = 'bootstrap'")
+        .unwrap()
+        .first()
+        .and_then(|row| row.get("n").cloned())
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    assert_eq!(n, 1, "自举应在 cfg_revisions 留下 source=bootstrap 的初始版本");
     let _ = std::fs::remove_file(&path);
 }
 

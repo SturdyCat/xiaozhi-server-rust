@@ -18,7 +18,7 @@
 
 ```bash
 # 1) 起服务端（带真实引擎需 sherpa + 模型；或用 docker-compose 自动下载模型）
-cd server && cargo run --features sherpa -- --config config.toml
+cd server && cargo run --features sherpa -- --config-db /tmp/data.db
 
 # 2) 跑协议联调（若 [server].expected_token 非空需 --token）
 python3 tests/mock_client.py --host 127.0.0.1 --port 8000 [--token <bearer>]
@@ -57,7 +57,7 @@ cd server && ~/.cargo/bin/cargo test
 `tests/mock_client.py` 是**零第三方依赖**的 WebSocket 客户端（纯标准库实现 RFC 6455 帧），场景化回归：握手协商、`asr_test`/`tts_test`/`llm_test`、`abort` 打断后连接存活探针（fatal）、唤醒问候（容忍型）、多轮对话：
 
 ```bash
-cd server && cargo run --release --features sherpa -- --config config.toml &
+cd server && cargo run --release --features sherpa -- --config-db /tmp/data.db &
 python3 server/tests/mock_client.py        # 逐场景 PASS/WARNING，末尾汇总
 ```
 

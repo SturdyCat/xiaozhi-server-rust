@@ -67,3 +67,18 @@ pub(super) async fn test_vad(
     let r = bench_vad(&engines).await;
     axum::Json(r).into_response()
 }
+
+#[derive(Deserialize)]
+pub struct TestLlmModelsReq {
+    pub api_base: Option<String>,
+    pub api_key: Option<String>,
+}
+
+/// `POST /api/test/llm/models`：拉取上游模型列表（OpenAI 兼容 GET {base}/models）。
+pub(super) async fn test_llm_models(
+    State(engines): State<Arc<Engines>>,
+    axum::Json(req): axum::Json<TestLlmModelsReq>,
+) -> Response {
+    let r = crate::app::bench_api::llm_models(&engines, req.api_base.as_deref(), req.api_key.as_deref()).await;
+    axum::Json(r).into_response()
+}

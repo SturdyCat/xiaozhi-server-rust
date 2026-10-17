@@ -24,7 +24,7 @@
 
 ```bash
 ./server/scripts/download_models.sh /host/data/models     # 裸机部署时手动下载
-cd server && ~/.cargo/bin/cargo run --release --features sherpa -- --config config.toml
+cd server && ~/.cargo/bin/cargo run --release --features sherpa -- --config-db /host/data/data.db
 ```
 
 ## 构建与故障边界

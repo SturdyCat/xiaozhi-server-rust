@@ -8,9 +8,10 @@ package com.xiaozhi.admin
  * 集中定义 id / order / label / group / keywords，构建期校验 id 唯一与 order 单调。
  *
  * 与「全部配置塞进 14 个平铺 tab」相比，本表额外承载**分组与搜索**信息：
- * - `group`：把 14 个 section 收拢为三个语义分组（服务与接入 / 语音与对话 / 智能体），
- *   配置页据此渲染「左侧分组导航 + 右侧单 section」两栏布局（见 `renderConfigLayout`），
- *   不再让用户面对一长条 tab 而无从下手；
+ * - `group`：把 14 个 section 收拢为三个语义分组（服务与接入 / 语音与对话 / 智能体）。
+ *   配置页采用**三级导航**（见 `renderConfigLayout`）：一级 = 管理台侧边栏（纵向，
+ *   AdminNav）；二级 = 配置内容区顶部的**横向 tabs**（置顶项 + 分组，本表 [tabs]）；
+ *   三级 = tab 内的**纵向子菜单**（该分组下的 section，`sectionsIn`）；
  * - `keywords`：为搜索框提供「中文意图 → section」的映射（如搜"音色"命中 TTS、
  *   搜"固件"命中 OTA），弥补单纯按 label 匹配覆盖不到的口语化查询。
  *
@@ -86,6 +87,21 @@ object ConfigSections {
 
     /** 置顶项（group == null），按声明顺序。 */
     val pinned: List<SectionDescriptor> get() = all.filter { it.group == null }
+
+    /**
+     * 二级横向 tabs（order 升序 = 展示顺序）：置顶项各自成 tab，分组各成一个 tab。
+     * id 语义：置顶项 tab 的 id = 该 section 的 id；分组 tab 的 id = 分组 id。
+     */
+    val tabs: List<Pair<String, String>> =
+        pinned.map { it.id to it.label } + groups
+
+    /** 某 section 所属的二级 tab id：置顶项 = 自身 id；分组项 = 所属分组 id。 */
+    fun tabOf(sectionId: String): String =
+        all.firstOrNull { it.id == sectionId }?.group ?: sectionId
+
+    /** 点二级 tab 时默认选中的 section：置顶项 tab = 自身；分组 tab = 组内第一个 section。 */
+    fun firstSectionIn(tabId: String): String =
+        if (groups.any { it.first == tabId }) sectionsIn(tabId).first().id else tabId
 
     /** 某分组下的 section，按声明顺序。 */
     fun sectionsIn(group: String): List<SectionDescriptor> = all.filter { it.group == group }

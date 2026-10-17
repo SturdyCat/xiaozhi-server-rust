@@ -1,15 +1,13 @@
-//! 每设备配置 overlay —— 白名单字段的「全局配置 ⊕ 设备增量」合并与落盘路径。
+//! 每设备配置 overlay —— 白名单字段的「全局配置 ⊕ 设备增量」合并。
 //!
 //! 设计要点（见 `docs/p3-round3-design.md`）：
 //! - overlay **只含会话内参数**（tts 音色/语速、llm 提示词与历史长度、soul 人设、
 //!   wakeup/command 话术、memory 召回参数）；结构型参数（server/audio/aiui）一律不可覆盖。
 //! - overlay **永不触碰引擎签名**：白名单字段都不在任一引擎的 `signature` 闭包里，
 //!   因此叠加 overlay 不会触发 TTS/LLM/Memory 的共享引擎重建（引擎仍按全局配置构建）。
-//! - 落盘于配置文件同目录的 `overlays/devices/<device_id>.toml`；`device_id` 做文件名
-//!   sanitize 防路径穿越。
+//! - overlay/预设现均存于 SQLite 配置库（`cfg_device_overlays` / `cfg_presets`，见
+//!   `config/store/sqlite.rs`）；旧的 TOML 文件落点已随 `FileConfigStore` 一并移除。
 //! - 本模块**不依赖引擎**，纯配置层；`engine.rs` 与 `app/ws` 都来复用它。
-
-use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
@@ -128,85 +126,3 @@ pub(crate) fn merge_overlay(base: &Config, overlay: &Value) -> anyhow::Result<Co
     cfg.normalize();
     Ok(cfg)
 }
-
-/// 设备 overlay 文件路径：`config_path` 同目录下的 `overlays/devices/<sanitized>.toml`。
-///
-/// `device_id` 经 [`sanitize_device_id`] 校验/清洗；非法返回 `None`（调用方据此 400）。
-pub(crate) fn device_overlay_path(config_path: &str, device_id: &str) -> Option<PathBuf> {
-    let id = sanitize_device_id(device_id)?;
-    let parent = Path::new(config_path).parent()?;
-    Some(parent.join("overlays").join("devices").join(format!("{id}.toml")))
-}
-
-/// 预设文件路径：`config_path` 同目录下的 `presets/<sanitized>.toml`。
-pub(crate) fn preset_path(config_path: &str, name: &str) -> Option<PathBuf> {
-    let n = sanitize_preset_name(name)?;
-    let parent = Path::new(config_path).parent()?;
-    Some(parent.join("presets").join(format!("{n}.toml")))
-}
-
-/// 预设备份目录：`config_path` 同目录下的 `presets/`。
-pub(crate) fn presets_dir(config_path: &str) -> Option<PathBuf> {
-    let parent = Path::new(config_path).parent()?;
-    Some(parent.join("presets"))
-}
-
-/// 读取设备 overlay 文件 → JSON（仅含文件中实际写出的字段）。
-///
-/// 文件不存在 → `None`（= 用全局配置）；解析失败 → 告警并返回 `None`（防御：坏文件不阻断会话）。
-pub(crate) fn read_device_overlay_value(path: &Path) -> Option<Value> {
-    if !path.exists() {
-        return None;
-    }
-    let text = match std::fs::read_to_string(path) {
-        Ok(t) => t,
-        Err(e) => {
-            tracing::warn!("读取设备 overlay {path:?} 失败，用全局配置: {e}");
-            return None;
-        }
-    };
-    match toml::from_str::<Value>(&text) {
-        Ok(v) => Some(v),
-        Err(e) => {
-            tracing::warn!("解析设备 overlay {path:?} 失败，用全局配置: {e}");
-            None
-        }
-    }
-}
-
-/// overlay JSON → TOML 文本（落盘用）。仅接受白名单已校验过的合法 JSON。
-pub(crate) fn json_to_toml(value: &Value) -> anyhow::Result<String> {
-    let tv = toml::Value::try_from(value)
-        .map_err(|e| anyhow::anyhow!("overlay JSON 无法转为 TOML: {e}"))?;
-    toml::to_string_pretty(&tv).map_err(|e| anyhow::anyhow!("序列化 overlay 失败: {e}"))
-}
-
-/// 设备 ID 文件名清洗：仅允许字母数字与 `- _ :`（MAC/UUID 足够），拒绝 `/ .` 与空，防路径穿越。
-fn sanitize_device_id(id: &str) -> Option<String> {
-    let id = id.trim();
-    if id.is_empty() || id.len() > 128 {
-        return None;
-    }
-    if !id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | ':')) {
-        return None;
-    }
-    Some(id.to_string())
-}
-
-/// 预设名清洗：允许字母数字与 `- _ .`，拒绝 `/` 与空，防路径穿越。
-fn sanitize_preset_name(name: &str) -> Option<String> {
-    let name = name.trim();
-    if name.is_empty() || name.len() > 128 {
-        return None;
-    }
-    if !name
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
-    {
-        return None;
-    }
-    Some(name.to_string())
-}
-
-#[cfg(test)]
-mod tests;

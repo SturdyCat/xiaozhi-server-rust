@@ -10,6 +10,7 @@ import com.tencent.kuikly.core.views.Input
 import com.tencent.kuikly.core.views.Switch
 import com.tencent.kuikly.core.views.Text
 import com.tencent.kuikly.core.views.TextArea
+import com.tencent.kuikly.core.views.TextInputState
 import com.tencent.kuikly.core.views.View
 import com.tencent.kuikly.core.views.compose.Button
 
@@ -35,7 +36,10 @@ fun ViewContainer<*, *>.fieldLabel(label: String) {
  * ⚠️ Input 内边距方案：iOS 渲染层 Input 无 padding 属性、文字贴边，
  * 故由外层容器承担 fieldBg 背景 / 1px 边框 / radiusSm / 左右内边距 sm(12)，
  * Input 透明背景 flex(1) 填满容器。
- * ⚠️ Input 必须显式传 textDidChange 回调，否则输入不更新。
+ * ⚠️ 输入绑定走 `textInputState` 通道（不可用 `text()`+`textDidChange` 受控回写：
+ * Catalyst 上编程式 setText 会打断 IME 组词并形成回声循环 → 文字/拼音交替闪烁）。
+ * textInputState 通道由框架内置防回环（InputView/TextAreaView 的
+ * isProcessingNativeEvent + lastSyncedTextInputState 挡住同态回填）；组词期间不回传 onChange。
  */
 fun ViewContainer<*, *>.labeledField(
     label: String,
@@ -65,10 +69,17 @@ fun ViewContainer<*, *>.labeledField(
                 backgroundColor(AdminColors.transparent)
                 fontSize(AdminType.body)
                 color(AdminColors.textPrimary)
-                text(getValue())
+                textInputState { TextInputState(text = getValue()) }
                 placeholder(placeholder)
             }
-            event { textDidChange { params -> onChange(params.text) } }
+            event {
+                // 组词中（compositionStart != NO_COMPOSITION）不上报，避免应用态与拼音组词互相踩
+                textInputStateChange { state ->
+                    if (state.compositionStart == TextInputState.NO_COMPOSITION && state.text != getValue()) {
+                        onChange(state.text)
+                    }
+                }
+            }
         }
     }
     // 字段级生效语义（schema 驱动）：`live` 不显示，只有"新会话/需重启"才提示——见 FormSchemaState
@@ -86,7 +97,7 @@ fun ViewContainer<*, *>.labeledField(
 
 /**
  * 标签 + 多行输入框（官方 TextArea 基座）：散文/提示词/系统提示等多行文本。
- * 官方 TextArea = 多行 Input（属性/事件同 Input，textDidChange 回调必须显式设置）。
+ * 官方 TextArea = 多行 Input；绑定通道与防闪烁约束同 [labeledField]（textInputState 通道）。
  * 容器承担背景/边框/内边距（叶子组件不支持 padding，见文件头铁律），TextArea 透明背景 flex(1) 填满。
  */
 fun ViewContainer<*, *>.labeledTextArea(
@@ -114,10 +125,17 @@ fun ViewContainer<*, *>.labeledTextArea(
                 backgroundColor(AdminColors.transparent)
                 fontSize(AdminType.body)
                 color(AdminColors.textPrimary)
-                text(getValue())
+                textInputState { TextInputState(text = getValue()) }
                 placeholder(placeholder)
             }
-            event { textDidChange { params -> onChange(params.text) } }
+            event {
+                // 组词中不上报，约束同 labeledField
+                textInputStateChange { state ->
+                    if (state.compositionStart == TextInputState.NO_COMPOSITION && state.text != getValue()) {
+                        onChange(state.text)
+                    }
+                }
+            }
         }
     }
 }

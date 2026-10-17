@@ -33,8 +33,8 @@ use impact::{save_impact, SaveImpact};
 
 /// 当前生效配置：启动时指定了配置文件则实时读盘，否则为内存内置默认配置。
 ///
-/// 健壮性：磁盘配置损坏/旧 schema 解析失败时回退内存配置（200），让管理页能正常打开
-/// ——一次成功保存即用合法 TOML 覆盖修复坏文件，避免陷入"打不开 → 永远修不好"的死局。
+/// 健壮性：库内配置损坏/旧 schema 解析失败时回退内存配置（200），让管理页能正常打开
+/// ——一次成功保存即把合法配置写回库修复，避免陷入"打不开 → 永远修不好"的死局。
 /// 原因记入服务端日志。
 ///
 /// `GET`（填表单）与 `PUT`（部分更新的基线）**共用**本函数：两者必须看到同一份"现值"，
@@ -45,7 +45,7 @@ pub(crate) fn current_config(engines: &Engines) -> Config {
             Ok(c) => c,
             Err(e) => {
                 tracing::error!(
-                    "读取配置文件 {p} 失败，回退内存配置（可在管理页重新保存修复）: {e}"
+                    "读取配置库 {p} 失败，回退内存配置（可在管理页重新保存修复）: {e}"
                 );
                 (*engines.config).clone()
             }
@@ -349,7 +349,7 @@ pub(super) async fn put_config(
         None => {
             return (
                 StatusCode::BAD_REQUEST,
-                json_msg(false, "server 以内置默认配置启动，未指定配置文件，无法持久化。请用 --config 指定 config.toml 后重启。", None),
+                json_msg(false, "配置库不可用（无持久化落点），无法保存配置。请检查 data.db 所在目录存在且可写后重启。", None),
             )
                 .into_response()
         }
@@ -373,7 +373,7 @@ pub(super) async fn put_config(
             }
             if !config_is_persistent(&path) {
                 msg.push_str(
-                    " ⚠️ 该路径不在挂载卷上：重建容器会丢失配置。请按 docker-compose.yml 挂载 ./server-data:/data（XIAOZHI_CONFIG=/data/config.toml）。",
+                    " ⚠️ 该路径不在挂载卷上：重建容器会丢失配置。请按 docker-compose.yml 挂载目录卷（如 ./server-data:/data）。",
                 );
             }
             // 回传**新** revision：客户端无需再 GET 就能继续保存
@@ -478,9 +478,8 @@ pub(super) async fn config_meta(State(engines): State<Arc<Engines>>) -> Response
         Some(p) => (backend, Some(meta_persistent(p))),
         None => ("default", None),
     };
-    let hint = match (path, persistent) {
-        (None, _) => "以内置默认配置运行，保存不会持久化（用 --config/XIAOZHI_CONFIG 指定配置文件后重启）",
-        (Some(_), Some(false)) => "⚠️ 配置库/文件不在挂载卷上：重建容器会丢失（请挂载 ./server-data:/data）",
+    let hint = match persistent {
+        Some(false) => "⚠️ 配置库不在挂载卷上：重建容器会丢失（请挂载 ./server-data:/data）",
         _ => "",
     };
     json_ok(serde_json::json!({

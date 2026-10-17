@@ -3,6 +3,7 @@ package com.xiaozhi.admin
 import com.tencent.kuikly.core.base.ViewContainer
 import com.tencent.kuikly.core.directives.vfor
 import com.tencent.kuikly.core.directives.vif
+import com.tencent.kuikly.core.pager.Pager
 import com.tencent.kuikly.core.views.Text
 import com.tencent.kuikly.core.views.View
 
@@ -18,7 +19,7 @@ import com.tencent.kuikly.core.views.View
  * 独立文件的原因：与 `ConfigCommandCard.kt` 同思路——字段/文案自成一组，
  * 且 `ConfigCards.kt` 已超文件规模约定，不再往里加内容。
  */
-fun ViewContainer<*, *>.nluConfigCard(form: ConfigFormState) {
+fun ViewContainer<*, *>.nluConfigCard(form: ConfigFormState, ctx: Pager) {
     val nlu = form.nlu
     groupedCard("技能级联（规则 → 轻量模型 → 云 LLM）") {
         // 整段档位提示（保存后新会话生效）：来自 /api/config/schema，服务端为唯一权威
@@ -66,6 +67,7 @@ fun ViewContainer<*, *>.nluConfigCard(form: ConfigFormState) {
             }
             nluIntentList(form, nlu)
             nluSlotList(form, nlu)
+            nluBuildModelSection(form, nlu, ctx)
         }
         vif({ nlu.enabled != "true" }) {
             Text {
@@ -74,6 +76,45 @@ fun ViewContainer<*, *>.nluConfigCard(form: ConfigFormState) {
                     color(AdminColors.textTertiary)
                     text("未启用：识别结果照常交给大模型（内置指令闸门 [command] 不受影响，见「指令」卡）。")
                 }
+            }
+        }
+    }
+}
+
+// ===================== 生成 NLU 模型（本地轻量模型三件套） =====================
+
+/**
+ * 「生成 NLU 模型」入口：POST /api/nlu/model/build 由服务端在宿主 docker 里
+ * 基于当前技能（内置提醒技能 + 自定义 intents）训练并导出 ONNX int8 三件套
+ * （model.onnx / tokenizer.json / labels.txt），产物供 `[nlu]` bert_* 配置指向。
+ */
+private fun ViewContainer<*, *>.nluBuildModelSection(form: ConfigFormState, nlu: NluSectionState, ctx: Pager) {
+    fieldLabel("轻量模型（TinyBERT 语义打分）")
+    Text {
+        attr {
+            fontSize(AdminType.caption)
+            color(AdminColors.textTertiary)
+            text("可选增强：用当前技能定义自动生成一个本地语义分类模型，替换「轻量模型」级的启发式打分（对口语化说法识别更稳，零外网推理）。训练在服务端宿主 docker 里进行，约数分钟。")
+        }
+    }
+    primaryButton(if (nlu.buildBusy) "训练中…" else "生成 NLU 模型") {
+        nlu.startBuildModel(ctx, form.serverBase)
+    }
+    vif({ nlu.buildMsg.isNotEmpty() }) {
+        Text {
+            attr {
+                fontSize(AdminType.caption)
+                color(if (nlu.buildPhase == "failed") AdminColors.warningTintText else AdminColors.textTertiary)
+                text(nlu.buildMsg)
+            }
+        }
+    }
+    vif({ nlu.buildLog.isNotEmpty() && (nlu.buildPhase == "running" || nlu.buildPhase == "failed") }) {
+        Text {
+            attr {
+                fontSize(AdminType.caption)
+                color(AdminColors.textTertiary)
+                text(nlu.buildLog.takeLast(1200))
             }
         }
     }
