@@ -130,3 +130,30 @@ fn mount_host_path_skips_longer_mountpoint_without_panic() {
         "/mnt/host-data/nlu-train"
     );
 }
+
+#[test]
+fn map_via_mounts_replaces_longest_destination() {
+    // 真实事故（UGOS NAS）：mountinfo source 只是设备名，需走自己容器 inspect
+    // 的 Mounts 做精确映射；嵌套挂载取最长 Destination。
+    let mounts = vec![
+        (
+            "/data".to_string(),
+            "/volume3/docker/xiaozhi-server-rust/server-data".to_string(),
+        ),
+        (
+            "/data/nlu-train-env".to_string(),
+            "/volume3/docker/xiaozhi-server-rust/server-data/nlu-train-env".to_string(),
+        ),
+    ];
+    assert_eq!(
+        map_via_mounts("/data/nlu-train", &mounts),
+        Some("/volume3/docker/xiaozhi-server-rust/server-data/nlu-train".to_string())
+    );
+}
+
+#[test]
+fn map_via_mounts_rejects_non_boundary_prefix() {
+    // /database 不是 /data 的挂载点，不能只按字符串前缀命中。
+    let mounts = vec![("/database".to_string(), "/host/db".to_string())];
+    assert_eq!(map_via_mounts("/data/nlu-train", &mounts), None);
+}

@@ -256,8 +256,57 @@ fn mount_host_path(path: &str, mountinfo: &str) -> String {
     best.map(|(_, p)| p).unwrap_or_else(|| path.to_string())
 }
 
+/// 精确路径换算：查**自己容器**的 inspect（经 docker.sock），`Mounts[]` 里
+/// Destination→Source 就是宿主真实 bind 源。覆盖 NAS 等设备子路径挂载场景
+/// （mountinfo 里 source 只是 `/dev/xxx` 设备名，设备在宿主的挂载点容器内
+/// 不可见，纯文本解析原理上不可解）。裸机或查不到时返回 None。
+async fn mount_from_own_container(path: &str) -> Option<String> {
+    let id = std::env::var("HOSTNAME").ok()?;
+    let out = tokio::process::Command::new("docker")
+        .args(["inspect", &id])
+        .output()
+        .await
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
+    let mounts = v.get(0)?.get("Mounts")?.as_array()?;
+    let pairs: Vec<(String, String)> = mounts
+        .iter()
+        .filter_map(|m| {
+            Some((
+                m.get("Destination")?.as_str()?.to_string(),
+                m.get("Source")?.as_str()?.to_string(),
+            ))
+        })
+        .collect();
+    map_via_mounts(path, &pairs)
+}
+
+/// 在 (容器内挂载点, 宿主源路径) 映射表中取覆盖 path 的最长挂载点做前缀替换。
+/// 纯函数供单测。
+fn map_via_mounts(path: &str, mounts: &[(String, String)]) -> Option<String> {
+    let mut best: Option<(usize, String)> = None;
+    for (dest, src) in mounts {
+        let Some(suffix) = path.strip_prefix(dest.as_str()) else {
+            continue;
+        };
+        if !(suffix.is_empty() || suffix.starts_with('/')) {
+            continue;
+        }
+        if best.as_ref().map_or(true, |(len, _)| dest.len() > *len) {
+            best = Some((dest.len(), format!("{src}{suffix}")));
+        }
+    }
+    best.map(|(_, p)| p)
+}
+
 async fn docker_host_path(path: &std::path::Path) -> String {
     let s = path.display().to_string();
+    if let Some(mapped) = mount_from_own_container(&s).await {
+        return mapped;
+    }
     match tokio::fs::read_to_string("/proc/self/mountinfo").await {
         Ok(info) => mount_host_path(&s, &info),
         Err(_) => s, // 裸机部署（不在容器里）：路径本来就是宿主路径。
