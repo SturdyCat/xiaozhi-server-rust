@@ -116,3 +116,17 @@ fn mount_host_path_subtree_root() {
         "/mnt/host/server-data/nlu-train"
     );
 }
+
+#[test]
+fn mount_host_path_skips_longer_mountpoint_without_panic() {
+    // 真实事故：mountinfo 里存在比目标路径更长的兄弟挂载点，
+    // 旧实现先按 mnt.len() 切片再校验前缀，直接 byte index 越界 panic。
+    let info = concat!(
+        "10 1 0:5 / /data rw - ext4 /mnt/host-data rw\n",
+        "12 10 0:7 / /data/nlu-train-env rw - ext4 /mnt/host-data/nlu-train-env rw\n",
+    );
+    assert_eq!(
+        mount_host_path("/data/nlu-train", info),
+        "/mnt/host-data/nlu-train"
+    );
+}

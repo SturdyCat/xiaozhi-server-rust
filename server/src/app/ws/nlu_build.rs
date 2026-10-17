@@ -235,8 +235,9 @@ fn mount_host_path(path: &str, mountinfo: &str) -> String {
             continue;
         }
         let (root, mnt, source) = (lf[3], lf[4], rf[1]);
-        let suffix = &path[mnt.len()..];
-        if !path.starts_with(mnt) || !(suffix.is_empty() || suffix.starts_with('/')) {
+        // 先匹配再取后缀：mountpoint 可能比目标路径长（兄弟挂载点），先切片会越界。
+        let Some(suffix) = path.strip_prefix(mnt) else { continue };
+        if !(suffix.is_empty() || suffix.starts_with('/')) {
             continue;
         }
         let rel = suffix.strip_prefix('/').unwrap_or("");
