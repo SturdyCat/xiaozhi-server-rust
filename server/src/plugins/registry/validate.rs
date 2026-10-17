@@ -173,5 +173,31 @@ pub(super) fn validate_nlu(cfg: &Config) -> Result<()> {
             }
         }
     }
+    // TinyBERT 语义分类（可选第二级）：开关打开时三路径必填且文件必须存在，阈值在 0~1。
+    // 构建失败只会在会话启动时 warn 回落，这里前置拦截配置错误。
+    if cfg.nlu.bert_enabled {
+        for (key, path) in [
+            ("bert_model", &cfg.nlu.bert_model),
+            ("bert_vocab", &cfg.nlu.bert_vocab),
+            ("bert_labels", &cfg.nlu.bert_labels),
+        ] {
+            if path.trim().is_empty() {
+                anyhow::bail!(
+                    "[nlu].bert_enabled = true 但 {key} 为空：请填写 ONNX 模型/词表/标签文件路径，                     或把 [nlu].bert_enabled 改回 false。"
+                );
+            }
+            if !std::path::Path::new(path).is_file() {
+                anyhow::bail!(
+                    "[nlu].{key} = 「{path}」不是存在的文件：请确认路径（相对路径以服务端工作目录为基准），                     或把 [nlu].bert_enabled 改回 false。"
+                );
+            }
+        }
+        if !(0.0..=1.0).contains(&cfg.nlu.bert_threshold) {
+            anyhow::bail!(
+                "[nlu].bert_threshold = {} 超出范围：请设为 0~1（建议 0.75），或恢复默认值。",
+                cfg.nlu.bert_threshold
+            );
+        }
+    }
     Ok(())
 }

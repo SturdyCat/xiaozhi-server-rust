@@ -101,3 +101,35 @@ fn llm_test_result_serializes_with_snake_case_tag() {
     assert_eq!(v["text"], "回复");
     assert_eq!(v["elapsed_ms"], 123);
 }
+
+#[test]
+fn nlu_test_client_message_deserializes_snake_case() {
+    // 与 llm_test 同口径：多单词变体必须是 nlu_test（小写下划线）。
+    let cm: ClientMessage =
+        serde_json::from_str(r#"{"type":"nlu_test","text":"把客厅的灯打开"}"#).expect("解析失败");
+    assert!(
+        matches!(cm, ClientMessage::NluTest { text, .. } if text == "把客厅的灯打开"),
+        "应反序列化为 NluTest 变体"
+    );
+}
+
+#[test]
+fn nlu_test_result_serializes_with_tag_and_omits_none() {
+    // tag 必须是 "nlu_test"；Option 字段为 None 时整体省略（客户端按字段存在性渲染）。
+    let sm = ServerMessage::NluTestResult {
+        session_id: "s1".to_string(),
+        state: "ok".to_string(),
+        intent: Some("light_on".to_string()),
+        confidence: Some(0.93),
+        tokenize_ms: Some(1),
+        infer_ms: Some(12),
+        text: None,
+    };
+    let v: serde_json::Value = serde_json::from_str(&sm.to_json()).expect("序列化失败");
+    assert_eq!(v["type"], "nlu_test");
+    assert_eq!(v["intent"], "light_on");
+    assert_eq!(v["confidence"], 0.93);
+    assert_eq!(v["tokenize_ms"], 1);
+    assert_eq!(v["infer_ms"], 12);
+    assert!(v.get("text").is_none(), "None 字段应省略");
+}

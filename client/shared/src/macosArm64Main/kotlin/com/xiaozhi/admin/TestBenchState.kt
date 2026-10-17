@@ -103,7 +103,7 @@ class TestBenchState(private val scope: PagerScope) {
 
     var statusMsg by scope.observable("")
 
-    /** 测试台标签页 UI 状态（连接 / ASR 识别 / TTS 合成 / LLM 对话 四个 tab，见 renderBench）。 */
+    /** 测试台标签页 UI 状态（连接 / ASR 识别 / TTS 合成 / LLM 对话 / NLU 意图 五个 tab，见 renderBench）。 */
     val tabUi = TabUiState(scope)
 
     // ============================================================
@@ -353,6 +353,91 @@ class TestBenchState(private val scope: PagerScope) {
             if (llmBusy) {
                 llmBusy = false
                 statusMsg = "LLM 测试超时：请检查 api_base/api_key 或服务器日志"
+            }
+        }
+    }
+
+    // ============================================================
+    // NLU 意图测试：发 nlu_test → 服务端按最新配置构建 TinyBERT 直推 → nlu_test 回调
+    // ============================================================
+
+    var nluInput by scope.observable("把客厅的灯打开")
+
+    /** 识别到的意图名（低于阈值/出错时为空，原因看 nluText）。 */
+    var nluIntent by scope.observable("")
+
+    /** 最高置信度 0~1；<0 表示本轮回包没带（出错帧）。 */
+    var nluConfidence by scope.observable(-1f)
+    var nluBusy by scope.observable(false)
+    var nluOk by scope.observable(false)
+
+    /** 说明文本：命中时是映射后的技能短语，未命中/出错时是服务端给出的可读原因。 */
+    var nluText by scope.observable("")
+
+    /** 分词 / 推理耗时（ms），由 nlu_test 回包携带。 */
+    var nluTokenizeMs by scope.observable(0)
+    var nluInferMs by scope.observable(0)
+
+    var nluReplyRef: ViewRef<DivView>? = null
+    var nluCopyHint by scope.observable("")
+
+    /** 复制 NLU 测试详情（有选区复制选区，无选区复制整段）。 */
+    fun copyNlu(ctx: Pager) = copySelectionOr(ctx, nluReplyRef, nluResultText()) { nluCopyHint = it }
+
+    /** 详情面板整段文本（复制回退用）。 */
+    fun nluResultText(): String {
+        if (!nluOk) return nluText
+        val head = buildString {
+            append("意图：").append(nluIntent.ifBlank { "（未命中）" })
+            if (nluConfidence >= 0f) append("　置信度：").append((nluConfidence * 1000).toInt() / 1000.0)
+            append("\n耗时：分词 ").append(nluTokenizeMs).append("ms / 推理 ").append(nluInferMs).append("ms")
+        }
+        return if (nluText.isBlank()) head else "$head\n$nluText"
+    }
+
+    fun testNlu(ctx: Pager) {
+        if (nluBusy) return
+        if (!connected) {
+            statusMsg = "请先在「连接」卡片建立连接"
+            return
+        }
+        if (nluInput.isBlank()) {
+            statusMsg = "请输入测试文本"
+            return
+        }
+        nluBusy = true
+        nluIntent = ""
+        nluConfidence = -1f
+        nluText = ""
+        nluTokenizeMs = 0
+        nluInferMs = 0
+        statusMsg = "NLU 测试中…"
+        xz(ctx).nluTest(nluInput) { result ->
+            nluBusy = false
+            nluOk = result?.optString("state", "error") == "ok"
+            if (nluOk) {
+                nluIntent = result?.optString("intent", "") ?: ""
+                nluConfidence = if (result?.has("confidence") == true) {
+                    (result?.optDouble("confidence") ?: Double.NaN).toFloat()
+                } else -1f
+                nluTokenizeMs = result?.optInt("tokenizeMs", 0) ?: 0
+                nluInferMs = result?.optInt("inferMs", 0) ?: 0
+                nluText = result?.optString("text", "") ?: ""
+                statusMsg = if (nluIntent.isBlank()) {
+                    "未命中意图：$nluText"
+                } else {
+                    "命中意图 $nluIntent（分词 ${nluTokenizeMs}ms / 推理 ${nluInferMs}ms）"
+                }
+            } else {
+                nluText = result?.optString("text", "")?.ifBlank { "（服务端未返回原因）" } ?: ""
+                statusMsg = "NLU 测试失败：$nluText"
+            }
+        }
+        // 超时兜底：本地 TinyBERT 推理通常毫秒级，10s 未回基本是连接/服务端异常
+        ctx.setTimeout(10_000) {
+            if (nluBusy) {
+                nluBusy = false
+                statusMsg = "NLU 测试超时：请检查连接或服务器日志"
             }
         }
     }

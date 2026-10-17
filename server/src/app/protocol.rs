@@ -92,8 +92,8 @@ pub struct ClientHello {
     #[serde(default)]
     pub audio_params: Option<AudioParams>,
     /// 测试台标记：macApp 管理端的测试连接带 `test:true`，ESP 设备不带。
-    /// 仅测试会话受理 `asr_test`/`tts_test`/`llm_test` 三种独立服务请求；
-    /// 设备会话收到这三种消息会被忽略（正式流程不走测试端点）。
+    /// 仅测试会话受理 `asr_test`/`tts_test`/`llm_test`/`nlu_test` 四种独立服务请求；
+    /// 设备会话收到这些消息会被忽略（正式流程不走测试端点）。
     #[serde(default)]
     pub test: bool,
 }
@@ -163,6 +163,14 @@ pub enum ClientMessage {
         session_id: Option<String>,
         text: String,
     },
+    /// 测试台专用：直接调用 TinyBERT 意图分类验证技能级联第二级（跳过 ASR/LLM）。
+    /// 服务端按磁盘上最新 `[nlu]` 配置临时构建分类器，改完配置无需重启即可验证；
+    /// 回包带分词/推理耗时拆解（`nlu_test`）。
+    NluTest {
+        #[serde(default)]
+        session_id: Option<String>,
+        text: String,
+    },
 }
 
 /// 服务器 → 设备 的文本消息。
@@ -220,6 +228,25 @@ pub enum ServerMessage {
         state: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         engine: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        text: Option<String>,
+    },
+    /// 测试台专用：TinyBERT 意图分类测试结果（`nlu_test`）。`state=ok` 时 `intent` 为
+    /// 置信度最高的标签（低于 `bert_threshold` 时为 None 并在 `text` 说明会放行 LLM）；
+    /// `state=error` 时 `text` 为可读错误信息（含怎么修）。分词 / 推理耗时分开计。
+    #[serde(rename = "nlu_test")]
+    NluTestResult {
+        session_id: String,
+        /// ok | error
+        state: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        intent: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        confidence: Option<f32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tokenize_ms: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        infer_ms: Option<u64>,
         #[serde(skip_serializing_if = "Option::is_none")]
         text: Option<String>,
     },

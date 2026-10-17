@@ -62,6 +62,7 @@ static inline void XZPlayerPlay(AVAudioPlayerNode *player) {
 @property (nonatomic, copy, nullable) id speakCallback; // 待 tts stop（或 tts_test 错误帧）时回调
 @property (nonatomic, copy, nullable) NSString *speakEngine;  // 本次合成引擎名（tts_test 成功帧携带）
 @property (nonatomic, copy, nullable) id llmCallback;   // 待服务端回 llm_test 时回调
+@property (nonatomic, copy, nullable) id nluCallback;   // 待服务端回 nlu_test 时回调
 @property (nonatomic, assign) uint32_t downlinkSampleRate;
 // ===== Opus 编解码（系统 AudioToolbox，实测可用；Catalyst 下无需第三方库）=====
 @property (nonatomic, assign) AudioConverterRef downlinkDecoder; // Opus(下行率) → LPCM float32

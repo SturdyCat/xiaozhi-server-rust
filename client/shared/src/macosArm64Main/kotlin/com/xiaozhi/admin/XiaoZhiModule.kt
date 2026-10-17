@@ -194,6 +194,21 @@ class XiaoZhiModule : Module() {
         )
     }
 
+    /**
+     * NLU 意图测试：发送 nlu_test（服务端按磁盘上最新 [nlu] 配置构建 TinyBERT 直推一句）。
+     * 结果经回调返回：{state, intent, confidence, tokenizeMs, inferMs, text}。
+     * 与 llmTest 相同为「稍后一次性回调」，keepCallbackAlive=false。
+     */
+    fun nluTest(text: String, callback: CallbackFn? = null) {
+        toNative(
+            keepCallbackAlive = false,
+            methodName = "nluTest",
+            param = JSONObject().apply { put("text", text) },
+            callback = callback,
+            syncCall = false,
+        )
+    }
+
     companion object {
         const val MODULE_NAME = "XiaoZhiModule"
     }

@@ -4,8 +4,10 @@
 //!
 //! ## 三级级联中的位置
 //!
-//! 终端 → ASR → 规则 NLU（[`NluEngine`]，命中即执行）→ 轻量模型（[`LightModel`]，
-//! 达阈值即执行）→ 云 LLM（本目录以 `execute_skill` 工具接入）→ TTS。
+//! 终端 → ASR → 规则 NLU（[`NluEngine`]，命中即执行）→ 轻量模型（配置了
+//! `[nlu].bert_*` 时优先 [`crate::plugins::nlu::BertClassify`] TinyBERT 语义分类，
+//! 否则/失败回落内置 [`LightModel`] 启发式打分，达阈值即执行）→ 云 LLM（本目录以
+//! `execute_skill` 工具接入）→ TTS。
 //!
 //! ## 兼容性
 //!
@@ -25,6 +27,7 @@
 //! 规则/模型/LLM 任何一个源出 bug 都不可能绕过校验直接产生副作用。
 
 use std::collections::{BTreeSet, HashMap};
+use std::sync::Arc;
 
 use anyhow::{bail, Result};
 use serde::Deserialize;
@@ -32,7 +35,9 @@ use serde_json::json;
 
 use crate::plugins::command::CommandConfig;
 use crate::plugins::llm::{ToolCall, ToolSpec};
-use crate::plugins::nlu::{norm, parse_template, template::Tok, NluConfig, NluEngine};
+use crate::plugins::nlu::{
+    BertClassify, NluConfig, NluEngine, norm, parse_template, template::Tok,
+};
 
 mod model;
 pub use model::LightModel;
@@ -88,11 +93,17 @@ struct Definition {
     reply: String,
 }
 
-/// 技能目录：规则引擎 + 轻量模型 + 校验器 + LLM 工具目录，会话级持有。
-#[derive(Debug, Clone)]
+/// 技能目录：规则引擎 + TinyBERT/轻量模型 + 校验器 + LLM 工具目录，会话级持有。
+#[derive(Clone)]
 pub struct SkillRegistry {
     rules: NluEngine,
     model: LightModel,
+    /// TinyBERT 语义分类器（`[nlu].bert_enabled` 且引擎构建成功时才有；先于启发式）。
+    bert: Option<Arc<dyn BertClassify>>,
+    /// TinyBERT 接受阈值（取自 `[nlu].bert_threshold`；无 bert 时无意义）。
+    bert_threshold: f32,
+    /// TinyBERT 标签 → 技能名映射（`[nlu].bert_label_map`，缺省同名直配）。
+    bert_label_map: HashMap<String, String>,
     definitions: Vec<Definition>,
     /// 槽位名 → (原始值表, 是否可选)；`resolve` 校验与 LLM 目录共用。
     slots: HashMap<String, (Vec<String>, bool)>,
@@ -100,7 +111,12 @@ pub struct SkillRegistry {
 
 impl SkillRegistry {
     /// 按两处配置快照构造：`command`（end_session 来源，向后兼容）+ `nlu`（自定义技能）。
-    pub fn new(command: &CommandConfig, nlu: &NluConfig) -> Self {
+    /// `bert` 由调用方注入（跨会话共享的已加载引擎，见 `Engines::bert_engine`；None = 未配置或不可用）。
+    pub fn new(
+        command: &CommandConfig,
+        nlu: &NluConfig,
+        bert: Option<Arc<dyn BertClassify>>,
+    ) -> Self {
         let mut definitions = Vec::new();
         if command.active() {
             definitions.push(Definition {
@@ -144,6 +160,9 @@ impl SkillRegistry {
         Self {
             rules: NluEngine::new(command, nlu),
             model: LightModel::build(&skills, &slot_map, nlu.model_threshold, nlu.model_margin),
+            bert,
+            bert_threshold: nlu.bert_threshold.clamp(0.0, 1.0),
+            bert_label_map: nlu.bert_label_map.clone(),
             definitions,
             slots: slot_meta,
         }
@@ -154,14 +173,33 @@ impl SkillRegistry {
         !self.definitions.is_empty()
     }
 
-    /// 三级中的本地两级：规则 → 轻量模型；都未命中返回 `None`（调用方放行 LLM）。
-    /// 命中层级见 [`SkillStage`]（日志区分"规则命中"与"模型命中"）。
+    /// 三级中的本地两级：规则 → TinyBERT（配置时）→ 轻量模型；都未命中返回 `None`
+    /// （调用方放行 LLM）。命中层级见 [`SkillStage`]（规则与模型两级，TinyBERT 与
+    /// 启发式打分同属 Model——执行路径完全一致，仅提名来源不同）。
     pub fn parse_staged(&self, text: &str) -> Option<(SkillStage, SkillInvocation)> {
         if let Some(hit) = self.rules.parse(text) {
             return self
                 .resolve(&hit.intent, hit.slots)
                 .ok()
                 .map(|inv| (SkillStage::Rules, inv));
+        }
+        // TinyBERT 语义分类（真实模型）：达阈值且标签映射到目录中的技能才提名；
+        // 引擎出错只记日志并回落启发式（模型故障不能拖垮级联）。
+        if let Some(bert) = &self.bert {
+            match bert.classify_timed(text) {
+                Ok(hit) if hit.confidence >= self.bert_threshold => {
+                    let skill = self
+                        .bert_label_map
+                        .get(&hit.label)
+                        .cloned()
+                        .unwrap_or(hit.label.clone());
+                    if let Ok(inv) = self.resolve(&skill, HashMap::new()) {
+                        return Some((SkillStage::Model, inv));
+                    }
+                }
+                Ok(_) => {} // 低于阈值：放行后续级（漏触发优于误触发）
+                Err(e) => tracing::warn!("TinyBERT 分类失败（回落启发式/LLM）: {e:#}"),
+            }
         }
         if !self.model.is_active() {
             return None;

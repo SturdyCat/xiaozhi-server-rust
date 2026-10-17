@@ -1,16 +1,16 @@
 PODS:
-  - OpenKuiklyIOSRender (2.28.0)
+  - OpenKuiklyIOSRender (2.29.1)
 
 DEPENDENCIES:
-  - OpenKuiklyIOSRender (= 2.28.0)
+  - OpenKuiklyIOSRender (= 2.29.1)
 
 SPEC REPOS:
   trunk:
     - OpenKuiklyIOSRender
 
 SPEC CHECKSUMS:
-  OpenKuiklyIOSRender: bed821fae9ff52da4c3f8fb4a7b3ec4360181822
+  OpenKuiklyIOSRender: 2ecc9c7bc5c4b3cd29e24530429a13aed1e514c0
 
-PODFILE CHECKSUM: 7dac3ef76ce8d48711fa829409e83f868ab39dac
+PODFILE CHECKSUM: d948bc3f2dba436f77231b629ab2ae7cf74a3164
 
 COCOAPODS: 1.16.2

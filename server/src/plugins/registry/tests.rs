@@ -457,10 +457,22 @@ fn nlu_rules_is_optional_and_hot_reloadable() {
         .iter()
         .filter_map(|f| f["key"].as_str())
         .collect();
-    // intents/slots 为嵌套数组，不登记为扁平字段（见 fields_nlu.rs 说明）
+    // intents/slots 为嵌套数组，不登记为扁平字段（见 fields_nlu.rs 说明）；
+    // bert_* 为 TinyBERT 语义分类的扁平字段（label_map 仍是嵌套 TOML 高级配置）。
     assert_eq!(
         keys,
-        vec!["enabled", "model_threshold", "model_margin"],
+        vec![
+            "enabled",
+            "model_threshold",
+            "model_margin",
+            "bert_enabled",
+            "bert_model",
+            "bert_vocab",
+            "bert_labels",
+            "bert_threshold",
+            "bert_num_threads",
+            "bert_max_len",
+        ],
         "{keys:?}"
     );
 }

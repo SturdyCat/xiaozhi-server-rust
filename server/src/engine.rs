@@ -29,6 +29,7 @@ use crate::config::Config;
 use crate::plugins::host::{Phase, PluginHost};
 use crate::plugins::llm::{build_llm, Llm};
 use crate::plugins::memory::MemoryProvider;
+use crate::plugins::nlu::{BertClassify, NluConfig, bert_signature, build_bert_checked};
 use crate::plugins::registry::{self, Capability};
 use crate::plugins::tts::{build_kokoro_with_lang, TtsEngine};
 #[cfg(not(feature = "sherpa"))]
@@ -106,6 +107,11 @@ pub struct Engines {
     /// 配置存储后端（读、写、落点三件事的唯一入口，见 [`crate::config::store`]）。
     /// 读取/写回配置**一律**经它——不要直接 `Config::load(路径)`，否则换成 SQLite 后端时会被绕过。
     pub config_store: Arc<dyn ConfigStore>,
+    /// TinyBERT 分类器跨会话缓存（`[nlu].bert_*`）：键 = 配置签名（[`bert_signature`]），
+    /// 变了即重建；构建失败缓存 `None`（每会话不重试加载大文件，测试台 `nlu_test`
+    /// 直调 [`build_bert_checked`] 以拿到完整错误）。加载是同步 IO（会话开始路径），
+    /// 但仅在首会话/配置变化时发生一次，稳态零开销。
+    bert: Mutex<Option<(String, Option<Arc<dyn BertClassify>>)>>,
 }
 
 impl Engines {
@@ -148,6 +154,7 @@ impl Engines {
             inference: crate::app::inference::InferenceGates::new(config),
             config: Arc::new(config.clone()),
             config_store,
+            bert: Mutex::new(None),
         }))
     }
 
@@ -157,6 +164,32 @@ impl Engines {
     /// overlay / presets / hot-audio 的落点派生与"能否持久化"判定都读这里。
     pub fn config_path(&self) -> Option<&str> {
         self.config_store.location()
+    }
+
+    /// 取（或按需构建）跨会话共享的 TinyBERT 分类器；未配置 / 构建失败返回 `None`
+    /// （失败只 warn 一次并缓存，避免每会话重复加载大文件的延迟与日志噪音）。
+    pub fn bert_engine(&self, nlu: &NluConfig) -> Option<Arc<dyn BertClassify>> {
+        if !nlu.bert_configured() {
+            return None;
+        }
+        let sig = bert_signature(nlu);
+        let mut guard = self.bert.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((cached_sig, engine)) = guard.as_ref() {
+            if *cached_sig == sig {
+                return engine.clone();
+            }
+        }
+        let built = match build_bert_checked(nlu) {
+            Ok(engine) => Some(engine),
+            Err(e) => {
+                tracing::warn!(
+                    "TinyBERT 引擎构建失败（技能级联回落启发式打分；测试台 nlu_test 可见完整错误）: {e:#}"
+                );
+                None
+            }
+        };
+        *guard = Some((sig, built.clone()));
+        built
     }
 
     /// 当前生效的 LLM 引擎（每次调用取一次读锁后克隆 `Arc`，开销可忽略）。

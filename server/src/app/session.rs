@@ -505,6 +505,14 @@ impl<'a, T: Transport> Session<'a, T> {
                 }
                 self.handle_llm_test(text).await?;
             }
+            ClientMessage::NluTest { text, .. } => {
+                // 测试台专用端点（仅 hello.test=true 受理）；实现见 session/bench.rs
+                if !self.is_test {
+                    tracing::warn!("session {session_id} 非测试会话收到 nlu_test，忽略");
+                    return Ok(());
+                }
+                self.handle_nlu_test(text).await?;
+            }
             ClientMessage::Hello(_) => {
                 tracing::warn!("会话内收到重复 hello，忽略");
             }

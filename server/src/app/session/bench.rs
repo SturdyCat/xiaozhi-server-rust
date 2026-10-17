@@ -1,7 +1,8 @@
-//! 测试台（macApp，`hello.test=true`）三个专用端点的处理实现：
-//! `asr_test`（录音缓冲整段识别）/ `tts_test`（合成 + 流式下发）/ `llm_test`（直调 LLM 验证）。
+//! 测试台（macApp，`hello.test=true`）四个专用端点的处理实现：
+//! `asr_test`（录音缓冲整段识别）/ `tts_test`（合成 + 流式下发）/ `llm_test`（直调 LLM 验证）
+//! / `nlu_test`（直调 TinyBERT 意图分类验证技能级联第二级）。
 //!
-//! ⚠️ 这三类消息**仅测试会话受理**（`session.rs` 的 match 臂先做 `is_test` 检查）；
+//! ⚠️ 这四类消息**仅测试会话受理**（`session.rs` 的 match 臂先做 `is_test` 检查）；
 //! 本文件作为 [`super::Session`] 的子模块 impl 扩展拆分自 `session.rs`（可访问会话私有字段）。
 //! 服务端每次都按**磁盘最新配置**工作（读盘热切换），因此测试台改配置保存后无需重启。
 
@@ -13,6 +14,7 @@ use crate::app::protocol::ServerMessage;
 use crate::app::session::{send_text, Session};
 use crate::app::transport::Transport;
 use crate::plugins::llm::build_llm;
+use crate::plugins::nlu::build_bert_checked;
 use crate::plugins::tts::build_xfyun;
 
 impl<'a, T: Transport> Session<'a, T> {
@@ -384,6 +386,111 @@ impl<'a, T: Transport> Session<'a, T> {
             },
         )
         .await?;
+        Ok(())
+    }
+
+    /// `nlu_test`：按**磁盘最新配置**临时构建 TinyBERT 分类器直调（跳过 ASR/LLM），
+    /// 结果回 `nlu_test`。带分词/推理耗时拆解；低于 `bert_threshold` 时 `intent=None`
+    /// 并在 `text` 说明会放行 LLM（与技能级联行为一致）。
+    pub(super) async fn handle_nlu_test(&mut self, text: String) -> anyhow::Result<()> {
+        let session_id = self.session_id.clone();
+        // 测试台专用端点：仅 hello.test=true 的会话受理。
+        if !self.is_test {
+            tracing::warn!("session {session_id} 非测试会话收到 nlu_test，忽略");
+            return Ok(());
+        }
+        if text.trim().is_empty() {
+            return Ok(());
+        }
+        // 按**磁盘上最新配置**构建分类器——改完 `[nlu].bert_*` 配置无需重启即可验证；
+        // 未指定配置文件（内置默认）或读盘失败时退回启动时的内存配置。
+        let nlu_cfg = if self.engines.config_path().is_none() {
+            self.engines.config.nlu.clone() // 内置默认配置：无来源可读
+        } else {
+            self.engines
+                .config_store
+                .load()
+                .map(|c| c.nlu)
+                .unwrap_or_else(|e| {
+                    tracing::warn!("session {session_id} NLU 测试读配置失败（用启动配置）: {e}");
+                    self.engines.config.nlu.clone()
+                })
+        };
+        // 构建失败原样回测试台（含怎么修文案），方便当场定位模型/词表路径问题。
+        let bert = match build_bert_checked(&nlu_cfg) {
+            Ok(bert) => bert,
+            Err(e) => {
+                tracing::warn!("session {session_id} NLU 测试构建失败: {e:#}");
+                send_text(
+                    self.transport,
+                    &ServerMessage::NluTestResult {
+                        session_id,
+                        state: "error".to_string(),
+                        intent: None,
+                        confidence: None,
+                        tokenize_ms: None,
+                        infer_ms: None,
+                        text: Some(format!("{e:#}")),
+                    },
+                )
+                .await?;
+                return Ok(());
+            }
+        };
+        // ort 推理是同步阻塞调用，隔离出 async 执行器。
+        let input = text.clone();
+        let result = tokio::task::spawn_blocking(move || bert.classify_timed(&input))
+            .await
+            .map_err(|e| anyhow::anyhow!("NLU 测试任务异常: {e}"))?;
+        match result {
+            Ok(hit) => {
+                let below = hit.confidence < nlu_cfg.bert_threshold;
+                let text = if below {
+                    Some(format!(
+                        "最高置信度 {:.3} 低于阈值 {}，技能级联会放行 LLM",
+                        hit.confidence, nlu_cfg.bert_threshold
+                    ))
+                } else {
+                    Some(nlu_cfg.bert_map_label(&hit.label).to_string())
+                };
+                tracing::info!(
+                    "session {session_id} NLU 测试完成：label={} conf={:.3}（分词 {}ms + 推理 {}ms）",
+                    hit.label,
+                    hit.confidence,
+                    hit.tokenize_ms,
+                    hit.infer_ms
+                );
+                send_text(
+                    self.transport,
+                    &ServerMessage::NluTestResult {
+                        session_id,
+                        state: "ok".to_string(),
+                        intent: (!below).then(|| nlu_cfg.bert_map_label(&hit.label).to_string()),
+                        confidence: Some(hit.confidence),
+                        tokenize_ms: Some(hit.tokenize_ms),
+                        infer_ms: Some(hit.infer_ms),
+                        text,
+                    },
+                )
+                .await?;
+            }
+            Err(e) => {
+                tracing::warn!("session {session_id} NLU 测试推理失败: {e:#}");
+                send_text(
+                    self.transport,
+                    &ServerMessage::NluTestResult {
+                        session_id,
+                        state: "error".to_string(),
+                        intent: None,
+                        confidence: None,
+                        tokenize_ms: None,
+                        infer_ms: None,
+                        text: Some(format!("{e:#}")),
+                    },
+                )
+                .await?;
+            }
+        }
         Ok(())
     }
 }

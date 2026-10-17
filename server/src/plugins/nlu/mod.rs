@@ -32,6 +32,17 @@ pub(crate) mod template;
 #[cfg(test)]
 mod tests;
 
+pub(crate) mod bert;
+// BertHit/bert_feature_enabled 仅 feature 构建内部使用，默认构建 re-export 会闲置。
+#[allow(unused_imports)]
+pub use bert::{
+    BertClassify, BertHit, bert_feature_enabled, bert_signature, build_bert_checked,
+};
+// TinyBertNlu 供外部/测试直接用类型；本 crate 内部经 trait 对象使用（二进制构建会闲置）。
+#[cfg(feature = "nlu")]
+#[allow(unused_imports)]
+pub use bert::TinyBertNlu;
+
 use matcher::match_template;
 pub use template::{parse_template, Template};
 
@@ -93,6 +104,32 @@ pub struct NluConfig {
     /// 轻量模型阶段的领先幅度：最高分与**其他技能**最高分的差值下限（防相近指令歧义）。
     #[serde(default = "default_model_margin")]
     pub model_margin: f32,
+    /// TinyBERT 语义分类器总开关（第二级识别的模型实现，需 feature `nlu` 编译）。
+    /// 关闭（默认）时第二级只用内置启发式打分（[`crate::plugins::skill::LightModel`]），零行为变化。
+    #[serde(default)]
+    pub bert_enabled: bool,
+    /// TinyBERT ONNX 模型路径（int8 量化的 TinyBERT4，HF `transformers` 导出）。
+    #[serde(default)]
+    pub bert_model: String,
+    /// 分词器词表路径（BERT `vocab.txt`，与导出模型配套）。
+    #[serde(default)]
+    pub bert_vocab: String,
+    /// 标签表路径：一行一个标签，行号 = 分类输出下标；标签经 [`Self::bert_label_map`]
+    /// 映射到技能名（未映射且同名的技能不存在时，该标签不会被提名执行）。
+    #[serde(default)]
+    pub bert_labels: String,
+    /// TinyBERT 接受阈值：最高标签置信度 ≥ 此值才提名技能（[0,1]，默认 0.75）。
+    #[serde(default = "default_bert_threshold")]
+    pub bert_threshold: f32,
+    /// ONNX Runtime 线程数（默认 1：单句毫秒级推理，避免与音频线程抢核）。
+    #[serde(default = "default_bert_num_threads")]
+    pub bert_num_threads: usize,
+    /// 分词截断长度（含 [CLS]/[SEP]，默认 64；指令句远短于此）。
+    #[serde(default = "default_bert_max_len")]
+    pub bert_max_len: usize,
+    /// ONNX 标签 → 技能名映射（缺省同名直配）。嵌套 map，管理台走 TOML 高级配置。
+    #[serde(default)]
+    pub bert_label_map: HashMap<String, String>,
 }
 
 impl Default for NluConfig {
@@ -105,6 +142,14 @@ impl Default for NluConfig {
             slots: Vec::new(),
             model_threshold: default_model_threshold(),
             model_margin: default_model_margin(),
+            bert_enabled: false,
+            bert_model: String::new(),
+            bert_vocab: String::new(),
+            bert_labels: String::new(),
+            bert_threshold: default_bert_threshold(),
+            bert_num_threads: default_bert_num_threads(),
+            bert_max_len: default_bert_max_len(),
+            bert_label_map: HashMap::new(),
         }
     }
 }
@@ -114,6 +159,34 @@ fn default_model_threshold() -> f32 {
 }
 fn default_model_margin() -> f32 {
     0.1
+}
+fn default_bert_threshold() -> f32 {
+    0.75
+}
+fn default_bert_num_threads() -> usize {
+    1
+}
+fn default_bert_max_len() -> usize {
+    64
+}
+
+impl NluConfig {
+    /// TinyBERT 层是否声明可用（开关 + 三个文件路径齐备）。**不含** feature/文件存在性
+    /// 检查——那两步在 [`bert::build_bert`] / 注册表 `validate_nlu`，错误文案要带"怎么修"。
+    pub fn bert_configured(&self) -> bool {
+        self.bert_enabled
+            && !self.bert_model.trim().is_empty()
+            && !self.bert_vocab.trim().is_empty()
+            && !self.bert_labels.trim().is_empty()
+    }
+
+    /// ONNX 标签 → 技能名（缺省同名直配；映射后查不到的技能由 `resolve` 拒绝）。
+    pub fn bert_map_label<'a>(&'a self, label: &'a str) -> &'a str {
+        self.bert_label_map
+            .get(label)
+            .map(|s| s.as_str())
+            .unwrap_or(label)
+    }
 }
 
 /// 配置层意图定义（模板为字符串形式）。

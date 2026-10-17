@@ -1,6 +1,6 @@
 // 根构建脚本：声明各子模块共享的插件版本（apply false），并引入 Kuikly 官方 Gradle 插件。
 // Kuikly 插件通过 buildscript classpath 引入（与官方独立业务工程一致），避免依赖 plugin marker。
-// 构建环境对齐 xiaoya-player：同版本 Kuikly 2.28.0-2.1.21 + Kotlin 2.1.21 + Gradle 8.14.5。
+// 构建环境对齐 xiaoya-player：同版本 Kuikly 2.29.1-2.1.21 + Kotlin 2.1.21 + Gradle 8.14.5。
 buildscript {
     // Kuikly 插件版本：与 gradle.properties 的 `kuiklyVersion` 保持同值
     // （buildscript 块在 project 属性求值之前执行，无法读该 property，只能同字面量双写）。
@@ -12,7 +12,7 @@ buildscript {
         maven { setUrl("https://mirrors.tencent.com/repository/maven-tencent/") }
     }
     dependencies {
-        classpath("com.tencent.kuikly-open:core-gradle-plugin:2.28.0-2.1.21")
+        classpath("com.tencent.kuikly-open:core-gradle-plugin:2.29.1-2.1.21")
     }
 }
 

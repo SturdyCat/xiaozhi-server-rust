@@ -15,7 +15,7 @@
 - 上行采样率跟随设备（默认 16k），下行采样率由服务器决定（默认 24k），二者独立协商。
 - **下行缓冲三段式**（提前量 + 服务器水库 + 起跑闸）：缓冲吸收上游间歇停顿；若平均生产速率持续慢于实时，仍会断音，必须提高上游吞吐。
 - **Feature 门控**：`default`（无真实引擎，仅供 `cargo check/test` 编译；运行必须 `--features sherpa`）；`sherpa`（引入 `sherpa-onnx` / `audiopus` / `rubato`，真实引擎）。
-- **无 mock**：ASR 恒为 SenseVoice、TTS 可选 Kokoro / 讯飞在线、LLM 恒为 OpenAI 兼容 HTTP、VAD 恒为 Silero——ESP 接入走完整正式流水线；macApp 测试台连接带 `hello.test=true`，走 `asr_test`/`tts_test`/`llm_test` 三个独立服务请求-响应端点。
+- **无 mock**：ASR 恒为 SenseVoice、TTS 可选 Kokoro / 讯飞在线、LLM 恒为 OpenAI 兼容 HTTP、VAD 恒为 Silero——ESP 接入走完整正式流水线；macApp 测试台连接带 `hello.test=true`，走 `asr_test`/`tts_test`/`llm_test`/`nlu_test` 四个独立服务请求-响应端点（`nlu_test` 按磁盘最新 `[nlu]` 配置构建 TinyBERT 直推，需 `--features nlu` 且已配置 bert 模型，未配置回错误原因帧）。
 - 可选 Bearer Token 鉴权（配置 `server.expected_token`）。
 
 ### 协议要点

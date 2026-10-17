@@ -200,6 +200,19 @@ reply = "好的，我先退下了。"          # 命中后先说这句，再用 
 #     其余 kind 为本地应答（只说 reply、不送 LLM）。
 #   - `slots` 每项含 `name` / `values`（封闭值表，用于校验与抽取）/ `optional`（空槽位是否允许）。
 #   改完保存后**新会话**生效（与 [command]/[wakeup] 一致）。
+#
+# TinyBERT 语义分类（可选，把上面的第 2 级升级为本地 BERT 推理）：
+#   需服务端以 `--features nlu` 构建（默认构建不含 ONNX 依赖）；打开后规则未命中的文本
+#   先过 TinyBERT 推理，置信度 ≥ bert_threshold 即按标签映射执行技能（空槽位交 LLM 补齐），
+#   否则照常放行。模型/词表/标签路径与标签映射是嵌套高级配置，直接书写：
+# bert_enabled = false
+# bert_model = "models/tinybert-intent.onnx"   # ONNX 模型（建议 max_len=64、含 token_type_ids）
+# bert_vocab = "models/vocab.txt"              # 配套 tokenizer 词表
+# bert_labels = "models/labels.txt"            # 每行一个标签，顺序 = 模型输出 logits 顺序
+# bert_threshold = 0.75                        # 0~1，越高越保守
+# bert_num_threads = 1                         # ONNX Runtime 会话线程数
+# bert_max_len = 64                            # 分词截断长度，须与模型导出一致
+# bert_label_map = { light_on = "control_light" }  # 模型标签 → 技能名映射（缺省同名）
 [nlu]
 enabled = false                     # true = 启用技能级联（自定义技能）；end_session 仍由 [command] 决定。
 model_threshold = 0.9               # 轻量模型接受阈值（0~1；1.0 = 关闭该级）。越高越保守。

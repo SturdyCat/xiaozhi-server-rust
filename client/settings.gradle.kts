@@ -12,7 +12,7 @@ pluginManagement {
     // 统一插件版本：各子模块使用简写 id（如 kotlin("multiplatform")）时必须在此声明版本才能解析。
     // 注意：插件版本声明必须放在 pluginManagement { plugins { } } 内（不能放在 dependencyResolutionManagement 里）。
     // 加 apply false：仅集中锁定版本，由各子模块自行 apply，避免 Kotlin 插件在多个子项目被重复加载报错。
-    // Kotlin 2.1.21 与 gradle.properties 中的 kuiklyVersion=2.28.0-2.1.21 绑定版本一致。
+    // Kotlin 2.1.21 与 gradle.properties 中的 kuiklyVersion=2.29.1-2.1.21 绑定版本一致。
     plugins {
         kotlin("multiplatform") version "2.1.21" apply false
         kotlin("android") version "2.1.21" apply false

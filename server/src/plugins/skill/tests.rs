@@ -58,7 +58,7 @@ fn fixture() -> (CommandConfig, NluConfig) {
 
 fn registry() -> SkillRegistry {
     let (command, nlu) = fixture();
-    SkillRegistry::new(&command, &nlu)
+    SkillRegistry::new(&command, &nlu, None)
 }
 
 fn slots(pairs: &[(&str, &str)]) -> HashMap<String, String> {
@@ -125,7 +125,7 @@ fn model_abstains_on_negation_ambiguity_and_missing_anchor() {
 fn threshold_one_disables_model_stage() {
     let (command, mut nlu) = fixture();
     nlu.model_threshold = 1.0;
-    let r = SkillRegistry::new(&command, &nlu);
+    let r = SkillRegistry::new(&command, &nlu, None);
     assert!(r.parse_staged("帮我把大客厅的灯打开").is_none());
 }
 
@@ -187,7 +187,7 @@ fn tools_expose_single_execute_skill_spec() {
         "目录须包含全部技能名"
     );
     // 全关目录：无工具（会话层不传 tools，LLM 纯聊天）。
-    let empty = SkillRegistry::new(&CommandConfig::default(), &NluConfig::default());
+    let empty = SkillRegistry::new(&CommandConfig::default(), &NluConfig::default(), None);
     assert!(empty.tools().is_empty());
 }
 

@@ -11,8 +11,8 @@ import com.tencent.kuikly.core.views.Text
 import com.tencent.kuikly.core.views.View
 
 /**
- * 渲染测试台标签页（tabbedPanel：官方 Tabs + PageList）：连接 / ASR 识别 / TTS 合成 / LLM 对话 四个 tab。
- * 每个 tab 宽屏左侧功能卡、右侧对应配置卡（连接→Server+Audio、ASR→ASR+VAD、TTS→TTS、LLM→LLM），
+ * 渲染测试台标签页（tabbedPanel：官方 Tabs + PageList）：连接 / ASR 识别 / TTS 合成 / LLM 对话 / NLU 意图 五个 tab。
+ * 每个 tab 宽屏左侧功能卡、右侧对应配置卡（连接→Server+Audio、ASR→ASR+VAD、TTS→TTS、LLM→LLM、NLU→NLU），
  * 改配置不必切走，配合顶栏「保存配置」一键写回；窄屏纵向堆叠（twoPane）。
  *
  * ⚠️ 响应式铁律（本项目反复踩坑）：凡依赖 observable 的文案/启用态/分支，必须写在
@@ -41,6 +41,7 @@ fun ViewContainer<*, *>.renderBench(
             TabPage("ASR 识别") { benchAsrPage(bench, form, ctx, wide) },
             TabPage("TTS 合成") { benchTtsPage(bench, form, ctx, wide) },
             TabPage("LLM 对话") { benchLlmPage(bench, form, ctx, wide) },
+            TabPage("NLU 意图") { benchNluPage(bench, form, ctx, wide) },
         ),
     )
 }

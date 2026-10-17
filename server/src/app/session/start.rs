@@ -76,9 +76,11 @@ pub async fn run_session<T: Transport>(
         None
     };
     // 技能目录快照：会话开始时取一次（= 注册表声明的 next_session 语义）。
-    // `[command]` + `[nlu]` 统一编译（规则 + 轻量模型两级）；全关时空目录，零开销。
+    // `[command]` + `[nlu]` 统一编译（规则 + 轻量模型两级，配置了 `[nlu].bert_*` 时
+    // 第二级为 TinyBERT 语义分类、跨会话共享引擎）；全关时空目录，零开销。
     // 数据源用每设备生效配置。
-    let skills = SkillRegistry::new(&eff_config.command, &eff_config.nlu);
+    let bert = engines.bert_engine(&eff_config.nlu);
+    let skills = SkillRegistry::new(&eff_config.command, &eff_config.nlu, bert);
     if skills.active() {
         tracing::info!(
             "session {session_id} 技能级联已启用：规则 + 轻量模型两级本地识别先于 LLM（设备 {device_id}）"

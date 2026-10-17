@@ -102,8 +102,8 @@ static XZFilePickerDelegate *gFilePickerDelegate = nil;
     [self receiveLoop];
 
     // hello：version=1 → 上行裸 Opus（v1）；audio_params 声明本端 16k/opus。
-    // test=YES：标记本连接为管理端测试台（服务端据此受理 asr_test/tts_test/llm_test
-    // 三种独立服务请求；ESP 设备不带此参数，走正式流水线，测试端点被忽略）。
+    // test=YES：标记本连接为管理端测试台（服务端据此受理 asr_test/tts_test/llm_test/nlu_test
+    // 四种独立服务请求；ESP 设备不带此参数，走正式流水线，测试端点被忽略）。
     [self sendJSON:@{
         @"type": @"hello",
         @"version": @(1),
@@ -224,6 +224,17 @@ static XZFilePickerDelegate *gFilePickerDelegate = nil;
     self.llmCallback = args[KR_CALLBACK_KEY];
     [self sendJSON:@{
         @"type": @"llm_test",
+        @"text": params[@"text"] ?: @""
+    }];
+}
+
+// nluTest(text) → 发送 nlu_test；服务端按磁盘上最新 [nlu] 配置构建 TinyBERT 直推一句，
+// 结果经 nlu_test 回调返回：{state, intent, confidence, tokenizeMs, inferMs, text}。
+- (void)nluTest:(NSDictionary *)args {
+    NSDictionary *params = [self parseParams:args[KR_PARAM_KEY]];
+    self.nluCallback = args[KR_CALLBACK_KEY];
+    [self sendJSON:@{
+        @"type": @"nlu_test",
         @"text": params[@"text"] ?: @""
     }];
 }
@@ -430,6 +441,20 @@ static XZFilePickerDelegate *gFilePickerDelegate = nil;
                 @"elapsedMs": dict[@"elapsed_ms"] ?: @(0)
             } success:YES error:nil];
             self.llmCallback = nil; // one-shot
+        }
+        return;
+    }
+    if ([type isEqualToString:@"nlu_test"]) {
+        if (self.nluCallback) {
+            [self invoke:self.nluCallback result:@{
+                @"state": dict[@"state"] ?: @"error",
+                @"intent": dict[@"intent"] ?: [NSNull null],
+                @"confidence": dict[@"confidence"] ?: [NSNull null],
+                @"tokenizeMs": dict[@"tokenize_ms"] ?: @(0),
+                @"inferMs": dict[@"infer_ms"] ?: @(0),
+                @"text": dict[@"text"] ?: @""
+            } success:YES error:nil];
+            self.nluCallback = nil; // one-shot
         }
         return;
     }

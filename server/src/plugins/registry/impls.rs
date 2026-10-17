@@ -152,6 +152,8 @@ fn sig_nlu(cfg: &Config) -> String {
         cfg.nlu.intents.len(),
         cfg.nlu.slots.len()
     );
+    // bert_* 一并入签：模型/词表/标签路径或阈值改动必须触发 TinyBERT 引擎重建。
+    s.push_str(&crate::plugins::nlu::bert_signature(&cfg.nlu));
     for it in &cfg.nlu.intents {
         s.push('|');
         s.push_str(&it.name);
