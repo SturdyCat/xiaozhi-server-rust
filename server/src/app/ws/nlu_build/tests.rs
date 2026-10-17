@@ -47,3 +47,18 @@ async fn push_log_keeps_tail_only_and_utf8_safe() {
     assert!(job.log.is_char_boundary(0));
     assert!(job.log.ends_with('\n'));
 }
+
+#[test]
+fn deps_marker_matches_when_requirements_identical() {
+    // 依赖卷标记与清单一致 → 跳过引导安装；空白差异视为一致（编辑器尾随换行）。
+    let req = "torch\ntransformers>=4.44\n";
+    assert!(deps_up_to_date(Some(req), req));
+    assert!(deps_up_to_date(Some("torch\ntransformers>=4.44\n\n"), req.trim_end()));
+}
+
+#[test]
+fn deps_stale_when_marker_missing_or_drifted() {
+    // 无标记（首次训练）或清单变化 → 触发重装。
+    assert!(!deps_up_to_date(None, "torch\n"));
+    assert!(!deps_up_to_date(Some("torch\nonnxruntime\n"), "torch\naccelerate\n"));
+}

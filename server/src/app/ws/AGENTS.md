@@ -9,6 +9,7 @@
 - Kuikly NetworkModule 只用 GET/POST；保留配置 POST=PUT、overlay/preset 删除 POST 别名，不能只测 curl 的 PUT/DELETE。
 - 人格 preview 接受未保存草稿，返回完整 effective；记忆 recall 是当场验证入口，clear 必须显式 scope 或 all。
 - 固件使用[固件子路由](<../firmware/http.rs>)，按功能/型号匹配；不要把统一插件 action/job 设计当成已存在路由。
+- 服务器全局实时日志流（[log_stream.rs](<log_stream.rs>)）：tracing INFO+ 事件经采集层进环形缓冲（500 行）+ 广播，`GET /api/logs` WS 客户端先收 backlog 帧再逐行收实时帧，供管理台与 AI 边调 API 边看日志；单次训练另有聚焦流 `GET /api/nlu/model/build/log`（终态帧后服务端关闭）。
 
 当前接口以路由与测试为准；管理操作见[管理台用法（从上级入口导航）](<../AGENTS.md>)。
 

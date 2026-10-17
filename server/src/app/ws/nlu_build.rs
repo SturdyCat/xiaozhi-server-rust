@@ -1,16 +1,18 @@
-//! NLU 模型训练端点：`POST /api/nlu/model/build`（异步启动）+ `GET /api/nlu/model/build`（状态）。
+//! NLU 模型训练端点：`POST /api/nlu/model/build`（异步启动）+ `GET /api/nlu/model/build`（状态）
+//! + `GET /api/nlu/model/build/log`（**WebSocket 实时日志流**，无需轮询）。
 //!
 //! ## 流程（跑通「技能定义 → 训练 → 部署」闭环）
 //!
 //! 1. 读当前生效配置的 `[nlu]` 段，与内置提醒技能合并（[`NluConfig::with_builtins`]，
 //!    与运行时技能目录同一份合并结果——训练标签与技能名必然一致）；
 //! 2. 把 intents/slots 写成 `input.json` 落到数据目录 `<data>/nlu-train/`；
-//! 3. 专属训练镜像：服务端**只 pull + run**，绝不在宿主 docker 里现场 build——
-//!    build 是 CPU 重活且污染宿主镜像层。镜像由维护方预构建（仓库
-//!    `tools/nlu-trainer` 的 Dockerfile，`docker build -t xiaozhi-nlu-trainer tools/nlu-trainer`
-//!    或推到私有 registry），本机缺失时服务端自动 `docker pull`（`NLU_TRAINER_IMAGE`
-//!    可指向任意 registry tag）。训练容器带 `--cpus/--memory` 上限，与实时推理隔离；
-//!    产物三件套直接落 `<data>/models/nlu/`（挂载进容器的 `/work/output`）；
+//! 3. **固定官方镜像 + 共享卷依赖**（不构建、不拉取任何专属镜像）：训练脚本与
+//!    `requirements.txt` 随服务端镜像内置（`/opt/nlu-trainer`，见根 Dockerfile），
+//!    每次训练复制进 `<data>/nlu-train/`；Python 依赖（torch 等）首次训练时由官方
+//!    `python:3.11-slim` 容器装进 `<data>/nlu-train-env/`（共享卷，跨任务复用，
+//!    清单变化自动重装）。训练就是一条 `docker run --rm`：挂工作目录 + 依赖卷 +
+//!    产物目录，`--cpus/--memory` 上限与实时推理隔离；跑完容器自动删除，
+//!    产物三件套留在 `<data>/models/nlu/`；
 //! 4. 训练完成后把 `[nlu].bert_*` 指到该目录（`bert_vocab` 用 `tokenizer.json`）、
 //!    `bert_enabled=true`，新会话生效。
 //!
@@ -21,15 +23,20 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
 use axum::response::{IntoResponse, Response};
 use serde_json::json;
-use tokio::sync::Mutex;
+use tokio::sync::{broadcast, Mutex};
 
 use crate::config::Config;
 use crate::engine::Engines;
 
-const TRAINER_IMAGE: &str = "xiaozhi-nlu-trainer";
+/// 运行训练的**官方**基础镜像（Docker Hub 公共 tag，任何环境都能 pull 到；
+/// 可用 `NLU_TRAINER_IMAGE` 指向内网镜像仓库的同版本 tag）。
+const TRAINER_IMAGE: &str = "python:3.11-slim";
+/// 服务端镜像内置的训练资产目录（train.py + requirements.txt，见根 Dockerfile COPY）。
+const TRAINER_ASSETS: &str = "/opt/nlu-trainer";
 
 /// 一次训练任务的状态（进程内单例；重启清零，与 devices/sessions 同口径）。
 #[derive(Default)]
@@ -56,6 +63,22 @@ fn job() -> &'static Mutex<BuildJob> {
     JOB.get_or_init(|| Mutex::new(BuildJob::new()))
 }
 
+/// WS 日志订阅者事件：一行日志，或任务结束（收到后服务端推终态帧并关闭）。
+#[derive(Clone)]
+enum BuildEvent {
+    Log(String),
+    /// 收尾信号（载荷仅为区分变体，值不读取）。
+    Done(()),
+}
+
+/// 日志广播通道（进程内单例）：`push_log` 发布，WS 客户端订阅实时接收。
+/// 容量 256 行——慢客户端丢行时由 [`build_log_ws`] 补一条 lag 提示，不阻塞训练。
+static LOG_TX: std::sync::OnceLock<broadcast::Sender<BuildEvent>> = std::sync::OnceLock::new();
+
+fn log_tx() -> &'static broadcast::Sender<BuildEvent> {
+    LOG_TX.get_or_init(|| broadcast::channel(256).0)
+}
+
 /// 数据目录：`[memory].db_path` 的父目录（与配置库同卷，默认 /data）。
 fn data_dir(cfg: &Config) -> PathBuf {
     std::path::Path::new(&cfg.memory.db_path)
@@ -66,21 +89,27 @@ fn data_dir(cfg: &Config) -> PathBuf {
 }
 
 async fn push_log(line: &str) {
-    // 只在写日志瞬间持锁：训练长达数十分钟，绝不能跨子进程持锁，
+    // 只在写日志瞬间持锁（显式块尾即释放）：训练长达数十分钟，绝不能跨子进程持锁，
     // 否则 GET 状态端点（build_status 抢同一把锁）会被整个卡死。
-    let mut job = job().lock().await;
-    let job = &mut *job;
-    job.log.push_str(&format!("{line}\n"));
-    // 只留尾部 8KB：训练日志可能很长，状态接口只关心"最近发生了什么"。
-    // 手动找 UTF-8 边界（floor_char_boundary 尚未稳定）。
-    let limit = job.log.len().saturating_sub(8 * 1024);
-    if limit > 0 {
-        let mut cut = limit;
-        while cut > 0 && !job.log.is_char_boundary(cut) {
-            cut -= 1;
+    {
+        let mut job = job().lock().await;
+        let job = &mut *job;
+        job.log.push_str(&format!("{line}\n"));
+        // 只留尾部 8KB：训练日志可能很长，状态接口只关心"最近发生了什么"。
+        // 手动找 UTF-8 边界（floor_char_boundary 尚未稳定）。
+        let limit = job.log.len().saturating_sub(8 * 1024);
+        if limit > 0 {
+            let mut cut = limit;
+            while cut > 0 && !job.log.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            job.log.drain(..cut);
         }
-        job.log.drain(..cut);
     }
+    // 镜像进全局日志流（`GET /api/logs`）：管理台/AI 在服务器日志里也能看到训练进度。
+    tracing::info!(target: "nlu_build", "{line}");
+    // 广播给训练 WS 订阅者（无订阅者时 Err 被忽略）。锁已在块尾释放，不会互锁。
+    let _ = log_tx().send(BuildEvent::Log(line.to_string()));
 }
 
 /// 训练前置校验（纯函数，供端点与单测共用）：`[nlu]` 未启用 / 无技能时拒绝训练。
@@ -117,8 +146,10 @@ pub(super) async fn start_build(State(engines): State<Arc<Engines>>) -> Response
     }
 
     // 训练在独立 tokio 任务里跑（docker 命令是长阻塞子进程）。
-    let work_dir = data_dir(&cfg).join("nlu-train");
-    let out_dir = data_dir(&cfg).join("models").join("nlu");
+    let data = data_dir(&cfg);
+    let work_dir = data.join("nlu-train");
+    let env_dir = data.join("nlu-train-env");
+    let out_dir = data.join("models").join("nlu");
     let intents = nlu
         .intents
         .iter()
@@ -130,7 +161,7 @@ pub(super) async fn start_build(State(engines): State<Arc<Engines>>) -> Response
         .map(|s| json!({ "name": s.name, "values": s.values, "optional": s.optional }))
         .collect::<Vec<_>>();
     tokio::spawn(async move {
-        run_training(work_dir, out_dir, json!({ "intents": intents, "slots": slots })).await;
+        run_training(work_dir, env_dir, out_dir, json!({ "intents": intents, "slots": slots })).await;
     });
     axum::Json(json!({ "started": true, "state": "running" })).into_response()
 }
@@ -166,18 +197,49 @@ async fn run_cmd(mut cmd: tokio::process::Command) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn run_training(work_dir: PathBuf, out_dir: PathBuf, input: serde_json::Value) {
+/// 依赖是否需要（重）装：依赖卷里的清单标记与当前 requirements 不一致时重装。
+/// 纯函数供单测；标记文件内容就是完整 requirements 文本（原样比对，不做哈希）。
+fn deps_up_to_date(marker: Option<&str>, requirements: &str) -> bool {
+    marker.map(str::trim) == Some(requirements.trim())
+}
+
+/// 从服务端内置资产目录把训练脚本与依赖清单复制进工作目录（每次训练都刷新，
+/// 保证脚本版本与部署的服务端一致）；返回 requirements 文本。
+async fn stage_assets(assets: &str, work_dir: &std::path::Path) -> anyhow::Result<String> {
+    let req_bytes = tokio::fs::read(format!("{assets}/requirements.txt"))
+        .await
+        .map_err(|e| anyhow::anyhow!("读取内置训练资产失败（{assets}/requirements.txt）: {e}"))?;
+    let requirements = String::from_utf8(req_bytes)?;
+    tokio::fs::copy(format!("{assets}/train.py"), work_dir.join("train.py"))
+        .await
+        .map_err(|e| anyhow::anyhow!("复制训练脚本失败（{assets}/train.py）: {e}"))?;
+    tokio::fs::write(work_dir.join("requirements.txt"), &requirements).await?;
+    Ok(requirements)
+}
+
+async fn run_training(
+    work_dir: PathBuf,
+    env_dir: PathBuf,
+    out_dir: PathBuf,
+    input: serde_json::Value,
+) {
     let image = std::env::var("NLU_TRAINER_IMAGE").unwrap_or_else(|_| TRAINER_IMAGE.to_string());
+    let assets = std::env::var("NLU_TRAINER_ASSETS").unwrap_or_else(|_| TRAINER_ASSETS.to_string());
     // 训练容器资源上限：训练是 CPU 重活，必须与实时推理隔离（可用 env 放宽）。
     let cpus = std::env::var("NLU_TRAINER_CPUS").unwrap_or_else(|_| "2".to_string());
     let memory = std::env::var("NLU_TRAINER_MEMORY").unwrap_or_else(|_| "4g".to_string());
+    // 容器内挂载点：/work=工作目录（脚本+input） /opt/env=共享依赖卷 /work/output=产物。
+    let marker_path = env_dir.join(".requirements");
     let result: anyhow::Result<()> = (|| async {
         tokio::fs::create_dir_all(&work_dir).await?;
+        tokio::fs::create_dir_all(&env_dir).await?;
         tokio::fs::create_dir_all(&out_dir).await?;
         tokio::fs::write(work_dir.join("input.json"), input.to_string()).await?;
+        let requirements = stage_assets(&assets, &work_dir).await?;
         job().lock().await.output_dir = Some(out_dir.display().to_string());
 
-        // 镜像由维护方预构建（tools/nlu-trainer 的 Dockerfile），这里只 pull，不 build。
+        // 基础镜像缺失时 pull 一次（官方公共 tag；内网环境可把 NLU_TRAINER_IMAGE
+        // 指到镜像仓库同版本 tag，同样只 pull 不 build）。
         let inspect = tokio::process::Command::new("docker")
             .args(["image", "inspect", &image])
             .stdout(std::process::Stdio::null())
@@ -187,7 +249,7 @@ async fn run_training(work_dir: PathBuf, out_dir: PathBuf, input: serde_json::Va
         match inspect {
             Ok(s) if s.success() => {}
             Ok(_) => {
-                push_log(&format!("镜像 {image} 不存在，docker pull（首次较慢）…")).await;
+                push_log(&format!("基础镜像 {image} 不存在，docker pull（首次较慢）…")).await;
                 let mut pull = tokio::process::Command::new("docker");
                 pull.args(["pull", &image]);
                 run_cmd(pull).await?;
@@ -195,13 +257,44 @@ async fn run_training(work_dir: PathBuf, out_dir: PathBuf, input: serde_json::Va
             Err(e) => anyhow::bail!("无法调用 docker: {e}（需要 docker CLI 与 docker.sock 挂载）"),
         }
 
+        // 依赖引导：首次训练（或 requirements 变化）时把依赖装进共享卷，之后离线复用。
+        // torch 主源走官方 CPU 轮子仓库，失败回退清华 PyPI 镜像。
+        let marker = tokio::fs::read_to_string(&marker_path).await.ok();
+        if !deps_up_to_date(marker.as_deref(), &requirements) {
+            push_log("安装训练依赖到共享卷（仅首次或清单变化时，torch 较大请耐心）…").await;
+            let mut pip = tokio::process::Command::new("docker");
+            pip.args(["run", "--rm", "--cpus", &cpus, "--memory", &memory])
+                .arg("-v")
+                .arg(format!("{}:/work", work_dir.display()))
+                .arg("-v")
+                .arg(format!("{}:/opt/env", env_dir.display()))
+                .env("PIP_NO_CACHE_DIR", "1")
+                .env("PIP_RETRIES", "5")
+                .env("PIP_TIMEOUT", "60")
+                .args([&image, "sh", "-lc", &format!(
+                    "(pip install --index-url https://download.pytorch.org/whl/cpu \
+                     -r /work/requirements.txt --target /opt/env \
+                     || pip install -i https://pypi.tuna.tsinghua.edu.cn/simple \
+                     -r /work/requirements.txt --target /opt/env)"
+                )]);
+            run_cmd(pip).await?;
+            tokio::fs::write(&marker_path, &requirements).await?;
+        }
+
+        // 训练：PYTHONPATH 指向共享依赖卷；产物直接写进挂载的正式产物目录。
         push_log("开始训练（HF 拉权重 + 微调 + ONNX int8 导出）…").await;
         let mut run = tokio::process::Command::new("docker");
         run.args(["run", "--rm", "--cpus", &cpus, "--memory", &memory])
             .arg("-v")
             .arg(format!("{}:/work", work_dir.display()))
+            .arg("-v")
+            .arg(format!("{}:/work/output", out_dir.display()))
+            .arg("-v")
+            .arg(format!("{}:/opt/env", env_dir.display()))
+            .env("PYTHONPATH", "/opt/env")
             .env("HF_ENDPOINT", "https://hf-mirror.com")
-            .args([&image]);
+            .env("MODEL_NAME", "hfl/rbt3")
+            .args([&image, "python", "/work/train.py"]);
         run_cmd(run).await?;
 
         // 产物三件套齐全才算成功。
@@ -220,15 +313,19 @@ async fn run_training(work_dir: PathBuf, out_dir: PathBuf, input: serde_json::Va
     })()
     .await;
 
-    {
-        let mut job = job().lock().await;
-        job.running = false;
-        if let Err(e) = &result {
-            push_log(&format!("[失败] {e:#}")).await;
-            job.error = format!("{e:#}");
-            job.state = "failed";
-        }
+    // 先写日志（push_log 内部要抢同一把锁），再拿锁收尾——tokio Mutex 不可重入，
+    // 持锁调 push_log 会自死锁，GET 状态端点会被永久卡住。
+    if let Err(e) = &result {
+        push_log(&format!("[失败] {e:#}")).await;
     }
+    let mut job = job().lock().await;
+    job.running = false;
+    if let Err(e) = &result {
+        job.error = format!("{e:#}");
+        job.state = "failed";
+    }
+    // 通知 WS 订阅者任务已结束（客户端收到后拿终态并断开）。
+    let _ = log_tx().send(BuildEvent::Done(()));
 }
 
 /// `GET /api/nlu/model/build`：当前训练任务状态 + 尾部日志 + 产物目录。
@@ -248,6 +345,76 @@ pub(super) async fn build_status() -> Response {
         },
     }))
     .into_response()
+}
+
+/// 状态快照（GET 端点与 WS 终态帧共用同一份 JSON 形状）。
+fn status_json(job: &BuildJob) -> serde_json::Value {
+    json!({
+        "state": job.state,
+        "running": job.running,
+        "error": job.error,
+        "log_tail": job.log,
+        "output_dir": job.output_dir,
+        "expected_config": {
+            "bert_enabled": true,
+            "bert_model": "<output_dir>/model.onnx",
+            "bert_vocab": "<output_dir>/tokenizer.json",
+            "bert_labels": "<output_dir>/labels.txt",
+        },
+    })
+}
+
+/// `GET /api/nlu/model/build/log`：WebSocket 实时训练日志。
+///
+/// 帧协议（全部为 JSON 文本帧）：`{"type":"log","line":…}` 逐行推送；
+/// `{"type":"state",…}` 为快照/终态（字段与 `GET /api/nlu/model/build` 一致），
+/// 终态帧之后服务端主动关闭连接。
+pub(super) async fn build_log_ws(ws: WebSocketUpgrade) -> Response {
+    ws.on_upgrade(stream_build_log)
+}
+
+/// 推送一帧当前状态快照（与 GET 端点同形状）。
+async fn send_status(socket: &mut WebSocket) {
+    let payload = {
+        let job = job().lock().await;
+        status_json(&job)
+    };
+    let _ = socket.send(Message::Text(payload.to_string().into())).await;
+}
+
+async fn stream_build_log(mut socket: WebSocket) {
+    // 先订阅广播再快照，避免"快照后、订阅前"的日志窗口丢失（重叠行由快照去重）。
+    let mut rx = log_tx().subscribe();
+    // 快照：任务已结束则推终态后立即关闭；运行中则继续推实时日志。
+    if !job().lock().await.running {
+        send_status(&mut socket).await;
+        let _ = socket.send(Message::Close(None)).await;
+        return;
+    }
+    loop {
+        match rx.recv().await {
+            Ok(BuildEvent::Log(line)) => {
+                let frame = json!({ "type": "log", "line": line }).to_string();
+                if socket.send(Message::Text(frame.into())).await.is_err() {
+                    return; // 客户端断开：训练不受影响，广播通道自动回收。
+                }
+            }
+            Ok(BuildEvent::Done(())) => {
+                send_status(&mut socket).await;
+                let _ = socket.send(Message::Close(None)).await;
+                return;
+            }
+            Err(broadcast::error::RecvError::Lagged(n)) => {
+                // 慢客户端丢行：提示缺口，不中断流。
+                let frame = json!({ "type": "log", "line": format!("…（日志过快，丢失 {n} 行）") })
+                    .to_string();
+                if socket.send(Message::Text(frame.into())).await.is_err() {
+                    return;
+                }
+            }
+            Err(broadcast::error::RecvError::Closed) => return,
+        }
+    }
 }
 
 #[cfg(test)]

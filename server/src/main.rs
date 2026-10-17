@@ -24,6 +24,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use axum::serve;
 use tokio::net::TcpListener;
+use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::EnvFilter;
 
 use crate::config::store::sqlite::SqliteConfigStore;
@@ -47,11 +48,15 @@ fn main() -> Result<()> {
 }
 
 async fn run(config: Config, config_store: Arc<dyn ConfigStore>) -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .init();
+    // registry + 各层手工组装：日志采集层（/api/logs WS）需要插在 fmt 之前，
+    // SubscriberBuilder 的 `.with` 只接受格式层，无法直接挂自定义 Layer。
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let subscriber = tracing_subscriber::registry()
+        .with(filter)        // 全局日志采集层：每条 INFO+ 事件进入环形缓冲 + 广播，
+        // 供 `GET /api/logs` WS 客户端（macApp / AI 调试）实时读取。
+        .with(crate::app::ws::log_stream::layer())
+        .with(tracing_subscriber::fmt::layer());
+    tracing::subscriber::set_global_default(subscriber)?;
 
     tracing::info!(
         "配置加载完成：ASR=SenseVoice, TTS=Kokoro, LLM=http, 监听=0.0.0.0:{}, tokio worker={} 线程",

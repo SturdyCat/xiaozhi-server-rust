@@ -65,6 +65,9 @@ use crate::app::transport::{IncomingFrame, Transport, WsTransport};
 mod bench_api;
 mod config;
 mod health;
+// 服务器全局实时日志流（`GET /api/logs` WS）：tracing 事件 → 环形缓冲 + 广播。
+// pub(crate)：main.rs 在初始化 tracing 时挂载采集层 layer()。
+pub(crate) mod log_stream;
 mod mcp;
 mod memory;
 mod nlu_build;
@@ -82,7 +85,7 @@ use health::engines_health;
 use mcp::mcp_tools;
 use memory::{memory_clear, memory_maintain, memory_rag_reindex, memory_recall, memory_status};
 use metrics::metrics_snapshot;
-use nlu_build::{build_status, start_build};
+use nlu_build::{build_log_ws, build_status, start_build};
 // 插件维护
 pub(crate) use config::config_is_persistent;
 use ota::ota;
@@ -198,6 +201,11 @@ pub fn router(engines: Arc<Engines>) -> Router {
             "/api/nlu/model/build",
             get(build_status).post(start_build),
         )
+        // 单次训练的聚焦日志流（全局日志流见 /api/logs）：终态帧后服务端主动关闭。
+        .route("/api/nlu/model/build/log", get(build_log_ws))
+        // 服务器全局实时日志流：macApp 连上即可实时看到全部运行日志；
+        // AI/脚本客户端也可连它，一边调 /api 测试端点一边读日志观察效果。
+        .route("/api/logs", get(log_stream::logs_ws))
         // 小智固件的 OTA 引导端点（带/不带尾斜杠都注册：固件配置的 URL 以 / 结尾）。
         // ⚠️ 所有接口必须在 /api 之下（接口规范），固件 OTA_URL 指到 /api/ota/ 即可——
         // 该地址完全可配置，无需对齐官方服务器的 /xiaozhi/ota/ 路径。

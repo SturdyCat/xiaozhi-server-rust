@@ -126,8 +126,8 @@ FROM debian:bookworm-slim AS runtime
 
 # libopus0：运行期动态链接（audiopus）；curl/bzip2：entrypoint 缺模型时按需下载解包。
 # docker CLI：NLU 模型训练走宿主 docker（/var/run/docker.sock 由 compose 挂入），
-#   只 pull + run 专属训练镜像（不在宿主现场 build）；只装 CLI 不装 daemon
-#   （静态二进制，避免 docker.io 全家桶拖大 slim 镜像）。
+#   只 run 官方 python:3.11-slim（依赖装共享卷，脚本由下方 /opt/nlu-trainer 提供）；
+#   不 build 任何专属镜像；只装 CLI 不装 daemon（静态二进制，避免 docker.io 全家桶拖大 slim 镜像）。
 RUN apt-get update \
  && apt-get install -y --no-install-recommends libopus0 ca-certificates curl bzip2 \
  && rm -rf /var/lib/apt/lists/* \
@@ -142,6 +142,9 @@ COPY --from=web /src/client/apps/h5App/web /app/web
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
 # 内置配置示例：首启 /data/config.toml 缺失时由入口脚本生成为默认配置
 COPY server/config.example.toml /app/config.example.toml
+# NLU 训练资产（脚本 + 依赖清单，合计 <100KB）：训练时由服务端复制进数据目录，
+# 官方 python 容器挂卷执行——依赖变化只改 requirements.txt，无需重建任何镜像。
+COPY tools/nlu-trainer/train.py tools/nlu-trainer/requirements.txt /opt/nlu-trainer/
 RUN chmod +x /app/docker-entrypoint.sh
 
 # 数据卷：模型持久化挂载点（entrypoint 缺失时自动下载到此；必须可写，勿 :ro 挂载）

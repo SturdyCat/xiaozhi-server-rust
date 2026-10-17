@@ -1,0 +1,12 @@
+# NLU 训练依赖清单（官方 python:3.11-slim 容器内 pip 安装，装进共享卷复用）。
+# 不再构建专属训练镜像：服务端首次训练时执行一次引导安装（nlu_build.rs bootstrap），
+# 之后依赖缓存在数据目录 nlu-train-env/，跨任务复用、离线可跑。
+# torch 走 CPU 轮子：引导命令主源是 download.pytorch.org/whl/cpu（体积远小于 CUDA 版），
+# 失败回退清华 PyPI 镜像（轮子偏大但可用）。
+torch
+transformers>=4.44
+datasets
+accelerate
+optimum[onnxruntime]>=1.19
+onnxruntime
+sentencepiece
