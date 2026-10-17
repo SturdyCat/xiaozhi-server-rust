@@ -37,11 +37,12 @@ async fn status_body_shape() {
     assert!(body["expected_config"]["bert_enabled"].as_bool().unwrap());
 }
 
-#[test]
-fn push_log_keeps_tail_only_and_utf8_safe() {
-    let mut job = BuildJob::default();
-    push_log(&mut job, &"训".repeat(6 * 1024)); // 多字节字符，验证边界回退
-    push_log(&mut job, &"x".repeat(20 * 1024));
+#[tokio::test]
+async fn push_log_keeps_tail_only_and_utf8_safe() {
+    // push_log 现自带锁（训练期间不得跨子进程持锁），测试也走异步入口。
+    push_log(&"训".repeat(6 * 1024)).await; // 多字节字符，验证边界回退
+    push_log(&"x".repeat(20 * 1024)).await;
+    let job = job().lock().await;
     assert!(job.log.len() <= 8 * 1024 + 32);
     assert!(job.log.is_char_boundary(0));
     assert!(job.log.ends_with('\n'));

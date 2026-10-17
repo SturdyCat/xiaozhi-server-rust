@@ -126,7 +126,8 @@ FROM debian:bookworm-slim AS runtime
 
 # libopus0：运行期动态链接（audiopus）；curl/bzip2：entrypoint 缺模型时按需下载解包。
 # docker CLI：NLU 模型训练走宿主 docker（/var/run/docker.sock 由 compose 挂入），
-#   只装 CLI 不装 daemon（静态二进制，避免 docker.io 全家桶拖大 slim 镜像）。
+#   只 pull + run 专属训练镜像（不在宿主现场 build）；只装 CLI 不装 daemon
+#   （静态二进制，避免 docker.io 全家桶拖大 slim 镜像）。
 RUN apt-get update \
  && apt-get install -y --no-install-recommends libopus0 ca-certificates curl bzip2 \
  && rm -rf /var/lib/apt/lists/* \
@@ -139,8 +140,6 @@ COPY --from=build /app/target/release/xiaozhi-server-rust /app/server
 # 同源托管的管理页静态产物（server [server].admin_dir 由下方 ENV 指到 /app/web）
 COPY --from=web /src/client/apps/h5App/web /app/web
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
-# NLU 训练器（Dockerfile + train.py）：POST /api/nlu/model/build 时 docker build 的上下文
-COPY tools/nlu-trainer /opt/nlu-trainer
 # 内置配置示例：首启 /data/config.toml 缺失时由入口脚本生成为默认配置
 COPY server/config.example.toml /app/config.example.toml
 RUN chmod +x /app/docker-entrypoint.sh

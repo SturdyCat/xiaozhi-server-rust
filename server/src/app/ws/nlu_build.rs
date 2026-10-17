@@ -5,10 +5,12 @@
 //! 1. 读当前生效配置的 `[nlu]` 段，与内置提醒技能合并（[`NluConfig::with_builtins`]，
 //!    与运行时技能目录同一份合并结果——训练标签与技能名必然一致）；
 //! 2. 把 intents/slots 写成 `input.json` 落到数据目录 `<data>/nlu-train/`；
-//! 3. 宿主 docker：镜像缺失时先 `docker build`（训练器源码目录见
-//!    `NLU_TRAINER_DIR`，默认 `/opt/nlu-trainer`，compose 已把仓库 `tools/nlu-trainer` 挂到这），
-//!    再 `docker run` 真训练（HF 拉权重微调 + ONNX int8 导出），产物三件套直接落
-//!    `<data>/models/nlu/`（挂载进容器的 `/work/output`）；
+//! 3. 专属训练镜像：服务端**只 pull + run**，绝不在宿主 docker 里现场 build——
+//!    build 是 CPU 重活且污染宿主镜像层。镜像由维护方预构建（仓库
+//!    `tools/nlu-trainer` 的 Dockerfile，`docker build -t xiaozhi-nlu-trainer tools/nlu-trainer`
+//!    或推到私有 registry），本机缺失时服务端自动 `docker pull`（`NLU_TRAINER_IMAGE`
+//!    可指向任意 registry tag）。训练容器带 `--cpus/--memory` 上限，与实时推理隔离；
+//!    产物三件套直接落 `<data>/models/nlu/`（挂载进容器的 `/work/output`）；
 //! 4. 训练完成后把 `[nlu].bert_*` 指到该目录（`bert_vocab` 用 `tokenizer.json`）、
 //!    `bert_enabled=true`，新会话生效。
 //!
@@ -63,7 +65,11 @@ fn data_dir(cfg: &Config) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/data"))
 }
 
-fn push_log(job: &mut BuildJob, line: &str) {
+async fn push_log(line: &str) {
+    // 只在写日志瞬间持锁：训练长达数十分钟，绝不能跨子进程持锁，
+    // 否则 GET 状态端点（build_status 抢同一把锁）会被整个卡死。
+    let mut job = job().lock().await;
+    let job = &mut *job;
     job.log.push_str(&format!("{line}\n"));
     // 只留尾部 8KB：训练日志可能很长，状态接口只关心"最近发生了什么"。
     // 手动找 UTF-8 边界（floor_char_boundary 尚未稳定）。
@@ -130,7 +136,7 @@ pub(super) async fn start_build(State(engines): State<Arc<Engines>>) -> Response
 }
 
 /// 子进程辅助：跑一条命令，把 stdout/stderr 追加进任务日志；返回是否成功。
-async fn run_cmd(job: &mut BuildJob, mut cmd: tokio::process::Command) -> anyhow::Result<()> {
+async fn run_cmd(mut cmd: tokio::process::Command) -> anyhow::Result<()> {
     let prog = format!(
         "{} {}",
         cmd.as_std().get_program().to_string_lossy(),
@@ -140,7 +146,7 @@ async fn run_cmd(job: &mut BuildJob, mut cmd: tokio::process::Command) -> anyhow
             .collect::<Vec<_>>()
             .join(" ")
     );
-    push_log(job, &format!("$ {prog}"));
+    push_log(&format!("$ {prog}")).await;
     let out = cmd
         .output()
         .await
@@ -148,9 +154,11 @@ async fn run_cmd(job: &mut BuildJob, mut cmd: tokio::process::Command) -> anyhow
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
     let mut lines: Vec<&str> = stdout.lines().chain(stderr.lines()).collect();
-    let start = lines.len().saturating_sub(40);
+    // 留尾部 120 行：docker build 里 pip 失败的真实报错往往在更早的行，
+    // 40 行会把 "ERROR: ..." 截掉，只剩退出码没法定位。
+    let start = lines.len().saturating_sub(120);
     for line in lines.drain(start..) {
-        push_log(job, line);
+        push_log(line).await;
     }
     if !out.status.success() {
         anyhow::bail!("命令退出码 {:?}：{}", out.status.code(), stderr.trim());
@@ -160,16 +168,16 @@ async fn run_cmd(job: &mut BuildJob, mut cmd: tokio::process::Command) -> anyhow
 
 async fn run_training(work_dir: PathBuf, out_dir: PathBuf, input: serde_json::Value) {
     let image = std::env::var("NLU_TRAINER_IMAGE").unwrap_or_else(|_| TRAINER_IMAGE.to_string());
-    let trainer_dir =
-        std::env::var("NLU_TRAINER_DIR").unwrap_or_else(|_| "/opt/nlu-trainer".to_string());
+    // 训练容器资源上限：训练是 CPU 重活，必须与实时推理隔离（可用 env 放宽）。
+    let cpus = std::env::var("NLU_TRAINER_CPUS").unwrap_or_else(|_| "2".to_string());
+    let memory = std::env::var("NLU_TRAINER_MEMORY").unwrap_or_else(|_| "4g".to_string());
     let result: anyhow::Result<()> = (|| async {
         tokio::fs::create_dir_all(&work_dir).await?;
         tokio::fs::create_dir_all(&out_dir).await?;
         tokio::fs::write(work_dir.join("input.json"), input.to_string()).await?;
-        let mut job = job().lock().await;
-        job.output_dir = Some(out_dir.display().to_string());
+        job().lock().await.output_dir = Some(out_dir.display().to_string());
 
-        // 镜像缺失时自动构建（训练器 Dockerfile + train.py 来自挂载的源码目录）。
+        // 镜像由维护方预构建（tools/nlu-trainer 的 Dockerfile），这里只 pull，不 build。
         let inspect = tokio::process::Command::new("docker")
             .args(["image", "inspect", &image])
             .stdout(std::process::Stdio::null())
@@ -179,22 +187,22 @@ async fn run_training(work_dir: PathBuf, out_dir: PathBuf, input: serde_json::Va
         match inspect {
             Ok(s) if s.success() => {}
             Ok(_) => {
-                push_log(&mut job, &format!("镜像 {image} 不存在，自动构建（首次较慢）…"));
-                let mut build = tokio::process::Command::new("docker");
-                build.args(["build", "-t", &image, &trainer_dir]);
-                run_cmd(&mut job, build).await?;
+                push_log(&format!("镜像 {image} 不存在，docker pull（首次较慢）…")).await;
+                let mut pull = tokio::process::Command::new("docker");
+                pull.args(["pull", &image]);
+                run_cmd(pull).await?;
             }
             Err(e) => anyhow::bail!("无法调用 docker: {e}（需要 docker CLI 与 docker.sock 挂载）"),
         }
 
-        push_log(&mut job, "开始训练（HF 拉权重 + 微调 + ONNX int8 导出）…");
+        push_log("开始训练（HF 拉权重 + 微调 + ONNX int8 导出）…").await;
         let mut run = tokio::process::Command::new("docker");
-        run.args(["run", "--rm"])
+        run.args(["run", "--rm", "--cpus", &cpus, "--memory", &memory])
             .arg("-v")
             .arg(format!("{}:/work", work_dir.display()))
             .env("HF_ENDPOINT", "https://hf-mirror.com")
             .args([&image]);
-        run_cmd(&mut job, run).await?;
+        run_cmd(run).await?;
 
         // 产物三件套齐全才算成功。
         for f in ["model.onnx", "tokenizer.json", "labels.txt"] {
@@ -202,24 +210,24 @@ async fn run_training(work_dir: PathBuf, out_dir: PathBuf, input: serde_json::Va
                 anyhow::bail!("训练完成但缺少产物 {f}（目录 {}）", out_dir.display());
             }
         }
-        push_log(
-            &mut job,
-            &format!(
-                "训练完成：{}（model.onnx / tokenizer.json / labels.txt）",
-                out_dir.display()
-            ),
-        );
-        job.state = "success";
+        push_log(&format!(
+            "训练完成：{}（model.onnx / tokenizer.json / labels.txt）",
+            out_dir.display()
+        ))
+        .await;
+        job().lock().await.state = "success";
         Ok(())
     })()
     .await;
 
-    let mut job = job().lock().await;
-    job.running = false;
-    if let Err(e) = result {
-        push_log(&mut job, &format!("[失败] {e:#}"));
-        job.error = format!("{e:#}");
-        job.state = "failed";
+    {
+        let mut job = job().lock().await;
+        job.running = false;
+        if let Err(e) = &result {
+            push_log(&format!("[失败] {e:#}")).await;
+            job.error = format!("{e:#}");
+            job.state = "failed";
+        }
     }
 }
 

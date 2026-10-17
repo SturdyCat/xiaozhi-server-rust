@@ -62,6 +62,8 @@ services:
       # ⚠️ 必须是**可写**挂载（勿加 :ro）。目录挂载支持原子 rename——
       #   旧版「单文件 bind mount → rename EBUSY → 回退原地写」的问题自此布局起不存在。
       - ./server-data:/data
-      # NLU 模型训练（POST /api/nlu/model/build）在**宿主** docker 里跑训练容器：
-      #   挂入宿主 docker.sock；镜像内已带 docker CLI 与训练器源码（/opt/nlu-trainer）。
+      # NLU 模型训练（POST /api/nlu/model/build）在**宿主** docker 里跑一个专属训练容器：
+      #   挂入宿主 docker.sock，服务端只 docker pull + run（--cpus/--memory 限核限内存，
+      #   不在宿主现场 build）。镜像由维护方预构建：docker build -t xiaozhi-nlu-trainer tools/nlu-trainer
+      #   （或推私有 registry 后用 NLU_TRAINER_IMAGE 指过去）。
       - /var/run/docker.sock:/var/run/docker.sock

@@ -6,13 +6,20 @@
 FROM python:3.11-slim
 
 ENV PIP_NO_CACHE_DIR=1 \
+    PIP_RETRIES=5 \
+    PIP_TIMEOUT=60 \
     HF_ENDPOINT=https://hf-mirror.com \
     MODEL_NAME=hfl/rbt3
 
 # CPU 版 torch（官方 cpu 轮子源，体积远小于默认 CUDA 版）+ 训练/导出栈。
-RUN pip install --index-url https://download.pytorch.org/whl/cpu torch \
-    && pip install "transformers>=4.44" datasets accelerate \
-       "optimum[onnxruntime]>=1.19" onnxruntime sentencepiece
+# 国内网络不稳：主源失败时回退清华 PyPI 镜像（轮子偏大但可用）。
+RUN (pip install --index-url https://download.pytorch.org/whl/cpu torch \
+     || pip install -i https://pypi.tuna.tsinghua.edu.cn/simple torch) \
+    && (pip install "transformers>=4.44" datasets accelerate \
+       "optimum[onnxruntime]>=1.19" onnxruntime sentencepiece \
+     || pip install -i https://pypi.tuna.tsinghua.edu.cn/simple \
+       "transformers>=4.44" datasets accelerate \
+       "optimum[onnxruntime]>=1.19" onnxruntime sentencepiece)
 
 COPY train.py /app/train.py
 WORKDIR /work
