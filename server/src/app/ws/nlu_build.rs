@@ -217,6 +217,52 @@ async fn stage_assets(assets: &str, work_dir: &std::path::Path) -> anyhow::Resul
     Ok(requirements)
 }
 
+/// 把传给宿主 docker 的挂载路径从容器内路径换算成宿主真实路径。
+///
+/// 服务端自身跑在容器里时（compose 把宿主 `./server-data` 挂为 `/data`），
+/// `docker.sock` 是**宿主** docker：`-v /data/nlu-train:/work` 会在宿主上解析，
+/// 得到一个自动新建的空目录，容器内写好的脚本/清单根本不在里面。自省
+/// `/proc/self/mountinfo` 找到覆盖该路径的最长 bind mount，把前缀替换为宿主源路径；
+/// 不在容器里（读不到 mountinfo 或无匹配）时原样返回。纯文本解析供单测。
+fn mount_host_path(path: &str, mountinfo: &str) -> String {
+    let mut best: Option<(usize, String)> = None;
+    for line in mountinfo.lines() {
+        // 格式：… root mountpoint opts … - fstype source superopts
+        let Some((left, right)) = line.split_once(" - ") else { continue };
+        let lf: Vec<&str> = left.split_whitespace().collect();
+        let rf: Vec<&str> = right.split_whitespace().collect();
+        if lf.len() < 5 || rf.len() < 2 {
+            continue;
+        }
+        let (root, mnt, source) = (lf[3], lf[4], rf[1]);
+        let suffix = &path[mnt.len()..];
+        if !path.starts_with(mnt) || !(suffix.is_empty() || suffix.starts_with('/')) {
+            continue;
+        }
+        let rel = suffix.strip_prefix('/').unwrap_or("");
+        // root 是该挂载在源文件系统里的子树位置（bind 目录挂载时为 /）；
+        // 宿主真实路径 = 源 + 子树 + 容器内相对路径。
+        let base = if root == "/" {
+            source.to_string()
+        } else {
+            format!("{source}{}", root.trim_end_matches('/'))
+        };
+        let mapped = if rel.is_empty() { base } else { format!("{base}/{rel}") };
+        if best.as_ref().map_or(true, |(len, _)| mnt.len() > *len) {
+            best = Some((mnt.len(), mapped));
+        }
+    }
+    best.map(|(_, p)| p).unwrap_or_else(|| path.to_string())
+}
+
+async fn docker_host_path(path: &std::path::Path) -> String {
+    let s = path.display().to_string();
+    match tokio::fs::read_to_string("/proc/self/mountinfo").await {
+        Ok(info) => mount_host_path(&s, &info),
+        Err(_) => s, // 裸机部署（不在容器里）：路径本来就是宿主路径。
+    }
+}
+
 async fn run_training(
     work_dir: PathBuf,
     env_dir: PathBuf,
@@ -260,14 +306,18 @@ async fn run_training(
         // 依赖引导：首次训练（或 requirements 变化）时把依赖装进共享卷，之后离线复用。
         // torch 主源走官方 CPU 轮子仓库，失败回退清华 PyPI 镜像。
         let marker = tokio::fs::read_to_string(&marker_path).await.ok();
+        // 宿主 docker 按宿主路径解析挂载：容器内路径必须先换算（见 mount_host_path）。
+        let host_work = docker_host_path(&work_dir).await;
+        let host_env = docker_host_path(&env_dir).await;
+        let host_out = docker_host_path(&out_dir).await;
         if !deps_up_to_date(marker.as_deref(), &requirements) {
             push_log("安装训练依赖到共享卷（仅首次或清单变化时，torch 较大请耐心）…").await;
             let mut pip = tokio::process::Command::new("docker");
             pip.args(["run", "--rm", "--cpus", &cpus, "--memory", &memory])
                 .arg("-v")
-                .arg(format!("{}:/work", work_dir.display()))
+                .arg(format!("{}:/work", host_work))
                 .arg("-v")
-                .arg(format!("{}:/opt/env", env_dir.display()))
+                .arg(format!("{}:/opt/env", host_env))
                 .env("PIP_NO_CACHE_DIR", "1")
                 .env("PIP_RETRIES", "5")
                 .env("PIP_TIMEOUT", "60")
@@ -286,11 +336,11 @@ async fn run_training(
         let mut run = tokio::process::Command::new("docker");
         run.args(["run", "--rm", "--cpus", &cpus, "--memory", &memory])
             .arg("-v")
-            .arg(format!("{}:/work", work_dir.display()))
+            .arg(format!("{}:/work", host_work))
             .arg("-v")
-            .arg(format!("{}:/work/output", out_dir.display()))
+            .arg(format!("{}:/work/output", host_out))
             .arg("-v")
-            .arg(format!("{}:/opt/env", env_dir.display()))
+            .arg(format!("{}:/opt/env", host_env))
             .env("PYTHONPATH", "/opt/env")
             .env("HF_ENDPOINT", "https://hf-mirror.com")
             .env("MODEL_NAME", "hfl/rbt3")

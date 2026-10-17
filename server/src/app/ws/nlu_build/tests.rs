@@ -62,3 +62,57 @@ fn deps_stale_when_marker_missing_or_drifted() {
     assert!(!deps_up_to_date(None, "torch\n"));
     assert!(!deps_up_to_date(Some("torch\nonnxruntime\n"), "torch\naccelerate\n"));
 }
+
+#[test]
+fn mount_host_path_bare_metal_unchanged() {
+    // 无 mountinfo 匹配（裸机或非容器路径）：原样返回。
+    assert_eq!(mount_host_path("/data/nlu-train", ""), "/data/nlu-train");
+}
+
+#[test]
+fn mount_host_path_maps_container_data_bind() {
+    // compose：宿主 ./server-data → 容器 /data（bind 挂载源为绝对路径）。
+    let info = "721 719 0:99 / /data rw,relatime - ext4 /srv/xiaozhi/server-data rw\n";
+    assert_eq!(
+        mount_host_path("/data/nlu-train", info),
+        "/srv/xiaozhi/server-data/nlu-train"
+    );
+    assert_eq!(
+        mount_host_path("/data", info),
+        "/srv/xiaozhi/server-data"
+    );
+}
+
+#[test]
+fn mount_host_path_prefers_longest_match() {
+    // 嵌套挂载取最长 mountpoint 前缀。
+    let info = concat!(
+        "10 1 0:5 / /data rw - ext4 /mnt/host-data rw\n",
+        "11 10 0:6 / /data/models rw - nfs 10.0.0.9:/exports/models rw\n",
+    );
+    assert_eq!(
+        mount_host_path("/data/models/nlu", info),
+        "10.0.0.9:/exports/models/nlu"
+    );
+    assert_eq!(
+        mount_host_path("/data/nlu-train", info),
+        "/mnt/host-data/nlu-train"
+    );
+}
+
+#[test]
+fn mount_host_path_ignores_prefix_collision() {
+    // /data 不应匹配 /database。
+    let info = "10 1 0:5 / /database rw - ext4 /mnt/other rw\n";
+    assert_eq!(mount_host_path("/data/nlu-train", info), "/data/nlu-train");
+}
+
+#[test]
+fn mount_host_path_subtree_root() {
+    // 挂载源端是子树（root 非 /，如镜像分层 bind）：定位到子树内同相对位置。
+    let info = "10 1 0:5 /server-data /data rw - ext4 /mnt/host rw\n";
+    assert_eq!(
+        mount_host_path("/data/nlu-train", info),
+        "/mnt/host/server-data/nlu-train"
+    );
+}
