@@ -99,6 +99,18 @@ async fn run(config: Config, config_store: Arc<dyn ConfigStore>) -> Result<()> {
             "未加载配置文件：唤醒问候语（[wakeup]）只能在进程内复用音频，重启后需重新合成"
         ),
     }
+    // 运行端口落盘（HEALTHCHECK 消费）：镜像 HEALTHCHECK 无法读 SQLite 配置库，
+    // 启动时把实际监听端口写到配置库同目录的 `.runtime_port`，健康检查读它——
+    // 改 [server].port 后无需再同步改 Dockerfile（读不到文件时健康检查兜底 8000）。
+    if let Some(p) = engines.config_store.location() {
+        if let Some(dir) = std::path::Path::new(&p).parent() {
+            if let Err(e) =
+                std::fs::write(dir.join(".runtime_port"), config.server.port.to_string())
+            {
+                tracing::warn!("运行端口写入 .runtime_port 失败（健康检查将退回 8000）：{e}");
+            }
+        }
+    }
     let app = router(engines);
 
     // 监听：永远 0.0.0.0，唯一可配的是端口（[server].port，默认 8000）——

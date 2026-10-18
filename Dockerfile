@@ -173,8 +173,9 @@ ENV XIAOZHI_CONFIG_DB=/data/data.db \
 EXPOSE 8000
 
 # 健康检查：curl 已随运行层安装；/api/health 不依赖模型就绪，start-period 20s 足够。
-# 端口 8000 与 config.example.toml 的 port 默认值一致——若自定义 [server].port 需同步改这里。
+# 端口读服务启动时落盘的 /data/.runtime_port（见 main.rs），改 [server].port 无需同步这里；
+# 文件缺失（如旧版镜像的挂载卷）时兜底默认 8000。
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD curl -f http://127.0.0.1:8000/api/health || exit 1
+    CMD curl -f http://127.0.0.1:$(cat /data/.runtime_port 2>/dev/null || echo 8000)/api/health || exit 1
 
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
