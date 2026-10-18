@@ -57,7 +57,15 @@ private fun ViewContainer<*, *>.benchConnectPage(
         wide = wide,
         left = {
             groupedCard("连接") {
-                labeledField("server url", { bench.serverUrl }, { bench.serverUrl = it }, "ws://127.0.0.1:8000/api/ws")
+                // server 地址只读展示：与 API 同一来源（侧边栏「切换服务器」），改一处 WS/API 一起变。
+                Text {
+                    attr {
+                        fontSize(AdminType.caption)
+                        color(AdminColors.textSecondary)
+                        text("服务器：${bench.serverUrl}（与 API 同一地址，经侧边栏「切换服务器」修改）")
+                    }
+                }
+                View { attr { height(AdminSpace.xs) } }
                 labeledField("token（可选）", { bench.token }, { bench.token = it })
                 actionRow {
                     // 连接/断开合为一个三态按钮：未连=绿「连接」、已连=红「断开」、连接中=灰底「连接中…」+拦截点击。

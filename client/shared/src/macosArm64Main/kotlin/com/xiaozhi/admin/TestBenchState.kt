@@ -28,6 +28,7 @@ import com.tencent.kuikly.core.views.View
  */
 class TestBenchState(private val scope: PagerScope) {
 
+    /** 由统一服务器基址推导的 WS 端点；「切换服务器」时随 API 基址一起更新（见 renderTestbenchSection）。 */
     var serverUrl by scope.observable("ws://127.0.0.1:8000/api/ws")
     var token by scope.observable("")
     var connected by scope.observable(false)

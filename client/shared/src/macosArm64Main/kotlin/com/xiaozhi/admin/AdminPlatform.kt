@@ -35,6 +35,8 @@ actual fun ViewContainer<*, *>.renderTestbenchSection(
     pageHeight: () -> Float,
 ) {
     val bench = benchStates.getOrPut(pager) { TestBenchState(pager) }
+    // WS 端点始终跟随统一服务器基址（与 API 同源，切换服务器后一起生效）。
+    bench.serverUrl = unifiedWsEndpoint(pager)
     renderBench(
         bench, form, pager, twoColumn,
         pageWidth = pageWidth,
@@ -52,6 +54,16 @@ private const val DEFAULT_SERVER = "http://127.0.0.1:8000"
 /** 服务端 API 基址：读记忆地址（ConnectState 时代同一 SP key），没存过回退本地默认。 */
 actual fun pagerBaseUrl(pager: Pager): String =
     prefs(pager).getItem(KEY_SERVER_URL).ifEmpty { DEFAULT_SERVER }
+
+/**
+ * 测试台 WS 端点：由**同一**服务器基址推导（http→ws、https→wss + /api/ws）。
+ * WS 与 API 只有一个地址源，切换服务器时两者一起变。
+ */
+fun unifiedWsEndpoint(pager: Pager): String {
+    val base = pagerBaseUrl(pager)
+    val scheme = if (base.startsWith("https://", true)) "wss" else "ws"
+    return "$scheme://${base.substringAfter("://")}/api/ws"
+}
 
 /** 表单态（输入框内容 / 保存中），按 Pager 缓存，重开表单保留上次输入。 */
 private class ServerSwitchState(scope: PagerScope) {
