@@ -38,6 +38,10 @@ const SCENE_TTS: &str = "IFLYTEK.tts";
 const TOTAL_TIMEOUT: Duration = Duration::from_secs(30);
 /// 分帧间隔读取超时。
 const READ_TIMEOUT: Duration = Duration::from_secs(15);
+/// 连接/握手超时（TCP + TLS + WS 握手）：`tungstenite::connect` 是同步阻塞且
+/// **不暴露 connect 超时**，云网络黑洞时整条合成链会挂死在握手前——这是"测试台
+/// 无限卡住"的根因之一，故用独立线程 + `recv_timeout` 兜底（10s 量级）。
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// "活跃耗时"预算：`tick` 把**非等待**时间从预算里扣掉，`after_wait` 把"刚发生的
 /// 故意等待"排除在外（调用方在回调返回后立刻调它）。
@@ -178,8 +182,7 @@ fn synthesize_frames(
     on_pcm: &mut dyn FnMut(&[f32]) -> bool,
 ) -> Result<()> {
     let url = signed_ws_url(HOST, PATH, &cfg.api_key, &cfg.api_secret);
-    let (mut ws, _resp) = tungstenite::connect(&url)
-        .context("连接 AIUI 合成服务失败（检查网络/时钟/密钥）")?;
+    let mut ws = connect_with_timeout(&url)?;
     apply_timeouts(&ws);
 
     // 请求：文本一帧发完（header.status = payload.text.status = 3）
@@ -277,6 +280,24 @@ pub(crate) fn pcm_i16le_to_f32(bytes: &[u8]) -> Vec<f32> {
         .chunks_exact(2)
         .map(|c| i16::from_le_bytes([c[0], c[1]]) as f32 / 32768.0)
         .collect()
+}
+
+/// 带超时的连接/握手（见 [`CONNECT_TIMEOUT`] 文档）：连接在独立线程完成，
+/// 超时后本调用立即报错返回；未完成的线程随后随 TCP 自身超时自然消亡（有界），
+/// 不阻塞调用方。成功路径与 `tungstenite::connect` 完全一致（握手响应不外传）。
+fn connect_with_timeout(url: &str) -> Result<WebSocket<MaybeTlsStream<TcpStream>>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let url = url.to_string();
+    std::thread::spawn(move || {
+        let r = tungstenite::connect(&url)
+            .map(|(ws, _resp)| ws)
+            .context("连接 AIUI 合成服务失败（检查网络/时钟/密钥）");
+        let _ = tx.send(r);
+    });
+    match rx.recv_timeout(CONNECT_TIMEOUT) {
+        Ok(r) => r,
+        Err(_) => bail!("连接 AIUI 合成服务超时（{CONNECT_TIMEOUT:?} 内未完成握手；检查网络/防火墙）"),
+    }
 }
 
 /// 握手后对底层 TCP 设置读写超时（tungstenite connect 不暴露超时参数）。

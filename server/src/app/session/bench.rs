@@ -6,6 +6,9 @@
 //! 本文件作为 [`super::Session`] 的子模块 impl 扩展拆分自 `session.rs`（可访问会话私有字段）。
 //! 服务端每次都按**磁盘最新配置**工作（读盘热切换），因此测试台改配置保存后无需重启。
 
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
+
 use crate::app::downlink::{
     drain_reservoir, new_reservoir, send_tts_state, spawn_single_sentence_filler,
 };
@@ -16,6 +19,10 @@ use crate::app::transport::Transport;
 use crate::plugins::llm::build_llm;
 use crate::plugins::nlu::build_bert_checked;
 use crate::plugins::tts::build_xfyun;
+
+mod synth;
+
+use synth::{race_synth, timeout_error_text, SynthRace, TTS_TEST_TIMEOUT};
 
 impl<'a, T: Transport> Session<'a, T> {
     /// `asr_test`：start 开始录音缓冲 / stop 对整段缓冲一次性识别（跳过 VAD），结果回 `stt`。
@@ -108,10 +115,27 @@ impl<'a, T: Transport> Session<'a, T> {
         );
         // 热切换：先按磁盘最新配置刷新 TTS 引擎（管理页保存后无需重启即可测新配置）。
         // 刷新失败（读盘/构建失败）以 tts_test 结果回报，测试台对话框直接可见。
+        // 整链超时预算从这里起算（含热切换、闸门排队与合成，见 TTS_TEST_TIMEOUT）。
+        let deadline = tokio::time::Instant::now() + TTS_TEST_TIMEOUT;
         let engines = self.engines.clone();
-        let refresh = tokio::task::spawn_blocking(move || engines.refresh_tts_from_disk())
-            .await
-            .map_err(|e| anyhow::anyhow!("TTS 热切换任务异常: {e}"))?;
+        let refresh_fut = tokio::task::spawn_blocking(move || engines.refresh_tts_from_disk());
+        let refresh = match tokio::time::timeout_at(deadline, refresh_fut).await {
+            Ok(joined) => joined.map_err(|e| anyhow::anyhow!("TTS 热切换任务异常: {e}"))?,
+            Err(_) => {
+                tracing::warn!("session {session_id} {}", timeout_error_text());
+                send_text(
+                    self.transport,
+                    &ServerMessage::TtsTestResult {
+                        session_id,
+                        state: "error".to_string(),
+                        engine: Some(self.engines.tts_name().to_string()),
+                        text: Some(timeout_error_text()),
+                    },
+                )
+                .await?;
+                return Ok(());
+            }
+        };
         if let Err(msg) = refresh {
             tracing::warn!("session {session_id} {msg}");
             send_text(
@@ -197,27 +221,44 @@ impl<'a, T: Transport> Session<'a, T> {
         let engine_name = tts.name().to_string();
         let t0 = std::time::Instant::now();
         // 推理闸门（缺口①）：测试台合成与生产会话共用同一把 TTS 闸门——
-        // 排队期响应打断（abort 感知），permit move 进闭包随合成结束 RAII 归还。
-        let Some(tts_permit) = self
-            .engines
-            .inference
-            .tts()
-            .acquire_with_abort(&self.abort)
-            .await
-        else {
+        // 排队期响应打断（abort 感知）+ 同一超时预算；超时分支在拿到 permit 前
+        // 直接放弃排队，不占许可。
+        let gate = self.engines.inference.tts();
+        let acquired = tokio::select! {
+            p = gate.acquire_with_abort(&self.abort) => p,
+            _ = tokio::time::sleep_until(deadline) => {
+                tracing::warn!("session {session_id} 闸门排队超时：{}", timeout_error_text());
+                send_text(
+                    self.transport,
+                    &ServerMessage::TtsTestResult {
+                        session_id,
+                        state: "error".to_string(),
+                        engine: Some(self.engines.tts_name().to_string()),
+                        text: Some(timeout_error_text()),
+                    },
+                )
+                .await?;
+                return Ok(());
+            }
+        };
+        let Some(tts_permit) = acquired else {
             tracing::info!("session {session_id} 测试合成在闸门排队期被打断");
             return Ok(());
         };
         // 流式合成：spawn_blocking 跑引擎，分片经 channel 边收边下发（首片即出声）。
         // 失败经 tts_test 结果回报测试台（不再静默）。
         // 与正常会话走**同一个下载缓冲**（按预算控制下载流速，见 `app::prefetch`）。
+        // `cancelled` 是本条 tts_test 独立的取消标志（不复用会话级 abort——超时只应
+        // 取消本次合成，不波及会话其他状态）：race_synth 超时即置位，producer 的
+        // 下一个分片回调拿到 false 提前终止、permit 随闭包退出归还。
         let download = crate::app::prefetch::DownloadBudget::new(self.params.download_buffer_ms);
         let (tx, chunk_rx) = tokio::sync::mpsc::channel::<crate::app::prefetch::PcmChunk>(
             crate::app::prefetch::PREFETCH_PCM_SLOTS,
         );
         let (done_tx, done_rx) = tokio::sync::oneshot::channel::<bool>();
         let text_c = text.clone();
-        let abort_c = self.abort.clone();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let cancelled_c = cancelled.clone();
         let budget_c = download.clone();
         let producer = tokio::task::spawn_blocking(move || {
             let _gate_permit = tts_permit; // RAII：闭包退出即归还推理闸门
@@ -226,8 +267,8 @@ impl<'a, T: Transport> Session<'a, T> {
                 speed,
                 speaker,
                 Box::new(move |sr, chunk| {
-                    // 下载缓冲按预算限速 + 打断感知（见 `prefetch::push_pcm` 文档）
-                    crate::app::prefetch::push_pcm(&budget_c, &tx, chunk.to_vec(), sr, &abort_c)
+                    // 下载缓冲按预算限速 + 本条合成取消感知（见 `prefetch::push_pcm` 文档）
+                    crate::app::prefetch::push_pcm(&budget_c, &tx, chunk.to_vec(), sr, &cancelled_c)
                 }),
             );
             // 合成是否正常结束：水库填充任务据此决定该句能否写结果缓存
@@ -254,22 +295,76 @@ impl<'a, T: Transport> Session<'a, T> {
             0, // 测试台测的是真实合成，不走缓存
         );
         let mut first_frame_at = None;
-        let drain = drain_reservoir(
-            self.transport,
-            &self.params,
-            &self.session_id,
-            &self.abort,
-            &mut self.downlink_ts,
-            &mut self.pacer,
-            source,
-            t0,
-            &mut first_frame_at,
-        )
-        .await?;
-        filler.abort();
-        let frames = drain.frames;
-        match producer.await {
-            Ok(Ok(())) => {
+        // 下发 future 需与 producer 竞速：三者（合成/下发/超时）都要被持续 poll——
+        // 停 poll 下发会让下载缓冲顶死、合成假死（见 `race_synth` 文档）。
+        // 整个竞速块结束时 drain_fut（借 self.transport）即释放，超时分支的
+        // 错误帧在块外发送。
+        enum BenchFlow {
+            TimedOut,
+            Done(anyhow::Result<()>, usize),
+        }
+        let mut producer = producer;
+        let flow = {
+            let mut drain_fut = Box::pin(drain_reservoir(
+                self.transport,
+                &self.params,
+                &self.session_id,
+                &self.abort,
+                &mut self.downlink_ts,
+                &mut self.pacer,
+                source,
+                t0,
+                &mut first_frame_at,
+            ));
+            let (race, drained) =
+                race_synth(&mut producer, &mut drain_fut, &cancelled, deadline).await;
+            match (race, drained) {
+                (SynthRace::TimedOut, _) => {
+                    filler.abort();
+                    BenchFlow::TimedOut
+                }
+                (SynthRace::Producer(r), d) => {
+                    // 合成已结束，剩余音频按节拍排空（不受超时预算约束）
+                    let drain = match d {
+                        Some(d) => d?,
+                        None => drain_fut.await?,
+                    };
+                    filler.abort();
+                    BenchFlow::Done(r, drain.frames)
+                }
+                (SynthRace::Drained, d) => {
+                    // 下发已完（说明 producer 已发出 done），收尾 join producer
+                    let r =
+                        producer.await.unwrap_or_else(|e| Err(anyhow::anyhow!("合成任务异常: {e}")));
+                    let drain = d.expect("Drained 分支必带下发结果")?;
+                    filler.abort();
+                    BenchFlow::Done(r, drain.frames)
+                }
+            }
+        };
+        let (producer_res, frames) = match flow {
+            BenchFlow::TimedOut => {
+                tracing::warn!(
+                    "session {session_id} 测试合成超时取消（{}ms）：{}",
+                    t0.elapsed().as_millis(),
+                    timeout_error_text()
+                );
+                send_text(
+                    self.transport,
+                    &ServerMessage::TtsTestResult {
+                        session_id,
+                        state: "error".to_string(),
+                        engine: Some(engine_name),
+                        text: Some(timeout_error_text()),
+                    },
+                )
+                .await?;
+                return Ok(());
+            }
+            BenchFlow::Done(r, frames) => (r, frames),
+        };
+        match producer_res {
+            Ok(()) => {
                 tracing::info!(
                                 "session {session_id} 测试合成完成（{engine_name}）：耗时 {}ms，{} 帧 / {tts_sr}Hz{vcn_note}",
                                 t0.elapsed().as_millis(),
@@ -291,7 +386,7 @@ impl<'a, T: Transport> Session<'a, T> {
                 // 「合成中」（7753f12 全链路流式改造时丢失，实测回归）。
                 send_tts_state(self.transport, &self.session_id, "stop").await?;
             }
-            Ok(Err(e)) => {
+            Err(e) => {
                 tracing::warn!(
                     "session {session_id} 测试合成失败（耗时 {}ms）: {e}",
                     t0.elapsed().as_millis()
@@ -303,19 +398,6 @@ impl<'a, T: Transport> Session<'a, T> {
                         state: "error".to_string(),
                         engine: Some(engine_name),
                         text: Some(e.to_string()),
-                    },
-                )
-                .await?;
-            }
-            Err(e) => {
-                tracing::warn!("session {session_id} 测试合成任务异常: {e}");
-                send_text(
-                    self.transport,
-                    &ServerMessage::TtsTestResult {
-                        session_id,
-                        state: "error".to_string(),
-                        engine: Some(engine_name),
-                        text: Some(format!("合成任务异常: {e}")),
                     },
                 )
                 .await?;
@@ -494,3 +576,6 @@ impl<'a, T: Transport> Session<'a, T> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests;
