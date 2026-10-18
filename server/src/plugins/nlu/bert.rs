@@ -124,32 +124,16 @@ pub fn build_bert(nlu: &NluConfig) -> Result<Arc<dyn BertClassify>> {
 #[cfg(feature = "nlu")]
 mod engine {
     use std::borrow::Cow;
-    use std::sync::OnceLock;
 
     use anyhow::{anyhow, bail, Context, Result};
 
     use super::{BertClassify, BertHit};
     use crate::plugins::nlu::NluConfig;
 
-    /// ort 进程级环境（rc.14 起全局只允许一个 [`ort::environment::Environment`]）。
-    static ORT_ENV: OnceLock<ort::environment::Environment> = OnceLock::new();
-
-    fn ort_env() -> Result<&'static ort::environment::Environment> {
-        if let Some(env) = ORT_ENV.get() {
-            return Ok(env);
-        }
-        let env = ort::init().build().map_err(|e| {
-            anyhow!("[nlu] ONNX Runtime 环境初始化失败: {e}；请确认 ort 预编译库可下载或本地已安装")
-        })?;
-        // 并发首建时后者 set 失败无害：取先建者（内容等价）。
-        let _ = ORT_ENV.set(env);
-        Ok(ORT_ENV.get().expect("刚 set 必然存在"))
-    }
-
     /// 已加载的 TinyBERT 分类器：分词器 + ONNX 会话（只读，跨会话共享）。
     pub struct TinyBertNlu {
         tokenizer: tokenizers::Tokenizer,
-        /// rc.14 的 `Session::run` 需要 `&mut`；推理互斥由这层锁承载（单句毫秒级）。
+        /// `Session::run` 需要 `&mut`；推理互斥由这层锁承载（单句毫秒级）。
         session: std::sync::Mutex<ort::session::Session>,
         labels: Vec<String>,
         /// 模型输入图里是否声明了 token_type_ids（BERT 导出常见；按需补零输入）。
@@ -174,9 +158,9 @@ mod engine {
             if labels.is_empty() {
                 bail!("[nlu] labels 文件为空：请一行一个标签（行号 = 分类输出下标）");
             }
-            let builder = ort::session::Session::builder(ort_env()?)
+            let builder = ort::session::Session::builder()
                 .map_err(|e| anyhow!("[nlu] ONNX 会话构建器创建失败: {e}"))?;
-            let mut builder = builder
+            let builder = builder
                 .with_intra_threads(nlu.bert_num_threads.max(1))
                 .map_err(|e| anyhow!("[nlu] ONNX 线程数（bert_num_threads）设置失败: {e}"))?;
             let session = builder.commit_from_file(&nlu.bert_model).map_err(|e| {
@@ -185,10 +169,7 @@ mod engine {
                     nlu.bert_model
                 )
             })?;
-            let has_token_type_ids = session
-                .inputs()
-                .iter()
-                .any(|i| i.name() == "token_type_ids");
+            let has_token_type_ids = session.inputs.iter().any(|i| i.name == "token_type_ids");
             if nlu.bert_max_len < 3 {
                 bail!("[nlu].bert_max_len 至少为 3（[CLS] + 正文 + [SEP]）");
             }
@@ -223,7 +204,7 @@ mod engine {
             let tokenize_ms = t0.elapsed().as_millis() as u64;
 
             let t1 = std::time::Instant::now();
-            // 形状 [1, len]（batch=1 的动态维度）；rc.14 的 ToShape 接受 i64 数组。
+            // 形状 [1, len]（batch=1 的动态维度）；from_array 接受 i64 形状 + i32 数据。
             let shape = [1i64, len as i64];
             let ids = ort::value::Tensor::from_array((shape, ids))?;
             let mask = ort::value::Tensor::from_array((shape, mask))?;
@@ -235,10 +216,7 @@ mod engine {
                 let types = ort::value::Tensor::from_array((shape, vec![0i32; len]))?;
                 inputs.push(("token_type_ids".into(), types.into()));
             }
-            let mut session_guard = self
-                .session
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
+            let mut session_guard = self.session.lock().unwrap_or_else(|e| e.into_inner());
             let outputs = session_guard.run(inputs)?;
             // logits: [1, num_labels] 的 f32 张量；softmax 后取 argmax。
             let (_logits_shape, logits) = outputs[0].try_extract_tensor::<f32>()?;

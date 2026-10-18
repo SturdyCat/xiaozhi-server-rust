@@ -38,7 +38,8 @@ sherpa-onnx = { version = "1.13.8", optional = true }
 audiopus = { version = "0.2", optional = true }
 
 # 仅在 nlu feature 下引入（ONNX Runtime 动态库 + 分词器）
-ort = { version = "2.0.0-rc.10", optional = true, features = ["load-dynamic"] }
+# 精确钉 rc.10：caret 会被锁到 rc.14（要求 ONNX Runtime >=1.31），与镜像内 1.22.1 dylib 不配对
+ort = { version = "=2.0.0-rc.10", optional = true, features = ["load-dynamic"] }
 tokenizers = { version = "0.21", optional = true, default-features = false, features = ["onig"] }
 tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots", "url"] }
 hmac = "0.13.0"
