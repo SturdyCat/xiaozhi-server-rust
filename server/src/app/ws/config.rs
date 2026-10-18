@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use axum::{
     extract::{Json, Query, State},
-    http::{header, HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use std::collections::HashMap;
@@ -29,7 +29,7 @@ use super::json_ok;
 pub(super) mod device_overlay;
 mod impact;
 pub(super) mod presets;
-use impact::{save_impact, SaveImpact};
+use impact::{SaveImpact, save_impact};
 
 /// 当前生效配置：启动时指定了配置文件则实时读盘，否则为内存内置默认配置。
 ///
@@ -44,9 +44,7 @@ pub(crate) fn current_config(engines: &Engines) -> Config {
         Some(p) => match engines.config_store.load() {
             Ok(c) => c,
             Err(e) => {
-                tracing::error!(
-                    "读取配置库 {p} 失败，回退内存配置（可在管理页重新保存修复）: {e}"
-                );
+                tracing::error!("读取配置库 {p} 失败，回退内存配置（可在管理页重新保存修复）: {e}");
                 (*engines.config).clone()
             }
         },
@@ -140,10 +138,7 @@ fn rewrite_legacy_paths(patch: &mut serde_json::Value) {
             }
         }
         if !moved.is_empty() {
-            match tts
-                .entry("kokoro")
-                .or_insert_with(|| serde_json::json!({}))
-            {
+            match tts.entry("kokoro").or_insert_with(|| serde_json::json!({})) {
                 serde_json::Value::Object(kokoro) => {
                     for (k, v) in moved {
                         kokoro.entry(k).or_insert(v); // 显式新位置优先
@@ -241,7 +236,7 @@ pub(super) async fn get_config(State(engines): State<Arc<Engines>>) -> Response 
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("序列化配置失败: {e}"),
             )
-                .into_response()
+                .into_response();
         }
     };
     body["revision"] = serde_json::json!(config_revision(&cfg));
@@ -521,7 +516,7 @@ pub(super) async fn db_query(
                 StatusCode::BAD_REQUEST,
                 "请求需含 \"sql\" 字段（如 {\"sql\":\"SELECT * FROM cfg_documents\"}）",
             )
-                .into_response()
+                .into_response();
         }
     };
     match engines.config_store.query(&sql) {
@@ -552,7 +547,11 @@ pub(super) async fn db_backup(
     let Some(loc) = engines.config_store.location() else {
         return (
             StatusCode::BAD_REQUEST,
-            json_msg(false, "内置默认配置无数据库可备份（请用 SQLite 配置后端）。", None),
+            json_msg(
+                false,
+                "内置默认配置无数据库可备份（请用 SQLite 配置后端）。",
+                None,
+            ),
         )
             .into_response();
     };
@@ -568,7 +567,7 @@ pub(super) async fn db_backup(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 json_msg(false, "生成备份路径失败（路径含非 UTF-8 字符）。", None),
             )
-                .into_response()
+                .into_response();
         }
     };
     match engines.config_store.backup(&dest) {

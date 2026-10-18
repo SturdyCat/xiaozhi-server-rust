@@ -37,6 +37,8 @@
 pub mod frames;
 pub mod transport;
 
+pub(crate) mod admin;
+pub(crate) mod registry;
 pub(crate) mod routes;
 #[cfg(test)]
 mod tests;
@@ -44,6 +46,7 @@ mod tests;
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::sync::{Mutex, OnceLock};
+use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
@@ -77,9 +80,8 @@ impl EchomuseConfig {
 }
 
 /// control 面出站消息：要么是 JSON 文本，要么是"断开"指令。
-// `Json` 目前由测试构造（生产路径 mic_start 在 control 任务内直发）；
-// 保留它是给会话层后续下发 leds/config 留的唯一通道。
-#[allow(dead_code)]
+// `Json` 的生产路径：会话层 mic_start（control 任务内直发）与管理面 command 下发
+// （admin.rs 经 hub 登记的 ctl_tx 克隆）。
 #[derive(Debug)]
 pub enum ControlOut {
     /// 一条 JSON 文本（mic_start / listen_ack / led_anim / config 等）。
@@ -98,6 +100,11 @@ pub struct PendingDevice {
     pub up_tx: UnboundedSender<crate::app::transport::IncomingFrame>,
     /// data 面出站接收端：data 任务取走后直发设备（`0x02`/`0x03`）。
     pub data_rx: UnboundedReceiver<DataOut>,
+    /// 登记时刻（`/em/status` 用它算 `connected_secs`）。
+    pub since: Instant,
+    /// control 出站发送端的克隆：管理面下发 `reboot`/`wifi_change` 走它
+    /// （`ControlOut::Json` → control_loop → 设备）。control 会话自己持原件。
+    pub ctl_tx: Option<UnboundedSender<ControlOut>>,
 }
 
 /// 进程级单例：设备 → 交接件 的登记表。
@@ -139,6 +146,32 @@ fn hub_iter() -> std::sync::MutexGuard<'static, HashMap<String, PendingDevice>> 
     hub().pending.lock().expect("echomuse hub 锁中毒")
 }
 
+/// 当前登记设备的 `(device_id, connected_secs)` 快照（`/em/status` 与管理面
+/// devices 列表合并 online 用；hub 的 key = 处于会话中的在线设备，会话结束
+/// `hub_remove` 后自然消失）。
+pub(crate) fn hub_status() -> Vec<(String, u64)> {
+    hub_iter()
+        .iter()
+        .map(|(id, pending)| (id.clone(), pending.since.elapsed().as_secs()))
+        .collect()
+}
+
+/// 某设备 control 出站口的克隆（管理面下发 command 用）；不在线（不在 hub）返回 None。
+pub(crate) fn hub_ctl(device_id: &str) -> Option<UnboundedSender<ControlOut>> {
+    hub_iter().get(device_id).and_then(|p| p.ctl_tx.clone())
+}
+
+/// `GET /em/status` 的响应体（与 HTTP 层解耦，便于单测直接断言形状）。
+pub(crate) fn status_json(enabled: bool) -> serde_json::Value {
+    let devices: Vec<serde_json::Value> = hub_status()
+        .into_iter()
+        .map(|(device_id, connected_secs)| {
+            serde_json::json!({ "device_id": device_id, "connected_secs": connected_secs })
+        })
+        .collect();
+    serde_json::json!({ "enabled": enabled, "devices": devices })
+}
+
 /// 会话结束后的清理（control 任务退出时调用；不存在则忽略）。
 fn hub_remove(device_id: &str) {
     hub()
@@ -178,13 +211,30 @@ pub fn ack_message(device_id: &str) -> String {
 /// 服务器 → 设备 的极简 `config` 推送：只写行为开关，不碰设备音频链路参数
 /// （EQ/AEC/波束等保持设备存储值）。`owwOnDevice=true` 让唤醒词在设备本地识别，
 /// 服务端零持续音频负载。
-pub fn config_push() -> String {
-    serde_json::json!({
+///
+/// `settings` 是管理面保存的每设备部分更新（协议 camelCase 字段，已在 admin 层
+/// 白名单过滤）：非 `null` 键覆盖基线，协议本身是"零/缺省字段忽略"的部分更新。
+/// `wakeWordEnabled` 按协议**单独一条** config 发送（HA 的 per-Echo 拾取态，不与
+/// 存储配置混发）。返回按序发送的 JSON 文本列表（1~2 条）。
+pub fn config_push_with(settings: &serde_json::Value) -> Vec<String> {
+    let mut base = serde_json::json!({
         "type": "config",
         "owwOnDevice": true,
         "streamReply": true,
-    })
-    .to_string()
+    });
+    if let (Some(obj), Some(base_obj)) = (settings.as_object(), base.as_object_mut()) {
+        for (k, v) in obj {
+            if k == "wakeWordEnabled" {
+                continue;
+            }
+            base_obj.insert(k.clone(), v.clone());
+        }
+    }
+    let mut out = vec![base.to_string()];
+    if let Some(b) = settings.get("wakeWordEnabled") {
+        out.push(serde_json::json!({ "type": "config", "wakeWordEnabled": b }).to_string());
+    }
+    out
 }
 
 /// 开机广播 mDNS `_emcontroller._tcp.local`（`[echomuse].enabled=true` 时由 main 调）。

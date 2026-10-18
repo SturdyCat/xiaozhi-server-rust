@@ -63,7 +63,10 @@ fn firmware_section_only_offers_newer_matched_firmware() {
     assert_eq!(v["version"], "1.6.4");
     assert_eq!(v["url"], "");
     // 设备版本未知：回显 "?"，同样不下发
-    let unknown = DeviceOta { version: String::new(), ..dev.clone() };
+    let unknown = DeviceOta {
+        version: String::new(),
+        ..dev.clone()
+    };
     assert_eq!(firmware_section("h:1", &unknown, None)["version"], "?");
 }
 
@@ -71,7 +74,8 @@ fn firmware_section_only_offers_newer_matched_firmware() {
 /// websocket 为扁平对象 url/token/version；firmware 由调用方按设备信息算好传入。
 #[test]
 fn ota_payload_contract() {
-    let firmware = serde_json::json!({"version": "2.0.4", "url": "http://h/api/ota/firmware/latest"});
+    let firmware =
+        serde_json::json!({"version": "2.0.4", "url": "http://h/api/ota/firmware/latest"});
     let v = ota_payload("192.168.99.250:8000", "tk123", 1, firmware);
     assert_eq!(v["websocket"]["url"], "ws://192.168.99.250:8000/api/ws");
     assert_eq!(v["websocket"]["token"], "tk123");
@@ -82,7 +86,12 @@ fn ota_payload_contract() {
     // 时间字段对齐官方实测约定：UTC epoch ms + offset=+480（固件 ts += offset*60s → 本地墙钟）
     assert_eq!(v["server_time"]["timezone_offset"], 480);
     // 未配置鉴权（expected_token 空）：字段仍在，空 token 固件自动跳过 Authorization 头
-    let none = ota_payload("h:1", "", 1, serde_json::json!({"version": "1.0.0", "url": ""}));
+    let none = ota_payload(
+        "h:1",
+        "",
+        1,
+        serde_json::json!({"version": "1.0.0", "url": ""}),
+    );
     assert_eq!(none["websocket"]["token"], "");
     // 有意省略官方字段：mqtt（否则固件优先选 MQTT）、activation（免激活流程）
     assert!(v.get("mqtt").is_none());
@@ -100,7 +109,8 @@ fn device_id_required() {
     h.insert("Device-Id", "84:fc:e6:7e:54:40".parse().unwrap());
     assert_eq!(device_id_of(&h).as_deref(), Some("84:fc:e6:7e:54:40"));
     // 错误体形状（官方同款字段）
-    let err: serde_json::Value = serde_json::from_str(&ota_error_body("Device ID is required")).unwrap();
+    let err: serde_json::Value =
+        serde_json::from_str(&ota_error_body("Device ID is required")).unwrap();
     assert_eq!(err["success"], false);
     assert_eq!(err["error"], "Device ID is required");
     assert_eq!(err["message"], "Device ID is required");

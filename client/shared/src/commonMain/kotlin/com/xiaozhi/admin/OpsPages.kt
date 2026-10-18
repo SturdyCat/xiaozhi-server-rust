@@ -43,7 +43,7 @@ fun ViewContainer<*, *>.opsScroller(content: ViewBuilder) {
 }
 
 /** 页内统一的「摘要 + 刷新」头行。 */
-private fun ViewContainer<*, *>.opsHeader(summary: () -> String, loading: () -> Boolean, onRefresh: () -> Unit) {
+internal fun ViewContainer<*, *>.opsHeader(summary: () -> String, loading: () -> Boolean, onRefresh: () -> Unit) {
     View {
         attr {
             flexDirectionRow()
@@ -63,7 +63,7 @@ private fun ViewContainer<*, *>.opsHeader(summary: () -> String, loading: () -> 
 }
 
 /** 首次加载失败的就地错误（带"怎么修"）。 */
-private fun ViewContainer<*, *>.opsError(message: String) {
+internal fun ViewContainer<*, *>.opsError(message: String) {
     vif({ message.isNotEmpty() }) {
         textNote("$message（确认服务端可达后点「刷新」）", tone = "error", micro = true)
     }
@@ -74,8 +74,7 @@ private fun ViewContainer<*, *>.opsError(message: String) {
  * 只在 `loading && !loaded` 时显示——已有数据的刷新**不**回到骨架（避免整页闪烁），
  * 刷新反馈由头部「刷新中…」按钮态承担。
  */
-private fun ViewContainer<*, *>.opsSkeleton() {
-    skeletonCard(rows = 3)
+internal fun ViewContainer<*, *>.opsSkeleton() {    skeletonCard(rows = 3)
     skeletonCard(rows = 4)
 }
 

@@ -83,4 +83,3 @@ pub(crate) fn save_impact(before: &Config, after: &Config) -> SaveImpact {
         paths,
     }
 }
-

@@ -27,7 +27,7 @@ use std::sync::Arc;
 
 use axum::{
     extract::State,
-    http::{header, HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
 
@@ -68,10 +68,26 @@ pub(super) async fn ota(
     let dev = parse_device(&body);
     tracing::info!(
         "OTA 检查：device={device_id} function={} model={} board={} firmware={}",
-        if dev.function.is_empty() { "?" } else { &dev.function },
-        if dev.model.is_empty() { "?" } else { &dev.model },
-        if dev.board.is_empty() { "-" } else { &dev.board },
-        if dev.version.is_empty() { "?" } else { &dev.version },
+        if dev.function.is_empty() {
+            "?"
+        } else {
+            &dev.function
+        },
+        if dev.model.is_empty() {
+            "?"
+        } else {
+            &dev.model
+        },
+        if dev.board.is_empty() {
+            "-"
+        } else {
+            &dev.board
+        },
+        if dev.version.is_empty() {
+            "?"
+        } else {
+            &dev.version
+        },
     );
 
     // WebSocket 地址跟随请求 Host：设备用哪个地址访问 OTA，就用哪个地址连 WS
@@ -95,7 +111,11 @@ pub(super) async fn ota(
             "OTA 命中托管固件：project={} model={} board={} {} → {}（device={device_id}）",
             m.project,
             m.model,
-            if m.board.is_empty() { "（通用）" } else { &m.board },
+            if m.board.is_empty() {
+                "（通用）"
+            } else {
+                &m.board
+            },
             dev.version,
             m.version,
         ),
@@ -164,7 +184,11 @@ fn ota_error_body(msg: &str) -> String {
 ///
 /// 未命中时**必须回显设备版本**（不能回服务端自身版本）：固件会拿"新版本号 + 空 url"去
 /// 尝试升级并弹错误；回显设备版本才让它安静地判定"已是最新"。
-fn firmware_section(host: &str, dev: &DeviceOta, upgrade: Option<&FirmwareMeta>) -> serde_json::Value {
+fn firmware_section(
+    host: &str,
+    dev: &DeviceOta,
+    upgrade: Option<&FirmwareMeta>,
+) -> serde_json::Value {
     match upgrade {
         Some(m) => serde_json::json!({
             "version": m.version,

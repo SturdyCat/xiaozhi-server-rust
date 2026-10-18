@@ -216,7 +216,9 @@ pub fn router(engines: Arc<Engines>) -> Router {
         .merge(crate::app::voices::router())
         // EchoMuse 设备入口（Echo Dot 2 / emOS）：`[echomuse].enabled=true` 才生效
         // （路由内部自检开关，关闭时返回 404；挂载本身零行为变化）。
-        .merge(crate::app::echomuse::routes::em_routes());
+        .merge(crate::app::echomuse::routes::em_routes())
+        // EchoMuse 管理面（/api/echomuse/*，经 auth_ok 鉴权）：registry 全表 + 认领 + 下行指令
+        .merge(crate::app::echomuse::admin::admin_routes());
 
     let app = if Path::new(&admin_dir).is_dir() {
         // SPA：未知路径回退到 index.html，交给前端路由处理。

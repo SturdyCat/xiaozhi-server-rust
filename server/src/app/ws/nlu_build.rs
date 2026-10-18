@@ -20,11 +20,11 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::response::{IntoResponse, Response};
 use serde_json::json;
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::{Mutex, broadcast};
 
 use crate::config::Config;
 use crate::engine::Engines;
@@ -155,7 +155,12 @@ pub(super) async fn start_build(State(engines): State<Arc<Engines>>) -> Response
         .map(|s| json!({ "name": s.name, "values": s.values, "optional": s.optional }))
         .collect::<Vec<_>>();
     tokio::spawn(async move {
-        run_training(work_dir, out_dir, json!({ "intents": intents, "slots": slots })).await;
+        run_training(
+            work_dir,
+            out_dir,
+            json!({ "intents": intents, "slots": slots }),
+        )
+        .await;
     });
     axum::Json(json!({ "started": true, "state": "running" })).into_response()
 }
@@ -172,10 +177,9 @@ async fn run_cmd(mut cmd: tokio::process::Command) -> anyhow::Result<()> {
             .join(" ")
     );
     push_log(&format!("$ {prog}")).await;
-    let out = cmd
-        .output()
-        .await
-        .map_err(|e| anyhow::anyhow!("docker 命令执行失败: {e}（容器内需要 docker CLI 与 /var/run/docker.sock）"))?;
+    let out = cmd.output().await.map_err(|e| {
+        anyhow::anyhow!("docker 命令执行失败: {e}（容器内需要 docker CLI 与 /var/run/docker.sock）")
+    })?;
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
     let mut lines: Vec<&str> = stdout.lines().chain(stderr.lines()).collect();
@@ -202,7 +206,9 @@ fn mount_host_path(path: &str, mountinfo: &str) -> String {
     let mut best: Option<(usize, String)> = None;
     for line in mountinfo.lines() {
         // 格式：… root mountpoint opts … - fstype source superopts
-        let Some((left, right)) = line.split_once(" - ") else { continue };
+        let Some((left, right)) = line.split_once(" - ") else {
+            continue;
+        };
         let lf: Vec<&str> = left.split_whitespace().collect();
         let rf: Vec<&str> = right.split_whitespace().collect();
         if lf.len() < 5 || rf.len() < 2 {
@@ -210,7 +216,9 @@ fn mount_host_path(path: &str, mountinfo: &str) -> String {
         }
         let (root, mnt, source) = (lf[3], lf[4], rf[1]);
         // 先匹配再取后缀：mountpoint 可能比目标路径长（兄弟挂载点），先切片会越界。
-        let Some(suffix) = path.strip_prefix(mnt) else { continue };
+        let Some(suffix) = path.strip_prefix(mnt) else {
+            continue;
+        };
         if !(suffix.is_empty() || suffix.starts_with('/')) {
             continue;
         }
@@ -222,7 +230,11 @@ fn mount_host_path(path: &str, mountinfo: &str) -> String {
         } else {
             format!("{source}{}", root.trim_end_matches('/'))
         };
-        let mapped = if rel.is_empty() { base } else { format!("{base}/{rel}") };
+        let mapped = if rel.is_empty() {
+            base
+        } else {
+            format!("{base}/{rel}")
+        };
         if best.as_ref().map_or(true, |(len, _)| mnt.len() > *len) {
             best = Some((mnt.len(), mapped));
         }
@@ -310,7 +322,10 @@ async fn run_training(work_dir: PathBuf, out_dir: PathBuf, input: serde_json::Va
         match inspect {
             Ok(s) if s.success() => {}
             Ok(_) => {
-                push_log(&format!("训练镜像 {image} 不存在，docker pull（首次较慢）…")).await;
+                push_log(&format!(
+                    "训练镜像 {image} 不存在，docker pull（首次较慢）…"
+                ))
+                .await;
                 let mut pull = tokio::process::Command::new("docker");
                 pull.args(["pull", &image]);
                 run_cmd(pull).await?;

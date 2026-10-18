@@ -20,7 +20,7 @@ use axum::{
 
 use super::json_ok;
 use crate::engine::Engines;
-use crate::plugins::soul::{self, presets, SoulConfig};
+use crate::plugins::soul::{self, SoulConfig, presets};
 
 /// `GET /api/soul/presets`。
 pub(super) async fn soul_presets() -> Response {
@@ -79,8 +79,9 @@ fn preview_body(
     let mut body = p.to_json();
     body["ok"] = serde_json::json!(true);
     // token 估算复用记忆注入的同一函数（口径一致，不另造一个估算器）
-    body["approx_tokens"] =
-        serde_json::json!(crate::plugins::memory::assemble::estimate_tokens(&p.instructions));
+    body["approx_tokens"] = serde_json::json!(crate::plugins::memory::assemble::estimate_tokens(
+        &p.instructions
+    ));
     body["device_id"] = serde_json::json!(asked);
     body["note"] = serde_json::json!(if p.enabled {
         "这是最终发给模型的 instructions（平台约束 + 人格 + 表达风格 + [llm].system_prompt）。\

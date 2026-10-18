@@ -31,7 +31,9 @@ fn validate_accepts_builtin_reminders() {
 #[tokio::test]
 async fn status_body_shape() {
     let res = build_status().await;
-    let bytes = axum::body::to_bytes(res.into_body(), 64 * 1024).await.unwrap();
+    let bytes = axum::body::to_bytes(res.into_body(), 64 * 1024)
+        .await
+        .unwrap();
     let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(body["state"], "idle");
     assert_eq!(body["running"], false);
@@ -63,10 +65,7 @@ fn mount_host_path_maps_container_data_bind() {
         mount_host_path("/data/nlu-train", info),
         "/srv/xiaozhi/server-data/nlu-train"
     );
-    assert_eq!(
-        mount_host_path("/data", info),
-        "/srv/xiaozhi/server-data"
-    );
+    assert_eq!(mount_host_path("/data", info), "/srv/xiaozhi/server-data");
 }
 
 #[test]

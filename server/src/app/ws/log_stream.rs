@@ -22,11 +22,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::response::Response;
 use serde_json::json;
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::{Mutex, broadcast};
 use tracing::Event;
+use tracing_subscriber::Layer as _;
 use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::layer::Context;
-use tracing_subscriber::Layer as _;
 
 /// 环形缓冲行数：新 WS 连接可一次性补齐的最近日志。
 const BACKLOG: usize = 500;
@@ -67,7 +67,8 @@ impl tracing::field::Visit for MessageVisitor {
         if field.name() == "message" {
             self.message = format!("{value:?}");
         } else if !self.message.is_empty() {
-            self.message.push_str(&format!(" {}={field:?} ", field.name()));
+            self.message
+                .push_str(&format!(" {}={field:?} ", field.name()));
         }
     }
 }
@@ -116,13 +117,7 @@ async fn stream_logs(mut socket: WebSocket) {
     // 先订阅再取快照：订阅后、快照间的少量重叠行由「backlog 从 ring 取、live 从
     // broadcast 取，ring 在订阅前已包含」的顺序保证基本无洞；极端并发下最多重复一行。
     let mut rx = hub().tx.subscribe();
-    let backlog: Vec<String> = hub()
-        .ring
-        .lock()
-        .await
-        .iter()
-        .cloned()
-        .collect::<Vec<_>>();
+    let backlog: Vec<String> = hub().ring.lock().await.iter().cloned().collect::<Vec<_>>();
     let frame = json!({ "type": "backlog", "lines": backlog }).to_string();
     if socket.send(Message::Text(frame.into())).await.is_err() {
         return;
@@ -136,9 +131,8 @@ async fn stream_logs(mut socket: WebSocket) {
                 }
             }
             Err(broadcast::error::RecvError::Lagged(n)) => {
-                let frame =
-                    json!({ "type": "log", "line": format!("…（日志过快，丢失 {n} 行）") })
-                        .to_string();
+                let frame = json!({ "type": "log", "line": format!("…（日志过快，丢失 {n} 行）") })
+                    .to_string();
                 if socket.send(Message::Text(frame.into())).await.is_err() {
                     return;
                 }

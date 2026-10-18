@@ -163,8 +163,7 @@ model = "/data/models/Kokoro/model.int8.onnx"
     assert_eq!(cfg.server.port, 8000); // 缺省回退
     assert_eq!(cfg.tts.engine, "kokoro");
     assert_eq!(
-        cfg.tts.kokoro.model,
-        "/data/models/Kokoro/model.int8.onnx",
+        cfg.tts.kokoro.model, "/data/models/Kokoro/model.int8.onnx",
         "旧 [tts].model 必须搬到 [tts.kokoro]"
     );
 }

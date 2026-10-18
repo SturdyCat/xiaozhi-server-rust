@@ -12,10 +12,7 @@ use crate::plugins::registry::{self, HotReload};
 fn impact_llm_model_is_next_session() {
     let mut base = full_test_config();
     base.llm.model = "gpt-4o".into();
-    let after = simulate_put(
-        &base,
-        serde_json::json!({"llm": {"model": "gpt-4o-mini"}}),
-    );
+    let after = simulate_put(&base, serde_json::json!({"llm": {"model": "gpt-4o-mini"}}));
     let impact = save_impact(&base, &after);
     assert_eq!(impact.hot, HotReload::NextSession);
     assert_eq!(impact.sections, vec!["llm".to_string()]);
@@ -47,8 +44,15 @@ fn impact_takes_strictest_across_sections() {
         }),
     );
     let impact = save_impact(&base, &after);
-    assert_eq!(impact.hot, HotReload::RestartOnly, "多段同改必须取最严格档位");
-    assert_eq!(impact.sections, vec!["audio".to_string(), "llm".to_string()]);
+    assert_eq!(
+        impact.hot,
+        HotReload::RestartOnly,
+        "多段同改必须取最严格档位"
+    );
+    assert_eq!(
+        impact.sections,
+        vec!["audio".to_string(), "llm".to_string()]
+    );
 }
 
 /// **无改动** → Live（"已是最新"，不该吓唬用户说需要重启）；
@@ -59,7 +63,11 @@ fn impact_no_change_is_live_and_empty() {
     let after = simulate_put(&base, serde_json::json!({}));
     let impact = save_impact(&base, &after);
     assert_eq!(impact.hot, HotReload::Live);
-    assert!(impact.sections.is_empty(), "无改动不应报告任何段: {:?}", impact.sections);
+    assert!(
+        impact.sections.is_empty(),
+        "无改动不应报告任何段: {:?}",
+        impact.sections
+    );
     assert!(impact.paths.is_empty());
 }
 
@@ -79,7 +87,12 @@ fn impact_normalizes_legacy_patch_before_diffing() {
         serde_json::json!({"tts": {"backend": "sherpa", "model": before_model}}),
     );
     let impact = save_impact(&base, &same);
-    assert_eq!(impact.hot, HotReload::Live, "同值迁移不应算变更: {:?}", impact.paths);
+    assert_eq!(
+        impact.hot,
+        HotReload::Live,
+        "同值迁移不应算变更: {:?}",
+        impact.paths
+    );
 
     // ② 旧写法回传**不同值** → 报告规范路径（tts.kokoro.model），而不是旧路径
     let changed = simulate_put(
@@ -113,7 +126,11 @@ fn impact_detects_array_element_change() {
     );
     let impact = save_impact(&base, &after);
     assert_eq!(impact.sections, vec!["soul".to_string()]);
-    assert!(impact.paths.iter().all(|p| p.starts_with("soul")), "{:?}", impact.paths);
+    assert!(
+        impact.paths.iter().all(|p| p.starts_with("soul")),
+        "{:?}",
+        impact.paths
+    );
     assert_eq!(
         impact.hot,
         registry::field_hot(&["soul", "traits"]).expect("soul.traits 应有字段元数据")
@@ -169,6 +186,10 @@ fn secret_field_has_hot_semantics() {
     let after = simulate_put(&base, serde_json::json!({"llm": {"api_key": "new"}}));
     let impact = save_impact(&base, &after);
     assert_eq!(impact.sections, vec!["llm".to_string()]);
-    assert!(impact.paths.iter().any(|p| p == "llm.api_key"), "{:?}", impact.paths);
+    assert!(
+        impact.paths.iter().any(|p| p == "llm.api_key"),
+        "{:?}",
+        impact.paths
+    );
     assert!(impact.hot.rank() <= HotReload::RestartOnly.rank());
 }

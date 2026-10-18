@@ -16,7 +16,12 @@ fn engines_health_returns_all_capabilities_with_full_keys() {
     let json = engines_health_json(&host);
     assert_eq!(json["ok"], true, "只读端点恒 ok");
     let caps = json["capabilities"].as_array().expect("capabilities 数组");
-    assert_eq!(caps.len(), ALL_CAPABILITIES.len(), "应覆盖全部 {} 个能力", ALL_CAPABILITIES.len());
+    assert_eq!(
+        caps.len(),
+        ALL_CAPABILITIES.len(),
+        "应覆盖全部 {} 个能力",
+        ALL_CAPABILITIES.len()
+    );
     for c in caps {
         for k in [
             "capability",
@@ -33,8 +38,14 @@ fn engines_health_returns_all_capabilities_with_full_keys() {
         ] {
             assert!(c.get(k).is_some(), "能力 {} 缺键 {k}", c["capability"]);
         }
-        let impls = c["implementations"].as_array().expect("implementations 数组");
-        assert!(!impls.is_empty(), "能力 {} 应至少有一个实现", c["capability"]);
+        let impls = c["implementations"]
+            .as_array()
+            .expect("implementations 数组");
+        assert!(
+            !impls.is_empty(),
+            "能力 {} 应至少有一个实现",
+            c["capability"]
+        );
     }
     for k in ["active", "degraded", "failed", "disabled", "total"] {
         assert!(json["counts"].get(k).is_some(), "counts 缺键 {k}");
@@ -86,7 +97,10 @@ fn optional_capability_probe_fail_degrades_not_fails() {
     let mem = find_cap(&json, "memory");
     assert_eq!(mem["phase"], "degraded", "可选能力探测失败应降级");
     let err = mem["last_error"].as_str().expect("降级必须带原因");
-    assert!(err.contains("db_path") || err.contains("目录"), "应点名字段: {err}");
+    assert!(
+        err.contains("db_path") || err.contains("目录"),
+        "应点名字段: {err}"
+    );
 }
 
 /// host 侧已有更坏状态时保留 host 的原因（启动期根因优先，探测文案不覆盖）。
@@ -142,13 +156,15 @@ fn same_source_as_plugins_endpoint() {
             .unwrap_or_else(|| panic!("健康端点能力 {id} 不在 /api/plugins"));
         // 探测未让 phase 变坏时两边必须一致（默认配置下模型路径存在性两边都看到了：
         // /api/plugins 不做探测，因此仅在探测 Ok 时两边相同）。
-        let probe_ok = h["probe"].is_null()
-            || h["probe"]["state"] == "ok";
+        let probe_ok = h["probe"].is_null() || h["probe"]["state"] == "ok";
         if probe_ok {
             assert_eq!(h["phase"], p["phase"], "能力 {id} 两端点 phase 分叉");
         }
         assert_eq!(h["enabled"], p["enabled"], "能力 {id} enabled 分叉");
-        assert_eq!(h["active_impl"], p["active_impl"], "能力 {id} active_impl 分叉");
+        assert_eq!(
+            h["active_impl"], p["active_impl"],
+            "能力 {id} active_impl 分叉"
+        );
         // 实现明细同构：逐条 id 一致
         let hi: Vec<&str> = h["implementations"]
             .as_array()

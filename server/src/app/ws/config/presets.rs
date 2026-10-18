@@ -8,17 +8,17 @@
 use std::sync::Arc;
 
 use axum::{
+    Json,
     extract::{Path, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    Json,
 };
 
 use crate::engine::Engines;
 
-use super::{config_revision, current_config, json_msg, json_msg_full, merge_client_patch};
 use super::super::json_ok;
 use super::impact::save_impact;
+use super::{config_revision, current_config, json_msg, json_msg_full, merge_client_patch};
 
 // ============================================================
 // 配置预设（P1-5）：把当前配置快照成预设，可应用/删除；
@@ -49,7 +49,11 @@ pub(in crate::app::ws) async fn preset_save(
         .trim()
         .to_string();
     if name.is_empty() {
-        return (StatusCode::BAD_REQUEST, json_msg(false, "预设名不能为空。", None)).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            json_msg(false, "预设名不能为空。", None),
+        )
+            .into_response();
     }
     let current = current_config(&engines);
     match engines.config_store.save_preset(&name, &current) {
@@ -82,7 +86,7 @@ pub(in crate::app::ws) async fn preset_apply(
                 StatusCode::BAD_REQUEST,
                 json_msg(false, &format!("预设「{name}」解析失败: {e:#}"), None),
             )
-                .into_response()
+                .into_response();
         }
     };
     let Some(preset_cfg) = preset_cfg else {
@@ -100,7 +104,7 @@ pub(in crate::app::ws) async fn preset_apply(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 json_msg(false, &format!("预设序列化失败: {e}"), None),
             )
-                .into_response()
+                .into_response();
         }
     };
     let body = match merge_client_patch(&current, &preset_json) {

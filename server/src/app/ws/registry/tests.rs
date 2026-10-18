@@ -142,7 +142,10 @@ fn conversations_query_defaults_and_cap_the_limit() {
         DEFAULT_CONVERSATIONS_LIMIT
     );
     // 上限：`?limit=100000` 必须被夹到 MAX（否则一次请求能把整个环形缓冲吐出去）
-    assert_eq!(100_000usize.min(MAX_CONVERSATIONS_LIMIT), MAX_CONVERSATIONS_LIMIT);
+    assert_eq!(
+        100_000usize.min(MAX_CONVERSATIONS_LIMIT),
+        MAX_CONVERSATIONS_LIMIT
+    );
     assert!(MAX_CONVERSATIONS_LIMIT >= DEFAULT_CONVERSATIONS_LIMIT);
 }
 

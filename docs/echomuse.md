@@ -42,8 +42,21 @@
 3. 服务端开 `[echomuse].enabled = true`、设置 `token`，与 Dot 同网段重启——mDNS 广播被设备发现后自动接管；
 4. 联调：`python3 tools/echomuse_mock_device.py --host <server> --port 8000 --token <token>`（模拟 register → 唤醒 → 上行 PCM → 收 `0x02…0x03`）。
 
+## 管理面 API（`/api/echomuse/*`，一期）
+
+经 `auth_ok` 鉴权（`Authorization: Bearer <token>` 或 `?token=`）；`[echomuse].enabled=false` 时除鉴权外一律 404（`{"error":"echomuse disabled"}`）。设备登记持久化在 `<memory.db_path 父目录>/echomuse_devices.json`（与配置库同卷，默认 `/data`），register 时 upsert，`online`/`connected_secs` 不落盘、由 hub 实时合并。
+
+- `GET /api/echomuse/devices` → `{"enabled":true,"devices":[{"device_id","label","approved","version","board","base_os","first_seen","last_seen","online","connected_secs"}]}`（registry 全表，按 device_id 排序；`connected_secs` 离线为 `null`）。
+- `GET /api/echomuse/devices/{id}` → 单台（同上形状）；不存在 404 `{"error":"device not found"}`。
+- `POST /api/echomuse/devices/{id}/approve`，body `{"label":"客厅音箱"}`（label 可省）→ 200 + 该设备 JSON（`approved=true`，label trim 后非空才改名）；不存在 404。
+- `POST /api/echomuse/devices/{id}/command`，body `{"action":"reboot"}` 或 `{"action":"wifi","ssid":"...","psk":"..."}`：在线（hub 有 control 通道）返回 202 `{"queued":true}` 并经 `ControlOut::Json` 下发 `{"type":"reboot"}` / `{"type":"wifi_change","ssid","psk"}`；不在线 409 `{"error":"device offline"}`；action 非法 / wifi 缺 ssid 400。
+- `POST /api/echomuse/devices/{id}/settings`，body 为**部分更新**的每设备配置，白名单：`wakeWordEnabled`/`owwOnDevice`（bool）、`owwModel`（string）、`owwThreshold`/`wakeSoundLevel`/`wakeMic`（number），白名单外或类型不符 400。先持久化到 registry `settings` 字段；设备在线 202 `{"persisted":true,"delivered":true}` 并即时下发 `config`（`wakeWordEnabled` 按协议**单独一条**），离线 200 `{"persisted":true,"delivered":false}`（设备下次接入时 control_session 自动推送）。`GET devices`/`{id}` 的设备对象新增 `settings` 字段。
+
+遗留限制：`reboot`/`wifi_change` 的设备侧支持需真机验证——命名按 EchoMuse `device-controller-interface.md`，设备不认识的 type 按协议忽略（静默无效果，不会报错）。emOS OTA 管理刻意未实现：官方控制器经 `/shell` root shell 读 boot 分区重打包镜像（`em_emos_update`），复刻需先实现 shell 面与镜像重建流水线，刷写风险高，需要时单独立项。
+
 ## 维护约束
 
 - 帧型按**方向**分命名空间（`0x04/0x05` 下行是音乐帧、上行是哨兵），解析只走 `frames::parse_uplink`。
 - `/em/data` 认领：显式 `?device_id=` 优先，否则仅当恰好一台待认领时取它；多台设备并存必须带 device_id（协议允许按对端地址收紧，真机多设备联调时再做）。
+- `GET /em/status` 只读状态查询：`{"enabled":bool,"devices":[{"device_id","connected_secs"}]}`，devices 取 hub 当前 key（= 处于会话中的在线设备）；关闭时也返回 200 + `enabled:false`（排查用，不 404、无鉴权）。
 - 帧编解码、能力协商形状、transport 翻译的回归在 `server/src/app/echomuse/tests.rs`；注册表 `APP_SECTION_HOT` 已登记 `echomuse: RestartOnly`（护栏测试会抓遗漏）。

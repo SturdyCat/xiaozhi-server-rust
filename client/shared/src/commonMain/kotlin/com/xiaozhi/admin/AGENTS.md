@@ -39,6 +39,7 @@
 | 概览 | `GET /api/stats` + `/api/plugins` | 设备在线数、活会话、11 个能力健康（degraded/failed 可点击跳配置） |
 | 测试台 | —（Web 占位） | Web 无麦克风 → 不可用说明 + 替代路径；端到端语音测试用 macOS 测试台 |
 | 设备 | `GET /api/devices` | 连过的设备、协商参数、上次会话为什么断；消息注入、个性化配置入口 |
+| EchoMuse | `GET /api/echomuse/devices` | EchoMuse 设备批准制登记（在线/离线、版本、base_os）；批准、重启、下发 WiFi 配置、唤醒词设置（离线可保存，上线自动推送） |
 | 会话 | `GET /api/sessions` | 此刻活着的连接与阶段（聆听/思考/说话） |
 | 对话记录 | `GET /api/conversations` | 最近聊了什么（内存环形，非持久化） |
 | 用量 | `GET /api/usage` | 令牌去向、记忆/人格把上下文撑大了多少 |
@@ -61,6 +62,7 @@
 | `GET /api/memory/status`、`POST /api/memory/{recall,maintain,clear,rag/reindex}` | 记忆状态 / 手动试召回 / 立即维护 / 清空 / RAG 索引重建 |
 | `GET /api/soul/presets`、`POST /api/soul/preview` | 人格预设清单 / 最终提示词预览 |
 | `POST /api/devices/{id}/inject` | 设备消息注入（文本作为用户话语走完整管线） |
+| `GET /api/echomuse/devices`、`POST /api/echomuse/devices/{id}/{approve,command,settings}` | EchoMuse 设备：列表 / 批准（body `label`）/ 下发指令（`reboot`、`wifi`，202 已排队、409 设备离线）/ 唤醒词设置（白名单部分更新，在线 202 `delivered:true`、离线 200 已保存） |
 | `GET /api/metrics`、`GET /api/usage` | 延迟大盘 / 令牌用量（内存态） |
 
 ```bash

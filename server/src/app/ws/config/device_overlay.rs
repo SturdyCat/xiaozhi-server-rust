@@ -8,10 +8,10 @@
 use std::sync::Arc;
 
 use axum::{
+    Json,
     extract::{Path, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    Json,
 };
 
 use crate::config::overlay::validate_overlay;
@@ -55,7 +55,11 @@ pub(in crate::app::ws) async fn device_overlay_put(
     Json(raw): Json<serde_json::Value>,
 ) -> Response {
     if !raw.is_object() {
-        return (StatusCode::BAD_REQUEST, "overlay JSON 必须是对象（如 {\"tts\":{\"speaker\":2}}）".to_string()).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            "overlay JSON 必须是对象（如 {\"tts\":{\"speaker\":2}}）".to_string(),
+        )
+            .into_response();
     }
     if let Err(msg) = validate_overlay(&raw) {
         return (StatusCode::BAD_REQUEST, json_msg(false, &msg, None)).into_response();

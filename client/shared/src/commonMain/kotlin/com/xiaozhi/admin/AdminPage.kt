@@ -83,6 +83,9 @@ class AdminPage : Pager() {
     // ---- 运维面数据源（新增，对应服务端 `app/registry` 的只读投影）----
     val stats = StatsState(this)
     val devices = DevicesState(this)
+
+    /** 「EchoMuse 设备」（`GET /api/echomuse/devices` + 批准 / 重启 / WiFi 下发）。 */
+    val echomuse = EchoMuseState(this)
     val sessions = SessionsState(this)
     val conversations = ConversationsState(this)
     val usage = UsageState(this)
@@ -115,6 +118,7 @@ class AdminPage : Pager() {
         // 运维面六路数据：并行发出，各自的 loading/loadError 独立（一个端点挂了不影响其他页面）
         stats.load(this)
         devices.load(this)
+        echomuse.load(this)
         sessions.load(this)
         conversations.load(this)
         usage.load(this)
@@ -248,6 +252,9 @@ class AdminPage : Pager() {
                                 ctx,
                             )
                         }
+                    }
+                    vif({ ctx.selectedSection == "echomuse" }) {
+                        opsScroller { renderEchoMuse(ctx.echomuse, ctx.toast, ctx) }
                     }
                     vif({ ctx.selectedSection == "sessions" }) {
                         opsScroller { renderOpsSessions(ctx.sessions, ctx) }

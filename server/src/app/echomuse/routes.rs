@@ -31,7 +31,7 @@ use crate::engine::Engines;
 use super::frames::{self, UplinkFrame};
 use super::transport::EchomuseTransport;
 use super::{
-    ack_message, config_push, hub_insert, hub_iter, hub_remove, hub_take, session_params,
+    ack_message, config_push_with, hub_insert, hub_iter, hub_remove, hub_take, session_params,
     ControlOut, DataOut, DeviceRegister,
 };
 
@@ -44,6 +44,15 @@ pub fn em_routes() -> axum::Router<Arc<Engines>> {
     axum::Router::new()
         .route("/em/control", get(em_control))
         .route("/em/data", get(em_data))
+        // 只读状态查询（排查"设备是否连上服务器"）：关闭时也返回 200 + enabled=false，
+        // 不像 WS 路由那样 404——该接口本身就是用来区分这两种情况的。
+        .route("/em/status", get(em_status))
+}
+
+/// `GET /em/status`：`{"enabled":bool,"devices":[{device_id,connected_secs}]}`。
+/// devices 取 hub 当前 key 集合（= 处于会话中的在线设备）；无鉴权（不含敏感信息）。
+async fn em_status(State(engines): State<Arc<Engines>>) -> Response {
+    axum::Json(super::status_json(engines.config.echomuse.enabled)).into_response()
 }
 
 /// `X-Em-Token` 校验：配置为空则不校验（与 `[server].expected_token` 同口径）。
@@ -96,21 +105,33 @@ async fn control_session(socket: WebSocket, engines: Arc<Engines>) -> anyhow::Re
         register.capabilities.join(","),
     );
 
-    // ack（能力协商：只声明服务器支持的子集）+ 极简 config 推送。
+    // ack（能力协商：只声明服务器支持的子集）+ config 推送（基线 + 每设备保存的设置）。
     sink.send(Message::Text(ack_message(&device_id).into()))
         .await?;
-    sink.send(Message::Text(config_push().into())).await?;
+    let settings = super::registry::global(&engines.config)
+        .get(&device_id)
+        .map(|r| serde_json::Value::Object(r.settings.into_iter().collect()))
+        .unwrap_or_else(|| serde_json::json!({}));
+    for msg in config_push_with(&settings) {
+        sink.send(Message::Text(msg.into())).await?;
+    }
 
     // 三条 channel：上行（翻译后的会话帧）、control 出站、data 出站。
     let (up_tx, up_rx) = mpsc::unbounded_channel::<IncomingFrame>();
     let (ctl_tx, ctl_rx) = mpsc::unbounded_channel::<ControlOut>();
     let (data_tx, data_rx) = mpsc::unbounded_channel::<DataOut>();
 
+    // 静态元数据落盘（label/approved/版本/首末见时间；online 由 hub 实时合并）。
+    super::registry::global(&engines.config).upsert(&register, super::registry::now_secs());
+
     hub_insert(
         &device_id,
         super::PendingDevice {
             up_tx: up_tx.clone(),
             data_rx,
+            since: std::time::Instant::now(),
+            // 管理面下发 reboot/wifi_change 的通道；control 会话自己持原件。
+            ctl_tx: Some(ctl_tx.clone()),
         },
     );
 
@@ -255,7 +276,7 @@ fn hub_take_only() -> Option<super::PendingDevice> {
 
 /// data 任务：上行帧翻译（PCM→Opus、哨兵→listen stop）+ 下行帧直发。
 async fn data_loop(socket: WebSocket, pending: super::PendingDevice) {
-    let super::PendingDevice { up_tx, mut data_rx } = pending;
+    let super::PendingDevice { up_tx, mut data_rx, .. } = pending;
     let (mut sink, mut stream) = socket.split();
     let mut up_enc = match OpusFrameEncoder::new(frames::MIC_SAMPLE_RATE) {
         Ok(enc) => enc,

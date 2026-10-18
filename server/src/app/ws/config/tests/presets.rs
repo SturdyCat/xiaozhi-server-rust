@@ -58,7 +58,10 @@ fn preset_apply_reuses_merge_client_patch_semantics() {
     preset_cfg.llm.model = "preset-model".to_string();
     preset_cfg.tts.speaker = 9;
     store.save_preset("tune", &preset_cfg).expect("保存预设");
-    let stored = store.load_preset("tune").expect("读预设").expect("预设存在");
+    let stored = store
+        .load_preset("tune")
+        .expect("读预设")
+        .expect("预设存在");
 
     // 模拟 POST /api/config/presets/{name}/apply：复用 put_config 同款部分更新管线
     let preset_json = serde_json::to_value(&stored).expect("预设序列化");
@@ -69,8 +72,14 @@ fn preset_apply_reuses_merge_client_patch_semantics() {
     let reloaded = store.load().expect("重读全局配置");
     assert_eq!(reloaded.llm.model, "preset-model", "apply 应覆盖 llm.model");
     assert_eq!(reloaded.tts.speaker, 9, "apply 应覆盖 tts.speaker");
-    assert_eq!(reloaded.tts.speed, current.tts.speed, "apply 不应动未提及字段");
-    assert_eq!(reloaded.llm.api_base, current.llm.api_base, "apply 不应动未提及字段");
+    assert_eq!(
+        reloaded.tts.speed, current.tts.speed,
+        "apply 不应动未提及字段"
+    );
+    assert_eq!(
+        reloaded.llm.api_base, current.llm.api_base,
+        "apply 不应动未提及字段"
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -86,7 +95,10 @@ fn preset_delete_removes_row() {
 
     // 模拟 DELETE /api/config/presets/{name}
     store.delete_preset(name).expect("删除预设");
-    assert!(!store.list_presets().unwrap().contains(&name.to_string()), "删除后预设应不存在");
+    assert!(
+        !store.list_presets().unwrap().contains(&name.to_string()),
+        "删除后预设应不存在"
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -19,8 +19,10 @@ use crate::engine::Engines;
 pub(super) async fn metrics_snapshot(State(engines): State<Arc<Engines>>) -> Response {
     let mut body = engines.metrics.snapshot_json();
     // additive 合并：inference_gates 是独立顶层节，不触碰既有键
-    if let (Some(dst), Some(src)) = (body.as_object_mut(), engines.inference.stats_json().as_object())
-    {
+    if let (Some(dst), Some(src)) = (
+        body.as_object_mut(),
+        engines.inference.stats_json().as_object(),
+    ) {
         for (k, v) in src {
             dst.entry(k.clone()).or_insert_with(|| v.clone());
         }

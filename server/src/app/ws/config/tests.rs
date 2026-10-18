@@ -6,9 +6,9 @@ mod presets;
 mod secrets;
 
 // 预设管线（P1-5 R3-8）测试依赖的纯函数（handler 委托给它们，避免单测里构造会加载模型的完整 `Engines`）。
-use crate::config::store::sqlite::SqliteConfigStore;
-use crate::config::store::ConfigStore;
 use crate::config::Config;
+use crate::config::store::ConfigStore;
+use crate::config::store::sqlite::SqliteConfigStore;
 use std::path::PathBuf;
 use uuid::Uuid;
 
@@ -181,17 +181,28 @@ fn legacy_toml_fixture_migrates_to_convention() {
         crate::plugins::tts::KokoroTtsConfig::default().model,
         "解析阶段不应擅自搬家"
     );
-    assert_eq!(cfg.tts.engine_id(), "kokoro", "旧 backend=\"sherpa\" 映射为 kokoro");
+    assert_eq!(
+        cfg.tts.engine_id(),
+        "kokoro",
+        "旧 backend=\"sherpa\" 映射为 kokoro"
+    );
 
     cfg.normalize();
     assert_eq!(cfg.tts.engine, "kokoro", "engine 键被补全为规范值");
-    assert_eq!(cfg.tts.kokoro.model, "/m/k.onnx", "旧 [tts].model → [tts.kokoro].model");
+    assert_eq!(
+        cfg.tts.kokoro.model, "/m/k.onnx",
+        "旧 [tts].model → [tts.kokoro].model"
+    );
     assert_eq!(cfg.tts.kokoro.lang, "en");
     assert_eq!(cfg.tts.kokoro.num_threads, 2);
     // 跨实现参数留在本体（位置不变，不参与搬家）
     assert_eq!(cfg.tts.speed, 1.25);
     assert_eq!(cfg.tts.speaker, 3);
-    assert_eq!(cfg.memory.engine_id(), "graph", "旧 [memory].backend → engine");
+    assert_eq!(
+        cfg.memory.engine_id(),
+        "graph",
+        "旧 [memory].backend → engine"
+    );
     assert_eq!(cfg.asr.engine_id(), "sensevoice", "缺失 engine → 默认实现");
     assert_eq!(cfg.llm.engine_id(), "openai");
 
@@ -200,7 +211,10 @@ fn legacy_toml_fixture_migrates_to_convention() {
     assert!(text.contains("[tts.kokoro]"), "{text}");
     assert!(text.contains("engine = \"kokoro\""), "{text}");
     assert!(!text.contains("backend ="), "旧键不得写回: {text}");
-    assert!(text.contains("engine = \"graph\""), "memory 也应写 engine: {text}");
+    assert!(
+        text.contains("engine = \"graph\""),
+        "memory 也应写 engine: {text}"
+    );
 
     // 幂等：再规范化一次结果不变（load → normalize 会被调用多次）
     let mut again = cfg.clone();
