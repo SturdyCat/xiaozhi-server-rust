@@ -14,7 +14,7 @@
 #
 # 三个阶段：
 #   web    —— Gradle 构建 Kuikly H5 管理页（client 工程：shared 业务包 + h5App 壳）
-#   build  —— 编译 Rust server（--features sherpa，真实 ASR/TTS 引擎）
+#   build  —— 编译 Rust server（--features sherpa,nlu，真实 ASR/TTS 引擎 + TinyBERT NLU）
 #   运行时 —— debian-slim：同源托管 管理页(/) + /api + /api/ws，模型缺失由入口脚本自下载
 #
 # 运行镜像内浏览器访问 `http://<host>:8000/` 即管理页，`/api/config` 读写 config.toml，
@@ -100,7 +100,7 @@ ENV RUSTFLAGS="-C target-cpu=x86-64-v2"
 COPY server/Cargo.toml server/Cargo.lock ./
 RUN mkdir -p src \
  && echo 'fn main() {}' > src/main.rs \
- && cargo build --release --features sherpa --locked \
+ && cargo build --release --features sherpa,nlu --locked \
  && rm -rf src
 
 # 真实源码（bin-only crate：入口即 src/main.rs，无 lib.rs）
@@ -118,7 +118,7 @@ COPY server/src ./src
 #      已随版本戳特性一并移除（2026-10）；「Compiling + 非 0.00s 耗时」日志即重编证据。
 RUN find src -type f -exec touch {} + \
  && cargo clean -p xiaozhi-server-rust --release \
- && cargo build --release --features sherpa --locked \
+ && cargo build --release --features sherpa,nlu --locked \
  && strip target/release/xiaozhi-server-rust
 
 # ---- 运行阶段 ----
