@@ -72,7 +72,10 @@ pub struct WsTransport {
 
 impl WsTransport {
     pub fn new(socket: WebSocket) -> Self {
-        Self { socket, closed: false }
+        Self {
+            socket,
+            closed: false,
+        }
     }
 }
 
@@ -125,7 +128,9 @@ impl Transport for WsTransport {
                     self.closed = true;
                     return Some(IncomingFrame::Closed);
                 }
-                Some(Some(Ok(Message::Text(t)))) => return Some(IncomingFrame::Text(t.to_string())),
+                Some(Some(Ok(Message::Text(t)))) => {
+                    return Some(IncomingFrame::Text(t.to_string()))
+                }
                 Some(Some(Ok(Message::Binary(b)))) => {
                     return Some(IncomingFrame::Binary(b.to_vec()))
                 }

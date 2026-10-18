@@ -121,9 +121,7 @@ async fn reconfigure_tts_swaps_semaphore_when_permits_change() {
 #[test]
 fn stats_json_shape() {
     let j = gates(3).stats_json();
-    let root = j
-        .get("inference_gates")
-        .expect("应有 inference_gates 节");
+    let root = j.get("inference_gates").expect("应有 inference_gates 节");
     for cap in ["asr", "tts"] {
         let n = &root[cap];
         assert!(n.get("permits").is_some(), "{cap} 应有 permits");

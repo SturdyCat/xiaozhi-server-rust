@@ -372,7 +372,8 @@ fn stable_ids_follow_sha256_scheme_and_are_deterministic() {
 fn stored_state_is_invisible_to_extraction_queue() {
     let st = open(&cfg(":memory:")).unwrap();
     // graph 路径：'pending' → 进队列
-    st.insert_turn("xiaozhi:dev1", "s1", 1, "问一", "答一", 1_000).unwrap();
+    st.insert_turn("xiaozhi:dev1", "s1", 1, "问一", "答一", 1_000)
+        .unwrap();
     assert!(
         st.pending_turn(2_000).unwrap().is_some(),
         "pending 状态应在抽取队列里"
@@ -387,7 +388,11 @@ fn stored_state_is_invisible_to_extraction_queue() {
         "队列队首应仍是 turn 1，stored 的 turn 2 不得出现: {queue:?}"
     );
     // 标记 turn 1 完成后队列即空（stored 的 turn 2 不会被补进队列）
-    let done = PendingTurn { scope: "xiaozhi:dev1".into(), session_id: "s1".into(), turn_index: 1 };
+    let done = PendingTurn {
+        scope: "xiaozhi:dev1".into(),
+        session_id: "s1".into(),
+        turn_index: 1,
+    };
     st.mark_turn(&done, "succeeded", None, None, 3_000).unwrap();
     assert!(
         st.pending_turn(4_000).unwrap().is_none(),
@@ -400,14 +405,17 @@ fn stored_state_is_invisible_to_extraction_queue() {
 fn turn_count_dedupes_messages_into_turns() {
     let st = open(&cfg(":memory:")).unwrap();
     assert_eq!(st.turn_count().unwrap(), 0);
-    st.insert_turn("xiaozhi:dev1", "s1", 1, "甲", "答", 1).unwrap();
-    st.insert_turn("xiaozhi:dev1", "s1", 2, "乙", "答", 2).unwrap();
+    st.insert_turn("xiaozhi:dev1", "s1", 1, "甲", "答", 1)
+        .unwrap();
+    st.insert_turn("xiaozhi:dev1", "s1", 2, "乙", "答", 2)
+        .unwrap();
     st.insert_turn_state("xiaozhi:dev2", "s1", 1, "丙", "答", "stored", 3)
         .unwrap();
     // 3 轮（跨 scope 计数），不是 6 条消息
     assert_eq!(st.turn_count().unwrap(), 3);
     // 幂等重复写入同一轮（INSERT OR IGNORE）不重复计数
-    st.insert_turn("xiaozhi:dev1", "s1", 1, "甲", "答", 1).unwrap();
+    st.insert_turn("xiaozhi:dev1", "s1", 1, "甲", "答", 1)
+        .unwrap();
     assert_eq!(st.turn_count().unwrap(), 3);
 }
 
@@ -415,7 +423,8 @@ fn turn_count_dedupes_messages_into_turns() {
 #[test]
 fn counts_tracks_stored_separately() {
     let st = open(&cfg(":memory:")).unwrap();
-    st.insert_turn("xiaozhi:dev1", "s1", 1, "问", "答", 1_000).unwrap();
+    st.insert_turn("xiaozhi:dev1", "s1", 1, "问", "答", 1_000)
+        .unwrap();
     st.insert_turn_state("xiaozhi:dev1", "s1", 2, "问二", "答二", "stored", 2_000)
         .unwrap();
     let c = st.counts().unwrap();
@@ -429,8 +438,10 @@ fn counts_tracks_stored_separately() {
 #[test]
 fn message_scope_counts_lists_turns_per_scope() {
     let st = open(&cfg(":memory:")).unwrap();
-    st.insert_turn("xiaozhi:dev1", "s1", 1, "甲", "答", 1).unwrap();
-    st.insert_turn("xiaozhi:dev1", "s1", 2, "乙", "答", 2).unwrap();
+    st.insert_turn("xiaozhi:dev1", "s1", 1, "甲", "答", 1)
+        .unwrap();
+    st.insert_turn("xiaozhi:dev1", "s1", 2, "乙", "答", 2)
+        .unwrap();
     st.insert_turn_state("xiaozhi:dev2", "s1", 1, "丙", "答", "stored", 3)
         .unwrap();
     let scopes = st.message_scope_counts().unwrap();
@@ -452,10 +463,20 @@ fn message_scope_counts_lists_turns_per_scope() {
 fn stored_and_graph_rows_coexist_in_same_db() {
     let st = open(&cfg(":memory:")).unwrap();
     // graph 写入 + 抽取成功
-    let ids = st.insert_turn("xiaozhi:dev1", "s1", 1, "杭州出差", "好的", 1_000).unwrap();
-    st.upsert_memory(&mem("xiaozhi:dev1", "s1", 1, "用户计划杭州出差"), &ids, 1_000)
+    let ids = st
+        .insert_turn("xiaozhi:dev1", "s1", 1, "杭州出差", "好的", 1_000)
         .unwrap();
-    let done = PendingTurn { scope: "xiaozhi:dev1".into(), session_id: "s1".into(), turn_index: 1 };
+    st.upsert_memory(
+        &mem("xiaozhi:dev1", "s1", 1, "用户计划杭州出差"),
+        &ids,
+        1_000,
+    )
+    .unwrap();
+    let done = PendingTurn {
+        scope: "xiaozhi:dev1".into(),
+        session_id: "s1".into(),
+        turn_index: 1,
+    };
     st.mark_turn(&done, "succeeded", None, None, 1_500).unwrap();
     // store 写入
     st.insert_turn_state("xiaozhi:dev1", "s2", 1, "今天天气", "晴天", "stored", 2_000)

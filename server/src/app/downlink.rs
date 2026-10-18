@@ -41,10 +41,8 @@ use crate::app::protocol::{ClientMessage, ServerMessage};
 use crate::app::session::send_text;
 use crate::app::transport::{IncomingFrame, Transport};
 
-pub(crate) use reservoir::{
-    new_reservoir, spawn_reservoir_filler, spawn_single_sentence_filler,
-};
-pub(crate) use sender::{ReservoirDrain, drain_reservoir};
+pub(crate) use reservoir::{new_reservoir, spawn_reservoir_filler, spawn_single_sentence_filler};
+pub(crate) use sender::{drain_reservoir, ReservoirDrain};
 
 /// 下行节拍器：按帧长匀速下发，并**整体提前** `lead_ms`（抖动缓冲，ESP 解码队列保护）。
 ///

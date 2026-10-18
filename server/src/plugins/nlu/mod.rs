@@ -35,9 +35,7 @@ mod tests;
 pub(crate) mod bert;
 // BertHit/bert_feature_enabled 仅 feature 构建内部使用，默认构建 re-export 会闲置。
 #[allow(unused_imports)]
-pub use bert::{
-    BertClassify, BertHit, bert_feature_enabled, bert_signature, build_bert_checked,
-};
+pub use bert::{bert_feature_enabled, bert_signature, build_bert_checked, BertClassify, BertHit};
 // TinyBertNlu 供外部/测试直接用类型；本 crate 内部经 trait 对象使用（二进制构建会闲置）。
 #[cfg(feature = "nlu")]
 #[allow(unused_imports)]

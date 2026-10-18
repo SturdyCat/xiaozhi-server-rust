@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use super::{SentenceSplitter, find_sentence_end, spawn_flush_watchdog};
+use super::{find_sentence_end, spawn_flush_watchdog, SentenceSplitter};
 
 #[test]
 fn splitter_splits_on_chinese_punctuation() {
@@ -90,7 +90,9 @@ fn take_expired_requires_silence_and_residual() {
     assert!(sp.feed("这是一段没有标点的残").is_empty());
     let deadline = sp.flush_deadline(wait).expect("残句非空应有 deadline");
     // 静默不足 → 不出
-    assert!(sp.take_expired(deadline - Duration::from_millis(1), wait).is_none());
+    assert!(sp
+        .take_expired(deadline - Duration::from_millis(1), wait)
+        .is_none());
     // 静默够长 → 出残句
     let got = sp
         .take_expired(deadline, wait)
@@ -132,7 +134,10 @@ fn flush_clears_timing_state() {
     let mut sp = SentenceSplitter::new();
     sp.feed("残句");
     assert_eq!(sp.flush(), vec!["残句"]);
-    assert!(sp.flush_deadline(Duration::from_millis(1)).is_none(), "flush 后无残句无 deadline");
+    assert!(
+        sp.flush_deadline(Duration::from_millis(1)).is_none(),
+        "flush 后无残句无 deadline"
+    );
     // flush 重置 last_feed：即使再喂入，旧时间不残留
     sp.feed("新的");
     assert!(sp.flush_deadline(Duration::from_secs(60)).is_some());
@@ -296,10 +301,9 @@ async fn on_flush_hook_fires_once_after_successful_send() {
     let finished = Arc::new(tokio::sync::Notify::new());
     let fired = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let fired_cb = fired.clone();
-    let on_flush: Arc<dyn Fn() + Send + Sync> =
-        Arc::new(move || {
-            fired_cb.fetch_add(1, Ordering::SeqCst);
-        });
+    let on_flush: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+        fired_cb.fetch_add(1, Ordering::SeqCst);
+    });
     spawn_flush_watchdog(
         shared.clone(),
         tx,
@@ -316,7 +320,11 @@ async fn on_flush_hook_fires_once_after_successful_send() {
         .expect("到期应出残句")
         .expect("通道不应关闭");
     assert_eq!(got, "会被定时送出的残句");
-    assert_eq!(fired.load(Ordering::SeqCst), 1, "send 成功后 on_flush 恰好一次");
+    assert_eq!(
+        fired.load(Ordering::SeqCst),
+        1,
+        "send 成功后 on_flush 恰好一次"
+    );
     // 收工退出；再等一段（无残句、通道仍在）不触发第二次
     done.store(true, Ordering::Release);
     finished.notify_waiters();

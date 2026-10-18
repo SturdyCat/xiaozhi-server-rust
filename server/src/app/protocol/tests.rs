@@ -42,7 +42,11 @@ fn bin_v2_v3_big_endian_layout() {
     assert_eq!(&v2[2..4], &[0x00, 0x00], "type=OPUS（大端）");
     assert_eq!(&v2[4..8], &[0x00, 0x00, 0x00, 0x00], "reserved（大端）");
     assert_eq!(&v2[8..12], &[0x01, 0x02, 0x03, 0x04], "timestamp 必须大端");
-    assert_eq!(&v2[12..16], &[0x00, 0x00, 0x00, 0x03], "payload_size 必须大端");
+    assert_eq!(
+        &v2[12..16],
+        &[0x00, 0x00, 0x00, 0x03],
+        "payload_size 必须大端"
+    );
     assert_eq!(&v2[16..], &opus);
     // 上行剥离同字节序
     assert_eq!(unwrap_uplink(BinVersion::V2, &v2), &opus);

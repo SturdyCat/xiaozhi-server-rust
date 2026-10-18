@@ -13,8 +13,8 @@
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 
 use crate::app::tts_cache::TtsCache;
 use crate::config::Config;

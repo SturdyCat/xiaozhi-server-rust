@@ -81,7 +81,8 @@ impl LlmProvider for RetryingLlm {
                     Err(e) => {
                         let failure = LlmFailure::classify(&e);
                         let delivered_text = delivered.load(Ordering::Relaxed);
-                        let can_retry = failure.retryable() && !delivered_text && attempt < MAX_RETRIES;
+                        let can_retry =
+                            failure.retryable() && !delivered_text && attempt < MAX_RETRIES;
                         if !can_retry {
                             if delivered_text && failure.retryable() {
                                 tracing::warn!(

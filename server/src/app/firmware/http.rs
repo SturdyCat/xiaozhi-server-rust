@@ -95,8 +95,14 @@ async fn upload(
         version,
         size,
         sha256: sha,
-        idf_ver: parsed.as_ref().map(|p| p.idf_ver.clone()).unwrap_or_default(),
-        built_at: parsed.as_ref().map(|p| p.built_at.clone()).unwrap_or_default(),
+        idf_ver: parsed
+            .as_ref()
+            .map(|p| p.idf_ver.clone())
+            .unwrap_or_default(),
+        built_at: parsed
+            .as_ref()
+            .map(|p| p.built_at.clone())
+            .unwrap_or_default(),
         uploaded_at: now_secs(),
     };
     let meta_json = serde_json::to_string_pretty(&meta).unwrap_or_default();
@@ -111,7 +117,11 @@ async fn upload(
         "固件已托管：project={} model={} board={} version={} size={} sha256={}（{}）",
         meta.project,
         meta.model,
-        if meta.board.is_empty() { "（通用）" } else { &meta.board },
+        if meta.board.is_empty() {
+            "（通用）"
+        } else {
+            &meta.board
+        },
         meta.version,
         meta.size,
         meta.sha256,
@@ -149,10 +159,16 @@ fn resolve_target(
             .or_else(|| from_pkg.map(str::trim).filter(|s| !s.is_empty()))
             .map(str::to_owned)
     };
-    let project = pick("project", parsed.map(|p| p.project.as_str())).and_then(|s| sanitize_segment(&s));
+    let project =
+        pick("project", parsed.map(|p| p.project.as_str())).and_then(|s| sanitize_segment(&s));
     let model = pick("model", parsed.map(|p| p.model.as_str())).and_then(|s| sanitize_segment(&s));
-    let version = pick("version", parsed.map(|p| p.version.as_str())).and_then(|s| sanitize_segment(&s));
-    let board = match query.get("board").map(|b| b.trim()).filter(|b| !b.is_empty()) {
+    let version =
+        pick("version", parsed.map(|p| p.version.as_str())).and_then(|s| sanitize_segment(&s));
+    let board = match query
+        .get("board")
+        .map(|b| b.trim())
+        .filter(|b| !b.is_empty())
+    {
         Some(b) => match sanitize_segment(b) {
             Some(v) => v,
             None => return Err("board 非法（只允许字母数字与 . - _，≤64 字符）".into()),

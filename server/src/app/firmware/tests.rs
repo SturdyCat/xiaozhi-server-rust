@@ -40,7 +40,14 @@ fn temp_root(name: &str) -> PathBuf {
 }
 
 /// 在临时根目录里落一个托管条目（bin + meta.json）。
-fn write_entry(root: &Path, project: &str, model: &str, board: &str, version: &str, uploaded_at: u64) {
+fn write_entry(
+    root: &Path,
+    project: &str,
+    model: &str,
+    board: &str,
+    version: &str,
+    uploaded_at: u64,
+) {
     let dir = entry_dir(root, project, model, board);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join(BIN_FILENAME), b"fake-bin").unwrap();
@@ -71,26 +78,42 @@ fn write_entry(root: &Path, project: &str, model: &str, board: &str, version: &s
 fn parse_app_image_reads_chip_and_app_desc() {
     let bin = build_app_image(0x0009, "xiaozhi", "2.0.4");
     let info = parse_app_image(&bin).expect("ESP-IDF 镜像应能解析");
-    assert_eq!(info.model, "esp32s3", "chip_id 9 = esp32s3（与 CONFIG_IDF_TARGET 同名）");
+    assert_eq!(
+        info.model, "esp32s3",
+        "chip_id 9 = esp32s3（与 CONFIG_IDF_TARGET 同名）"
+    );
     assert_eq!(info.project, "xiaozhi");
     assert_eq!(info.version, "2.0.4");
     assert_eq!(info.idf_ver, "v5.4.1");
     assert_eq!(info.built_at, "Oct 11 2026 10:20:30");
     // c3 同样可识别
     assert_eq!(
-        parse_app_image(&build_app_image(0x0005, "xiaozhi", "2.0.4")).unwrap().model,
+        parse_app_image(&build_app_image(0x0005, "xiaozhi", "2.0.4"))
+            .unwrap()
+            .model,
         "esp32c3"
     );
     // 未知芯片 id：型号留空（调用方要求显式给 ?model=，绝不猜）
-    assert_eq!(parse_app_image(&build_app_image(0x00FF, "x", "1.0.0")).unwrap().model, "");
+    assert_eq!(
+        parse_app_image(&build_app_image(0x00FF, "x", "1.0.0"))
+            .unwrap()
+            .model,
+        ""
+    );
 }
 
 /// 非 ESP-IDF 镜像（魔数不符/长度不足）→ None，由上传处理器回退到查询参数。
 #[test]
 fn parse_app_image_rejects_non_esp_image() {
     assert!(parse_app_image(&[]).is_none());
-    assert!(parse_app_image(&vec![0u8; APP_DESC_OFFSET + APP_DESC_LEN]).is_none(), "全 0 无魔数");
-    assert!(parse_app_image(&build_app_image(0x0009, "xiaozhi", "2.0.4")[..64]).is_none(), "长度不足");
+    assert!(
+        parse_app_image(&vec![0u8; APP_DESC_OFFSET + APP_DESC_LEN]).is_none(),
+        "全 0 无魔数"
+    );
+    assert!(
+        parse_app_image(&build_app_image(0x0009, "xiaozhi", "2.0.4")[..64]).is_none(),
+        "长度不足"
+    );
 }
 
 /// chip_id → 型号名必须与固件 `SystemInfo::GetChipModelName()`（`CONFIG_IDF_TARGET`）一致，
@@ -134,7 +157,10 @@ fn is_newer_follows_firmware_semantics() {
 fn sanitize_segment_blocks_path_traversal() {
     assert_eq!(sanitize_segment(" 2.0.4 "), Some("2.0.4".into()));
     assert_eq!(sanitize_segment("esp32s3"), Some("esp32s3".into()));
-    assert_eq!(sanitize_segment("bread-compact-wifi"), Some("bread-compact-wifi".into()));
+    assert_eq!(
+        sanitize_segment("bread-compact-wifi"),
+        Some("bread-compact-wifi".into())
+    );
     // 路径穿越 / 注入：一律拒绝（会拼进存储目录与下载 URL）
     assert_eq!(sanitize_segment("../etc/passwd"), None);
     assert_eq!(sanitize_segment(".."), None, "纯点段会穿透目录");
@@ -153,7 +179,14 @@ fn sanitize_segment_blocks_path_traversal() {
 fn find_requires_same_project_and_model_and_prefers_board() {
     let root = temp_root("find_match");
     write_entry(&root, "xiaozhi", "esp32s3", "", "2.0.4", 100);
-    write_entry(&root, "xiaozhi", "esp32s3", "bread-compact-wifi", "2.0.5", 90);
+    write_entry(
+        &root,
+        "xiaozhi",
+        "esp32s3",
+        "bread-compact-wifi",
+        "2.0.5",
+        90,
+    );
     write_entry(&root, "xiaozhi", "esp32c3", "", "2.0.6", 110);
     write_entry(&root, "otherapp", "esp32s3", "", "9.0.0", 120);
 
@@ -166,10 +199,16 @@ fn find_requires_same_project_and_model_and_prefers_board() {
     assert_eq!(m.version, "2.0.4");
     assert_eq!(m.board, "");
     // 同功能不同型号：互不相干（c3 不会拿到 s3 的包）
-    assert_eq!(find_in(&root, "xiaozhi", "esp32c3", "").unwrap().version, "2.0.6");
+    assert_eq!(
+        find_in(&root, "xiaozhi", "esp32c3", "").unwrap().version,
+        "2.0.6"
+    );
     assert!(find_in(&root, "xiaozhi", "esp32s2", "").is_none());
     // 同型号不同功能：互不相干
-    assert_eq!(find_in(&root, "otherapp", "esp32s3", "").unwrap().version, "9.0.0");
+    assert_eq!(
+        find_in(&root, "otherapp", "esp32s3", "").unwrap().version,
+        "9.0.0"
+    );
     assert!(find_in(&root, "otherapp", "esp32c3", "").is_none());
     // 没有型号信息（老固件不上报）→ 不下发，绝不猜
     assert!(find_in(&root, "", "", "").is_none());
@@ -178,7 +217,10 @@ fn find_requires_same_project_and_model_and_prefers_board() {
     assert_eq!(scan_in(&root).len(), 4);
     // 二进制路径按 功能/型号/板型 分目录
     let m = find_in(&root, "xiaozhi", "esp32s3", "lichuang-dev").unwrap();
-    assert_eq!(bin_path_in(&root, &m), root.join("xiaozhi/esp32s3/_/firmware.bin"));
+    assert_eq!(
+        bin_path_in(&root, &m),
+        root.join("xiaozhi/esp32s3/_/firmware.bin")
+    );
 }
 
 /// 上传即覆盖：同 key 只有一份；扫描结果按上传时间倒序（新的在前）。
@@ -203,8 +245,14 @@ fn remove_deletes_entry_and_cleans_empty_parents() {
     write_entry(&root, "xiaozhi", "esp32c3", "", "2.0.1", 100);
     assert!(remove_in(&root, "xiaozhi", "esp32c3", ""));
     assert!(find_in(&root, "xiaozhi", "esp32c3", "").is_none());
-    assert!(!root.join("xiaozhi/esp32c3").exists(), "空掉的父目录一并清理");
-    assert!(!remove_in(&root, "xiaozhi", "esp32c3", ""), "重复删除返回 false");
+    assert!(
+        !root.join("xiaozhi/esp32c3").exists(),
+        "空掉的父目录一并清理"
+    );
+    assert!(
+        !remove_in(&root, "xiaozhi", "esp32c3", ""),
+        "重复删除返回 false"
+    );
     assert!(root.exists(), "根目录保留");
 }
 
@@ -216,7 +264,8 @@ fn legacy_root_entry_is_listed_but_never_matches() {
     std::fs::write(root.join(BIN_FILENAME), b"old-bin").unwrap();
     std::fs::write(
         root.join("latest.json"),
-        serde_json::json!({"version": "1.9.0", "size": 7, "sha256": "aa", "uploaded_at": 42}).to_string(),
+        serde_json::json!({"version": "1.9.0", "size": 7, "sha256": "aa", "uploaded_at": 42})
+            .to_string(),
     )
     .unwrap();
 

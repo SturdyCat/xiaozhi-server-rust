@@ -14,7 +14,9 @@ use anyhow::Result;
 
 use super::*;
 use crate::plugins::llm::{LlmEvent, LlmProvider, LlmTurnResult, ToolSpec, TurnPrompt};
-use crate::plugins::memory::{CompletedTurn, GraphMemory, MaintainOpts, MemoryProvider, RetentionConfig};
+use crate::plugins::memory::{
+    CompletedTurn, GraphMemory, MaintainOpts, MemoryProvider, RetentionConfig,
+};
 
 /// 极简假 LLM：固定成功回复（供 graph 阶段抽取用），记录调用次数。
 struct FakeOkLlm {
@@ -45,8 +47,8 @@ impl LlmProvider for FakeOkLlm {
     {
         Box::pin(async move {
             self.calls.fetch_add(1, Ordering::SeqCst);
-            let text = "```json\n{\"summary\":\"测试摘要\",\"outcome\":\"information\"}\n```"
-                .to_string();
+            let text =
+                "```json\n{\"summary\":\"测试摘要\",\"outcome\":\"information\"}\n```".to_string();
             on_event(LlmEvent::Text(text.clone()));
             Ok(LlmTurnResult {
                 text,
@@ -138,11 +140,7 @@ async fn switch_graph_store_graph_preserves_data_without_burst_extraction() {
     // 阶段 2：切到 store 继续积累（stored 落同一库）。
     let store_mem = StoreOnlyMemory::new(&cfg()).unwrap();
     store_mem
-        .record(turn(
-            "xiaozhi:dev1",
-            "我下周三要去杭州出差",
-            "记得带充电器",
-        ))
+        .record(turn("xiaozhi:dev1", "我下周三要去杭州出差", "记得带充电器"))
         .await
         .unwrap();
     let stats = store_mem.stats();

@@ -182,9 +182,7 @@ async fn cancelled_turn_drops_accumulated_tool_calls() {
             Box::new(move |ev| {
                 match &ev {
                     LlmEvent::Text(t) => sink.lock().unwrap().push(format!("text:{t}")),
-                    LlmEvent::ToolCall(c) => {
-                        sink.lock().unwrap().push(format!("tool:{}", c.name))
-                    }
+                    LlmEvent::ToolCall(c) => sink.lock().unwrap().push(format!("tool:{}", c.name)),
                     LlmEvent::Done => sink.lock().unwrap().push("done".into()),
                 }
                 // 模拟设备打断：回调拒绝后续事件（producer.rs 的真实行为）
@@ -237,9 +235,7 @@ async fn normal_turn_still_delivers_tool_calls() {
             Box::new(move |ev| {
                 match &ev {
                     LlmEvent::Text(t) => sink.lock().unwrap().push(format!("text:{t}")),
-                    LlmEvent::ToolCall(c) => {
-                        sink.lock().unwrap().push(format!("tool:{}", c.name))
-                    }
+                    LlmEvent::ToolCall(c) => sink.lock().unwrap().push(format!("tool:{}", c.name)),
                     LlmEvent::Done => sink.lock().unwrap().push("done".into()),
                 }
                 true
@@ -286,9 +282,7 @@ async fn cancelled_non_sse_turn_drops_tool_calls() {
             Box::new(move |ev| {
                 match &ev {
                     LlmEvent::Text(t) => sink.lock().unwrap().push(format!("text:{t}")),
-                    LlmEvent::ToolCall(c) => {
-                        sink.lock().unwrap().push(format!("tool:{}", c.name))
-                    }
+                    LlmEvent::ToolCall(c) => sink.lock().unwrap().push(format!("tool:{}", c.name)),
                     LlmEvent::Done => sink.lock().unwrap().push("done".into()),
                 }
                 false
@@ -327,7 +321,13 @@ async fn normal_non_sse_turn_delivers_tool_calls() {
     let up = MockUpstream::start(body, "application/json").await;
     let client = up.client(false);
     let out = client
-        .chat_stream_inner(&[], "开灯", &TurnPrompt::default(), None, Box::new(|_| true))
+        .chat_stream_inner(
+            &[],
+            "开灯",
+            &TurnPrompt::default(),
+            None,
+            Box::new(|_| true),
+        )
         .await
         .expect("正常轮不应是错误");
     assert!(!out.cancelled);
@@ -347,7 +347,13 @@ async fn empty_response_is_still_a_failure() {
     .await;
     let client = up.client(true);
     let err = client
-        .chat_stream_inner(&[], "在吗", &TurnPrompt::default(), None, Box::new(|_| true))
+        .chat_stream_inner(
+            &[],
+            "在吗",
+            &TurnPrompt::default(),
+            None,
+            Box::new(|_| true),
+        )
         .await
         .expect_err("200 但既无文本也无工具调用 = 空回复失败");
     let failure = LlmFailure::classify(&err);
@@ -379,7 +385,13 @@ async fn cancelled_turn_with_text_only_is_not_empty_response_failure() {
     .await;
     let client = up.client(true);
     let out = client
-        .chat_stream_inner(&[], "在吗", &TurnPrompt::default(), None, Box::new(|_| false))
+        .chat_stream_inner(
+            &[],
+            "在吗",
+            &TurnPrompt::default(),
+            None,
+            Box::new(|_| false),
+        )
         .await
         .expect("取消不是错误，不该返回 Err");
     assert!(out.cancelled, "应标记为取消而非失败");
@@ -403,7 +415,13 @@ async fn cancellation_takes_precedence_over_stream_error() {
     .await;
     let client = up.client(true);
     let out = client
-        .chat_stream_inner(&[], "在吗", &TurnPrompt::default(), None, Box::new(|_| false))
+        .chat_stream_inner(
+            &[],
+            "在吗",
+            &TurnPrompt::default(),
+            None,
+            Box::new(|_| false),
+        )
         .await
         .expect("取消不是错误：同一块里的流式错误不得把打断变成上游故障");
     assert!(out.cancelled, "应按取消处理");
@@ -422,7 +440,13 @@ async fn stream_error_without_cancellation_is_still_protocol_failure() {
     .await;
     let client = up.client(true);
     let err = client
-        .chat_stream_inner(&[], "在吗", &TurnPrompt::default(), None, Box::new(|_| true))
+        .chat_stream_inner(
+            &[],
+            "在吗",
+            &TurnPrompt::default(),
+            None,
+            Box::new(|_| true),
+        )
         .await
         .expect_err("未取消时的流式错误应报 Protocol");
     let failure = LlmFailure::classify(&err);
@@ -436,7 +460,9 @@ async fn stream_error_without_cancellation_is_still_protocol_failure() {
 /// 401 应按 `Status` 归类且**不可重试**（分类路由护栏的既有行为，顺带守住重试可判据）。
 #[tokio::test]
 async fn non_error_status_returns_status_failure() {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
     let addr = listener.local_addr().expect("addr");
     tokio::spawn(async move {
         let Ok((mut sock, _)) = listener.accept().await else {
@@ -459,7 +485,13 @@ async fn non_error_status_returns_status_failure() {
         ..LlmConfig::default()
     });
     let err = client
-        .chat_stream_inner(&[], "你好", &TurnPrompt::default(), None, Box::new(|_| true))
+        .chat_stream_inner(
+            &[],
+            "你好",
+            &TurnPrompt::default(),
+            None,
+            Box::new(|_| true),
+        )
         .await
         .expect_err("401 应是错误");
     let failure = LlmFailure::classify(&err);

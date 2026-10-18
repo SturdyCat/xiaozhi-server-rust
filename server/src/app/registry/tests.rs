@@ -121,7 +121,11 @@ fn turn_ring_truncates_and_reports_dropped() {
     }
 
     let conv = &reg.conversations()[0];
-    assert_eq!(conv.turns.len(), MAX_TURNS_PER_SESSION, "轮次必须被环形截断");
+    assert_eq!(
+        conv.turns.len(),
+        MAX_TURNS_PER_SESSION,
+        "轮次必须被环形截断"
+    );
     assert!(conv.truncated());
     assert_eq!(conv.dropped, extra as u64, "丢掉的条数要如实记下");
     // 保留的是**最近**的：最后一条应是最后写入的那句

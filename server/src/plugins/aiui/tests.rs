@@ -24,8 +24,7 @@ fn first_frame_carries_full_params_and_base64_audio() {
         pace_ms: 10,
     };
     let f: serde_json::Value =
-        serde_json::from_str(&first_frame(&cfg, "xz-dev", "audio-1", &[1, 2, 3, 4], 0))
-            .unwrap();
+        serde_json::from_str(&first_frame(&cfg, "xz-dev", "audio-1", &[1, 2, 3, 4], 0)).unwrap();
     assert_eq!(f["header"]["appid"], "app1");
     assert_eq!(f["header"]["sn"], "xz-dev");
     assert_eq!(f["header"]["stmid"], "audio-1");
@@ -60,28 +59,40 @@ fn parse_result_frame_decodes_all_subs() {
     // event：Bos
     let ev = base64::engine::general_purpose::STANDARD
         .encode(r#"{"type":"Vad","data":"","key":"Bos","desc":{}}"#);
-    let f = parse_result_frame(&json!({
-        "header": {"code": 0, "message": "success", "status": 1, "stmid": "1"},
-        "payload": {"event": {"text": ev, "status": 0}}
-    }).to_string()).unwrap();
+    let f = parse_result_frame(
+        &json!({
+            "header": {"code": 0, "message": "success", "status": 1, "stmid": "1"},
+            "payload": {"event": {"text": ev, "status": 0}}
+        })
+        .to_string(),
+    )
+    .unwrap();
     assert_eq!(f.event_key.as_deref(), Some("Bos"));
     assert_eq!(f.code, 0);
 
     // iat：官方听写格式
     let iat = r#"{"sn":1,"ls":false,"bg":0,"ed":0,"pgs":"","ws":[{"cw":[{"w":"你"}]} ,{"cw":[{"w":"好吗"}]}]}"#;
     let iat_b64 = base64::engine::general_purpose::STANDARD.encode(iat);
-    let f = parse_result_frame(&json!({
-        "header": {"code": 0, "status": 1},
-        "payload": {"iat": {"text": iat_b64, "status": 2}}
-    }).to_string()).unwrap();
+    let f = parse_result_frame(
+        &json!({
+            "header": {"code": 0, "status": 1},
+            "payload": {"iat": {"text": iat_b64, "status": 2}}
+        })
+        .to_string(),
+    )
+    .unwrap();
     assert_eq!(f.iat_text.as_deref(), Some("你好吗"));
 
     // nlp：流式增量
     let nlp = base64::engine::general_purpose::STANDARD.encode("今天天气晴朗");
-    let f = parse_result_frame(&json!({
-        "header": {"code": 0, "status": 1},
-        "payload": {"nlp": {"text": nlp, "status": 1}}
-    }).to_string()).unwrap();
+    let f = parse_result_frame(
+        &json!({
+            "header": {"code": 0, "status": 1},
+            "payload": {"nlp": {"text": nlp, "status": 1}}
+        })
+        .to_string(),
+    )
+    .unwrap();
     assert_eq!(f.nlp_delta.as_deref(), Some("今天天气晴朗"));
     assert_eq!(f.nlp_status, Some(1));
 
@@ -94,9 +105,13 @@ fn parse_result_frame_decodes_all_subs() {
     assert_eq!(f.tts_status, Some(2));
 
     // 错误帧
-    let f = parse_result_frame(&json!({
-        "header": {"code": 10110, "message": "server licence error", "status": 2}
-    }).to_string()).unwrap();
+    let f = parse_result_frame(
+        &json!({
+            "header": {"code": 10110, "message": "server licence error", "status": 2}
+        })
+        .to_string(),
+    )
+    .unwrap();
     assert_eq!(f.code, 10110);
     assert!(f.header_session_end);
 }
@@ -109,8 +124,8 @@ fn frame_status_progresses_per_turn() {
     let f: serde_json::Value =
         serde_json::from_str(&first_frame(&cfg, "sn", "audio-3", &[7], 0)).unwrap();
     assert_eq!(f["header"]["status"], 0);
-    let f: serde_json::Value = serde_json::from_str(&next_frame(&cfg, "sn", "audio-3", &[7], 2))
-        .unwrap();
+    let f: serde_json::Value =
+        serde_json::from_str(&next_frame(&cfg, "sn", "audio-3", &[7], 2)).unwrap();
     assert_eq!(f["header"]["status"], 2);
 }
 
@@ -158,7 +173,12 @@ fn aiui_live_smoke() {
     println!(
         "== 结果：{}（{}ms）==",
         match &result {
-            Ok(t) => format!("OK stt={}字 reply={}字 audio={}B", t.stt.chars().count(), t.reply.chars().count(), t.audio.len()),
+            Ok(t) => format!(
+                "OK stt={}字 reply={}字 audio={}B",
+                t.stt.chars().count(),
+                t.reply.chars().count(),
+                t.audio.len()
+            ),
             Err(e) => format!("ERR {e:#}"),
         },
         t0.elapsed().as_millis()

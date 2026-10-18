@@ -45,9 +45,9 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 /// 流**空闲**超时：相邻两个 SSE 分片之间的最大间隔（LLM 思考停顿也在预算内）。
 const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(20);
 
+use super::{LlmEvent, LlmProvider, LlmTurnResult, ToolCall, ToolSpec};
 use crate::config::LlmConfig;
 use crate::plugins::prompt::{MemoryPosition, TurnPrompt};
-use super::{LlmEvent, LlmProvider, LlmTurnResult, ToolCall, ToolSpec};
 
 fn parse_whole_response(v: &Value) -> (String, Vec<ToolCall>) {
     let mut text = String::new();
@@ -85,7 +85,11 @@ fn parse_whole_response(v: &Value) -> (String, Vec<ToolCall>) {
                     .and_then(|a| a.as_str())
                     .unwrap_or("{}")
                     .to_string();
-                calls.push(ToolCall { id, name, arguments });
+                calls.push(ToolCall {
+                    id,
+                    name,
+                    arguments,
+                });
             }
             _ => {}
         }
@@ -246,11 +250,14 @@ impl LlmClient {
 
         if !is_event_stream {
             // 非 SSE 回退：整段解析（兼容不支持 SSE 的端点）。
-            let v: Value = resp
-                .json()
-                .await
-                .map_err(|e| anyhow::Error::new(LlmFailure::Protocol(format!("解析响应 JSON 失败: {e}"))))?;
-            if let Some(err) = v.get("error").and_then(|e| e.get("message")).and_then(|m| m.as_str()) {
+            let v: Value = resp.json().await.map_err(|e| {
+                anyhow::Error::new(LlmFailure::Protocol(format!("解析响应 JSON 失败: {e}")))
+            })?;
+            if let Some(err) = v
+                .get("error")
+                .and_then(|e| e.get("message"))
+                .and_then(|m| m.as_str())
+            {
                 return Err(anyhow::Error::new(LlmFailure::Status {
                     code: 200,
                     body: format!("上游在响应体里报错: {err}"),
@@ -278,7 +285,10 @@ impl LlmClient {
                 }
             }
             if cancelled {
-                tracing::info!("LLM 非流式响应被调用方取消（丢弃 {} 个工具调用）", calls.len());
+                tracing::info!(
+                    "LLM 非流式响应被调用方取消（丢弃 {} 个工具调用）",
+                    calls.len()
+                );
                 return Ok(LlmTurnResult {
                     text,
                     tool_calls: Vec::new(),
@@ -334,7 +344,9 @@ impl LlmClient {
         //   错误信息不丢，降级为 warn 后按取消语义返回。
         if let Some(err) = out.error {
             if cancelled {
-                tracing::warn!("LLM 流被取消，且同一块内带有流式错误（按取消处理，不作失败）: {err}");
+                tracing::warn!(
+                    "LLM 流被取消，且同一块内带有流式错误（按取消处理，不作失败）: {err}"
+                );
             } else {
                 return Err(anyhow::Error::new(LlmFailure::Protocol(format!(
                     "流式响应错误: {err}"

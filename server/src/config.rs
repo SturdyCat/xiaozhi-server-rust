@@ -38,9 +38,9 @@ pub use crate::app::echomuse::EchomuseConfig;
 pub use crate::plugins::aiui::AiuiConfig;
 pub use crate::plugins::asr::AsrConfig;
 pub use crate::plugins::command::CommandConfig;
-pub use crate::plugins::nlu::NluConfig;
 pub use crate::plugins::llm::LlmConfig;
 pub use crate::plugins::memory::MemoryConfig;
+pub use crate::plugins::nlu::NluConfig;
 pub use crate::plugins::soul::SoulConfig;
 pub use crate::plugins::tts::TtsConfig;
 pub use crate::plugins::vad::VadConfig;
@@ -296,7 +296,8 @@ impl AudioConfig {
     /// 会把流式下载退化成逐片节拍），上限保证每会话 PCM 内存 ≤ ~640KB。
     /// 10s 的下载缓冲 + 多秒水库 = 服务器侧总领先量，见 [`Self::downlink_buffer_ms`] 文档。
     pub fn download_budget_ms(&self) -> u32 {
-        self.downlink_buffer_ms.clamp(DOWNLOAD_BUDGET_MIN_MS, DOWNLOAD_BUDGET_MAX_MS)
+        self.downlink_buffer_ms
+            .clamp(DOWNLOAD_BUDGET_MIN_MS, DOWNLOAD_BUDGET_MAX_MS)
     }
 
     /// 配置规范化：
@@ -506,4 +507,3 @@ fn default_admin_dir() -> String {
 
 #[cfg(test)]
 mod tests;
-

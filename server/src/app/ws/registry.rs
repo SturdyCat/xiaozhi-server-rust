@@ -30,7 +30,7 @@ use axum::{
     response::Response,
 };
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use super::json_response;
 use crate::app::registry::{self, ConversationRecord, DeviceRecord, LiveSession};
@@ -102,17 +102,14 @@ pub(super) async fn device_detail(
     let mcp = McpFacts::of(&engines, &device_id);
     let mut body = device_json(&device, live.len(), now, &mcp);
     body["ok"] = json!(true);
-    body["sessions"] = json!(
-        live.iter()
-            .map(|s| session_json(s, now))
-            .collect::<Vec<_>>()
-    );
-    body["conversations"] = json!(
-        convs
-            .iter()
-            .map(|c| conversation_json(c))
-            .collect::<Vec<_>>()
-    );
+    body["sessions"] = json!(live
+        .iter()
+        .map(|s| session_json(s, now))
+        .collect::<Vec<_>>());
+    body["conversations"] = json!(convs
+        .iter()
+        .map(|c| conversation_json(c))
+        .collect::<Vec<_>>());
     body["note"] = json!(
         "`conversations` 是内存里保留的**最近几轮**（每会话最多 40 条、最多 32 个会话），\
          不是完整历史——要长期留存请开启 `[memory]`（走 `gm_messages`）。"

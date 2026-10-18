@@ -8,8 +8,8 @@ use super::poll_abort;
 use super::DownlinkPacer;
 use super::PacerStats;
 use crate::app::transport::{IncomingFrame, Transport};
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// 纯模拟下发（无 sleep）：`arrivals[i]` = 第 i 帧数据可就绪的时刻（毫秒，相对基准）。
@@ -23,7 +23,9 @@ fn simulate_pacing(lead_ms: u64, frame_ms: u64, arrivals: &[u64]) -> (Vec<u64>, 
         .iter()
         .map(|&a| {
             let now = a.max(send_at);
-            let wait = p.plan(base + Duration::from_millis(now), frame_ms).as_millis() as u64;
+            let wait = p
+                .plan(base + Duration::from_millis(now), frame_ms)
+                .as_millis() as u64;
             send_at = now + wait;
             p.mark_sent(base + Duration::from_millis(send_at));
             wait
@@ -98,13 +100,17 @@ fn pacer_bounds_catch_up_burst_after_long_vacuum() {
         lead / frame + 2
     );
     assert_eq!(
-        waits[(5 + burst) as usize], frame,
+        waits[(5 + burst) as usize],
+        frame,
         "补发结束后必须立刻回到实时节奏，实测 {waits:?}"
     );
     // 5 秒断供必然打穿设备缓冲：真空 + 队列余量两项都要有记录
     assert_eq!(stats.vacuum_events, 1, "{stats:?}");
     assert!(stats.max_vacuum_ms >= 5_000, "{stats:?}");
-    assert!(stats.queue_min_ms.unwrap_or(0) < 0, "应观测到队列见底：{stats:?}");
+    assert!(
+        stats.queue_min_ms.unwrap_or(0) < 0,
+        "应观测到队列见底：{stats:?}"
+    );
 }
 
 /// 提前量（抖动缓冲）语义：开局连续零等待预充约 lead/帧长 + 1 帧，随后回到匀速但
@@ -113,12 +119,19 @@ fn pacer_bounds_catch_up_burst_after_long_vacuum() {
 fn pacer_lead_pre_fills_and_absorbs_jitter() {
     // 数据全程就绪：前 5 帧零等待（预充 240ms + 首帧），随后 60ms 匀速
     let (waits, stats) = simulate_pacing(240, 60, &[0; 16]);
-    assert!(waits[..5].iter().all(|&w| w == 0), "开局应突发预充 4~5 帧，实测 {waits:?}");
+    assert!(
+        waits[..5].iter().all(|&w| w == 0),
+        "开局应突发预充 4~5 帧，实测 {waits:?}"
+    );
     assert!(
         waits[5..].iter().all(|&w| w == 60),
         "预充完成后应恢复 60ms 匀速，实测 {waits:?}"
     );
-    assert_eq!(stats.queue_min_ms.unwrap_or(0), 300, "匀速段余量应稳定在 lead+帧长：{stats:?}");
+    assert_eq!(
+        stats.queue_min_ms.unwrap_or(0),
+        300,
+        "匀速段余量应稳定在 lead+帧长：{stats:?}"
+    );
     // 100ms 短真空（< lead 240）：不重锚定，时间表不动 → 只按差额立即补 1~2 帧，
     // 随后回到 60ms 匀速（提前量吸收掉了这次抖动）
     let mut arrivals = vec![0u64; 5];
@@ -129,8 +142,15 @@ fn pacer_lead_pre_fills_and_absorbs_jitter() {
         caught_up <= 2,
         "短真空只应补回差额（1~2 帧），实测补 {caught_up} 帧：{waits:?}"
     );
-    assert_eq!(waits[5 + caught_up], 60, "短真空后回到 60ms 匀速：{waits:?}");
-    assert_eq!(stats.vacuum_events, 0, "100ms < 提前量：不构成真空：{stats:?}");
+    assert_eq!(
+        waits[5 + caught_up],
+        60,
+        "短真空后回到 60ms 匀速：{waits:?}"
+    );
+    assert_eq!(
+        stats.vacuum_events, 0,
+        "100ms < 提前量：不构成真空：{stats:?}"
+    );
 }
 
 /// 观测统计（每轮日志的现场证据）：
@@ -144,7 +164,10 @@ fn pacer_reports_vacuum_and_queue_stats() {
     let (_, stats) = simulate_pacing(240, 60, &[0; 20]);
     assert_eq!(stats.vacuum_events, 0, "{stats:?}");
     assert_eq!(stats.max_vacuum_ms, 0, "{stats:?}");
-    assert!(stats.queue_min_ms.unwrap_or(0) >= 240, "匀速段不得报队列见底：{stats:?}");
+    assert!(
+        stats.queue_min_ms.unwrap_or(0) >= 240,
+        "匀速段不得报队列见底：{stats:?}"
+    );
 
     // ③ 生产者每帧晚 120ms 才给数据（单次间隔 < 提前量 240 → 不重锚定、不报真空），
     //    但音频只够实时的一半 → 队列被持续抽干（净亏 60ms/帧）
@@ -165,7 +188,10 @@ fn pacer_reports_vacuum_and_queue_stats() {
     assert!(fresh.stats().queue_min_ms.is_none(), "首帧尚未测量");
     fresh.reset();
     let s = fresh.stats();
-    assert_eq!((s.vacuum_events, s.max_vacuum_ms, s.queue_min_ms), (0, 0, None));
+    assert_eq!(
+        (s.vacuum_events, s.max_vacuum_ms, s.queue_min_ms),
+        (0, 0, None)
+    );
 }
 
 /// 开局预充的**包数**必须低于设备队列容量——队列是 **N 包**（容量 = N × 帧长），
@@ -184,9 +210,15 @@ fn prefill_packet_budget_stays_within_firmware_queue() {
     }
     // 默认提前量（生产帧长 60ms）也必须安全
     let lead = super::DEFAULT_LEAD_MS;
-    assert!(lead.div_ceil(60) + 1 < queue, "默认 lead={lead}ms 的预充超队");
+    assert!(
+        lead.div_ceil(60) + 1 < queue,
+        "默认 lead={lead}ms 的预充超队"
+    );
     // 反例（旧口径）：固定按 1200ms 当容量，40ms 帧下必然溢出
-    assert!(1200u64.div_ceil(40) + 1 > queue, "旧口径确实超队列，说明按包数算才正确");
+    assert!(
+        1200u64.div_ceil(40) + 1 > queue,
+        "旧口径确实超队列，说明按包数算才正确"
+    );
 }
 
 /// 默认构造 = 内置默认提前量（1000ms），与 `[audio].downlink_lead_ms` 默认一致。
@@ -236,9 +268,7 @@ fn abort_flag() -> Arc<AtomicBool> {
 
 #[test]
 fn poll_abort_triggers_on_abort_text() {
-    let mut t = transport_with(vec![IncomingFrame::Text(
-        r#"{"type":"abort"}"#.to_string(),
-    )]);
+    let mut t = transport_with(vec![IncomingFrame::Text(r#"{"type":"abort"}"#.to_string())]);
     let flag = abort_flag();
     assert!(poll_abort(&mut t, "s1", &flag));
 }

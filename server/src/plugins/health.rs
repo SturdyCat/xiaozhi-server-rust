@@ -66,11 +66,17 @@ pub struct ProbeReport {
 
 impl ProbeReport {
     fn ok() -> Self {
-        Self { state: ProbeState::Ok, detail: None }
+        Self {
+            state: ProbeState::Ok,
+            detail: None,
+        }
     }
 
     fn fail(detail: String) -> Self {
-        Self { state: ProbeState::Fail, detail: Some(detail) }
+        Self {
+            state: ProbeState::Fail,
+            detail: Some(detail),
+        }
     }
 
     /// JSON 投影（`GET /api/health/engines` 的 `probe` 字段）。

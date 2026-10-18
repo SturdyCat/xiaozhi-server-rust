@@ -24,9 +24,7 @@ pub(crate) fn overlay_allowed(path: &[&str]) -> bool {
     match path.first().copied() {
         Some("tts") => matches!(
             path,
-            ["tts", "speaker"]
-                | ["tts", "speed"]
-                | ["tts", "xfyun", "voice"]
+            ["tts", "speaker"] | ["tts", "speed"] | ["tts", "xfyun", "voice"]
         ),
         Some("llm") => matches!(path, ["llm", "system_prompt"] | ["llm", "max_history"]),
         // 整段允许（人设仅影响 prompt 渲染，无引擎影响）

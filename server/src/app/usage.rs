@@ -95,10 +95,7 @@ impl UsageMeter {
     /// 全局累计快照（端点走 [`Self::to_json`]；此访问器供测试与后续 Prometheus 类导出用）。
     #[allow(dead_code)]
     pub fn global(&self) -> UsageSnapshot {
-        self.inner
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .global
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).global
     }
 
     pub fn session(&self, session_id: &str) -> Option<UsageSnapshot> {

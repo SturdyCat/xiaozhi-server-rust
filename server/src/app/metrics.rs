@@ -31,7 +31,7 @@ use std::time::Instant;
 
 use tokio::sync::broadcast;
 
-use crate::app::events::{ANCHOR_INJECT, ANCHOR_SPEECH_END, ServerEvent};
+use crate::app::events::{ServerEvent, ANCHOR_INJECT, ANCHOR_SPEECH_END};
 
 /// 整轮延迟样本窗口（p50/p95 的计算样本数；超出丢最旧）。
 const TURN_WINDOW: usize = 200;
@@ -64,8 +64,7 @@ fn stage_stats_json(w: &VecDeque<u64>) -> serde_json::Value {
         if samples.is_empty() {
             0
         } else {
-            let idx =
-                (((samples.len() as f64) * q).ceil() as usize).clamp(1, samples.len()) - 1;
+            let idx = (((samples.len() as f64) * q).ceil() as usize).clamp(1, samples.len()) - 1;
             samples[idx]
         }
     };
@@ -107,7 +106,10 @@ pub struct Metrics {
 
 impl Metrics {
     pub fn new() -> Self {
-        Self { inner: Arc::new(Mutex::new(Inner::default())), started: Instant::now() }
+        Self {
+            inner: Arc::new(Mutex::new(Inner::default())),
+            started: Instant::now(),
+        }
     }
 
     /// 消费一条事件并更新聚合（订阅者唯一入口；绝不允许 panic 外溢）。
@@ -116,7 +118,9 @@ impl Metrics {
         match e {
             ServerEvent::SessionStart { .. } => g.sessions_started += 1,
             ServerEvent::SessionEnd { .. } => g.sessions_ended += 1,
-            ServerEvent::MessageAdded { role, elapsed_ms, .. } => {
+            ServerEvent::MessageAdded {
+                role, elapsed_ms, ..
+            } => {
                 // 轮次计数与整轮耗时样本的**唯一来源**：只有 `role == "assistant"` 的
                 // MessageAdded 才算"一轮"（用户那条只是同一轮的另一半，见 `turn_id`）。
                 // `TurnLatency` **绝不**参与这两个计数——否则一轮会被记成多轮。
@@ -130,7 +134,12 @@ impl Metrics {
                     }
                 }
             }
-            ServerEvent::TtsRound { frames, audio_ms, interrupted, .. } => {
+            ServerEvent::TtsRound {
+                frames,
+                audio_ms,
+                interrupted,
+                ..
+            } => {
                 g.tts_rounds += 1;
                 g.tts_frames += u64::from(*frames);
                 g.tts_audio_ms += *audio_ms;
@@ -189,7 +198,8 @@ impl Metrics {
             if samples.is_empty() {
                 0
             } else {
-                let idx = (((samples.len() as f64) * q).ceil() as usize).clamp(1, samples.len()) - 1;
+                let idx =
+                    (((samples.len() as f64) * q).ceil() as usize).clamp(1, samples.len()) - 1;
                 samples[idx]
             }
         };

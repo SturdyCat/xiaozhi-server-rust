@@ -38,7 +38,13 @@ fn latency_section_shape_and_quantiles_monotonic() {
             session_id: "s".into(),
             device_id: "d".into(),
             turn_id: i,
-            stages: stages(Some(i * 10), Some(i * 20), Some(i * 30), Some(i * 40), Some(i * 50)),
+            stages: stages(
+                Some(i * 10),
+                Some(i * 20),
+                Some(i * 30),
+                Some(i * 40),
+                Some(i * 50),
+            ),
             interrupted: false,
         });
     }
@@ -51,7 +57,9 @@ fn latency_section_shape_and_quantiles_monotonic() {
         "tts_first_pcm_ms",
         "first_audio_ms",
     ] {
-        let n = lat.get(key).unwrap_or_else(|| panic!("latency.{key} 应存在"));
+        let n = lat
+            .get(key)
+            .unwrap_or_else(|| panic!("latency.{key} 应存在"));
         for q in ["p50_ms", "p90_ms", "p95_ms", "p99_ms", "max_ms", "samples"] {
             assert!(n.get(q).is_some(), "latency.{key}.{q} 应存在");
         }
@@ -227,12 +235,21 @@ fn only_speech_and_inject_anchors_enter_latency_windows() {
     let j = m.snapshot_json();
     let asr = &j["latency"]["asr_end_ms"];
     assert_eq!(asr["samples"], 2, "仅 speech_end + inject 两轮入窗");
-    assert_eq!(asr["max_ms"], 200, "canned/aiui 的 9999 不得混入（否则 max 失真）");
+    assert_eq!(
+        asr["max_ms"], 200,
+        "canned/aiui 的 9999 不得混入（否则 max 失真）"
+    );
     assert_eq!(asr["p50_ms"], 100);
     // note 文案写明口径（前端展示直接用）
     let note = j["latency"]["note"].as_str().unwrap_or_default();
-    assert!(note.contains("speech_end") && note.contains("inject"), "note 应写明入窗锚点口径: {note}");
-    assert!(note.contains("canned") || note.contains("不入窗"), "note 应说明排除口径: {note}");
+    assert!(
+        note.contains("speech_end") && note.contains("inject"),
+        "note 应写明入窗锚点口径: {note}"
+    );
+    assert!(
+        note.contains("canned") || note.contains("不入窗"),
+        "note 应说明排除口径: {note}"
+    );
 }
 
 /// ## 关键回归：一轮的 5 个分段只算**一个**样本（不是 5 个）
@@ -250,7 +267,7 @@ fn stages_of_one_turn_count_as_one_sample_per_window() {
     let m = Metrics::new();
     for i in 1..=N {
         let turn = i; // 一轮一个 id
-        // 用户消息：与助手同轮（不参与轮次计数，见 observe 的注释）
+                      // 用户消息：与助手同轮（不参与轮次计数，见 observe 的注释）
         m.observe(&ServerEvent::MessageAdded {
             session_id: "s".into(),
             device_id: "d".into(),
@@ -273,7 +290,13 @@ fn stages_of_one_turn_count_as_one_sample_per_window() {
             session_id: "s".into(),
             device_id: "d".into(),
             turn_id: turn,
-            stages: stages(Some(i * 10), Some(i * 20), Some(i * 30), Some(i * 40), Some(i * 50)),
+            stages: stages(
+                Some(i * 10),
+                Some(i * 20),
+                Some(i * 30),
+                Some(i * 40),
+                Some(i * 50),
+            ),
             interrupted: false,
         });
         m.observe(&ServerEvent::TtsRound {
@@ -298,7 +321,8 @@ fn stages_of_one_turn_count_as_one_sample_per_window() {
         "first_audio_ms",
     ] {
         assert_eq!(
-            j["latency"][key]["samples"], N,
+            j["latency"][key]["samples"],
+            N,
             "latency.{key}: 一轮只进 1 个样本（一轮共 5 段但分属 5 个窗口），\
              若为 {} 说明按分段重复计数了",
             N * 5
@@ -359,7 +383,13 @@ fn mixed_anchors_do_not_inflate_samples() {
             session_id: "s".into(),
             device_id: "d".into(),
             turn_id: turn,
-            stages: stages(Some(i * 10), Some(i * 20), Some(i * 30), Some(i * 40), Some(i * 50)),
+            stages: stages(
+                Some(i * 10),
+                Some(i * 20),
+                Some(i * 30),
+                Some(i * 40),
+                Some(i * 50),
+            ),
             interrupted: false,
         });
         // 每轮语音之间夹一条问候语（canned）与一条 AIUI 轮（值 9999，绝不能进窗）
@@ -391,7 +421,10 @@ fn mixed_anchors_do_not_inflate_samples() {
         ("tts_first_pcm_ms", 40),
         ("first_audio_ms", 50),
     ] {
-        assert_eq!(j["latency"][key]["samples"], 10, "latency.{key} 只按 10 个语音轮计");
+        assert_eq!(
+            j["latency"][key]["samples"], 10,
+            "latency.{key} 只按 10 个语音轮计"
+        );
         assert_eq!(
             j["latency"][key]["max_ms"],
             10 * factor,

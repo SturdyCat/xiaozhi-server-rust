@@ -168,11 +168,7 @@ pub fn parse_app_image(bytes: &[u8]) -> Option<AppImageInfo> {
     if magic != APP_DESC_MAGIC {
         return None;
     }
-    let chip_id = u16::from_le_bytes(
-        bytes[CHIP_ID_OFFSET..CHIP_ID_OFFSET + 2]
-            .try_into()
-            .ok()?,
-    );
+    let chip_id = u16::from_le_bytes(bytes[CHIP_ID_OFFSET..CHIP_ID_OFFSET + 2].try_into().ok()?);
     let version = read_cstr(bytes, APP_DESC_OFFSET + 16, 32);
     let project = read_cstr(bytes, APP_DESC_OFFSET + 48, 32);
     let time = read_cstr(bytes, APP_DESC_OFFSET + 80, 16);

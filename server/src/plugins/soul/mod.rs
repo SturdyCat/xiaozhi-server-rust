@@ -419,7 +419,10 @@ fn platform_constraints(max_sentences: u32, max_chars: u32) -> String {
 /// 人格内容取 [`SoulConfig::effective`]（预设基线 ⊕ 用户字段）。
 pub fn instructions(cfg: &crate::config::Config, device_id: &str) -> anyhow::Result<String> {
     let soul = cfg.soul.effective()?;
-    prompt::assemble(&soul.sections(&cfg.llm.system_prompt), &vars_for(&soul, device_id))
+    prompt::assemble(
+        &soul.sections(&cfg.llm.system_prompt),
+        &vars_for(&soul, device_id),
+    )
 }
 
 /// 插值变量（人格渲染与预览共用同一口径，避免"预览的和实际发的不一样"）。
@@ -430,7 +433,6 @@ fn vars_for(soul: &SoulConfig, device_id: &str) -> prompt::Vars {
     vars.set("device_id", device_id.to_string());
     vars
 }
-
 
 /// 追加一行（空串跳过）。
 fn push_line(s: &mut String, line: &str) {

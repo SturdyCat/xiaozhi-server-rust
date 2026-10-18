@@ -39,7 +39,10 @@ fn record_stores_tools_and_projects_counts() {
         "aa:bb",
         "s1",
         1_000,
-        vec![tool("self.audio_speaker.set_volume", false), tool("self.reboot", true)],
+        vec![
+            tool("self.audio_speaker.set_volume", false),
+            tool("self.reboot", true),
+        ],
     ));
     let d = reg.get("aa:bb").expect("登记后应能查到");
     assert_eq!(d.board, "bread-compact-wifi");
@@ -60,7 +63,12 @@ fn failed_probe_keeps_last_good_tools() {
     // 这是本模块的核心规则：探测失败（一个工具都没取到 + 带 error）**不能**把上次结果抹掉，
     // 否则界面会从"5 个工具"变成"什么都没有"，看起来像设备被清空了。
     let reg = McpRegistry::new();
-    reg.record(probe("aa:bb", "s1", 1_000, vec![tool("self.lamp.turn_on", false)]));
+    reg.record(probe(
+        "aa:bb",
+        "s1",
+        1_000,
+        vec![tool("self.lamp.turn_on", false)],
+    ));
     let mut failed = probe("aa:bb", "s2", 2_000, vec![]);
     failed.error = Some("initialize 未完成: 等待设备 MCP 响应超时（800ms）".into());
     failed.board = String::new();
@@ -98,7 +106,9 @@ fn failed_probe_without_previous_record_still_reports_the_error() {
     let mut failed = probe("cc:dd", "s1", 5_000, vec![]);
     failed.error = Some("设备拒绝 initialize（code=-32601）: Method not implemented".into());
     reg.record(failed);
-    let d = reg.get("cc:dd").expect("失败也要登记：界面才能显示'这台设备探测失败了'");
+    let d = reg
+        .get("cc:dd")
+        .expect("失败也要登记：界面才能显示'这台设备探测失败了'");
     assert!(d.tools.is_empty());
     assert!(d.error.unwrap().contains("-32601"));
 }
@@ -110,7 +120,10 @@ fn mark_offline_only_applies_to_the_probing_session() {
     // 旧会话收尾（s1）在新会话（s2）已探测之后到达：不能把"在线"抹掉
     reg.record(probe("aa:bb", "s2", 2_000, vec![]));
     reg.mark_offline("aa:bb", "s1");
-    assert!(reg.get("aa:bb").unwrap().online, "旧会话不得把新会话标成离线");
+    assert!(
+        reg.get("aa:bb").unwrap().online,
+        "旧会话不得把新会话标成离线"
+    );
 
     reg.mark_offline("aa:bb", "s2");
     assert!(!reg.get("aa:bb").unwrap().online);
@@ -128,7 +141,10 @@ fn registry_is_bounded() {
     assert_eq!(reg.len(), MAX_DEVICES, "长时间运行不得无界增长");
     assert!(reg.get("dev-0").is_none(), "淘汰最旧的一条");
     assert!(reg.get("dev-4").is_none());
-    assert!(reg.get(&format!("dev-{}", MAX_DEVICES + 4)).is_some(), "最新的必须在");
+    assert!(
+        reg.get(&format!("dev-{}", MAX_DEVICES + 4)).is_some(),
+        "最新的必须在"
+    );
 }
 
 #[test]
@@ -141,7 +157,10 @@ fn to_json_orders_most_recently_probed_first() {
     assert_eq!(v["devices"][0]["device_id"], "new", "最近探测的在前面");
     assert_eq!(v["devices"][1]["device_id"], "old");
     // 空注册表也要给出可行动的说明（"刚部署 / 设备还没唤醒"是正常现象，不是错误）
-    assert!(McpRegistry::new().to_json()["devices"].as_array().unwrap().is_empty());
+    assert!(McpRegistry::new().to_json()["devices"]
+        .as_array()
+        .unwrap()
+        .is_empty());
     assert!(v["note"].as_str().unwrap().contains("会话开始时"));
 }
 
@@ -153,9 +172,21 @@ fn has_tool_distinguishes_unknown_from_absent() {
     assert_eq!(reg.has_tool("no-device", "self.audio_listener.stop"), None);
 
     // 探测成功且含 stop → Some(true)
-    reg.record(probe("dev-ok", "s1", 1_000, vec![tool("self.audio_listener.stop", true)]));
-    assert_eq!(reg.has_tool("dev-ok", "self.audio_listener.stop"), Some(true));
-    assert_eq!(reg.has_tool("dev-ok", "self.reboot"), Some(false), "清单在手但无此工具");
+    reg.record(probe(
+        "dev-ok",
+        "s1",
+        1_000,
+        vec![tool("self.audio_listener.stop", true)],
+    ));
+    assert_eq!(
+        reg.has_tool("dev-ok", "self.audio_listener.stop"),
+        Some(true)
+    );
+    assert_eq!(
+        reg.has_tool("dev-ok", "self.reboot"),
+        Some(false),
+        "清单在手但无此工具"
+    );
 
     // 探测失败（零工具 + error）→ 清单未知（保持试探路径，不误判为"没有"）
     let mut bad = probe("dev-bad", "s2", 2_000, vec![]);
@@ -169,15 +200,28 @@ fn has_tool_distinguishes_unknown_from_absent() {
 
     // 探测成功但清单为空 → 设备明确没有工具 → Some(false)（不是 None）
     reg.record(probe("dev-empty", "s3", 3_000, vec![]));
-    assert_eq!(reg.has_tool("dev-empty", "self.audio_listener.stop"), Some(false));
+    assert_eq!(
+        reg.has_tool("dev-empty", "self.audio_listener.stop"),
+        Some(false)
+    );
 }
 
 /// P1-10：`command_gate` 三态标记（管理台「指令闸门兼容」列的数据源）。
 #[test]
 fn command_gate_json_marks_compatibility() {
     let reg = McpRegistry::new();
-    reg.record(probe("dev-ok", "s1", 1_000, vec![tool("self.audio_listener.stop", true)]));
-    reg.record(probe("dev-old", "s2", 1_000, vec![tool("self.reboot", true)]));
+    reg.record(probe(
+        "dev-ok",
+        "s1",
+        1_000,
+        vec![tool("self.audio_listener.stop", true)],
+    ));
+    reg.record(probe(
+        "dev-old",
+        "s2",
+        1_000,
+        vec![tool("self.reboot", true)],
+    ));
     let mut bad = probe("dev-bad", "s3", 1_000, vec![]);
     bad.error = Some("超时".into());
     reg.record(bad);
@@ -194,5 +238,9 @@ fn command_gate_json_marks_compatibility() {
     };
     assert_eq!(find("dev-ok")["command_gate"], "compatible");
     assert_eq!(find("dev-old")["command_gate"], "will_degrade");
-    assert_eq!(find("dev-bad")["command_gate"], "unknown", "探测失败 = 未知");
+    assert_eq!(
+        find("dev-bad")["command_gate"],
+        "unknown",
+        "探测失败 = 未知"
+    );
 }

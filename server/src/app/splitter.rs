@@ -33,7 +33,10 @@ pub struct SentenceSplitter {
 
 impl SentenceSplitter {
     pub fn new() -> Self {
-        Self { buf: String::new(), last_feed: None }
+        Self {
+            buf: String::new(),
+            last_feed: None,
+        }
     }
 
     /// 喂入文本增量，返回本次切出的完整句（可能 0~N 句）。
@@ -152,7 +155,11 @@ pub(crate) fn spawn_flush_watchdog(
                 .unwrap_or_else(|e| e.into_inner())
                 .take_expired(now, max_wait);
             if let Some(sentence) = expired {
-                tracing::debug!("残句定时出句（静默 ≥ {}ms）：{:?}", max_wait.as_millis(), sentence);
+                tracing::debug!(
+                    "残句定时出句（静默 ≥ {}ms）：{:?}",
+                    max_wait.as_millis(),
+                    sentence
+                );
                 if tx.send(sentence).is_err() {
                     return; // 消费者已退出
                 }

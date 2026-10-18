@@ -20,12 +20,12 @@ use std::sync::{Arc, RwLock};
 use anyhow::Result;
 
 use crate::config::Config;
+use crate::plugins::asr::AsrEngine;
+use crate::plugins::llm::Llm;
 use crate::plugins::registry::{
     active_impl, impl_id, unknown_engine_hint, unknown_engine_of, Built, Capability, HotReload,
     Requirement, ALL_CAPABILITIES, REGISTRY,
 };
-use crate::plugins::asr::AsrEngine;
-use crate::plugins::llm::Llm;
 use crate::plugins::tts::TtsEngine;
 
 /// 插件生命周期状态（对齐 DSH 的 `FiberState`，只保留对用户有意义的几档）。
@@ -247,17 +247,14 @@ impl PluginHost {
         }
 
         // 3) 可选能力的共享实例（记忆）：失败只降级，并把原因写进状态供 /api/plugins 上报
-        let memory: Arc<dyn crate::plugins::memory::MemoryProvider> = match Self::build_optional(
-            &host,
-            cfg,
-            Capability::Memory,
-        ) {
-            Some(Built::Memory(m)) => {
-                tracing::info!("记忆引擎已装配：{}", m.name());
-                m
-            }
-            _ => Arc::new(crate::plugins::memory::NoopMemory),
-        };
+        let memory: Arc<dyn crate::plugins::memory::MemoryProvider> =
+            match Self::build_optional(&host, cfg, Capability::Memory) {
+                Some(Built::Memory(m)) => {
+                    tracing::info!("记忆引擎已装配：{}", m.name());
+                    m
+                }
+                _ => Arc::new(crate::plugins::memory::NoopMemory),
+            };
 
         let booted = Booted {
             asr: asr.ok_or_else(|| no_impl_err(Capability::Asr))?,
@@ -272,11 +269,7 @@ impl PluginHost {
     ///
     /// 与必需能力的分工：必需能力走 [`Self::boot`] 的"校验汇总 → 构建 → 失败即退出"；
     /// 可选能力只要能降级就不该阻止启动（记忆配错一个路径不该让音箱不能用）。
-    pub fn build_optional(
-        host: &Arc<Self>,
-        cfg: &Config,
-        cap: Capability,
-    ) -> Option<Built> {
+    pub fn build_optional(host: &Arc<Self>, cfg: &Config, cap: Capability) -> Option<Built> {
         let d = REGISTRY
             .iter()
             .find(|d| d.capability == cap && d.is_selected(cfg))?;
@@ -365,12 +358,7 @@ impl PluginHost {
             })
             .collect();
 
-        let count = |p: Phase| {
-            statuses
-                .iter()
-                .filter(|s| s.phase == p)
-                .count()
-        };
+        let count = |p: Phase| statuses.iter().filter(|s| s.phase == p).count();
         serde_json::json!({
             "capabilities": caps,
             "counts": {
@@ -403,18 +391,19 @@ impl PluginHost {
             .fold(None::<Phase>, |acc, p| match (acc, p) {
                 (None, p) => Some(p),
                 (Some(Phase::Failed), _) | (_, Phase::Failed) => Some(Phase::Failed),
-                (Some(Phase::Active), Phase::Degraded)
-                | (Some(Phase::Degraded), Phase::Active) => Some(Phase::Degraded),
+                (Some(Phase::Active), Phase::Degraded) | (Some(Phase::Degraded), Phase::Active) => {
+                    Some(Phase::Degraded)
+                }
                 (Some(a), Phase::Disabled) => Some(a),
                 (Some(_), p) => Some(p),
             })
             .unwrap_or(Phase::Disabled);
-        let active_impl = impls.iter().find(|s| s.phase == Phase::Active).map(|s| s.id);
-        let enabled = impls.iter().any(|s| s.enabled);
-        let last_error = impls
+        let active_impl = impls
             .iter()
-            .find_map(|s| s.last_error.as_ref())
-            .cloned();
+            .find(|s| s.phase == Phase::Active)
+            .map(|s| s.id);
+        let enabled = impls.iter().any(|s| s.enabled);
+        let last_error = impls.iter().find_map(|s| s.last_error.as_ref()).cloned();
         CapabilitySummary {
             capability: cap,
             phase,

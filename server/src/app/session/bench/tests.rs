@@ -29,9 +29,17 @@ async fn 合成挂死时竞速返回超时并置位取消标志() {
         Ok::<(), anyhow::Error>(())
     });
     let drain = futures_util::future::pending::<anyhow::Result<()>>();
-    let (race, drained) =
-        race_synth(&mut producer, drain, &cancelled, deadline_after(TEST_DEADLINE_MS)).await;
-    assert!(matches!(race, SynthRace::TimedOut), "应判超时，实际 {race:?}");
+    let (race, drained) = race_synth(
+        &mut producer,
+        drain,
+        &cancelled,
+        deadline_after(TEST_DEADLINE_MS),
+    )
+    .await;
+    assert!(
+        matches!(race, SynthRace::TimedOut),
+        "应判超时，实际 {race:?}"
+    );
     assert!(drained.is_none());
     assert!(cancelled.load(Ordering::Relaxed), "超时必须置位取消标志");
     // 取消标志置位后 producer 应能自行退出（permit 随闭包归还，不泄漏）
@@ -46,8 +54,13 @@ async fn 合成先完成时竞速返回producer结果() {
         tokio::time::sleep(Duration::from_millis(TEST_DEADLINE_MS)).await;
         Ok(())
     });
-    let (race, drained) =
-        race_synth(&mut producer, &mut drain, &cancelled, deadline_after(10_000)).await;
+    let (race, drained) = race_synth(
+        &mut producer,
+        &mut drain,
+        &cancelled,
+        deadline_after(10_000),
+    )
+    .await;
     match race {
         SynthRace::Producer(Ok(())) => {}
         other => panic!("应返回 Producer(Ok)，实际 {other:?}"),
@@ -65,9 +78,17 @@ async fn 下发先完成时竞速返回drained并携带结果() {
         Ok::<(), anyhow::Error>(())
     });
     let mut drain = Box::pin(async { Ok(7usize) });
-    let (race, drained) =
-        race_synth(&mut producer, &mut drain, &cancelled, deadline_after(10_000)).await;
-    assert!(matches!(race, SynthRace::Drained), "应判 Drained，实际 {race:?}");
+    let (race, drained) = race_synth(
+        &mut producer,
+        &mut drain,
+        &cancelled,
+        deadline_after(10_000),
+    )
+    .await;
+    assert!(
+        matches!(race, SynthRace::Drained),
+        "应判 Drained，实际 {race:?}"
+    );
     let value = drained.expect("Drained 必带结果").expect("下发未报错");
     assert_eq!(value, 7);
     assert!(!cancelled.load(Ordering::Relaxed));

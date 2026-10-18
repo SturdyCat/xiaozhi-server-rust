@@ -2,9 +2,9 @@
 //! `#[cfg(feature = "sherpa")]`：仅在启用 sherpa feature 的构建中存在。
 
 use super::AsrConfig;
-use anyhow::Result;
 #[cfg(feature = "sherpa")]
 use anyhow::Context;
+use anyhow::Result;
 use std::sync::Arc;
 
 use super::AsrEngine;
@@ -54,4 +54,3 @@ impl AsrEngine for SherpaAsr {
         }
     }
 }
-

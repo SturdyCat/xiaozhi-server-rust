@@ -7,7 +7,6 @@
 //!   `event.key` = Bos/Eos/Silence（云端 VAD 事件）；iat 为流式听写；
 //!   nlp 为大模型流式增量；tts.audio 为合成音频；`header.status==2` 收尾。
 
-
 use anyhow::{Context, Result};
 use base64::Engine as _;
 use serde_json::json;
@@ -36,8 +35,7 @@ pub(super) struct TurnFrame {
 
 /// 解析一帧结果 JSON（文本字段 base64 解码）。
 pub(super) fn parse_result_frame(text: &str) -> Result<TurnFrame> {
-    let v: serde_json::Value =
-        serde_json::from_str(text).context("结果帧不是合法 JSON")?;
+    let v: serde_json::Value = serde_json::from_str(text).context("结果帧不是合法 JSON")?;
     let header = v.get("header").cloned().unwrap_or(serde_json::Value::Null);
     let code = header.get("code").and_then(|c| c.as_i64()).unwrap_or(-1);
     let message = header
@@ -83,10 +81,7 @@ pub(super) fn parse_result_frame(text: &str) -> Result<TurnFrame> {
             if let Some(t) = ev.get("text").and_then(|t| t.as_str()) {
                 if let Ok(decoded) = base64_decode_string(t) {
                     if let Ok(j) = serde_json::from_str::<serde_json::Value>(&decoded) {
-                        f.event_key = j
-                            .get("key")
-                            .and_then(|k| k.as_str())
-                            .map(str::to_string);
+                        f.event_key = j.get("key").and_then(|k| k.as_str()).map(str::to_string);
                     }
                 }
             }
@@ -152,7 +147,13 @@ pub(super) fn base64_decode_string(s: &str) -> Result<String> {
 }
 
 /// 首帧：全量参数（header + parameter + payload.audio）。
-pub(super) fn first_frame(cfg: &AiuiConfig, sn: &str, stmid: &str, audio: &[u8], status: i64) -> String {
+pub(super) fn first_frame(
+    cfg: &AiuiConfig,
+    sn: &str,
+    stmid: &str,
+    audio: &[u8],
+    status: i64,
+) -> String {
     json!({
         "header": frame_header(cfg, sn, stmid, status),
         "parameter": {
@@ -188,7 +189,13 @@ pub(super) fn first_frame(cfg: &AiuiConfig, sn: &str, stmid: &str, audio: &[u8],
 }
 
 /// 中/尾帧：精简（仅 header + payload.audio）。
-pub(super) fn next_frame(cfg: &AiuiConfig, sn: &str, stmid: &str, audio: &[u8], status: i64) -> String {
+pub(super) fn next_frame(
+    cfg: &AiuiConfig,
+    sn: &str,
+    stmid: &str,
+    audio: &[u8],
+    status: i64,
+) -> String {
     json!({
         "header": frame_header(cfg, sn, stmid, status),
         "payload": {
@@ -205,7 +212,12 @@ pub(super) fn next_frame(cfg: &AiuiConfig, sn: &str, stmid: &str, audio: &[u8], 
     .to_string()
 }
 
-pub(super) fn frame_header(cfg: &AiuiConfig, sn: &str, stmid: &str, status: i64) -> serde_json::Value {
+pub(super) fn frame_header(
+    cfg: &AiuiConfig,
+    sn: &str,
+    stmid: &str,
+    status: i64,
+) -> serde_json::Value {
     json!({
         "appid": cfg.appid,
         "sn": sn,

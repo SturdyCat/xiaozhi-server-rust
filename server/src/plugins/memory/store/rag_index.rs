@@ -114,7 +114,15 @@ impl Store {
                 "INSERT OR REPLACE INTO rag_docs
                      (id, path, title, size, mtime_ms, chunk_count, indexed_at_ms)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                rusqlite::params![doc_id, path_str, title, size, mtime_ms, chunks.len() as i64, now],
+                rusqlite::params![
+                    doc_id,
+                    path_str,
+                    title,
+                    size,
+                    mtime_ms,
+                    chunks.len() as i64,
+                    now
+                ],
             )?;
             for (seq, text) in chunks.iter().enumerate() {
                 let chunk_id = schema::stable_id("rchk", &[&doc_id, &seq.to_string()]);
@@ -142,7 +150,11 @@ impl Store {
     /// 词法检索文档分块（与 graph 的摘要检索同路线：命中词项数排序）。
     ///
     /// 返回前 `limit` 条；`terms` 为空 → 空结果（调用方提前短路）。
-    pub(in crate::plugins::memory) fn search_chunks(&self, terms: &[String], limit: usize) -> Result<Vec<RagSearchHit>> {
+    pub(in crate::plugins::memory) fn search_chunks(
+        &self,
+        terms: &[String],
+        limit: usize,
+    ) -> Result<Vec<RagSearchHit>> {
         if terms.is_empty() {
             return Ok(Vec::new());
         }
@@ -157,7 +169,10 @@ impl Store {
              ORDER BY hits DESC, c.id
              LIMIT {limit}"
         );
-        let params = terms.iter().map(|s| s as &dyn rusqlite::ToSql).collect::<Vec<_>>();
+        let params = terms
+            .iter()
+            .map(|s| s as &dyn rusqlite::ToSql)
+            .collect::<Vec<_>>();
         let conn = self.conn();
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(rusqlite::params_from_iter(params), |r| {
@@ -196,10 +211,7 @@ fn collect_docs(dir: &Path) -> Vec<(PathBuf, i64, i64)> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return out; // 目录不存在 = 零文档（正常态）
     };
-    let mut paths: Vec<PathBuf> = entries
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .collect();
+    let mut paths: Vec<PathBuf> = entries.filter_map(|e| e.ok()).map(|e| e.path()).collect();
     paths.sort();
     for path in paths {
         if path.is_dir() {
@@ -229,7 +241,11 @@ fn collect_docs(dir: &Path) -> Vec<(PathBuf, i64, i64)> {
 ///
 /// 保守策略：不做句子级切分（中文标点歧义多），段边界优先、滑窗兜底；
 /// 单字符级别的 overlap 保证跨块边界的句子至少完整出现在一个块里。
-pub(in crate::plugins::memory) fn chunk_text(text: &str, chunk_size: usize, overlap: usize) -> Vec<String> {
+pub(in crate::plugins::memory) fn chunk_text(
+    text: &str,
+    chunk_size: usize,
+    overlap: usize,
+) -> Vec<String> {
     let overlap = overlap.min(chunk_size.saturating_sub(1));
     let normalize = |s: &str| s.trim().to_string();
     let mut out: Vec<String> = Vec::new();

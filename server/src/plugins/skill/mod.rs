@@ -36,7 +36,7 @@ use serde_json::json;
 use crate::plugins::command::CommandConfig;
 use crate::plugins::llm::{ToolCall, ToolSpec};
 use crate::plugins::nlu::{
-    BertClassify, NluConfig, NluEngine, norm, parse_template, template::Tok,
+    norm, parse_template, template::Tok, BertClassify, NluConfig, NluEngine,
 };
 
 mod model;

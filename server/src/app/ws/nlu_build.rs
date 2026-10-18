@@ -20,11 +20,11 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::State;
 use axum::response::{IntoResponse, Response};
 use serde_json::json;
-use tokio::sync::{Mutex, broadcast};
+use tokio::sync::{broadcast, Mutex};
 
 use crate::config::Config;
 use crate::engine::Engines;

@@ -1,12 +1,12 @@
 //! `server/src/app/downlink/sender.rs`（下行发送端：水库 → 实时节拍）的单元测试。
 
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::*;
 use crate::app::downlink::reservoir::DownlinkItem;
-use crate::app::downlink::{DownlinkPacer, new_reservoir};
+use crate::app::downlink::{new_reservoir, DownlinkPacer};
 use crate::app::protocol::BinVersion;
 use crate::app::session::SessionParams;
 use crate::app::transport::{IncomingFrame, Transport};
@@ -63,7 +63,10 @@ impl Transport for RecordingTransport {
 #[tokio::test]
 async fn sentence_start_exactly_once_and_before_frames() {
     let (sink, source) = new_reservoir(600, 60);
-    assert!(sink.push(DownlinkItem::SentenceStart("你好".to_string())).await);
+    assert!(
+        sink.push(DownlinkItem::SentenceStart("你好".to_string()))
+            .await
+    );
     assert!(sink.push(DownlinkItem::Frame(vec![1, 2])).await);
     assert!(sink.push(DownlinkItem::Frame(vec![3])).await);
     drop(sink);
@@ -103,7 +106,10 @@ async fn sentence_start_exactly_once_and_before_frames() {
         t.sent
     );
     assert_eq!(
-        t.sent.iter().filter(|m| m.contains("sentence_start")).count(),
+        t.sent
+            .iter()
+            .filter(|m| m.contains("sentence_start"))
+            .count(),
         1,
         "sentence_start 恰好一次：{:?}",
         t.sent

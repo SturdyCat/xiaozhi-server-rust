@@ -183,8 +183,14 @@ fn unknown_engine_reports_chinese_error_with_fix_hint() {
         .expect("未知 engine 必须报错");
     let msg = format!("{err}");
     assert!(msg.contains("store2"), "应回显用户写的值: {msg}");
-    assert!(msg.contains("可选 graph / store / rag / none"), "必须列出合法值: {msg}");
-    assert!(msg.contains("怎么修") || msg.contains("请改"), "必须含修复指引: {msg}");
+    assert!(
+        msg.contains("可选 graph / store / rag / none"),
+        "必须列出合法值: {msg}"
+    );
+    assert!(
+        msg.contains("怎么修") || msg.contains("请改"),
+        "必须含修复指引: {msg}"
+    );
     // ⚠️ TOML 裸字面量（engine = mistral，无引号）在 **TOML 解析层**即被拒（invalid string），
     // 到不了 serde 层——自定义 Deserialize 只需拦截"合法 TOML 字符串但取值未知"的场景。
 }
@@ -203,7 +209,11 @@ fn unknown_engine_via_full_config() {
 /// 合法取值与大小写/空白宽容度（对齐 canonical_engine 的口径）。
 #[test]
 fn engine_parses_graph_store_none_with_leniency() {
-    let parse = |s: &str| toml::from_str::<MemoryConfig>(&format!("engine = \"{s}\"\n")).unwrap().engine;
+    let parse = |s: &str| {
+        toml::from_str::<MemoryConfig>(&format!("engine = \"{s}\"\n"))
+            .unwrap()
+            .engine
+    };
     assert_eq!(parse("graph"), MemoryBackend::Graph);
     assert_eq!(parse("store"), MemoryBackend::Store);
     assert_eq!(parse("none"), MemoryBackend::None);
@@ -229,7 +239,11 @@ fn default_zero_cost_contract_survives_store_addition() {
     assert!(!cfg.active(), "enabled=false 时任何 engine 都不生效");
     // 旧键 backend 仍可读（字段级 alias 与枚举自定义 Deserialize 正交）
     let legacy = toml::from_str::<MemoryConfig>("enabled = true\nbackend = \"store\"\n").unwrap();
-    assert_eq!(legacy.engine, MemoryBackend::Store, "旧键 backend 别名仍生效");
+    assert_eq!(
+        legacy.engine,
+        MemoryBackend::Store,
+        "旧键 backend 别名仍生效"
+    );
 }
 
 /// active() 语义扩展（P1-7）：store 也算生效（写入门要放行），none 不生效。
@@ -238,7 +252,10 @@ fn active_covers_store_but_not_none() {
     let mut cfg = enabled_cfg();
     assert!(cfg.active(), "graph + enabled 生效");
     cfg.engine = MemoryBackend::Store;
-    assert!(cfg.active(), "store + enabled 必须生效（spawn_memory_write 门要放行）");
+    assert!(
+        cfg.active(),
+        "store + enabled 必须生效（spawn_memory_write 门要放行）"
+    );
     cfg.engine = MemoryBackend::None;
     assert!(!cfg.active(), "none 不生效（显式停用）");
 }

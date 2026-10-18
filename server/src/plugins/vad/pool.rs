@@ -56,7 +56,10 @@ impl VadPool {
     pub fn new() -> Self {
         Self {
             state: Arc::new(PoolState {
-                inner: Mutex::new(PoolInner { sig: String::new(), idle: VecDeque::new() }),
+                inner: Mutex::new(PoolInner {
+                    sig: String::new(),
+                    idle: VecDeque::new(),
+                }),
                 sem: Arc::new(Semaphore::new(MAX_INSTANCES)),
             }),
         }

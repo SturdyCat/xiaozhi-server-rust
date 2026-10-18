@@ -148,12 +148,10 @@ fn preview_without_device_id_uses_placeholder() {
     )
     .unwrap();
     assert_eq!(body2["device_id"], "dev-1");
-    assert!(
-        body2["instructions"]
-            .as_str()
-            .unwrap()
-            .contains("设备 dev-1")
-    );
+    assert!(body2["instructions"]
+        .as_str()
+        .unwrap()
+        .contains("设备 dev-1"));
 }
 
 /// 客户端「载入预设内容到表单」把 `effective` **整段**喂给表单，因此它必须是**完整档案**：

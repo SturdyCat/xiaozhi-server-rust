@@ -110,7 +110,7 @@ use tungstenite::{Message, WebSocket};
 use crate::plugins::tts::xfyun::signed_ws_url;
 
 mod protocol;
-use protocol::{{first_frame, next_frame, parse_result_frame, pcm_i16_as_bytes}};
+use protocol::{first_frame, next_frame, parse_result_frame, pcm_i16_as_bytes};
 
 const HOST: &str = "aiui.xf-yun.com";
 const PATH: &str = "/v3/aiint/sos";
@@ -179,8 +179,8 @@ impl AiuiSession {
             bail!("[aiui].enabled 需要 appid/api_key/api_secret（AIUI 平台应用三要素）");
         }
         let url = signed_ws_url(HOST, PATH, &self.cfg.api_key, &self.cfg.api_secret);
-        let (ws, _resp) = tungstenite::connect(&url)
-            .context("连接 AIUI 交互服务失败（检查网络/时钟/密钥）")?;
+        let (ws, _resp) =
+            tungstenite::connect(&url).context("连接 AIUI 交互服务失败（检查网络/时钟/密钥）")?;
         apply_timeouts(&ws);
         self.ws = Some(ws);
         self.stmid = 0; // 新连接 stmid 从 1 重新计数（不重复即可）
@@ -201,7 +201,12 @@ impl AiuiSession {
         let bytes = pcm_i16_as_bytes(pcm_i16);
         let chunks: Vec<&[u8]> = bytes.chunks(FRAME_BYTES).collect();
         let total = chunks.len().max(1);
-        for (i, chunk) in chunks.iter().map(Some).chain(std::iter::once(None)).enumerate() {
+        for (i, chunk) in chunks
+            .iter()
+            .map(Some)
+            .chain(std::iter::once(None))
+            .enumerate()
+        {
             // 空段防御：chunks 为空时补一个空尾帧（仅 i==total-1 的 None 项），否则云端永远等数据
             let Some(chunk) = chunk else { continue };
             let first = i == 0;
@@ -268,7 +273,11 @@ impl AiuiSession {
             if frame.code != 0 {
                 // 错误码后连接状态不可信，必须重建（见模块注释）
                 self.ws = None;
-                bail!("AIUI 错误 {}: {}（连接已重建标记）", frame.code, frame.message);
+                bail!(
+                    "AIUI 错误 {}: {}（连接已重建标记）",
+                    frame.code,
+                    frame.message
+                );
             }
             if let Some(key) = frame.event_key {
                 if key == "Silence" {

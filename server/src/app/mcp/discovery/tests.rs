@@ -48,7 +48,10 @@ fn tools_list_carries_cursor_and_user_tools_flag() {
     assert_eq!(first["method"], "tools/list");
     assert_eq!(first["params"]["cursor"], "");
     assert_eq!(first["params"]["withUserTools"], true);
-    assert!(first["params"]["withUserTools"].is_boolean(), "固件只认 bool");
+    assert!(
+        first["params"]["withUserTools"].is_boolean(),
+        "固件只认 bool"
+    );
     assert_eq!(first["id"], 4);
 
     let second = tools_list(5, "self.lamp.turn_on", false);
@@ -65,7 +68,11 @@ fn parse_server_info_reads_board_and_firmware_version() {
     // 固件 serverInfo.version = esp_app_get_description()->version（固件版本）
     assert_eq!(info.version, "1.6.4");
     assert!(info.tools_capability, "capabilities.tools 存在");
-    assert!(info.summary().contains("bread-compact-wifi"), "{}", info.summary());
+    assert!(
+        info.summary().contains("bread-compact-wifi"),
+        "{}",
+        info.summary()
+    );
 }
 
 #[test]
@@ -101,11 +108,17 @@ fn parse_tools_reads_firmware_tool_shape() {
     }));
     assert_eq!(page.tools.len(), 2);
     assert_eq!(page.tools[0].name, "self.audio_speaker.set_volume");
-    assert_eq!(page.tools[0].description, "Set the volume of the audio speaker");
+    assert_eq!(
+        page.tools[0].description,
+        "Set the volume of the audio speaker"
+    );
     assert_eq!(page.tools[0].input_schema["required"][0], "volume");
     assert!(!page.tools[0].user_only, "无 annotations 的工具对 AI 可见");
     // user_only 的唯一可靠信号是 annotations.audience 含 "user"
-    assert!(page.tools[1].user_only, "带 audience=[user] 的必须标成 user_only");
+    assert!(
+        page.tools[1].user_only,
+        "带 audience=[user] 的必须标成 user_only"
+    );
     assert_eq!(page.next_cursor, None, "没有 nextCursor 就是最后一页");
     assert_eq!(page.skipped, 0);
 }
@@ -173,11 +186,17 @@ fn schema_params_read_the_firmware_property_keywords() {
     let by = |n: &str| params.iter().find(|p| p.name == n).unwrap();
 
     assert_eq!(by("volume").ty, "integer");
-    assert!(!by("volume").required, "有 default 即非必填（固件 GetRequired 口径）");
+    assert!(
+        !by("volume").required,
+        "有 default 即非必填（固件 GetRequired 口径）"
+    );
     assert_eq!(by("volume").default, Some(json!(50)));
     assert_eq!(by("volume").minimum, Some(0));
     assert_eq!(by("volume").maximum, Some(100));
-    assert_eq!(by("volume").signature(), "volume: integer（默认 50，0~100）");
+    assert_eq!(
+        by("volume").signature(),
+        "volume: integer（默认 50，0~100）"
+    );
 
     assert_eq!(by("text").max_length, Some(32));
     assert!(by("text").required, "required 数组里有它");
@@ -201,8 +220,14 @@ fn schema_params_are_tolerant_of_odd_schemas() {
     let p = schema_params(&json!({
         "properties": { "a": { "type": "integer", "minimum": 1 }, "b": { "type": "integer", "maximum": 9 } }
     }));
-    assert_eq!(p.iter().find(|x| x.name == "a").unwrap().signature(), "a: integer（≥1）");
-    assert_eq!(p.iter().find(|x| x.name == "b").unwrap().signature(), "b: integer（≤9）");
+    assert_eq!(
+        p.iter().find(|x| x.name == "a").unwrap().signature(),
+        "a: integer（≥1）"
+    );
+    assert_eq!(
+        p.iter().find(|x| x.name == "b").unwrap().signature(),
+        "b: integer（≤9）"
+    );
 }
 
 #[test]

@@ -113,9 +113,18 @@ fn blank_fields_fall_back_to_default_preset() {
     cfg.soul.normalize();
     let out = instructions(&cfg, "dev-1").unwrap();
     assert!(out.contains("【语音对话的基本约束】"), "{out}");
-    assert!(out.contains("你的名字是「小智」"), "预设的自称应补上：{out}");
-    assert!(out.contains("音箱里的小助手"), "预设的 self_intro 应补上：{out}");
-    assert!(out.contains("- 称呼用户为「你」。"), "预设的称呼应补上：{out}");
+    assert!(
+        out.contains("你的名字是「小智」"),
+        "预设的自称应补上：{out}"
+    );
+    assert!(
+        out.contains("音箱里的小助手"),
+        "预设的 self_intro 应补上：{out}"
+    );
+    assert!(
+        out.contains("- 称呼用户为「你」。"),
+        "预设的称呼应补上：{out}"
+    );
     assert!(out.contains("## 你不会做的事"), "{out}");
     assert!(!out.contains("{{"), "不应残留未展开变量: {out}");
     // 校验也该通过（空 name 不再是错误——它由预设兜底）
@@ -154,7 +163,10 @@ fn preset_none_means_no_baseline() {
     };
     let out = instructions(&cfg, "dev-1").unwrap();
     assert!(out.contains("只有我自己写的。"), "{out}");
-    assert!(!out.contains("音箱里的小助手"), "preset=none 不该注入预设内容：{out}");
+    assert!(
+        !out.contains("音箱里的小助手"),
+        "preset=none 不该注入预设内容：{out}"
+    );
     assert!(!out.contains("- 说真话：不确定的地方标出来"), "{out}");
     cfg.soul.validate().unwrap();
 }
@@ -168,7 +180,10 @@ fn unknown_preset_is_rejected_when_enabled_but_exempt_when_disabled() {
         ..SoulConfig::default()
     };
     let err = format!("{:#}", cfg.soul.validate().unwrap_err());
-    assert!(err.contains("xiaozi") && err.contains("xiaozhi") && err.contains("none"), "{err}");
+    assert!(
+        err.contains("xiaozi") && err.contains("xiaozhi") && err.contains("none"),
+        "{err}"
+    );
     // 组装同样报错 → 会话层退回 system_prompt 并告警（绝不静默换成人格）
     assert!(instructions(&cfg, "dev-1").is_err());
     cfg.soul.enabled = false;
@@ -213,7 +228,11 @@ fn preset_normalizes_empty_to_default_and_keeps_explicit_none() {
         ..SoulConfig::default()
     };
     none.normalize();
-    assert_eq!(none.preset, presets::NONE_ID, "显式 none 不能被折成默认预设");
+    assert_eq!(
+        none.preset,
+        presets::NONE_ID,
+        "显式 none 不能被折成默认预设"
+    );
     assert!(presets::is_none(none.preset_id()));
 }
 
@@ -225,8 +244,7 @@ fn default_config_uses_the_default_preset() {
     // 老配置（**没有** preset 键）必须落到内置默认灵魂，而不是"没有基线"——升级不改行为的前提
     let legacy: SoulConfig = serde_json::from_str(r#"{"enabled":true}"#).unwrap();
     assert_eq!(legacy.preset, presets::DEFAULT_ID);
-    let explicit: SoulConfig =
-        serde_json::from_str(r#"{"enabled":true,"preset":"none"}"#).unwrap();
+    let explicit: SoulConfig = serde_json::from_str(r#"{"enabled":true,"preset":"none"}"#).unwrap();
     assert_eq!(explicit.preset, presets::NONE_ID);
 }
 

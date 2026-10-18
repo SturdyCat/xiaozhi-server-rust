@@ -20,7 +20,7 @@ use axum::{
 
 use super::json_ok;
 use crate::engine::Engines;
-use crate::plugins::soul::{self, SoulConfig, presets};
+use crate::plugins::soul::{self, presets, SoulConfig};
 
 /// `GET /api/soul/presets`。
 pub(super) async fn soul_presets() -> Response {

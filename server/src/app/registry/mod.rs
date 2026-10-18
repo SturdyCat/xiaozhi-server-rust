@@ -366,8 +366,13 @@ impl Registry {
     }
 
     /// 计数快照（`GET /api/stats`）。
-    pub fn counts(&self) -> Counts {        let inner = self.lock();
-        let online: HashSet<&str> = inner.sessions.values().map(|s| s.device_id.as_str()).collect();
+    pub fn counts(&self) -> Counts {
+        let inner = self.lock();
+        let online: HashSet<&str> = inner
+            .sessions
+            .values()
+            .map(|s| s.device_id.as_str())
+            .collect();
         Counts {
             devices: inner.devices.len(),
             online: online.len(),

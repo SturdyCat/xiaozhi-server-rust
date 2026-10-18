@@ -99,8 +99,16 @@ impl McpServerInfo {
     pub fn summary(&self) -> String {
         format!(
             "板型={} 固件={} 协议={}",
-            if self.name.is_empty() { "(未报)" } else { &self.name },
-            if self.version.is_empty() { "(未报)" } else { &self.version },
+            if self.name.is_empty() {
+                "(未报)"
+            } else {
+                &self.name
+            },
+            if self.version.is_empty() {
+                "(未报)"
+            } else {
+                &self.version
+            },
             if self.protocol_version.is_empty() {
                 "(未报)"
             } else {

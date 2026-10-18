@@ -21,10 +21,12 @@ impl LlmProvider for FakeOkLlm {
         _prompt: &'a TurnPrompt,
         _tools: Option<&'a [ToolSpec]>,
         mut on_event: Box<dyn FnMut(LlmEvent) -> bool + Send + 'a>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<LlmTurnResult>> + Send + 'a>>
-    {
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = anyhow::Result<LlmTurnResult>> + Send + 'a>,
+    > {
         Box::pin(async move {
-            let text = "```json\n{\"summary\":\"测试摘要\",\"outcome\":\"information\"}\n```".to_string();
+            let text =
+                "```json\n{\"summary\":\"测试摘要\",\"outcome\":\"information\"}\n```".to_string();
             on_event(LlmEvent::Text(text.clone()));
             Ok(LlmTurnResult {
                 text,
@@ -141,12 +143,20 @@ async fn record_stores_and_reindex_is_idempotent() {
     let c1 = mem.stats().rag.unwrap().chunks;
 
     // 对话照常落 stored（验收：知识问答与对话沉淀不互相废弃）
-    mem.record(turn("xiaozhi:dev1", "问一", "答一")).await.unwrap();
-    mem.record(turn("xiaozhi:dev1", "问二", "答二")).await.unwrap();
+    mem.record(turn("xiaozhi:dev1", "问一", "答一"))
+        .await
+        .unwrap();
+    mem.record(turn("xiaozhi:dev1", "问二", "答二"))
+        .await
+        .unwrap();
     let stats = mem.stats();
     assert_eq!(stats.stored, 4);
     assert_eq!(stats.turns, 2);
-    assert_eq!(stats.rag.as_ref().unwrap().chunks, c1, "record 不动文档索引");
+    assert_eq!(
+        stats.rag.as_ref().unwrap().chunks,
+        c1,
+        "record 不动文档索引"
+    );
 
     // 验收 4：手动触发重建，分块数一致；重复触发防重入
     assert!(mem.reindex(), "空闲时应触发成功");
@@ -161,7 +171,11 @@ async fn record_stores_and_reindex_is_idempotent() {
 #[tokio::test]
 async fn maintain_applies_retention_to_turns_not_docs() {
     let docs = temp_dir("maint");
-    std::fs::write(std::path::Path::new(&docs).join("k.md"), "知识内容 需要足够长 产生词项").unwrap();
+    std::fs::write(
+        std::path::Path::new(&docs).join("k.md"),
+        "知识内容 需要足够长 产生词项",
+    )
+    .unwrap();
     let mut cfg = rag_cfg(":memory:", &docs);
     cfg.retention.keep = "recent".into();
     cfg.retention.recent_turns = 1;
@@ -170,8 +184,12 @@ async fn maintain_applies_retention_to_turns_not_docs() {
     let docs_before = mem.stats().rag.unwrap().docs;
     assert_eq!(docs_before, 1);
 
-    mem.record(turn("xiaozhi:dev1", "第一轮", "答")).await.unwrap();
-    mem.record(turn("xiaozhi:dev1", "第二轮", "答")).await.unwrap();
+    mem.record(turn("xiaozhi:dev1", "第一轮", "答"))
+        .await
+        .unwrap();
+    mem.record(turn("xiaozhi:dev1", "第二轮", "答"))
+        .await
+        .unwrap();
     let out = mem.maintain(MaintainOpts::forced(false)).await.unwrap();
     assert!(out.ran);
     let stats = mem.stats();

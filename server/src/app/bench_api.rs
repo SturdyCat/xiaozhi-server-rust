@@ -40,16 +40,42 @@ pub struct BenchResult {
 }
 
 impl BenchResult {
-    fn ok(elapsed_ms: u64, first_packet_ms: Option<u64>, engine: Option<String>, text: Option<String>) -> Self {
-        Self { state: "ok", elapsed_ms, first_packet_ms, engine, text, error: None }
+    fn ok(
+        elapsed_ms: u64,
+        first_packet_ms: Option<u64>,
+        engine: Option<String>,
+        text: Option<String>,
+    ) -> Self {
+        Self {
+            state: "ok",
+            elapsed_ms,
+            first_packet_ms,
+            engine,
+            text,
+            error: None,
+        }
     }
     fn err(elapsed_ms: u64, engine: Option<String>, error: String) -> Self {
-        Self { state: "error", elapsed_ms, first_packet_ms: None, engine, text: None, error: Some(error) }
+        Self {
+            state: "error",
+            elapsed_ms,
+            first_packet_ms: None,
+            engine,
+            text: None,
+            error: Some(error),
+        }
     }
     /// 仅默认 feature（无 sherpa）的 kokoro 分支使用；sherpa 构建下该状态不可达。
     #[cfg(not(feature = "sherpa"))]
     fn unavailable(error: String) -> Self {
-        Self { state: "unavailable", elapsed_ms: 0, first_packet_ms: None, engine: None, text: None, error: Some(error) }
+        Self {
+            state: "unavailable",
+            elapsed_ms: 0,
+            first_packet_ms: None,
+            engine: None,
+            text: None,
+            error: Some(error),
+        }
     }
 }
 
@@ -58,10 +84,14 @@ fn load_disk_llm(engines: &Arc<Engines>) -> crate::plugins::llm::LlmConfig {
     if engines.config_path().is_none() {
         return engines.config.llm.clone(); // 内置默认配置：无来源可读
     }
-    engines.config_store.load().map(|c| c.llm).unwrap_or_else(|e| {
-        tracing::warn!("内联 LLM 测试读盘配置失败（用启动配置）: {e}");
-        engines.config.llm.clone()
-    })
+    engines
+        .config_store
+        .load()
+        .map(|c| c.llm)
+        .unwrap_or_else(|e| {
+            tracing::warn!("内联 LLM 测试读盘配置失败（用启动配置）: {e}");
+            engines.config.llm.clone()
+        })
 }
 
 /// 按配置来源的最新内容读取 TTS 段；无来源或读取失败时退回启动快照。
@@ -69,10 +99,14 @@ fn load_disk_tts(engines: &Arc<Engines>) -> crate::plugins::tts::TtsConfig {
     if engines.config_path().is_none() {
         return engines.config.tts.clone(); // 内置默认配置：无来源可读
     }
-    engines.config_store.load().map(|c| c.tts).unwrap_or_else(|e| {
-        tracing::warn!("内联 TTS 测试读盘配置失败（用启动配置）: {e}");
-        engines.config.tts.clone()
-    })
+    engines
+        .config_store
+        .load()
+        .map(|c| c.tts)
+        .unwrap_or_else(|e| {
+            tracing::warn!("内联 TTS 测试读盘配置失败（用启动配置）: {e}");
+            engines.config.tts.clone()
+        })
 }
 
 /// LLM 连通性 + 首 token 延迟测量（单轮无历史）。
@@ -131,12 +165,7 @@ pub async fn bench_llm(
     let elapsed = t0.elapsed().as_millis() as u64;
     let first_packet_ms = first.lock().unwrap_or_else(|e| e.into_inner()).clone();
     match result {
-        Ok(r) => BenchResult::ok(
-            elapsed,
-            first_packet_ms,
-            Some(engine_label),
-            Some(r.text),
-        ),
+        Ok(r) => BenchResult::ok(elapsed, first_packet_ms, Some(engine_label), Some(r.text)),
         Err(e) => BenchResult::err(elapsed, Some(engine_label), format!("{e:#}")),
     }
 }
@@ -194,7 +223,8 @@ pub async fn bench_tts(
     {
         let _ = (lang, vcn_override, speaker, gate);
         BenchResult::unavailable(
-            "本地 TTS 需 sherpa 构建（本二进制未启用 sherpa feature，请用 --features sherpa 编译）".to_string(),
+            "本地 TTS 需 sherpa 构建（本二进制未启用 sherpa feature，请用 --features sherpa 编译）"
+                .to_string(),
         )
     }
 }
@@ -410,7 +440,12 @@ pub async fn llm_models(
                     }
                     models.sort();
                     models.dedup();
-                    ModelsResult { state: "ok", models, elapsed_ms: elapsed, error: None }
+                    ModelsResult {
+                        state: "ok",
+                        models,
+                        elapsed_ms: elapsed,
+                        error: None,
+                    }
                 }
                 Err(e) => ModelsResult {
                     state: "error",

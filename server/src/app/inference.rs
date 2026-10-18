@@ -132,7 +132,10 @@ impl Gate {
                 }
                 // 我们从不 close 信号量；真发生说明出现结构性 bug，放弃排队并留痕。
                 Ok(Err(_)) => {
-                    tracing::error!("推理闸门 {} 的信号量已被关闭（不应发生），放弃本次排队", self.name);
+                    tracing::error!(
+                        "推理闸门 {} 的信号量已被关闭（不应发生），放弃本次排队",
+                        self.name
+                    );
                     return None;
                 }
                 // 本轮超时：复查 abort 后继续排队
@@ -148,8 +151,7 @@ impl Gate {
         if permits == self.permits.load(Ordering::Relaxed) {
             return;
         }
-        *self.sem.write().unwrap_or_else(|e| e.into_inner()) =
-            Arc::new(Semaphore::new(permits));
+        *self.sem.write().unwrap_or_else(|e| e.into_inner()) = Arc::new(Semaphore::new(permits));
         self.permits.store(permits, Ordering::Relaxed);
         tracing::info!("推理闸门 {}：许可数已调整为 {permits}", self.name);
     }
@@ -181,10 +183,7 @@ impl GateHandle {
     }
 
     /// abort 感知获取（TTS 路径）：排队期间 abort 置位 → 放弃等待返回 `None`。
-    pub async fn acquire_with_abort(
-        &self,
-        abort: &AtomicBool,
-    ) -> Option<OwnedSemaphorePermit> {
+    pub async fn acquire_with_abort(&self, abort: &AtomicBool) -> Option<OwnedSemaphorePermit> {
         self.gate.acquire_abortable(abort).await
     }
 }
@@ -206,12 +205,16 @@ impl InferenceGates {
 
     /// 取当前 ASR 闸门（调用方 `acquire()` 后把 permit 带进 `spawn_blocking`）。
     pub fn asr(&self) -> GateHandle {
-        GateHandle { gate: self.asr.clone() }
+        GateHandle {
+            gate: self.asr.clone(),
+        }
     }
 
     /// 取当前 TTS 闸门（调用方 `acquire_with_abort()`）。
     pub fn tts(&self) -> GateHandle {
-        GateHandle { gate: self.tts.clone() }
+        GateHandle {
+            gate: self.tts.clone(),
+        }
     }
 
     /// TTS 热切换对账（[`crate::engine::Engines::refresh_tts`] 成功路径调用）：

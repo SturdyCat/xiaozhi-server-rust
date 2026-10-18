@@ -33,9 +33,9 @@ use axum::{extract::State, response::Response};
 
 use super::json_ok;
 use crate::engine::Engines;
-use crate::plugins::health::{ProbeState, probe};
+use crate::plugins::health::{probe, ProbeState};
 use crate::plugins::host::{Phase, PluginHost};
-use crate::plugins::registry::{ALL_CAPABILITIES, Capability};
+use crate::plugins::registry::{Capability, ALL_CAPABILITIES};
 
 /// capability → 配置页 section id（前端跳转锚点；`None` = 无对应配置 section）。
 ///
@@ -64,7 +64,11 @@ fn rank(p: Phase) -> u8 {
 
 /// 两者取更坏（rank 高者胜）。
 fn worse(a: Phase, b: Phase) -> Phase {
-    if rank(b) > rank(a) { b } else { a }
+    if rank(b) > rank(a) {
+        b
+    } else {
+        a
+    }
 }
 
 /// `GET /api/health/engines`：全部能力的健康聚合（只读投影）。

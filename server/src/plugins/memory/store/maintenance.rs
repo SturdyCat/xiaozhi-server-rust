@@ -79,13 +79,20 @@ impl Store {
             let conn = self.conn();
             if dry_run {
                 let n: i64 = conn
-                    .query_row(&count_sql, rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())), |r| r.get(0))
+                    .query_row(
+                        &count_sql,
+                        rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())),
+                        |r| r.get(0),
+                    )
                     .context("保留策略演练失败")?;
                 total += n as u64;
             } else {
                 let del_sql = format!("DELETE {sql}");
                 let n = conn
-                    .execute(&del_sql, rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())))
+                    .execute(
+                        &del_sql,
+                        rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())),
+                    )
                     .context("保留策略删除失败")?;
                 total += n as u64;
             }

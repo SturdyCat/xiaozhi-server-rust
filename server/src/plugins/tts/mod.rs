@@ -183,7 +183,6 @@ impl TtsConfig {
         canonical_engine(raw, TTS_ENGINES, DEFAULT_TTS_ENGINE)
     }
 
-
     /// 配置规范化（幂等）：补 `engine` 键 + 把旧位置字段搬进 `[tts.kokoro]`。
     ///
     /// 「新位置优先」：只有当 `[tts.kokoro]` 对应字段**仍是默认值**、而旧位置的值
@@ -299,9 +298,9 @@ pub(crate) mod xfyun;
 #[allow(unused_imports)]
 pub use xfyun::XfyunTtsConfig;
 
-use anyhow::Result;
 #[cfg(feature = "sherpa")]
 use anyhow::Context;
+use anyhow::Result;
 #[cfg(feature = "sherpa")]
 use kokoro::SherpaTts;
 use std::sync::Arc;
@@ -373,7 +372,9 @@ pub fn build_kokoro(cfg: &KokoroTtsConfig) -> Result<Arc<dyn TtsEngine>> {
     #[cfg(not(feature = "sherpa"))]
     {
         let _ = cfg;
-        anyhow::bail!("本二进制未启用 `sherpa` feature，无法构建 TTS 引擎（请用 --features sherpa 编译）");
+        anyhow::bail!(
+            "本二进制未启用 `sherpa` feature，无法构建 TTS 引擎（请用 --features sherpa 编译）"
+        );
     }
 }
 

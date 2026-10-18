@@ -40,7 +40,10 @@ fn upsample_splits_by_downlink_frame() {
     let frames = f.push(&vec![0.0f32; 1600]).expect("分帧");
     assert_eq!(frames.len(), 1, "2400 样本 = 1 整帧 + 残");
     let tail = f.finish().expect("收尾").expect("应有尾帧");
-    assert!(!tail.is_empty() || cfg!(not(feature = "sherpa")), "尾帧应已编码（无 sherpa 时是占位空帧）");
+    assert!(
+        !tail.is_empty() || cfg!(not(feature = "sherpa")),
+        "尾帧应已编码（无 sherpa 时是占位空帧）"
+    );
 }
 
 /// 空分片 / 空收尾都不产帧（避免下发零长度二进制帧）。

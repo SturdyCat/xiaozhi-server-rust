@@ -8,23 +8,50 @@ use crate::plugins::prompt;
 fn presets_have_substance_and_unique_ids() {
     assert!(!PRESETS.is_empty(), "至少要有一个内置预设");
     let ids: Vec<&str> = PRESETS.iter().map(|p| p.id).collect();
-    assert_eq!(ids.iter().collect::<std::collections::HashSet<_>>().len(), ids.len(), "preset id 必须唯一：{ids:?}");
-    assert!(ids.contains(&DEFAULT_ID), "默认预设 {DEFAULT_ID} 必须在表里");
+    assert_eq!(
+        ids.iter().collect::<std::collections::HashSet<_>>().len(),
+        ids.len(),
+        "preset id 必须唯一：{ids:?}"
+    );
+    assert!(
+        ids.contains(&DEFAULT_ID),
+        "默认预设 {DEFAULT_ID} 必须在表里"
+    );
     assert!(get(DEFAULT_ID).is_some());
     for p in PRESETS {
-        assert!(!p.name.trim().is_empty() && !p.description.trim().is_empty(), "{} 缺少展示文案", p.id);
+        assert!(
+            !p.name.trim().is_empty() && !p.description.trim().is_empty(),
+            "{} 缺少展示文案",
+            p.id
+        );
         let s = (p.profile)();
         assert!(!s.self_intro.trim().is_empty(), "{} 缺 self_intro", p.id);
         assert!(!s.tone.trim().is_empty(), "{} 缺 tone", p.id);
         assert!(!s.name.trim().is_empty(), "{} 缺 name", p.id);
-        assert!(!s.address_user.trim().is_empty(), "{} 缺 address_user", p.id);
-        assert!(s.traits.len() >= 3, "{} 性格条目太少（只写形容词会失效）", p.id);
+        assert!(
+            !s.address_user.trim().is_empty(),
+            "{} 缺 address_user",
+            p.id
+        );
+        assert!(
+            s.traits.len() >= 3,
+            "{} 性格条目太少（只写形容词会失效）",
+            p.id
+        );
         assert!(s.values.len() >= 2, "{} 价值条目太少", p.id);
         assert!(s.boundaries.len() >= 2, "{} 红线太少", p.id);
-        assert!(s.examples.len() >= 2, "{} 风格范例太少（锁风格最有效的手段）", p.id);
+        assert!(
+            s.examples.len() >= 2,
+            "{} 风格范例太少（锁风格最有效的手段）",
+            p.id
+        );
         // 范例必须是 Q/A 两行，单行范例起不到锁风格的作用
         for e in &s.examples {
-            assert!(e.contains('\n'), "{} 的范例应为「用户：…\\n<名字>：…」两行：{e:?}", p.id);
+            assert!(
+                e.contains('\n'),
+                "{} 的范例应为「用户：…\\n<名字>：…」两行：{e:?}",
+                p.id
+            );
         }
     }
 }
@@ -64,7 +91,11 @@ fn provided_fields_only_carries_fillable_fields() {
         let fields = provided_fields(&(p.profile)());
         for (k, v) in &fields {
             assert!(all_keys.contains(k), "{} 提供了不存在的字段 {k}", p.id);
-            assert!(!not_fillable.contains(&k.as_str()), "{} 提供了不可留空的字段 {k}", p.id);
+            assert!(
+                !not_fillable.contains(&k.as_str()),
+                "{} 提供了不可留空的字段 {k}",
+                p.id
+            );
             match v {
                 Value::String(s) => assert!(!s.trim().is_empty(), "{} 的 {k} 是空串", p.id),
                 Value::Array(a) => assert!(!a.is_empty(), "{} 的 {k} 是空数组", p.id),
@@ -72,7 +103,14 @@ fn provided_fields_only_carries_fillable_fields() {
             }
         }
         // 默认灵魂的"实质"就在这些字段里：缺一个都说明 provided_fields 漏了
-        for k in ["self_intro", "tone", "traits", "values", "boundaries", "examples"] {
+        for k in [
+            "self_intro",
+            "tone",
+            "traits",
+            "values",
+            "boundaries",
+            "examples",
+        ] {
             assert!(fields.contains_key(k), "{} 的 {k} 应被提供", p.id);
         }
         // 客户端把它直接喂给表单（`fill`），因此必须能反序列化回配置

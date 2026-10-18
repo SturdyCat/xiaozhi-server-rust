@@ -28,7 +28,10 @@ use std::sync::Arc;
 use anyhow::Result;
 
 use super::store::{self, KeepPolicy, Store};
-use super::{schema, BoxFut, CompletedTurn, ExtractOutcome, MaintainOpts, MaintainOutcome, MemoryConfig, MemoryProvider, MemoryStats, RecallResult};
+use super::{
+    schema, BoxFut, CompletedTurn, ExtractOutcome, MaintainOpts, MaintainOutcome, MemoryConfig,
+    MemoryProvider, MemoryStats, RecallResult,
+};
 
 /// SQLite 是同步阻塞 API，统一经 `spawn_blocking` 隔离（与 graph 同纪律）。
 async fn run_blocking<T, F>(label: &str, f: F) -> Result<T>
@@ -82,22 +85,19 @@ impl MemoryProvider for StoreOnlyMemory {
             }
             let store = self.store.clone();
             let now = schema::now_ms();
-            run_blocking(
-                "记忆写入(store)",
-                move || -> Result<()> {
-                    let idx = store.next_turn_index(&turn.scope)?;
-                    store.insert_turn_state(
-                        &turn.scope,
-                        &turn.session_id,
-                        idx,
-                        &turn.user_text,
-                        &turn.assistant_text,
-                        "stored",
-                        now,
-                    )?;
-                    Ok(())
-                },
-            )
+            run_blocking("记忆写入(store)", move || -> Result<()> {
+                let idx = store.next_turn_index(&turn.scope)?;
+                store.insert_turn_state(
+                    &turn.scope,
+                    &turn.session_id,
+                    idx,
+                    &turn.user_text,
+                    &turn.assistant_text,
+                    "stored",
+                    now,
+                )?;
+                Ok(())
+            })
             .await
         })
     }
@@ -187,8 +187,7 @@ impl MemoryProvider for StoreOnlyMemory {
     fn clear(&self, scope: Option<String>) -> BoxFut<'_, Result<u64>> {
         Box::pin(async move {
             let store = self.store.clone();
-            run_blocking("清空记忆(store)", move || store.clear(scope.as_deref()))
-                .await
+            run_blocking("清空记忆(store)", move || store.clear(scope.as_deref())).await
         })
     }
 }

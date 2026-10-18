@@ -30,7 +30,6 @@ use std::sync::Arc;
 
 pub mod assemble;
 pub mod config;
-pub mod types;
 mod graph;
 mod llm_extract;
 mod rag;
@@ -38,6 +37,7 @@ mod schema;
 mod store;
 mod store_only;
 mod terms;
+pub mod types;
 pub use graph::GraphMemory;
 pub use rag::RagMemory;
 pub use store_only::StoreOnlyMemory;

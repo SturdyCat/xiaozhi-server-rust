@@ -34,7 +34,10 @@ impl Transport for MockTransport {
 #[tokio::test]
 async fn recv_delivers_frames_then_sticky_closed() {
     let mut t = MockTransport {
-        frames: vec![IncomingFrame::Text("a".into()), IncomingFrame::Binary(vec![1])],
+        frames: vec![
+            IncomingFrame::Text("a".into()),
+            IncomingFrame::Binary(vec![1]),
+        ],
     };
     assert!(matches!(t.recv().await, IncomingFrame::Text(_)));
     assert!(matches!(t.recv().await, IncomingFrame::Binary(_)));

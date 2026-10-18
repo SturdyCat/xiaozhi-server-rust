@@ -225,7 +225,6 @@ impl CommandGate {
                 reply: self.reply.clone(),
             })
     }
-
 }
 
 /// 句末语气助词：只说「退下」的人往往被识别成「退下吧」「闭嘴啊」，这些应等价处理。

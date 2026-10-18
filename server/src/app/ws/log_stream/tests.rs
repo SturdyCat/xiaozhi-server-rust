@@ -43,10 +43,9 @@ fn ring_keeps_only_latest_backlog_lines() {
     let ring = futures_block();
     assert_eq!(ring.len(), BACKLOG);
     // hub 是进程级单例，其他测试可能并发写 ring：只断言本测试的行已进入、最老的已滚出。
-    assert!(
-        ring.iter()
-            .any(|l| l.contains(&format!("tick {}", BACKLOG + 49)))
-    );
+    assert!(ring
+        .iter()
+        .any(|l| l.contains(&format!("tick {}", BACKLOG + 49))));
     assert!(!ring.iter().any(|l| l.contains("tick 0")));
 }
 

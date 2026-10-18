@@ -334,8 +334,9 @@ impl<'a, T: Transport> Session<'a, T> {
                 }
                 (SynthRace::Drained, d) => {
                     // 下发已完（说明 producer 已发出 done），收尾 join producer
-                    let r =
-                        producer.await.unwrap_or_else(|e| Err(anyhow::anyhow!("合成任务异常: {e}")));
+                    let r = producer
+                        .await
+                        .unwrap_or_else(|e| Err(anyhow::anyhow!("合成任务异常: {e}")));
                     let drain = d.expect("Drained 分支必带下发结果")?;
                     filler.abort();
                     BenchFlow::Done(r, drain.frames)

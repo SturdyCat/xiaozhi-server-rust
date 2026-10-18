@@ -47,7 +47,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use axum::{
-    extract::{ws::WebSocketUpgrade, ws::WebSocket, Query, State},
+    extract::{ws::WebSocket, ws::WebSocketUpgrade, Query, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{delete, get},
@@ -56,11 +56,11 @@ use axum::{
 use tower_http::services::{ServeDir, ServeFile};
 use uuid::Uuid;
 
-use crate::config::ServerConfig;
-use crate::engine::Engines;
 use crate::app::protocol::{AudioParams, BinVersion, ClientHello, ClientMessage, ServerMessage};
 use crate::app::session::{run_session, send_text, SessionParams};
 use crate::app::transport::{IncomingFrame, Transport, WsTransport};
+use crate::config::ServerConfig;
+use crate::engine::Engines;
 
 mod bench_api;
 mod config;
@@ -78,9 +78,9 @@ mod plugins;
 mod registry;
 mod soul;
 mod usage;
-use config::{config_meta, db_backup, db_query, get_config, put_config};
 use config::device_overlay::{device_overlay_delete, device_overlay_get, device_overlay_put};
 use config::presets::{preset_apply, preset_delete, preset_save, presets_list};
+use config::{config_meta, db_backup, db_query, get_config, put_config};
 use health::engines_health;
 use mcp::mcp_tools;
 use memory::{memory_clear, memory_maintain, memory_rag_reindex, memory_recall, memory_status};
@@ -126,7 +126,10 @@ pub fn router(engines: Arc<Engines>) -> Router {
     let api = Router::new()
         .route("/api/health", get(health))
         .route("/api/ws", get(ws_handler))
-        .route("/api/config", get(get_config).put(put_config).post(put_config))
+        .route(
+            "/api/config",
+            get(get_config).put(put_config).post(put_config),
+        )
         // 引擎健康自检（P1-6）：11 个 capability × 运行期本地探测的聚合投影，
         // 能力聚合与 /api/plugins 同源（capability_summary），phase 含探测合并
         .route("/api/health/engines", get(engines_health))
@@ -154,7 +157,10 @@ pub fn router(engines: Arc<Engines>) -> Router {
         // 内联配置测试（P0-2）：LLM/TTS/VAD 延迟测量（HTTP 直调，按磁盘最新配置 ad-hoc
         // 构建引擎，不要求 is_test WS 会话；与 WS 测试台并存，测量核心见 app::bench_api）
         .route("/api/test/llm", axum::routing::post(bench_api::test_llm))
-        .route("/api/test/llm/models", axum::routing::post(bench_api::test_llm_models))
+        .route(
+            "/api/test/llm/models",
+            axum::routing::post(bench_api::test_llm_models),
+        )
         .route("/api/test/tts", axum::routing::post(bench_api::test_tts))
         .route("/api/test/vad", axum::routing::post(bench_api::test_vad))
         // 记忆：状态 / 测试召回 / 立即维护 / 清空（"记忆开了没用"的当场验证入口）
@@ -163,7 +169,10 @@ pub fn router(engines: Arc<Engines>) -> Router {
         .route("/api/memory/maintain", axum::routing::post(memory_maintain))
         .route("/api/memory/clear", axum::routing::post(memory_clear))
         // P1-9：RAG 文档索引后台重建（仅 engine = rag 有效）
-        .route("/api/memory/rag/reindex", axum::routing::post(memory_rag_reindex))
+        .route(
+            "/api/memory/rag/reindex",
+            axum::routing::post(memory_rag_reindex),
+        )
         // 灵魂：内置预设清单 / 最终提示词预览（"人格配了之后到底发了什么"的当场验证入口）
         .route("/api/soul/presets", get(soul_presets))
         .route("/api/soul/preview", axum::routing::post(soul_preview))
@@ -175,7 +184,10 @@ pub fn router(engines: Arc<Engines>) -> Router {
         .route("/api/devices", get(devices))
         .route("/api/devices/{device_id}", get(device_detail))
         // 设备消息注入（P1-2）：文本作为用户话语走完整管线（会话侧通道见 app/inject）
-        .route("/api/devices/{device_id}/inject", axum::routing::post(device_inject))
+        .route(
+            "/api/devices/{device_id}/inject",
+            axum::routing::post(device_inject),
+        )
         // 每设备 overlay（P1-5）：白名单字段增量；仅会话内参数可覆盖，结构型参数拒绝。
         // POST = PUT 的别名、`/delete` 的 POST = DELETE 的别名（Kuikly 客户端无 PUT/DELETE，
         // 同 OTA 固件删除惯例）。
@@ -197,10 +209,7 @@ pub fn router(engines: Arc<Engines>) -> Router {
         .route("/api/metrics", get(metrics_snapshot))
         // 设备 MCP 工具：按设备列出会话开始时探测到的工具清单（回答"这台设备能被 AI 指挥做什么"）
         .route("/api/mcp/tools", get(mcp_tools))
-        .route(
-            "/api/nlu/model/build",
-            get(build_status).post(start_build),
-        )
+        .route("/api/nlu/model/build", get(build_status).post(start_build))
         // 单次训练的聚焦日志流（全局日志流见 /api/logs）：终态帧后服务端主动关闭。
         .route("/api/nlu/model/build/log", get(build_log_ws))
         // 服务器全局实时日志流：macApp 连上即可实时看到全部运行日志；
@@ -267,7 +276,11 @@ async fn ws_handler(
     })
 }
 
-pub(crate) fn auth_ok(headers: &HeaderMap, query: &HashMap<String, String>, server: &ServerConfig) -> bool {
+pub(crate) fn auth_ok(
+    headers: &HeaderMap,
+    query: &HashMap<String, String>,
+    server: &ServerConfig,
+) -> bool {
     if server.expected_token.is_empty() {
         return true;
     }
@@ -279,7 +292,9 @@ pub(crate) fn auth_ok(headers: &HeaderMap, query: &HashMap<String, String>, serv
     }
     // 兜底：浏览器 WebSocket 无法自定义请求头，允许 ?token= 查询参数
     // （管理页面通过 URL 带 token 联调；设备侧仍走 Authorization 头）
-    query.get("token").is_some_and(|t| t == &server.expected_token)
+    query
+        .get("token")
+        .is_some_and(|t| t == &server.expected_token)
 }
 
 async fn handle_handshake(
@@ -354,7 +369,9 @@ async fn handle_handshake(
     // 本会话一个 MCP 报文都不发，指令闸门退回「断开本次会话」（向后兼容，见 app/session.rs）。
     let mcp = hello.features.as_ref().is_some_and(|f| f.mcp);
     if hello.test {
-        tracing::info!("session {session_id} 测试台连接（hello.test=true，受理 asr_test/tts_test/llm_test）");
+        tracing::info!(
+            "session {session_id} 测试台连接（hello.test=true，受理 asr_test/tts_test/llm_test）"
+        );
     } else {
         // 设备正式会话（ASR/TTS 走这条 WS；按需建立——唤醒/按键触发对话时才连接，开机只走 OTA）
         tracing::info!(

@@ -16,8 +16,8 @@ use super::fields_nlu::NLU_FIELDS;
 use super::fields_wake::WAKE_FIELDS;
 use super::validate::{
     validate_aiui, validate_asr, validate_command, validate_llm, validate_memory, validate_nlu,
-    validate_soul, validate_tts_kokoro, validate_tts_xfyun, validate_vad, validate_wake,
-    warn_llm, warn_memory,
+    validate_soul, validate_tts_kokoro, validate_tts_xfyun, validate_vad, validate_wake, warn_llm,
+    warn_memory,
 };
 use super::{Built, Capability, HotReload, PluginDescriptor, Requirement};
 

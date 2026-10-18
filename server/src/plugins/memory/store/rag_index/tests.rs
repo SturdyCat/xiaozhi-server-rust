@@ -30,7 +30,11 @@ fn chunk_text_splits_paragraphs_and_windows_long_ones() {
     // 超长段按滑窗切，且相邻块有重叠（跨块边界语义保住）
     let long = "甲".repeat(300) + "。" + &"乙".repeat(300);
     let chunks = chunk_text(&long, 100, 20);
-    assert!(chunks.len() >= 6, "300+301 字符按 100/步长 80 至少 6 块: {}", chunks.len());
+    assert!(
+        chunks.len() >= 6,
+        "300+301 字符按 100/步长 80 至少 6 块: {}",
+        chunks.len()
+    );
     // 重叠：第 2 块的开头应与第 1 块的结尾部分重叠
     assert!(chunks[1].chars().count() <= 100);
 
@@ -42,9 +46,17 @@ fn chunk_text_splits_paragraphs_and_windows_long_ones() {
 #[test]
 fn rebuild_is_idempotent_and_search_hits_content() {
     let store = crate::plugins::memory::store::open(&cfg()).unwrap();
-    let dir = std::env::temp_dir().join(format!("xiaozhi-rag-t1-{}-{}", std::process::id(), schema::now_ms()));
+    let dir = std::env::temp_dir().join(format!(
+        "xiaozhi-rag-t1-{}-{}",
+        std::process::id(),
+        schema::now_ms()
+    ));
     std::fs::create_dir_all(&dir).unwrap();
-    write_doc(&dir, "售后.md", "# 售后服务\n\n售后服务电话是 400-123-4567，工作日 9 点到 18 点。\n\n保修期为两年。");
+    write_doc(
+        &dir,
+        "售后.md",
+        "# 售后服务\n\n售后服务电话是 400-123-4567，工作日 9 点到 18 点。\n\n保修期为两年。",
+    );
 
     let s1 = store.rebuild_docs(dir.to_str().unwrap(), 512, 64).unwrap();
     assert_eq!(s1.docs, 1);
@@ -63,7 +75,11 @@ fn rebuild_is_idempotent_and_search_hits_content() {
     let hits = store.search_chunks(&terms, 4).unwrap();
     assert!(!hits.is_empty());
     assert!(hits[0].text.contains("400-123-4567"), "{:?}", hits[0].text);
-    assert!(hits[0].source.ends_with("售后.md"), "来源可解释: {}", hits[0].source);
+    assert!(
+        hits[0].source.ends_with("售后.md"),
+        "来源可解释: {}",
+        hits[0].source
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -73,7 +89,11 @@ fn missing_docs_dir_clears_index_and_zero_docs_is_normal() {
     let store = crate::plugins::memory::store::open(&cfg()).unwrap();
     store.ensure_rag_tables().unwrap();
     // 先写入一份旧索引内容
-    let dir = std::env::temp_dir().join(format!("xiaozhi-rag-t2-{}-{}", std::process::id(), schema::now_ms()));
+    let dir = std::env::temp_dir().join(format!(
+        "xiaozhi-rag-t2-{}-{}",
+        std::process::id(),
+        schema::now_ms()
+    ));
     std::fs::create_dir_all(&dir).unwrap();
     write_doc(&dir, "a.md", "一些内容需要足够长才能产生词项 一些内容");
     store.rebuild_docs(dir.to_str().unwrap(), 512, 64).unwrap();
@@ -93,7 +113,11 @@ fn missing_docs_dir_clears_index_and_zero_docs_is_normal() {
 #[test]
 fn rebuild_picks_up_new_and_deleted_docs() {
     let store = crate::plugins::memory::store::open(&cfg()).unwrap();
-    let dir = std::env::temp_dir().join(format!("xiaozhi-rag-t3-{}-{}", std::process::id(), schema::now_ms()));
+    let dir = std::env::temp_dir().join(format!(
+        "xiaozhi-rag-t3-{}-{}",
+        std::process::id(),
+        schema::now_ms()
+    ));
     std::fs::create_dir_all(&dir).unwrap();
     write_doc(&dir, "a.md", "菠萝披萨配凤梨 味道特别 值得一试");
     store.rebuild_docs(dir.to_str().unwrap(), 512, 64).unwrap();

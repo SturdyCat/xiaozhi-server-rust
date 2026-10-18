@@ -22,11 +22,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::response::Response;
 use serde_json::json;
-use tokio::sync::{Mutex, broadcast};
+use tokio::sync::{broadcast, Mutex};
 use tracing::Event;
-use tracing_subscriber::Layer as _;
 use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::layer::Context;
+use tracing_subscriber::Layer as _;
 
 /// 环形缓冲行数：新 WS 连接可一次性补齐的最近日志。
 const BACKLOG: usize = 500;

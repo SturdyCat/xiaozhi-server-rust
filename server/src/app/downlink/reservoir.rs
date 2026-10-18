@@ -40,14 +40,14 @@
 //! - **打断**：读端被丢弃（或 `abort` 置位）→ `push` 返回 `false` → 填充任务立刻收尾，
 //!   不再白合成/白编码本轮剩余音频。
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use tokio::sync::{Notify, mpsc};
+use tokio::sync::{mpsc, Notify};
 
 use crate::app::hot_audio::{MAX_ENTRY_BYTES, MAX_FRAMES};
-use crate::app::prefetch::{PREFETCH_SENTENCES, PreparedAudio, PreparedSentence};
+use crate::app::prefetch::{PreparedAudio, PreparedSentence, PREFETCH_SENTENCES};
 use crate::app::session::SessionParams;
 use crate::app::tts_cache::TtsCache;
 

@@ -187,11 +187,7 @@ fn non_fs_capabilities_have_no_probe() {
         Capability::Wake,
         Capability::Nlu,
     ] {
-        assert!(
-            probe(&cfg, cap).is_none(),
-            "{} 不应有本地探测项",
-            cap.id()
-        );
+        assert!(probe(&cfg, cap).is_none(), "{} 不应有本地探测项", cap.id());
     }
 }
 

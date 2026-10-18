@@ -84,7 +84,9 @@ impl LlmFailure {
     /// 面向用户/日志的一句话（含「接下来会怎样」，而不是复述错误码）。
     pub fn hint(&self) -> &'static str {
         match self {
-            LlmFailure::Connect(_) => "连不上模型服务：检查 [llm].api_base 与网络（本机能否访问该地址）",
+            LlmFailure::Connect(_) => {
+                "连不上模型服务：检查 [llm].api_base 与网络（本机能否访问该地址）"
+            }
             LlmFailure::Timeout(_) => "模型服务响应超时：上游拥塞或地址不可达",
             LlmFailure::Transport(_) => "读模型响应时连接中断：网络不稳定",
             LlmFailure::Status { code: 429, .. } => "被上游限流（429）：稍后重试或换更低频的模型",
@@ -94,7 +96,9 @@ impl LlmFailure {
             LlmFailure::Status { code: 404, .. } => {
                 "上游 404：api_base 必须是 **Responses** 端点，且 model 名要存在"
             }
-            LlmFailure::Status { code, .. } if *code >= 500 => "上游服务端错误（5xx）：通常是临时的",
+            LlmFailure::Status { code, .. } if *code >= 500 => {
+                "上游服务端错误（5xx）：通常是临时的"
+            }
             LlmFailure::Status { .. } => "上游拒绝了请求（4xx）：检查 model/参数/额度",
             LlmFailure::EmptyResponse => "上游返回了空回复（既无文本也无工具调用）",
             LlmFailure::Protocol(_) => "响应格式不符合预期（Responses 协议解析失败）",

@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use axum::{
     extract::{Json, Query, State},
-    http::{HeaderMap, StatusCode, header},
+    http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
 use std::collections::HashMap;
@@ -29,7 +29,7 @@ use super::json_ok;
 pub(super) mod device_overlay;
 mod impact;
 pub(super) mod presets;
-use impact::{SaveImpact, save_impact};
+use impact::{save_impact, SaveImpact};
 
 /// 当前生效配置：启动时指定了配置文件则实时读盘，否则为内存内置默认配置。
 ///

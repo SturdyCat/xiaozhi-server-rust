@@ -18,7 +18,11 @@ fn engine_key_prefers_new_value_and_falls_back_to_legacy_backend() {
     assert_eq!(new.engine, "xfyun");
 
     let mut legacy = legacy_toml(r#"backend = "sherpa""#);
-    assert_eq!(legacy.engine_id(), "kokoro", "旧 backend=sherpa 映射为 kokoro");
+    assert_eq!(
+        legacy.engine_id(),
+        "kokoro",
+        "旧 backend=sherpa 映射为 kokoro"
+    );
     legacy.normalize();
     assert_eq!(legacy.engine, "kokoro", "规范化后写回 engine 键");
 
@@ -76,7 +80,10 @@ cache_entries = 77
     let text = toml::to_string_pretty(&cfg).unwrap();
     assert!(text.contains("[kokoro]"), "{text}");
     assert!(!text.contains("backend"), "{text}");
-    assert!(!text.contains("model = \"/m/k.onnx\"\nlang"), "旧位置不得写入: {text}");
+    assert!(
+        !text.contains("model = \"/m/k.onnx\"\nlang"),
+        "旧位置不得写入: {text}"
+    );
 }
 
 /// **新位置优先**：`[tts.kokoro]` 已有非默认值时不搬旧位置（避免旧键覆盖新键）。

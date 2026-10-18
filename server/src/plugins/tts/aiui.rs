@@ -57,13 +57,18 @@ struct ActiveDeadline {
 
 impl ActiveDeadline {
     fn new(total: Duration) -> Self {
-        Self { left: total, last: Instant::now() }
+        Self {
+            left: total,
+            last: Instant::now(),
+        }
     }
 
     /// 推进到"现在"，把 `last` 以来的时长从预算里扣掉（在非等待点调用）。
     fn tick(&mut self) {
         let now = Instant::now();
-        self.left = self.left.saturating_sub(now.saturating_duration_since(self.last));
+        self.left = self
+            .left
+            .saturating_sub(now.saturating_duration_since(self.last));
         self.last = now;
     }
 
@@ -84,7 +89,9 @@ pub struct AiuiTts {
 
 impl AiuiTts {
     pub fn new(cfg: &XfyunTtsConfig) -> Result<Self> {
-        if cfg.app_id.trim().is_empty() || cfg.api_key.trim().is_empty() || cfg.api_secret.trim().is_empty()
+        if cfg.app_id.trim().is_empty()
+            || cfg.api_key.trim().is_empty()
+            || cfg.api_secret.trim().is_empty()
         {
             bail!(
                 "在线合成需要 [tts.xfyun] 的 app_id/api_key/api_secret（讯飞开放平台应用三要素）"
@@ -216,7 +223,8 @@ fn synthesize_frames(
         }
     })
     .to_string();
-    ws.send(Message::text(request)).context("发送 AIUI 合成请求失败")?;
+    ws.send(Message::text(request))
+        .context("发送 AIUI 合成请求失败")?;
 
     let mut deadline = ActiveDeadline::new(TOTAL_TIMEOUT);
     loop {
@@ -227,7 +235,9 @@ fn synthesize_frames(
                 TOTAL_TIMEOUT.as_secs()
             );
         }
-        let msg = ws.read().context("读取 AIUI 合成响应失败（网络或读超时）")?;
+        let msg = ws
+            .read()
+            .context("读取 AIUI 合成响应失败（网络或读超时）")?;
         let text = match &msg {
             Message::Text(t) => t.to_string(),
             Message::Binary(b) => String::from_utf8_lossy(b).into_owned(),
@@ -237,7 +247,10 @@ fn synthesize_frames(
         let Ok(frame) = serde_json::from_str::<serde_json::Value>(&text) else {
             continue; // 非 JSON 帧（握手响应等）：忽略
         };
-        let header = frame.get("header").cloned().unwrap_or(serde_json::Value::Null);
+        let header = frame
+            .get("header")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
         let code = header.get("code").and_then(|c| c.as_i64()).unwrap_or(0);
         if code != 0 {
             let sid = header.get("sid").and_then(|s| s.as_str()).unwrap_or("");
@@ -296,7 +309,9 @@ fn connect_with_timeout(url: &str) -> Result<WebSocket<MaybeTlsStream<TcpStream>
     });
     match rx.recv_timeout(CONNECT_TIMEOUT) {
         Ok(r) => r,
-        Err(_) => bail!("连接 AIUI 合成服务超时（{CONNECT_TIMEOUT:?} 内未完成握手；检查网络/防火墙）"),
+        Err(_) => {
+            bail!("连接 AIUI 合成服务超时（{CONNECT_TIMEOUT:?} 内未完成握手；检查网络/防火墙）")
+        }
     }
 }
 

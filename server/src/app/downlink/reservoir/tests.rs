@@ -3,14 +3,14 @@
 //! 未启用 `sherpa` 时 Opus 编码器是占位实现（返回空帧），因此断言只看**顺序、帧数、
 //! 水位与背压**，不看负载字节。
 
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::sync::{mpsc, oneshot};
 
 use super::*;
-use crate::app::prefetch::{PREFETCH_SENTENCES, PcmChunk, PreparedAudio};
+use crate::app::prefetch::{PcmChunk, PreparedAudio, PREFETCH_SENTENCES};
 use crate::app::protocol::BinVersion;
 use crate::app::session::SessionParams;
 use crate::app::tts_cache::TtsCache;

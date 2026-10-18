@@ -11,7 +11,10 @@ fn state_starts_empty_without_cache() {
     std::env::set_var("XIAOZHI_VOICES_CACHE", "/nonexistent/voices-test.json");
     init();
     let snap = state().read().unwrap_or_else(|e| e.into_inner()).clone();
-    assert!(snap.voices.is_empty(), "无缓存时应为空目录（不得回退硬编码可用列表）");
+    assert!(
+        snap.voices.is_empty(),
+        "无缓存时应为空目录（不得回退硬编码可用列表）"
+    );
     assert_eq!(snap.source, "empty");
     std::env::remove_var("XIAOZHI_VOICES_CACHE");
 }
@@ -23,8 +26,16 @@ fn candidates_are_unique_and_wellformed() {
     let mut seen = std::collections::HashSet::new();
     for v in &c {
         assert!(seen.insert(v.vcn.clone()), "候选 vcn 重复: {}", v.vcn);
-        assert!(matches!(v.gender.as_str(), "female" | "male"), "非法性别: {}", v.vcn);
-        assert!(matches!(v.type_.as_str(), "classic" | "x6"), "非法类型: {}", v.vcn);
+        assert!(
+            matches!(v.gender.as_str(), "female" | "male"),
+            "非法性别: {}",
+            v.vcn
+        );
+        assert!(
+            matches!(v.type_.as_str(), "classic" | "x6"),
+            "非法类型: {}",
+            v.vcn
+        );
     }
     assert!(c.len() >= 100, "候选池过小（疑似被截断）: {}", c.len());
 }
@@ -58,8 +69,16 @@ fn voices_probe_live() {
         eprintln!("跳过：未设置 XFYUN_APP_ID/XFYUN_API_KEY/XFYUN_API_SECRET");
         return;
     };
-    let cfg = XfyunTtsConfig { app_id, api_key, api_secret, voice: String::new() };
-    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let cfg = XfyunTtsConfig {
+        app_id,
+        api_key,
+        api_secret,
+        voice: String::new(),
+    };
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
     let t0 = std::time::Instant::now();
     rt.block_on(probe_and_persist(cfg));
     let snap = state().read().unwrap_or_else(|e| e.into_inner()).clone();
@@ -67,6 +86,8 @@ fn voices_probe_live() {
         "== 探测完成：{} 条可用（耗时 {}s），示例: {:?}",
         snap.voices.len(),
         t0.elapsed().as_secs(),
-        snap.voices.first().map(|v| (&v.vcn, &v.name, &v.type_, v.gender.as_str()))
+        snap.voices
+            .first()
+            .map(|v| (&v.vcn, &v.name, &v.type_, v.gender.as_str()))
     );
 }

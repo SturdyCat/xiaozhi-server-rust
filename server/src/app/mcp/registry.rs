@@ -158,20 +158,24 @@ impl McpRegistry {
     pub fn record(&self, probe: ProbeResult) {
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let keep_old = probe.tools.is_empty() && probe.error.is_some();
-        let old = keep_old.then(|| inner.devices.get(&probe.device_id).cloned()).flatten();
+        let old = keep_old
+            .then(|| inner.devices.get(&probe.device_id).cloned())
+            .flatten();
         let entry = DeviceTools {
             device_id: probe.device_id.clone(),
             session_id: probe.session_id,
             probed_at_ms: probe.probed_at_ms,
             // 探测发生在一条活着的会话上，因此这一刻设备在线
             online: true,
-            board: old.as_ref().map_or(probe.board.clone(), |o| o.board.clone()),
-            firmware_version: old
+            board: old
                 .as_ref()
-                .map_or(probe.firmware_version.clone(), |o| o.firmware_version.clone()),
-            protocol_version: old
-                .as_ref()
-                .map_or(probe.protocol_version.clone(), |o| o.protocol_version.clone()),
+                .map_or(probe.board.clone(), |o| o.board.clone()),
+            firmware_version: old.as_ref().map_or(probe.firmware_version.clone(), |o| {
+                o.firmware_version.clone()
+            }),
+            protocol_version: old.as_ref().map_or(probe.protocol_version.clone(), |o| {
+                o.protocol_version.clone()
+            }),
             tools: old.map_or(probe.tools, |o| o.tools),
             error: probe.error,
         };

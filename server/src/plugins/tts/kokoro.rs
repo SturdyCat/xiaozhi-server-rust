@@ -16,9 +16,7 @@ pub struct SherpaTts {
 #[cfg(feature = "sherpa")]
 impl SherpaTts {
     pub fn new(cfg: &KokoroTtsConfig) -> Result<Self> {
-        use sherpa_onnx::{
-            OfflineTtsConfig, OfflineTtsKokoroModelConfig, OfflineTtsModelConfig,
-        };
+        use sherpa_onnx::{OfflineTtsConfig, OfflineTtsKokoroModelConfig, OfflineTtsModelConfig};
         let mut model_config = OfflineTtsModelConfig::default();
         model_config.kokoro = OfflineTtsKokoroModelConfig {
             model: Some(cfg.model.clone()),

@@ -131,7 +131,11 @@ pub fn build(cfg: &crate::config::Config, device_id: &str) -> anyhow::Result<Pre
     overridden.sort();
 
     Ok(Preview {
-        source: if soul.enabled { "soul" } else { "system_prompt" },
+        source: if soul.enabled {
+            "soul"
+        } else {
+            "system_prompt"
+        },
         enabled: soul.enabled,
         preset_name: presets::display_name(soul.preset_id()),
         preset: soul.preset_id().to_string(),

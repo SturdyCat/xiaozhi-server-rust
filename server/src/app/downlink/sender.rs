@@ -18,11 +18,9 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 
 use crate::app::downlink::reservoir::{DownlinkItem, ReservoirSource, ReservoirStats};
-use crate::app::downlink::{
-    DownlinkPacer, poll_abort, send_sentence_start, start_tts_guarded,
-};
+use crate::app::downlink::{poll_abort, send_sentence_start, start_tts_guarded, DownlinkPacer};
 use crate::app::protocol::wrap_downlink;
-use crate::app::session::{SessionParams, send_binary};
+use crate::app::session::{send_binary, SessionParams};
 use crate::app::transport::Transport;
 
 /// 一轮下行的发送观测（与 [`crate::app::downlink::PacerStats`] 一起打印）。

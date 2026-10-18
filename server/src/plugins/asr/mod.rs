@@ -8,12 +8,12 @@
 //! 调用方（[`crate::app::session`]）必须用 `tokio::task::spawn_blocking` 隔离，
 //! 否则独占 tokio worker，期间同 runtime 的其他会话/HTTP 全部卡死。
 
-use anyhow::Result;
-use serde::{Deserialize, Serialize};
 #[cfg(feature = "sherpa")]
 use anyhow::Context;
+use anyhow::Result;
 #[cfg(feature = "sherpa")]
 use sensevoice::SherpaAsr;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::config::{canonical_engine, EngineSpec};
@@ -111,7 +111,9 @@ pub fn build_asr(cfg: &AsrConfig) -> Result<Arc<dyn AsrEngine>> {
     #[cfg(not(feature = "sherpa"))]
     {
         let _ = cfg;
-        anyhow::bail!("本二进制未启用 `sherpa` feature，无法构建 ASR 引擎（请用 --features sherpa 编译）");
+        anyhow::bail!(
+            "本二进制未启用 `sherpa` feature，无法构建 ASR 引擎（请用 --features sherpa 编译）"
+        );
     }
 }
 

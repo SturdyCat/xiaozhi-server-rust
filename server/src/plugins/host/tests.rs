@@ -244,10 +244,14 @@ fn capabilities_json_carries_every_key_the_overview_page_reads() {
         }
         // `last_error` 允许为 null（正常状态），但键必须在（客户端用 optString 取，缺键=空串）
         assert!(c["last_error"].is_null() || c["last_error"].is_string());
-        let impls = c["implementations"].as_array().expect("implementations 数组");
+        let impls = c["implementations"]
+            .as_array()
+            .expect("implementations 数组");
         assert!(!impls.is_empty(), "能力 {} 应至少有一个实现", c["id"]);
         for im in impls {
-            for k in ["id", "display", "local", "hot", "hot_hint", "enabled", "phase"] {
+            for k in [
+                "id", "display", "local", "hot", "hot_hint", "enabled", "phase",
+            ] {
                 assert!(im.get(k).is_some(), "实现 {} 缺键 {k}", im["id"]);
             }
             // `active_impl` 若指向某实现，客户端要靠它的 display 显示"当前用的是什么"

@@ -12,8 +12,16 @@ fn canonical_engine_maps_aliases_and_defaults() {
     let specs = crate::plugins::tts::TTS_ENGINES;
     assert_eq!(canonical_engine("", specs, "kokoro"), "kokoro", "空 = 默认");
     assert_eq!(canonical_engine("  ", specs, "kokoro"), "kokoro");
-    assert_eq!(canonical_engine("sherpa", specs, "kokoro"), "kokoro", "旧别名");
-    assert_eq!(canonical_engine("SHERPA", specs, "kokoro"), "kokoro", "大小写不敏感");
+    assert_eq!(
+        canonical_engine("sherpa", specs, "kokoro"),
+        "kokoro",
+        "旧别名"
+    );
+    assert_eq!(
+        canonical_engine("SHERPA", specs, "kokoro"),
+        "kokoro",
+        "大小写不敏感"
+    );
     assert_eq!(canonical_engine("Xfyun", specs, "kokoro"), "xfyun");
     assert_eq!(
         canonical_engine("whisper", specs, "kokoro"),
@@ -176,7 +184,10 @@ fn audio_lead_ms_is_capped_to_device_queue_packets() {
     // 超限 → 收敛到上限
     a.downlink_lead_ms = 1200;
     a.normalize();
-    assert_eq!(a.downlink_lead_ms, 1080, "1200ms 开局预充 21 包 > 20 包，必须被收敛");
+    assert_eq!(
+        a.downlink_lead_ms, 1080,
+        "1200ms 开局预充 21 包 > 20 包，必须被收敛"
+    );
     // 合法值原样保留
     a.downlink_lead_ms = 600;
     a.normalize();
@@ -185,17 +196,39 @@ fn audio_lead_ms_is_capped_to_device_queue_packets() {
     let d = AudioConfig::default();
     assert!(d.downlink_lead_ms <= d.max_lead_ms());
     // ⚠️ 上限随**帧长**变：队列是 N **包**，40ms 帧只能装 800ms → 上限 (20−2)×40 = 720
-    let mut f = AudioConfig { downlink_frame_duration_ms: 40, downlink_lead_ms: 1000, ..AudioConfig::default() };
-    assert_eq!(f.max_lead_ms(), 720, "40ms 帧的队容量是 20×40=800ms，不能按 1200ms 算");
+    let mut f = AudioConfig {
+        downlink_frame_duration_ms: 40,
+        downlink_lead_ms: 1000,
+        ..AudioConfig::default()
+    };
+    assert_eq!(
+        f.max_lead_ms(),
+        720,
+        "40ms 帧的队容量是 20×40=800ms，不能按 1200ms 算"
+    );
     f.normalize();
-    assert_eq!(f.downlink_lead_ms, 720, "40ms 帧下 1000ms 提前量会被静默丢包，必须被收敛");
+    assert_eq!(
+        f.downlink_lead_ms, 720,
+        "40ms 帧下 1000ms 提前量会被静默丢包，必须被收敛"
+    );
     // 「要更多缓存」的唯一路径：自刷固件放大包数 → 同步 downlink_queue_packets → 上限自动放宽
-    let mut big = AudioConfig { downlink_queue_packets: 66, downlink_lead_ms: 3000, ..AudioConfig::default() };
+    let mut big = AudioConfig {
+        downlink_queue_packets: 66,
+        downlink_lead_ms: 3000,
+        ..AudioConfig::default()
+    };
     assert_eq!(big.max_lead_ms(), 64 * 60);
     big.normalize();
-    assert_eq!(big.downlink_lead_ms, 3000, "队列放大后 3000ms 提前量应被接受");
+    assert_eq!(
+        big.downlink_lead_ms, 3000,
+        "队列放大后 3000ms 提前量应被接受"
+    );
     // 帧长 0 非法（节拍器零等待 = 尽速灌入）→ 回落默认并保证上限仍合理
-    let mut z = AudioConfig { downlink_frame_duration_ms: 0, downlink_lead_ms: 1000, ..AudioConfig::default() };
+    let mut z = AudioConfig {
+        downlink_frame_duration_ms: 0,
+        downlink_lead_ms: 1000,
+        ..AudioConfig::default()
+    };
     z.normalize();
     assert_eq!(z.downlink_frame_duration_ms, 60, "0 帧长必须被修正");
 }
@@ -207,14 +240,21 @@ fn audio_reservoir_params_are_normalized() {
     // 默认：容量 30s、起跑闸 1.5s、最长等待 4s（生产默认必须自洽）
     let d = AudioConfig::default();
     assert_eq!(
-        (d.downlink_buffer_ms, d.downlink_buffer_start_ms, d.downlink_buffer_start_max_ms),
+        (
+            d.downlink_buffer_ms,
+            d.downlink_buffer_start_ms,
+            d.downlink_buffer_start_max_ms
+        ),
         (30_000, 1_500, 4_000)
     );
     assert!(d.downlink_buffer_start_ms <= d.downlink_buffer_ms);
     assert!(d.downlink_buffer_start_max_ms >= d.downlink_buffer_start_ms);
 
     // 容量有上限：手滑写 10^9 也不会把每会话内存吃光
-    let mut big = AudioConfig { downlink_buffer_ms: 1_000_000, ..AudioConfig::default() };
+    let mut big = AudioConfig {
+        downlink_buffer_ms: 1_000_000,
+        ..AudioConfig::default()
+    };
     big.normalize();
     assert_eq!(big.downlink_buffer_ms, 180_000, "水库容量必须被收敛到上限");
 
@@ -227,7 +267,10 @@ fn audio_reservoir_params_are_normalized() {
     };
     off.normalize();
     assert_eq!(
-        (off.downlink_buffer_start_ms, off.downlink_buffer_start_max_ms),
+        (
+            off.downlink_buffer_start_ms,
+            off.downlink_buffer_start_max_ms
+        ),
         (0, 0),
         "水库关闭时起跑闸必须归零（否则起跑前白等到超时）"
     );
@@ -240,8 +283,14 @@ fn audio_reservoir_params_are_normalized() {
         ..AudioConfig::default()
     };
     odd.normalize();
-    assert_eq!(odd.downlink_buffer_start_ms, 2_000, "攒不出比容量更多的音频");
-    assert_eq!(odd.downlink_buffer_start_max_ms, 2_000, "最长等待不得小于起跑闸");
+    assert_eq!(
+        odd.downlink_buffer_start_ms, 2_000,
+        "攒不出比容量更多的音频"
+    );
+    assert_eq!(
+        odd.downlink_buffer_start_max_ms, 2_000,
+        "最长等待不得小于起跑闸"
+    );
 }
 
 /// 下载缓冲预算（`AudioConfig::download_budget_ms`）：由水库容量派生并夹在 [1s, 10s]。
@@ -250,15 +299,35 @@ fn audio_reservoir_params_are_normalized() {
 /// ——两者等深会把每会话内存从几十 KB 抬到几 MB；而太小又会让"下载"退化回逐片等消费。
 #[test]
 fn download_budget_is_derived_and_bounded() {
-    let base = AudioConfig { downlink_buffer_ms: 30_000, ..AudioConfig::default() };
-    assert_eq!(base.download_budget_ms(), 10_000, "大水库下取上限 10s（内存口径）");
-    let small = AudioConfig { downlink_buffer_ms: 2_000, ..AudioConfig::default() };
+    let base = AudioConfig {
+        downlink_buffer_ms: 30_000,
+        ..AudioConfig::default()
+    };
+    assert_eq!(
+        base.download_budget_ms(),
+        10_000,
+        "大水库下取上限 10s（内存口径）"
+    );
+    let small = AudioConfig {
+        downlink_buffer_ms: 2_000,
+        ..AudioConfig::default()
+    };
     assert_eq!(small.download_budget_ms(), 2_000, "小水库跟随水库容量");
-    let off = AudioConfig { downlink_buffer_ms: 0, ..AudioConfig::default() };
-    assert_eq!(off.download_budget_ms(), 1_000, "水库关闭也要留下限（解耦下载与编码）");
+    let off = AudioConfig {
+        downlink_buffer_ms: 0,
+        ..AudioConfig::default()
+    };
+    assert_eq!(
+        off.download_budget_ms(),
+        1_000,
+        "水库关闭也要留下限（解耦下载与编码）"
+    );
     // 派生值必须与水库容量脱钩地**恒**在界内：配置怎么改都不会把 PCM 内存顶飞
     for ms in [0, 1, 999, 1_000, 8_000, 60_000, 180_000] {
-        let c = AudioConfig { downlink_buffer_ms: ms, ..AudioConfig::default() };
+        let c = AudioConfig {
+            downlink_buffer_ms: ms,
+            ..AudioConfig::default()
+        };
         assert!(
             (1_000..=10_000).contains(&c.download_budget_ms()),
             "download_budget_ms({ms}) 越界"
@@ -299,8 +368,14 @@ fn inference_gate_permits_clamped_to_at_least_one() {
     cfg.asr.max_concurrent = 0;
     cfg.tts.max_concurrent = 0;
     cfg.normalize();
-    assert_eq!(cfg.asr.max_concurrent, 1, "asr 0 许可会被永久堵死，clamp ≥1");
-    assert_eq!(cfg.tts.max_concurrent, 1, "tts 0 许可会被永久堵死，clamp ≥1");
+    assert_eq!(
+        cfg.asr.max_concurrent, 1,
+        "asr 0 许可会被永久堵死，clamp ≥1"
+    );
+    assert_eq!(
+        cfg.tts.max_concurrent, 1,
+        "tts 0 许可会被永久堵死，clamp ≥1"
+    );
 
     cfg.asr.max_concurrent = 4;
     cfg.tts.max_concurrent = 8;

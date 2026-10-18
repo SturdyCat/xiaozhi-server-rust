@@ -115,8 +115,10 @@ impl GraphMemory {
     /// `Ok(Some(false))` = 抽取失败（已按上限决定重试/隔离）。
     async fn extract_one(&self) -> Result<Option<bool>> {
         let store = self.store.clone();
-        let pending = match run_blocking("查询抽取队列", move || store.pending_turn(schema::now_ms()))
-            .await?
+        let pending = match run_blocking("查询抽取队列", move || {
+            store.pending_turn(schema::now_ms())
+        })
+        .await?
         {
             Some(p) => p,
             None => return Ok(None),
@@ -152,13 +154,10 @@ impl GraphMemory {
                     };
                     let now = schema::now_ms();
                     let key = pending.clone();
-                    run_blocking(
-                        "写入记忆",
-                        move || -> Result<()> {
-                            store.upsert_memory(&m, &ids, now)?;
-                            store.mark_turn(&key, "succeeded", None, None, now)
-                        },
-                    )
+                    run_blocking("写入记忆", move || -> Result<()> {
+                        store.upsert_memory(&m, &ids, now)?;
+                        store.mark_turn(&key, "succeeded", None, None, now)
+                    })
                     .await?;
                     tracing::info!(
                         "记忆抽取成功：scope={} turn={} outcome={} summary={}",
@@ -252,10 +251,9 @@ impl MemoryProvider for GraphMemory {
             let budget = Duration::from_millis(self.cfg.recall_budget_ms.max(1));
             let hits = match tokio::time::timeout(
                 budget,
-                run_blocking(
-                    "召回",
-                    move || store.search(&terms, scope_owned.as_deref(), fresh, limit),
-                ),
+                run_blocking("召回", move || {
+                    store.search(&terms, scope_owned.as_deref(), fresh, limit)
+                }),
             )
             .await
             {
@@ -314,21 +312,18 @@ impl MemoryProvider for GraphMemory {
             self.since_maintain.fetch_add(1, Ordering::Relaxed);
             let store = self.store.clone();
             let now = schema::now_ms();
-            run_blocking(
-                "记忆写入",
-                move || -> Result<()> {
-                    let idx = store.next_turn_index(&turn.scope)?;
-                    store.insert_turn(
-                        &turn.scope,
-                        &turn.session_id,
-                        idx,
-                        &turn.user_text,
-                        &turn.assistant_text,
-                        now,
-                    )?;
-                    Ok(())
-                },
-            )
+            run_blocking("记忆写入", move || -> Result<()> {
+                let idx = store.next_turn_index(&turn.scope)?;
+                store.insert_turn(
+                    &turn.scope,
+                    &turn.session_id,
+                    idx,
+                    &turn.user_text,
+                    &turn.assistant_text,
+                    now,
+                )?;
+                Ok(())
+            })
             .await
         })
     }

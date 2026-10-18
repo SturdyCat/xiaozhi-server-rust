@@ -15,7 +15,10 @@ async fn send_reaches_registered_session_and_guard_removal_closes_it() {
     assert_eq!(rx.recv().await.as_deref(), Some("你好"));
 
     // guard 还活着：NoChannel 只对未注册的会话
-    assert_eq!(injector.send("other", "x".into()), Err(InjectError::NoChannel));
+    assert_eq!(
+        injector.send("other", "x".into()),
+        Err(InjectError::NoChannel)
+    );
 
     drop(guard);
     // 守卫摘除后通道不在注册表里（NoChannel，而不是 Closed）

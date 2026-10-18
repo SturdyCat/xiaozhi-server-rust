@@ -23,26 +23,23 @@
 //! `tts_test` 前）读取磁盘配置：`[tts]` 引擎签名（engine / 关键参数）变化即重建并热替换
 //! ——管理页改配置保存后，无需重启即对**新会话**与测试台生效。
 
-use crate::plugins::asr::AsrEngine;
 use crate::config::store::ConfigStore;
 use crate::config::Config;
+use crate::plugins::asr::AsrEngine;
 use crate::plugins::host::{Phase, PluginHost};
 use crate::plugins::llm::{build_llm, Llm};
 use crate::plugins::memory::MemoryProvider;
-use crate::plugins::nlu::{BertClassify, NluConfig, bert_signature, build_bert_checked};
+use crate::plugins::nlu::{bert_signature, build_bert_checked, BertClassify, NluConfig};
 use crate::plugins::registry::{self, Capability};
 use crate::plugins::tts::{build_kokoro_with_lang, TtsEngine};
 #[cfg(not(feature = "sherpa"))]
 use crate::plugins::vad::MockVad;
 use crate::plugins::vad::VadEngine;
-#[cfg(feature = "sherpa")]
-use {
-    crate::plugins::vad::SherpaVad,
-    anyhow::Context,
-};
 use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
+#[cfg(feature = "sherpa")]
+use {crate::plugins::vad::SherpaVad, anyhow::Context};
 
 /// 进程内共享的引擎（ASR / TTS / LLM）与每会话 VAD 工厂。
 pub struct Engines {
@@ -127,10 +124,14 @@ impl Engines {
         let memory_sig = capability_signature(config, Capability::Memory);
         // 跟随配置来源的持久卷；无来源时复用 memory.db_path 的父目录，
         // 不把生产音频写到硬编码的容器层路径。与 wakeup 共用旧 hot-audio/ 格式。
-        let hot_audio_dir = crate::app::hot_audio::cache_dir(config_store.location(), &config.memory.db_path);
-        let hot_audio = Arc::new(crate::app::hot_audio::HotAudioStore::new(Some(hot_audio_dir)));
+        let hot_audio_dir =
+            crate::app::hot_audio::cache_dir(config_store.location(), &config.memory.db_path);
+        let hot_audio = Arc::new(crate::app::hot_audio::HotAudioStore::new(Some(
+            hot_audio_dir,
+        )));
         let tts_cache = Arc::new(crate::app::tts_cache::TtsCache::with_store(
-            config.tts.cache_entries, hot_audio.clone(),
+            config.tts.cache_entries,
+            hot_audio.clone(),
         ));
         Ok(Arc::new(Self {
             asr: booted.asr,
@@ -199,7 +200,10 @@ impl Engines {
 
     /// 当前生效的记忆引擎（未启用时是 `NoopMemory`，调用零开销）。
     pub fn memory(&self) -> Arc<dyn MemoryProvider> {
-        self.memory.read().unwrap_or_else(|e| e.into_inner()).clone()
+        self.memory
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// **会话级最新配置快照**：由 [`Self::refresh_from_disk`] 在会话开始时刷新。
@@ -283,7 +287,10 @@ impl Engines {
         let built = match build_kokoro_with_lang(&cfg.tts.kokoro, lang) {
             Ok(e) => e,
             Err(err) => {
-                tracing::warn!("构建 lang={lang} 的 TTS 引擎失败（耗时 {}ms），回退默认引擎: {err:#}", t0.elapsed().as_millis());
+                tracing::warn!(
+                    "构建 lang={lang} 的 TTS 引擎失败（耗时 {}ms），回退默认引擎: {err:#}",
+                    t0.elapsed().as_millis()
+                );
                 return self.tts();
             }
         };
@@ -370,10 +377,7 @@ impl Engines {
             // 记忆被关掉（或 engine=none）：换回 Noop，状态由 plan 侧的标记决定
             *self.memory.write().unwrap_or_else(|e| e.into_inner()) =
                 Arc::new(crate::plugins::memory::NoopMemory);
-            *self
-                .memory_sig
-                .write()
-                .unwrap_or_else(|e| e.into_inner()) = String::new();
+            *self.memory_sig.write().unwrap_or_else(|e| e.into_inner()) = String::new();
             return Ok(());
         };
         if let Err(e) = (d.validate)(fresh) {
@@ -393,12 +397,17 @@ impl Engines {
         match crate::plugins::memory::build_memory(&fresh.memory, &fresh.llm) {
             Ok(engine) => {
                 *self.memory.write().unwrap_or_else(|e| e.into_inner()) = engine;
-                *self
-                    .memory_sig
-                    .write()
-                    .unwrap_or_else(|e| e.into_inner()) = sig;
+                *self.memory_sig.write().unwrap_or_else(|e| e.into_inner()) = sig;
                 let warn = d.warn_if.and_then(|f| f(fresh));
-                self.mark_capability(Capability::Memory, if warn.is_some() { Phase::Degraded } else { Phase::Active }, warn);
+                self.mark_capability(
+                    Capability::Memory,
+                    if warn.is_some() {
+                        Phase::Degraded
+                    } else {
+                        Phase::Active
+                    },
+                    warn,
+                );
                 tracing::info!("记忆引擎已热切换（新会话生效）");
                 Ok(())
             }
@@ -427,7 +436,8 @@ impl Engines {
         };
         let engine_id = fresh.tts.engine_id();
         // 构建入口**由注册表描述符提供**（新增供应商只要加 1 条描述符，本函数不再分发）。
-        let Some(descriptor) = registry::active_impl(fresh, Capability::Tts).and_then(registry::find)
+        let Some(descriptor) =
+            registry::active_impl(fresh, Capability::Tts).and_then(registry::find)
         else {
             let msg = format!(
                 "TTS 引擎切换失败：没有匹配 [tts].engine=\"{engine_id}\" 的实现（保持当前引擎）"
@@ -436,7 +446,10 @@ impl Engines {
             return Err(msg);
         };
         let Some(build) = descriptor.build else {
-            let msg = format!("TTS 实现 {} 未提供构建入口（注册表配置错误）", descriptor.id);
+            let msg = format!(
+                "TTS 实现 {} 未提供构建入口（注册表配置错误）",
+                descriptor.id
+            );
             self.mark_capability(Capability::Tts, Phase::Failed, Some(msg.clone()));
             return Err(msg);
         };
@@ -459,7 +472,10 @@ impl Engines {
         *self.tts.write().unwrap_or_else(|e| e.into_inner()) = engine;
         *self.tts_sig.write().unwrap_or_else(|e| e.into_inner()) = sig;
         // 语言池属于旧引擎（如 sherpa 的按语言缓存），清掉避免串用
-        self.tts_pool.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        self.tts_pool
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
         // ⚠️ 缓存里是**旧引擎**产出的下行音频：换了引擎（音色/采样率不同）后
         // 若继续命中，会播出上一个引擎的声音。故一并清空。
         self.tts_cache.clear();
@@ -548,9 +564,8 @@ impl Engines {
             ))
         };
         #[cfg(not(feature = "sherpa"))]
-        let factory = || -> Result<Box<dyn VadEngine>> {
-            Ok(Box::new(MockVad::new(cfg.vad.threshold)))
-        };
+        let factory =
+            || -> Result<Box<dyn VadEngine>> { Ok(Box::new(MockVad::new(cfg.vad.threshold))) };
         self.vad_pool.acquire(sig, factory).await
     }
 }
@@ -588,7 +603,10 @@ fn decide_refresh(
         return Ok(None);
     };
     if let Err(e) = (d.validate)(fresh) {
-        return Err(format!("{} 配置未通过校验（保持当前引擎）: {e:#}", d.display));
+        return Err(format!(
+            "{} 配置未通过校验（保持当前引擎）: {e:#}",
+            d.display
+        ));
     }
     if let Some(reason) = d.warn_if.and_then(|f| f(fresh)) {
         return Err(format!("{} 能力受限（保持当前引擎）: {reason}", d.display));

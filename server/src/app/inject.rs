@@ -56,8 +56,14 @@ impl Injector {
 
     /// 会话侧注册一条注入通道；返回的 [`InjectGuard`] Drop 时自动摘除。
     pub fn register(&self, session_id: &str, tx: mpsc::Sender<String>) -> InjectGuard {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).insert(session_id.to_string(), tx);
-        InjectGuard { inner: Arc::clone(&self.inner), session_id: session_id.to_string() }
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(session_id.to_string(), tx);
+        InjectGuard {
+            inner: Arc::clone(&self.inner),
+            session_id: session_id.to_string(),
+        }
     }
 
     /// 向指定会话注入一段文本（作为用户话语走完整管线）。
@@ -83,7 +89,10 @@ pub struct InjectGuard {
 
 impl Drop for InjectGuard {
     fn drop(&mut self) {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.session_id);
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.session_id);
     }
 }
 
