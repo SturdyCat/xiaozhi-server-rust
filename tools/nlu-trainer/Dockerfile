@@ -4,14 +4,18 @@
 # 服务端（nlu_build.rs）默认按该 tag `docker pull` + `docker run`。
 FROM python:3.11-slim
 
-# PyPI 清华镜像作主 index（全量包），CPU 轮子仓库作 extra index（只收录 torch 系包，
-# 不能当唯一 index，否则 transformers 等报 from versions: none）。
+# PyPI 阿里云镜像作主 index（全量包；ACR 云端构建环境访问清华源会拿到空列表，
+# 阿里源与 ACR 同云最稳），CPU 轮子仓库作 extra index（只收录 torch 系包，
+# 不能当唯一 index，否则 transformers 等报 from versions: none）。失败回退官方 PyPI。
 COPY requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir \
-      -i https://pypi.tuna.tsinghua.edu.cn/simple \
+RUN pip install --no-cache-dir --retries 5 --timeout 60 \
+      -i https://mirrors.aliyun.com/pypi/simple/ \
       --extra-index-url https://download.pytorch.org/whl/cpu \
       -r /tmp/requirements.txt \
- && rm /tmp/requirements.txt
+ || pip install --no-cache-dir \
+      --extra-index-url https://download.pytorch.org/whl/cpu \
+      -r /tmp/requirements.txt \
+ && rm -f /tmp/requirements.txt
 
 # HF 权重经国内镜像拉取；训练脚本固定路径，工作目录与产物目录由服务端挂载。
 ENV HF_ENDPOINT=https://hf-mirror.com \
