@@ -4,6 +4,7 @@ import com.tencent.kuikly.core.annotations.Page
 import com.tencent.kuikly.core.base.ViewBuilder
 import com.tencent.kuikly.core.base.ViewContainer
 import com.tencent.kuikly.core.directives.vif
+import com.tencent.kuikly.core.module.Module
 import com.tencent.kuikly.core.pager.Pager
 import com.tencent.kuikly.core.reactive.handler.observable
 import com.tencent.kuikly.core.views.Text
@@ -44,11 +45,13 @@ import com.tencent.kuikly.core.views.View
  * 范式；点遮罩/选中导航后收起）。两态共用 [adminSidebar]，视觉不漂移。
  * 运维页首次加载显示骨架卡（`skeletonCard`，见 OpsPages）。
  *
- * ## 与 macOS `AdminShell` 的关系
+ * ## 平台差异（expect/actual）
  *
- * 两者并列而不合并：macOS 壳额外挂着「测试台」与「切换服务器」（依赖 macosArm64Main 的
- * `TestBenchState` / `XiaoZhiModule`，web 端不编译）。两壳**共用**同一套侧边栏原语
- * （[sidebarItem]）与导航常量（[AdminNav]），因此视觉与信息层级不会漂移。
+ * web 与 macOS **共用本壳**（原 macOS 专属 `AdminShell` @Page("router") 已废除，见
+ * macosArm64Main/AdminPlatform.kt 的 actual）。差异全部收口为 expect/actual：macOS 注入
+ * [XiaoZhiModule]、渲染 mac-only 测试台（`renderTestbenchSection`）与「切换服务器」
+ * （`macServerSwitchEntry`）、基址经 [pagerBaseUrl] 读 SP 记忆地址；web 全部为空/""（同域
+ * 相对路径）。测试台菜单仅 macOS 显示（[AdminNav.visible]），web 端彻底隐藏。
  *
  * ## Kuikly DSL 约束（踩过的坑，勿改）
  *
@@ -102,29 +105,48 @@ class AdminPage : Pager() {
      */
     var drawerOpen by observable(false)
 
+    /**
+     * macOS「切换服务器」表单开关（web 恒 false）：入口与表单渲染在 mac actual 的
+     * [macServerSwitchEntry]（侧边栏内联展开），保存后经 [refreshAll] 重拉数据。
+     */
+    var serverSwitchOpen by observable(false)
+
+    /** 当前生效的 API 基址（[refreshAll] 时确定）：mac 后续动作（save/reload/个性化 load）沿用同一基址；web 恒 ""。 */
+    var apiBase by observable("")
+
     /** 顶部弹出一条提示（成功=ok / 失败=error / 提示=info），3 秒后自动消失。 */
     fun showToast(message: String, level: String = "info") = toast.show(message, level)
 
     override fun pageDidAppear() {
         super.pageDidAppear()
-        // web 端由 server 同域托管，基址留空（相对路径）；鉴权 token 由 URL 参数带进来
-        //（`?token=xxx&page_name=admin`，与 /api/ws 的浏览器兜底口径一致）。
-        val token = pagerData.params.optString("token", "")
-        form.load(this)
-        form.loadPresets(this)
-        plugins.load(this)
-        mcpTools.load(this)
-        ota.load(this, "", token)
-        // 运维面六路数据：并行发出，各自的 loading/loadError 独立（一个端点挂了不影响其他页面）
-        stats.load(this)
-        devices.load(this)
-        echomuse.load(this)
-        sessions.load(this)
-        conversations.load(this)
-        usage.load(this)
-        metrics.load(this)
-        engineHealth.load(this)
+        refreshAll(pagerBaseUrl(this))
     }
+
+    /**
+     * 拉取全部 section 数据：页面首现与 macOS「切换服务器」后共用。
+     * web 端 base=""（server 同域托管走相对路径，行为不变）；macOS 传记忆地址。
+     * 鉴权 token 由 URL 参数带进来（`?token=xxx&page_name=admin`，与 /api/ws 的浏览器兜底口径一致）。
+     */
+    fun refreshAll(base: String) {
+        apiBase = base
+        val token = pagerData.params.optString("token", "")
+        form.load(this, base)
+        form.loadPresets(this, base)
+        plugins.load(this, base)
+        mcpTools.load(this, base)
+        ota.load(this, base, token)
+        // 运维面多路数据：并行发出，各自的 loading/loadError 独立（一个端点挂了不影响其他页面）
+        stats.load(this, base)
+        devices.load(this, base)
+        echomuse.load(this, base)
+        sessions.load(this, base)
+        conversations.load(this, base)
+        usage.load(this, base)
+        metrics.load(this, base)
+        engineHealth.load(this, base)
+    }
+
+    override fun createExternalModules(): Map<String, Module> = platformExternalModules()
 
     override fun body(): ViewBuilder {
         val ctx = this
@@ -136,6 +158,11 @@ class AdminPage : Pager() {
         // （@DslMarker 屏蔽嵌套 builder 闭包对 pagerData 的访问），故收敛成顶层 lambda，
         // 嵌套 vif 里一律经 isNarrow() 求值——窗口 resize 跨过断点时自动 常驻 ⇄ 抽屉 切换。
         val isNarrow = { pagerData.pageViewWidth < NARROW_BREAKPOINT }
+        // 测试台布局参数（mac-only section，见下方分支）：与 AdminShell 时代同一口径
+        //（宽 = 窗口宽 - 侧边栏(240) - 分隔(1)；高 = 窗口高 - 顶避让(36) - 标题栏区(145-36)）。
+        val twoColumn = { pagerData.pageViewWidth >= 900f }
+        val contentPageWidth = { pagerData.pageViewWidth - 241f }
+        val contentPageHeight = { pagerData.pageViewHeight - 145f }
         return {
             attr {
                 flex(1f)
@@ -188,7 +215,7 @@ class AdminPage : Pager() {
                         trailing = {
                             vif({ ctx.selectedSection == "config" && ctx.form.conflict }) {
                                 // 过期写入（409）：草稿仍在本地，给一个「重新加载」出口
-                                secondaryButton("重新加载") { ctx.form.reload(ctx) }
+                                secondaryButton("重新加载") { ctx.form.reload(ctx, ctx.apiBase) }
                                 View { attr { width(AdminSpace.sm) } }
                             }
                             // 保存按钮：构建期文案参数 → 用 vif 切换两份按钮响应编辑对象
@@ -204,7 +231,7 @@ class AdminPage : Pager() {
                                 ) {
                                     // toast 在**接口返回后**由回调触发（不能紧随 save() 取 statusMsg：
                                     // 那时请求还没回来，会弹出上一条旧消息）
-                                    ctx.form.save(ctx) { msg, level -> ctx.showToast(msg, level) }
+                                    ctx.form.save(ctx, ctx.apiBase) { msg, level -> ctx.showToast(msg, level) }
                                 }
                             }
                             vif({ ctx.selectedSection == "config" && ctx.form.editDeviceId.isNotEmpty() }) {
@@ -216,7 +243,7 @@ class AdminPage : Pager() {
                                     successText = "✓ 已保存",
                                     errorText = "✕ 保存失败",
                                 ) {
-                                    ctx.form.save(ctx) { msg, level -> ctx.showToast(msg, level) }
+                                    ctx.form.save(ctx, ctx.apiBase) { msg, level -> ctx.showToast(msg, level) }
                                 }
                             }
                         },
@@ -233,9 +260,9 @@ class AdminPage : Pager() {
                         }
                     }
                     vif({ ctx.selectedSection == "testbench" }) {
-                        // 测试台（P1-3）：web 端占位——麦克风/音频链路依赖原生能力，
-                        // 完整测试台只在 macOS 客户端（macosArm64Main），此处仅做引导
-                        opsScroller { testbenchUnavailableCard() }
+                        // 测试台（P1-3）：mac-only（菜单已在 web 隐藏）。mac actual 按 Pager 缓存
+                        // TestBenchState，切走再切回来连接/录音状态不丢；⚠️ 非限定调用挂进内容区
+                        renderTestbenchSection(ctx, ctx.form, twoColumn, contentPageWidth, contentPageHeight)
                     }
                     vif({ ctx.selectedSection == "devices" }) {
                         opsScroller {
@@ -246,7 +273,7 @@ class AdminPage : Pager() {
                                 //（editDeviceId 置位后 load 走「全局基线 + overlay」分支）
                                 { id ->
                                     ctx.form.editDeviceId = id
-                                    ctx.form.load(ctx)
+                                    ctx.form.load(ctx, ctx.apiBase)
                                     ctx.selectedSection = "config"
                                 },
                                 ctx,
@@ -334,7 +361,7 @@ private fun ViewContainer<*, *>.adminSidebar(ctx: AdminPage, topInset: Float) {
         }
         // 分组标题在 group 变化处插入（AdminNav.init 已护栏：同组必须相邻声明）
         var lastGroup = ""
-        for (item in AdminNav.all) {
+        for (item in AdminNav.visible(IS_MACOS)) {
             if (item.group != lastGroup) {
                 lastGroup = item.group
                 navGroupHeader(item.group)
@@ -348,6 +375,15 @@ private fun ViewContainer<*, *>.adminSidebar(ctx: AdminPage, topInset: Float) {
                 // 窄屏抽屉：选中导航后收起（宽屏 drawerOpen 恒为 false，无副作用）
                 ctx.drawerOpen = false
             }
+        }
+        // macOS 专属：「切换服务器」入口 + 内联地址表单（js/其他平台 actual 空实现）
+        macServerSwitchEntry(
+            ctx,
+            { ctx.serverSwitchOpen },
+            { ctx.serverSwitchOpen = false },
+        ) {
+            ctx.refreshAll(pagerBaseUrl(ctx))
+            ctx.showToast("已切换服务器，数据已重新加载", "ok")
         }
         // 底部弹性占位 + 版本信息
         View { attr { flex(1f) } }
@@ -399,30 +435,5 @@ private fun ViewContainer<*, *>.hamburgerButton(onClick: () -> Unit) {
                 }
             }
         }
-    }
-}
-
-/**
- * 测试台占位卡（P1-3 范围 A）：web 端不实现测试台本体，只说明原因并给出两条替代路径。
- *
- * 为什么是占位而不是真实现：测试台需要**本地麦克风/扬声器**走音频采集-播放链路，
- * 这是浏览器/页面容器之外的原生能力；本项目只有 macOS 客户端（macosArm64Main 的
- * `TestBenchState`）接了这条链路，web（h5App）产物不编译那部分代码。范围 A 拍板：
- * 不把原生逻辑下沉到 common，web 端仅保留导航占位做引导，避免用户以为功能缺失。
- */
-private fun ViewContainer<*, *>.testbenchUnavailableCard() {
-    groupedCard("测试台") {
-        Text {
-            attr {
-                fontSize(AdminType.body)
-                color(AdminColors.textPrimary)
-                text("语音测试台需要本地麦克风与音频播放链路，网页端无法使用。请在 macOS 客户端中打开「测试台」进行端到端语音验证。")
-            }
-        }
-        // Text 不支持 padding/margin 属性（Kuikly DSL 限制），间距一律包 View
-        View { attr { height(AdminSpace.sm) } }
-        textNote(
-            "替代路径：配置页中 LLM / TTS / VAD 各项的「测试」按钮在服务端执行，无需麦克风即可验证上游链路连通性。",
-        )
     }
 }

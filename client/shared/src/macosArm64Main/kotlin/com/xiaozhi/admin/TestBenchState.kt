@@ -22,7 +22,7 @@ import com.tencent.kuikly.core.views.View
  * 录音流程（录音与识别解耦）：开始录音 → 停止录音（本地缓冲，可反复试听）→ 发送识别。
  * TTS 流程：合成并播放（实时下行边收边播）→ 完成后出现波形播放器可反复回听。
  *
- * ⚠️ XiaoZhiModule 由持有它的 Pager（AdminShell）经 createExternalModules() 注册；
+ * ⚠️ XiaoZhiModule 由持有它的 admin Pager（AdminPage，mac actual 经 platformExternalModules 注入）注册；
  *   本类不是 Pager，故方法都接收 ctx: Pager 来 acquireModule。
  *   渲染见文件底部的 ViewContainer.renderBench(bench, ctx) 扩展。
  */
@@ -164,7 +164,7 @@ class TestBenchState(private val scope: PagerScope) {
 
     private fun xz(ctx: Pager): XiaoZhiModule = ctx.acquireModule(XiaoZhiModule.MODULE_NAME)
 
-    /** onDone：连接结果回调（成功与否），供启动自动连接流程（ConnectState）接续 UI 切换。 */
+    /** onDone：连接结果回调（成功与否），供统一壳接续 UI 切换。 */
     fun connect(ctx: Pager, onDone: ((Boolean) -> Unit)? = null) {
         connectionState = "connecting"
         statusMsg = "连接中…"

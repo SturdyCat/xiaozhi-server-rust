@@ -12,7 +12,7 @@ import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 // ============================================================
 
 /**
- * 用服务端 /api/config 回包填充表单（公开：macOS ConnectState 连接流程自行 GET 后调用，
+ * 用服务端 /api/config 回包填充表单（公开：macOS 端经 AdminPage.refreshAll 以绝对基址调用，
  * 以便同时提取 expected_token 供 WS 鉴权；load() 内部也走这里）。
  */
 internal fun ConfigFormState.fill(obj: JSONObject) {

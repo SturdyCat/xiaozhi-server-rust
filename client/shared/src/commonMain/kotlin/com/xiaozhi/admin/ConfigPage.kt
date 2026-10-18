@@ -9,7 +9,7 @@ import com.tencent.kuikly.core.views.View
 /**
  * 管理后台 · 配置页（config），位于 shared 公共层，跨端复用（web / Android / iOS / OHOS）。
  *
- * 作为 macOS 单窗口壳（AdminShell.kt 的 @Page("router")）内「配置」section 的兜底独立入口：
+ * 统一管理台（@Page("admin")）之外的单页模式兜底入口：
  * 其它平台没有侧边栏壳，仍可用本页单独打开配置。
  * 逻辑全部下沉到 ConfigFormState（load/save/renderForm），本页只负责壳 + 生命周期。
  */

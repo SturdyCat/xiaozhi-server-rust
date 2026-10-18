@@ -12,8 +12,8 @@
 
     self.window = [[UIWindow alloc] initWithWindowScene:windowScene];
 
-    // Mac 版默认进入单窗口管理后台壳（router）：侧边栏 + 内容区，概览/测试台/配置同页切换。
-    KuiklyRenderViewController *root = [[KuiklyRenderViewController alloc] initWithPageName:@"router"
+    // Mac 版进入统一管理台壳（admin，原 router 双壳已废除）：侧边栏 + 内容区，概览/测试台/配置同页切换。
+    KuiklyRenderViewController *root = [[KuiklyRenderViewController alloc] initWithPageName:@"admin"
                                                                                   pageData:@{}];
     UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:root];
     self.window.rootViewController = nav;

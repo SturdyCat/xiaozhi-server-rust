@@ -21,7 +21,14 @@ import com.tencent.kuikly.core.views.View
  * 集中定义 id/order/label，构建期校验 id 唯一与 order 升序。收益是新增一个页面从
  * "改 `renderXxx` 里的一行 + 记住顺序 + 别漏文案"收敛为"表加一行 + `when` 加一条分支"。
  */
-class NavDescriptor(val id: String, val order: Int, val label: String, val group: String)
+class NavDescriptor(
+    val id: String,
+    val order: Int,
+    val label: String,
+    val group: String,
+    /** true = 仅 macOS 客户端显示（如测试台，依赖原生麦克风/音频链路）；web 不渲染该菜单。 */
+    val macOnly: Boolean = false,
+)
 
 /** 管理台一级导航（order 升序即展示顺序）。 */
 object AdminNav {
@@ -33,8 +40,8 @@ object AdminNav {
     val all: List<NavDescriptor> = listOf(
         // order 以 10 为步长：留出插入空间，避免每次新增都要重排既有值
         NavDescriptor("overview", 0, "概览", GROUP_OBSERVE),
-        // 测试台（P1-3）：web 端仅占位引导（麦克风/音频链路不可用），真实现只在 macOS 客户端
-        NavDescriptor("testbench", 5, "测试台", GROUP_OBSERVE),
+        // 测试台（P1-3）：macOnly —— web 端彻底隐藏该菜单（麦克风/音频链路不可用），真实现只在 macOS 客户端
+        NavDescriptor("testbench", 5, "测试台", GROUP_OBSERVE, macOnly = true),
         NavDescriptor("devices", 10, "设备", GROUP_OBSERVE),
         // EchoMuse 设备（批准制登记 + 重启 / WiFi 下发指令，`GET /api/echomuse/devices`）
         NavDescriptor("echomuse", 15, "EchoMuse", GROUP_OBSERVE),
@@ -66,6 +73,12 @@ object AdminNav {
 
     /** id → 文案（找不到时回退 id 本身，避免标题变成空白）。 */
     fun label(id: String): String = all.firstOrNull { it.id == id }?.label ?: id
+
+    /**
+     * 按平台过滤后的导航表：macOnly 项只在 macOS 客户端出现。
+     * 侧边栏渲染一律走本函数（不要直接遍历 [all]），保证 web 端彻底看不到 mac 专属入口。
+     */
+    fun visible(macos: Boolean): List<NavDescriptor> = all.filter { !it.macOnly || macos }
 }
 
 /** 连接状态 → 中文（macOS 连接页与 web 顶栏共用）。 */

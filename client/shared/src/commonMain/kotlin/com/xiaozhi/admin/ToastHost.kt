@@ -15,7 +15,7 @@ import com.tencent.kuikly.core.views.View
 /**
  * 顶部 toast 数据：level 决定图标与描边——ok=绿（成功）/error=红（失败）/info=中性（提示）。
  *
- * 跨端统一（commonMain）：macOS 壳（AdminShell）与 web 配置页（ConfigPage）共用同一套
+ * 跨端统一（commonMain）：统一管理台（AdminPage）与 web 单页配置（ConfigPage）共用同一套
  * 状态、配色与渲染，不再各写一套（此前 macOS 在壳内、web 在 DOM 里各实现一次）。
  */
 data class ToastData(val msg: String, val level: String = "info")

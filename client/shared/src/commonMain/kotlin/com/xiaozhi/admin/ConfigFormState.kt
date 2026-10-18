@@ -19,7 +19,7 @@ import kotlin.reflect.KMutableProperty0
  * - load(ctx) / save(ctx)：经 NetworkModule 拉取 / 写回 server 的 GET|POST /api/config
  *   （acquireModule 是 Pager 方法，故 load/save 接收 ctx: Pager）。
  * - baseUrl：请求基址前缀。web（h5App）由 server 同域托管，保持默认 "" → 相对路径 /api/config；
- *   macOS 测试台跨机访问时由 ConnectState 传入已连接服务器的绝对基址（如 http://192.168.1.10:8000）。
+ *   macOS 测试台跨机访问时经 AdminPage.apiBase 携带已配置服务器的绝对基址（如 http://192.168.1.10:8000）。
  * - 任意字段变更时 dirty=true（在 onChange 里设）。
  * - 渲染见文件底部的 ViewContainer.renderConfigLayout(form) 扩展。
  *

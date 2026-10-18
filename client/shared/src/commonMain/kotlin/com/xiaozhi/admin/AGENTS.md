@@ -2,6 +2,8 @@
 
 这里是跨端管理页面、表单和网络状态；macOS 专用测试台不属于 commonMain。
 
+**单一壳**：web 与 macOS 共用 `@Page("admin")`（[AdminPage](<AdminPage.kt>)），平台差异全部收口到 [AdminPlatform.kt](<AdminPlatform.kt>) 的 expect/actual（macosArm64Main 真实现，js/android/ios 空实现）。原 macOS 专属 `AdminShell` @Page("router") 双壳已废除。
+
 ## UI 与布局
 
 - [AdminTheme](<AdminTheme.kt>)提供 token，现有[组件](<AdminComponents.kt>)、[表单控件](<AdminFormControls.kt>)、[widgets](<AdminWidgets.kt>)统一封装官方控件；不要绕过封装散写样式。
@@ -37,7 +39,7 @@
 | Section | 数据源 | 回答什么问题 |
 |---|---|---|
 | 概览 | `GET /api/stats` + `/api/plugins` | 设备在线数、活会话、11 个能力健康（degraded/failed 可点击跳配置） |
-| 测试台 | —（Web 占位） | Web 无麦克风 → 不可用说明 + 替代路径；端到端语音测试用 macOS 测试台 |
+| 测试台 | —（仅 macOS 客户端） | 依赖原生麦克风/音频链路，`NavDescriptor.macOnly`：web 不显示该菜单；端到端语音测试用 macOS 客户端 |
 | 设备 | `GET /api/devices` | 连过的设备、协商参数、上次会话为什么断；消息注入、个性化配置入口 |
 | EchoMuse | `GET /api/echomuse/devices` | EchoMuse 设备批准制登记（在线/离线、版本、base_os）；批准、重启、下发 WiFi 配置、唤醒词设置（离线可保存，上线自动推送） |
 | 会话 | `GET /api/sessions` | 此刻活着的连接与阶段（聆听/思考/说话） |

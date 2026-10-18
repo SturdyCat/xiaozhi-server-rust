@@ -10,6 +10,7 @@
 - shared 框架路径从 apps/macosApp 上两级，用 PROJECT_DIR 绝对化搜索路径；releaseFramework 不是 releaseShared。
 - Kotlin/Native macabi 平台补丁已由[shared 构建任务](<../../shared/build.gradle.kts>)自动 finalizedBy；使用[补丁脚本](<../../scripts/patch_framework_macabi.py>)，不要手动 vtool 重写一套。
 - WS/采音/播放/Opus 桥在[XiaoZhiModule](<XiaoZhiModule.m>)及其 Audio/Opus 分类；协议改动同时检查原生桥与服务端。
+- 宿主启动即打开 shared 的统一管理台 `@Page("admin")`（[SceneDelegate](<SceneDelegate.m>)，pageName 已从旧 `router` 切换）；macOS 与 web 同壳，平台差异（测试台 / 切换服务器 / 服务器基址）由 shared 的 AdminPlatform expect/actual 承载，原 AdminShell 双壳已删除。
 
 本级说明 · [协议联调（从上级入口导航）](<../../AGENTS.md>)
 
@@ -24,7 +25,7 @@
 
 `web` 受浏览器麦克风 / WebSocket 二进制等限制，不适合语音链路测试。macOS App（`apps/macosApp`，Mac Catalyst，复用 iOS 渲染器 `OpenKuiklyIOSRender`）承载端到端语音测试：
 
-- **测试代码只在 `client/shared/src/macosArm64Main`**：web/Android/iOS/OHOS 的包不含测试代码；web 管理台「测试台」入口显示不可用说明与替代路径。
+- **测试代码只在 `client/shared/src/macosArm64Main`**：web/Android/iOS/OHOS 的包不含测试代码；web 管理台不显示「测试台」菜单（`NavDescriptor.macOnly`），仅 macOS 客户端可见。
 - **四个 tab**：连接 / ASR 识别（录音试听 → 识别解耦 + 波形回放）/ TTS 合成（音色下拉 + 语速，可临时覆盖当前配置）/ LLM 对话；每个 tab 右侧内嵌对应配置卡，配合顶栏「保存配置」写回。
 - 原生桥接 `apps/macosApp/XiaoZhiModule*.m`：WS 建连、麦克风采集、音频播放、**Opus 编解码**（`XiaoZhiModule+Opus.m`，libopus）均已实现。
 

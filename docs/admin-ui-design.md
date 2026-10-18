@@ -56,7 +56,8 @@ settings.section [list]  ← 每个 section 再声明自己的子座
 DSH 的"800×800 居中 modal + 遮罩 + 焦点陷阱"在 Kuikly 下**不可实现**（官方只有 `AlertDialog`，无尺寸可定制的模态容器，`AGENTS.md` §5.8）。因此**用整页 + 官方 Tabs+PageList**：
 
 ```
-┌ 侧栏（AdminShell，macosApp 已有「测试台 / 配置」两项）─┬─ 内容区 ────────────────────────┐
+┌ 侧栏（统一 @Page("admin") 壳；⚠️ 历史草图：原 AdminShell 双壳已废除，macOS 与 web 同壳，
+│        测试台项仅 macOS 显示，见 shared AdminPlatform.kt expect/actual）─┬─ 内容区 ────────┐
 │ 测试台                                              │ 能力总览            [刷新]      │
 │ 配置                                                │ 共 9 个 · 5 运行中 · 1 降级 · 1 异常 │
 │  ├ 总览           ← 新增                            │                               │
@@ -323,7 +324,7 @@ DSH（Cordis）插件体系实测要点（本机 `~/.dsh/profiles/desktop/`）�
 | 能力健康卡（P1-6 P1） | 配置页「总览」section（`ConfigSections` 的 `overview` 置顶项，order 0）内、既有 `overviewCard`（能力总览）之下 | `engineHealthCard`：11 行 × phase；deviation 打标 + 原因 + 可点击；正常行弱化 |
 | AdminNav 常量表 | **本轮不加导航项**（P1-6/P1-7 均挂在既有 overview/config section 内，无新页面） | — |
 | AdminPage 接线三处 | ① `val engineHealth = EngineHealthState(this)`；② `pageDidAppear` 加 `engineHealth.load(this)`；③ `renderOpsOverview` 调用点传 health + 跳转 lambda | 比照 metrics/usage 既有模式 |
-| AdminShell（macOS） | `renderConfigLayout` 调用点增参；数据加载跟随 conn.baseUrl 模式 | 该壳无概览页，只服务配置页总览 section 的健康卡 |
+| 统一壳（macOS） | 已废除原 AdminShell @Page("router") 双壳：macApp 改开 `@Page("admin")`，测试台/切换服务器/基址经 shared AdminPlatform expect/actual 挂进统一壳 | 历史记录：该壳曾独立服务「测试台/配置」两个 section |
 | ConfigPage（独立页） | 同 AdminPage 三处 | `?page_name=config` 单页模式同样生效 |
 | 记忆 engine 下拉（P1-7 P1） | 配置页「记忆」section（ConfigSections `memory`，order 130）的 engine 下拉 | `memoryBackendOptions` 加 store 项；选中 store 时 textNote 定位说明（"只存原文不抽取，适合先积累再决定"） |
 | `/api/memory/status` 面板数据 | 配置页记忆卡的状态区（ConfigContextState.memoryStatusMsg 链路） | engine 变 "store"、新增 turns 计数——字段 additive，前端按需展示 |

@@ -331,7 +331,7 @@ fun ViewContainer<*, *>.pluginStatusBadge(phase: String, enabled: Boolean) {
  * 右可选按钮/徽标（trailing ViewBuilder）。
  * ⚠️ title 是 lambda，须在 Text 的 attr 闭包内读取（如 `{ "配置" }` 或依赖 observable 的
  * `{ when (ctx.selectedSection) ... }`），切 section 时标题才会响应式更新。
- * ⚠️ 顶部避让区（macOS 红黄绿窗口按钮）由 AdminShell 的内容区/侧边栏 paddingTop 控制。
+ * ⚠️ 顶部避让区（macOS 红黄绿窗口按钮）由 AdminPage 的内容区/侧边栏 paddingTop 控制。
  */
 fun ViewContainer<*, *>.largeTitleBar(
     title: () -> String,
