@@ -188,7 +188,13 @@ async fn try_recv_empty_is_none_not_closed() {
 
 // ---- /em/status 状态查询 ----
 
+use std::sync::Mutex;
+
 use super::{hub_insert, hub_remove, status_json, PendingDevice};
+
+/// hub 是进程级单例，读写它的测试必须串行（否则 `status_disabled_shape` 会读到
+/// 并行探针）。所有触碰 hub 的测试持锁。
+static HUB_LOCK: Mutex<()> = Mutex::new(());
 
 /// 借真实 hub 登记一台假设备，测试完清理（hub 是进程级单例，不能留残）。
 fn insert_probe(device_id: &str) {
@@ -208,6 +214,7 @@ fn insert_probe(device_id: &str) {
 
 #[test]
 fn status_disabled_shape() {
+    let _g = HUB_LOCK.lock().unwrap();
     // 关闭时也返回 200 语义的形状：enabled=false + 空 devices（该接口用于排查，不 404）。
     let v = status_json(false);
     assert_eq!(v["enabled"], false);
@@ -216,6 +223,7 @@ fn status_disabled_shape() {
 
 #[test]
 fn status_enabled_reflects_hub_keys() {
+    let _g = HUB_LOCK.lock().unwrap();
     // enabled 只透传配置；devices 取 hub 当前 key 集合（channel 直驱：不起真实 WS，
     // 直接登记/清理 hub，与 control/data 路由的 insert/remove 走同一函数）。
     insert_probe("dev-status-1");
@@ -307,7 +315,7 @@ fn registry_approve_sets_flag_and_label() {
         .expect("存在应返回记录");
     assert!(updated.approved);
     assert_eq!(updated.label, "客厅音箱"); // trim 生效
-    // 落盘往返：重建后 approved/label 仍在。
+                                           // 落盘往返：重建后 approved/label 仍在。
     let reloaded = Registry::load(path.clone());
     let d = reloaded.get("dev-ap-1").unwrap();
     assert!(d.approved);
@@ -344,6 +352,7 @@ fn insert_online(device_id: &str) -> mpsc::UnboundedReceiver<ControlOut> {
 
 #[test]
 fn devices_payload_merges_hub_online() {
+    let _g = HUB_LOCK.lock().unwrap();
     let (reg, path) = temp_registry("payload");
     reg.upsert(&reg_load("dev-on-1", "1.0"), 100);
     let ctl_rx = insert_online("dev-on-1");
@@ -538,4 +547,16 @@ fn registry_settings_roundtrip_and_payload() {
         "alexa"
     );
     assert!(reg.set_settings("ghost", m).is_none());
+}
+
+// ---- mDNS 广播地址解析（纯动态探测，无配置项） ----
+
+#[test]
+fn advertise_ipv4_fallback_is_routable_or_loopback() {
+    use super::advertise_ipv4;
+    let ip = advertise_ipv4();
+    assert!(
+        ip.is_loopback() || ip.is_private(),
+        "探测结果应为局域网地址或 loopback 回落，实际 {ip}"
+    );
 }

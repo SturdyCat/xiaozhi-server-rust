@@ -242,6 +242,7 @@ pub fn config_push_with(settings: &serde_json::Value) -> Vec<String> {
 /// 阻塞细节（网络注册）放在 `spawn_blocking`；失败只告警不退出——mDNS 只是发现
 /// 辅助，设备凭据文件里已有 endpoint 时不需要它。
 pub fn spawn_mdns(port: u16) {
+    let ip = advertise_ipv4();
     tokio::task::spawn_blocking(move || {
         use mdns_sd::{ServiceDaemon, ServiceInfo};
 
@@ -254,8 +255,8 @@ pub fn spawn_mdns(port: u16) {
                 return;
             }
         };
-        // 广播地址：取默认路由出口的局域网 IPv4；失败退回 loopback（容器内常见，仅日志可见）。
-        let ip = local_ipv4().unwrap_or(Ipv4Addr::LOCALHOST);
+        // 广播地址：动态探测部署机默认路由出口的局域网 IPv4，
+        // 失败退回 loopback（容器内常见，仅日志可见）。
         let props = [("plain_port".to_string(), port.to_string())]
             .into_iter()
             .collect();
@@ -263,7 +264,9 @@ pub fn spawn_mdns(port: u16) {
             "_emcontroller._tcp.local.",
             "xiaozhi-server",
             "xiaozhi-server.local.",
-            format!("{ip}:{port}"),
+            // mdns-sd 0.11 只接受纯 IP 字符串（端口由下一参单独给出），
+            // 传 "ip:port" 会报 invalid IP address syntax
+            ip.to_string(),
             port,
             Some(props),
         ) {
@@ -282,14 +285,25 @@ pub fn spawn_mdns(port: u16) {
     });
 }
 
-/// 探测本机默认出口的局域网 IPv4（UDP connect 不发包，只查路由表）。
-fn local_ipv4() -> Option<Ipv4Addr> {
-    let sock = std::net::UdpSocket::bind(("0.0.0.0", 0)).ok()?;
-    sock.connect(("8.8.8.8", 80)).ok()?;
-    match sock.local_addr().ok()?.ip() {
-        std::net::IpAddr::V4(v4) => Some(v4),
-        std::net::IpAddr::V6(_) => None,
+/// 解析 mDNS 广播地址：动态探测部署机默认出口的局域网 IPv4（部署在哪台机器、
+/// 是什么 IP 就广播什么，不做任何硬编码/配置）；探测失败退回 loopback 并告警。
+fn advertise_ipv4() -> Ipv4Addr {
+    match local_ipv4() {
+        Some(ip) => ip,
+        None => {
+            tracing::warn!(
+                "[echomuse] 无法探测局域网 IPv4（容器部署常见），mDNS 退回 127.0.0.1；\
+                 设备发现不了时请改用 host 网络部署"
+            );
+            Ipv4Addr::LOCALHOST
+        }
     }
+}
+
+/// 探测本机默认出口的局域网 IPv4：实现移到 [`crate::app::local_ipv4`]（与
+/// macApp 连接地址展示共用），此处保留薄封装以维持测试入口。
+fn local_ipv4() -> Option<Ipv4Addr> {
+    super::local_ipv4()
 }
 
 /// 会话参数：EchoMuse 侧固定 16k/60ms/v1——mic 是 16k PCM（协议常量），TTS 解码后

@@ -27,11 +27,11 @@ use tokio::net::TcpListener;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::EnvFilter;
 
+use crate::app::ws::router;
 use crate::config::store::sqlite::SqliteConfigStore;
 use crate::config::store::ConfigStore;
 use crate::config::Config;
 use crate::engine::Engines;
-use crate::app::ws::router;
 
 fn main() -> Result<()> {
     // 配置在 runtime 构建前加载（worker_threads 需要它）。
@@ -52,7 +52,7 @@ async fn run(config: Config, config_store: Arc<dyn ConfigStore>) -> Result<()> {
     // SubscriberBuilder 的 `.with` 只接受格式层，无法直接挂自定义 Layer。
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     let subscriber = tracing_subscriber::registry()
-        .with(filter)        // 全局日志采集层：每条 INFO+ 事件进入环形缓冲 + 广播，
+        .with(filter) // 全局日志采集层：每条 INFO+ 事件进入环形缓冲 + 广播，
         // 供 `GET /api/logs` WS 客户端（macApp / AI 调试）实时读取。
         .with(crate::app::ws::log_stream::layer())
         .with(tracing_subscriber::fmt::layer());
@@ -83,9 +83,7 @@ async fn run(config: Config, config_store: Arc<dyn ConfigStore>) -> Result<()> {
                 );
             }
         }
-        None => tracing::warn!(
-            "配置库路径不可见（location() == None）：配置将无法持久化"
-        ),
+        None => tracing::warn!("配置库路径不可见（location() == None）：配置将无法持久化"),
     }
     // 发音人目录：读盘缓存/离线兜底 + 配置了控制台会话时后台刷新一次（失败非致命）
     crate::app::voices::init();
@@ -116,6 +114,18 @@ async fn run(config: Config, config_store: Arc<dyn ConfigStore>) -> Result<()> {
         Err(e) => return Err(anyhow::anyhow!(e).context(format!("绑定 {addr} 失败"))),
     };
     tracing::info!("xiaozhi-server-rust 监听于 {addr}");
+    // 把用户真正要填的连接地址打出来：macApp/设备需要 IP:port（监听永远 0.0.0.0，
+    // 打 bind 地址没意义）。IP 无配置项，动态探测部署机默认出口。
+    match crate::app::local_ipv4() {
+        Some(ip) => tracing::info!(
+            "局域网连接地址（macApp / 设备填写）: ws://{ip}:{}",
+            config.server.port
+        ),
+        None => tracing::warn!(
+            "无法探测局域网 IPv4（容器部署常见），macApp 请手动填宿主机 IP，端口 {}",
+            config.server.port
+        ),
+    }
     // EchoMuse 设备发现（`[echomuse].enabled=true` 时）：广播 `_emcontroller._tcp`，
     // emOS 设备在同网段即可发现本服务器。失败只告警（设备也可凭 endpoint 文件直连）。
     if config.echomuse.enabled {
@@ -174,7 +184,9 @@ fn load_config_inner() -> (Config, Arc<dyn ConfigStore>) {
             // （cfg_documents + source="bootstrap"），而非等首次保存。失败不阻断启动：
             // load() 对空库本就返回默认值，只是少了这条可回滚的初始版本。
             match store.bootstrap_default_if_empty() {
-                Ok(true) => tracing::info!("配置库 {db_path} 为空，已写入内置默认配置（首次安装自举）"),
+                Ok(true) => {
+                    tracing::info!("配置库 {db_path} 为空，已写入内置默认配置（首次安装自举）")
+                }
                 Ok(false) => {}
                 Err(e) => tracing::warn!("空配置库自举写默认配置失败（以内置默认启动）: {e:#}"),
             }

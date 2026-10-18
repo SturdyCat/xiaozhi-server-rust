@@ -276,7 +276,9 @@ fn hub_take_only() -> Option<super::PendingDevice> {
 
 /// data 任务：上行帧翻译（PCM→Opus、哨兵→listen stop）+ 下行帧直发。
 async fn data_loop(socket: WebSocket, pending: super::PendingDevice) {
-    let super::PendingDevice { up_tx, mut data_rx, .. } = pending;
+    let super::PendingDevice {
+        up_tx, mut data_rx, ..
+    } = pending;
     let (mut sink, mut stream) = socket.split();
     let mut up_enc = match OpusFrameEncoder::new(frames::MIC_SAMPLE_RATE) {
         Ok(enc) => enc,

@@ -254,6 +254,8 @@ enabled = false                     # true = 挂载 /em/control、/em/data 路�
 token = ""                          # 期望的设备 token（`X-Em-Token` 头）；留空 = 不校验。
                                     # 取 Dot 上 EchoMuse 凭据文件里的 token（配对时下发）；
                                     # 生产建议设置——同网段任何设备都能按此协议连进来。
+# mDNS 广播地址无配置项：启动时动态探测部署机默认出口的局域网 IPv4，部署在哪台
+# 机器就广播哪个 IP。docker 容器部署探测到的是容器内网 IP，请改用 host 网络。
 
 # ===== AIUI 全链路（极速超拟人链路）：启用后设备流水线切换为 VAD 切段 → AIUI 云端闭环
 #       （识别 + 大模型 + 合成一体，发音人目录见 AIUI 文档 3.9），本地 ASR/LLM/TTS 引擎闲置。

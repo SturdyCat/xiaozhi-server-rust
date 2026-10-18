@@ -13,6 +13,8 @@
 | `enabled` | `false` | 挂载 `/em/control`、`/em/data` 路由并广播 mDNS `_emcontroller._tcp`；关闭时零行为变化 |
 | `token` | 空 | 校验设备 `X-Em-Token` 头；留空不校验。生产建议设置（同网段任何设备都能按此协议连进来） |
 
+mDNS 广播地址**无配置项**：启动时动态探测部署机默认出口的局域网 IPv4，部署在哪台机器、是什么 IP 就广播什么。docker 容器部署会探测到容器内网 IP（设备连不上），请改用 host 网络部署。
+
 会话侧固定参数：上行 16kHz/二进制协议 v1、下行 16kHz/60ms/v1（mic 是 16k PCM 协议常量；TTS 解码后直接出 16k PCM，无重采样）。
 
 ## 协议映射（EchoMuse → xiaozhi 会话语义）
