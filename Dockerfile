@@ -129,11 +129,22 @@ FROM debian:bookworm-slim AS runtime
 # docker CLI：NLU 模型训练走宿主 docker（/var/run/docker.sock 由 compose 挂入），
 #   只 run 专用训练镜像（依赖在镜像构建期装好，见 tools/nlu-trainer/Dockerfile）；
 #   只装 CLI 不装 daemon（静态二进制，避免 docker.io 全家桶拖大 slim 镜像）。
+# ONNX Runtime 1.22.1 动态库：nlu 特性下 ort 以 load-dynamic 运行时 dlopen——
+#   构建期 ort-sys 不再静态链 onnxruntime/onnx（否则与 sherpa-onnx-sys 的静态 onnx
+#   对象符号重复，ld 报 duplicate symbol）。1.22.1 的 C API(22) 满足 ort rc.14 的最低
+#   API 17，向下兼容。GitHub Release 已不附 Linux 包，改从 NuGet 取（包内
+#   runtimes/linux-x64/native/，未带版本号文件名恰可直接作 ORT_DYLIB_PATH）；
+#   nupkg 含全平台（~128MB）但只解出 Linux 两件，镜像实际只增 ~21MB。
 RUN apt-get update \
- && apt-get install -y --no-install-recommends libopus0 ca-certificates curl bzip2 \
+ && apt-get install -y --no-install-recommends libopus0 ca-certificates curl bzip2 unzip \
  && rm -rf /var/lib/apt/lists/* \
  && curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-27.3.1.tgz \
-      | tar xz --strip-components=1 -C /usr/local/bin docker/docker
+      | tar xz --strip-components=1 -C /usr/local/bin docker/docker \
+ && curl -fsSL -o /tmp/ort.nupkg \
+      https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/1.22.1/microsoft.ml.onnxruntime.1.22.1.nupkg \
+ && unzip -j /tmp/ort.nupkg 'runtimes/linux-x64/native/*' -d /usr/local/lib \
+ && rm /tmp/ort.nupkg \
+ && ldconfig /usr/local/lib
 
 WORKDIR /app
 # Rust server 二进制
@@ -157,8 +168,8 @@ VOLUME ["/data"]
 ENV XIAOZHI_CONFIG_DB=/data/data.db \
     XIAOZHI_ADMIN_DIR=/app/web \
     XIAOZHI_AUTO_DOWNLOAD_MODELS=missing \
-    RUST_LOG=info
-
+    RUST_LOG=info \
+    ORT_DYLIB_PATH=/usr/local/lib/libonnxruntime.so
 EXPOSE 8000
 
 # 健康检查：curl 已随运行层安装；/api/health 不依赖模型就绪，start-period 20s 足够。
