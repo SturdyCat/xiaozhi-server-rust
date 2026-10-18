@@ -150,6 +150,8 @@ class AdminPage : Pager() {
 
     override fun body(): ViewBuilder {
         val ctx = this
+        // 字号设备适配：按本机视口宽度算一次缩放系数（1.0~1.5），AdminType.* 取值时生效
+        AdminType.scale = AdminType.scaleFor(pagerData.pageViewWidth)
         // H5 是同域托管的网页（没有 macOS 红黄绿窗口按钮），不需要顶部避让；
         // 若 macOS 直接打开本页（`?page_name=admin`），保留 36pt 避开窗口按钮。
         val isH5 = pagerData.params.optString("is_H5", "").isNotEmpty()

@@ -90,18 +90,31 @@ object AdminShape {
 }
 
 /**
- * 字号 token（pt）。已按「远看清晰 / iPad 触屏操作」放大两轮：
- * display=34 顶栏大标题；section=21 卡片标题；body=17 正文/标签/输入/按钮；
- * bodySm=16 分段控件；caption=15 提示；micro=13 徽标/版本。
+ * 字号 token（pt，按设备动态缩放）。
+ *
+ * 基准：body=14（默认字号），caption/bodySm/micro 一律不低于 14（最小 14 号），
+ * 标题类按层级放大：section=20 / title=24 / display=32。
+ *
+ * 设备适配：[scale] 由 AdminPage 创建时按 `pagerData.pageViewWidth` 计算一次
+ * （视口越宽系数越大，1.0~1.5 之间，窄屏/手机保持 1.0 不缩小），
+ * 各 token 用 getter 在取值时乘上系数，调用点仍写 `fontSize(AdminType.body)` 不变。
+ * 注意：系数在页面创建时确定，窗口中途 resize 不重排字号（Kuikly attr 不响应）。
  */
 object AdminType {
-    val display = 34f
-    val title = 22f
-    val section = 21f
-    val body = 17f
-    val bodySm = 16f
-    val caption = 15f
-    val micro = 13f
+    /** 设备缩放系数，由 AdminPage 初始化（默认 1.0）。 */
+    var scale = 1f
+
+    val display get() = 32f * scale
+    val title get() = 24f * scale
+    val section get() = 20f * scale
+    val body get() = 14f * scale
+    val bodySm get() = 14f * scale
+    val caption get() = 14f * scale
+    val micro get() = 14f * scale
+
+    /** 按页面视口宽度计算缩放系数：基准 1200pt 宽为 1.0，每 +600pt 加 0.2，封顶 1.5。 */
+    fun scaleFor(pageViewWidth: Float): Float =
+        (1f + ((pageViewWidth - 1200f).coerceAtLeast(0f) / 600f) * 0.2f).coerceAtMost(1.5f)
 }
 
 /**

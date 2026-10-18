@@ -54,6 +54,8 @@ class ConfigPage : Pager() {
         // Kuikly DSL 约定：嵌套容器闭包内无法隐式访问 Pager 成员（@DslMarker），
         // 用局部 val ctx 捕获 Pager 取状态；组件扩展则在目标容器闭包内非限定调用。
         val ctx = this
+        // 字号设备适配：按本机视口宽度算一次缩放系数（1.0~1.5），AdminType.* 取值时生效
+        AdminType.scale = AdminType.scaleFor(pagerData.pageViewWidth)
         // ⚠️ 配置布局内部自管尺寸（DslMarker 仅屏蔽嵌套闭包对 Pager 成员的隐式访问，不影响此处）。
         return {
             attr {
