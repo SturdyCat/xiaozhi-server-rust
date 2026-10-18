@@ -27,6 +27,8 @@ settings:
     CODE_SIGN_IDENTITY: "-"
     MACOSX_DEPLOYMENT_TARGET: "12.0"
     PRODUCT_NAME: macosApp
+    # App 图标：指向 Assets.xcassets 里的 AppIcon（蓝紫渐变螺旋对话气泡，AI 聊天机器人主题）
+    ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     # Mac Catalyst：用 UIKit for Mac 跑 Kuikly 的 iOS 渲染器
     SUPPORTS_MACCATALYST: "YES"
     CLANG_ENABLE_MODULES: "YES"
@@ -44,6 +46,8 @@ targets:
       - path: .
         includes: ["**/*.m", "**/*.mm", "**/*.h", "**/*.swift"]
         excludes: ["Podfile", "project.yml", "*.xcodeproj", "*.xcworkspace"]
+      # App 图标资源目录（macOS AppIcon，蓝紫渐变螺旋对话气泡）
+      - path: Assets.xcassets
     info:
       path: Info.plist
       properties:
@@ -64,6 +68,10 @@ targets:
         # ⚠️ 麦克风用途描述：缺失时 TCC 直接拒绝授权（不弹窗），inputNode 报 0 声道 →
         #    AUIOBase "no channels in channel map" + AudioConverter -50 刷屏、录音无声。
         NSMicrophoneUsageDescription: 用于 ASR 语音识别测试（录音上传到本机或局域网服务器做识别）。
+        # Finder / Dock 读取编译后的 AppIcon.icns；图标名与资源目录保持一致。
+        # 声明本身不会打包图片，仍须保留上面的 Assets.xcassets 资源输入。
+        CFBundleIconFile: AppIcon
+        CFBundleIconName: AppIcon
     preBuildScripts:
       # 守卫：本 App 只能以 Mac Catalyst 构建（UIKit 渲染器）。误选原生 "My Mac"
       # 运行目标时，编译会在 'UIKit/UIKit.h' file not found 上报难懂的错误；
