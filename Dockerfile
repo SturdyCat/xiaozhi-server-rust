@@ -77,10 +77,11 @@ RUN NODE_OPTIONS="--max-old-space-size=1024" \
  && test -f apps/h5App/web/h5App.js
 
 # ---- Rust 构建阶段 ----
-# rust:1.90-bookworm = 与生成 Cargo.lock 的本机 cargo 1.90 对齐（勿降级，见 agents.md §5.5）。
+# rust:1.92-bookworm = 满足 ort 2.0.0-rc.14（nlu 特性）的 rustc ≥ 1.92 最低要求
+# （rust:1.90 会报「ort requires rustc 1.92」直接构建失败）。
 # 保持 Debian（非 alpine）：sherpa-onnx 预编译原生库与 audiopus/libopus 按 glibc 链接，
 # 与 xiaoya 的 musl 静态方案不通用，勿照搬。
-FROM rust:1.90-bookworm AS build
+FROM rust:1.92-bookworm AS build
 
 # pkg-config + libopus-dev：audiopus_sys 需要（libopus 编译/链接）
 RUN apt-get update \
