@@ -420,6 +420,13 @@ def step_wifi(work: Path, ssid: str, psk: str, port: str) -> None:
         else:
             die(f"90s 未观察到加入结果，输出尾部: {result[-400:]!r}",
                 "重跑 --wifi 重试；或手动 screen 上去跑 em-wifi 看现场")
+        # 配网成功后立即复用同一串口做状态探测并打印最终汇总
+        try:
+            print_summary(run_probes(con))
+        except SystemExit:
+            raise
+        except Exception as exc:  # 探测失败不影响配网成功结论
+            log(f"配网成功，但状态汇总失败: {exc}")
         log("确认入网: `dns-sd -B _emcontroller._tcp` 应出现设备广播，"
             "server 日志流出现 echomuse register。")
     finally:
@@ -428,50 +435,52 @@ def step_wifi(work: Path, ssid: str, psk: str, port: str) -> None:
 
 
 
-def step_probe(port: str) -> None:
-    """串口探针：确认 emOS 运行状态、网络/IP/MAC、无线与蓝牙线索。
+PROBES = [
+    ("系统", "uname -a; uptime"),
+    ("emOS 版本", "em-info 2>/dev/null; cat /etc/os-release /etc/version "
+                  "/data/emos/version 2>/dev/null; ls /data/emos 2>/dev/null"),
+    ("WiFi 配置", "ls -l /data/emos/wpa.conf 2>/dev/null "
+                  "&& echo '(wpa.conf 存在=已配置)' || echo '(未配网)'; "
+                  "grep '^ssid=' /data/emos/wpa.conf 2>/dev/null "
+                  "|| echo '(无 ssid 行)'"),
+    ("网络接口", "ip -o addr show 2>/dev/null || ifconfig -a 2>/dev/null"),
+    ("无线状态", "cat /proc/net/wireless 2>/dev/null; "
+                 "iw dev wlan0 link 2>/dev/null || iwconfig 2>/dev/null"),
+    ("蓝牙", "hciconfig -a 2>/dev/null || ls /sys/class/bluetooth 2>/dev/null "
+             "|| echo '(无蓝牙控制接口——emOS 正常现象)'"),
+    ("进程", "ps | grep -v grep | grep -E 'wpa|emos' 2>/dev/null || true"),
+]
+
+
+def run_probes(con: "Console") -> dict[str, str]:
+    """在已打开的控制台上跑全部探测命令，返回 标题→原始输出。
 
     设备端 shell 会回显输入，故 marker 用字符串拼接（__EO""C__）避免命中回显。
     """
-    probes = [
-        ("系统", "uname -a; uptime"),
-        ("emOS 版本", "em-info 2>/dev/null; cat /etc/os-release /etc/version "
-                      "/data/emos/version 2>/dev/null; ls /data/emos 2>/dev/null"),
-        ("WiFi 配置", "ls -l /data/emos/wpa.conf 2>/dev/null "
-                      "&& echo '(wpa.conf 存在=已配置)' || echo '(未配网)'; "
-                      "grep '^ssid=' /data/emos/wpa.conf 2>/dev/null "
-                      "|| echo '(无 ssid 行)'"),
-        ("网络接口", "ip -o addr show 2>/dev/null || ifconfig -a 2>/dev/null"),
-        ("无线状态", "cat /proc/net/wireless 2>/dev/null; "
-                     "iw dev wlan0 link 2>/dev/null || iwconfig 2>/dev/null"),
-        ("蓝牙", "hciconfig -a 2>/dev/null || ls /sys/class/bluetooth 2>/dev/null "
-                 "|| echo '(无蓝牙控制接口——emOS 正常现象)'"),
-        ("进程", "ps | grep -v grep | grep -E 'wpa|emos' 2>/dev/null || true"),
-    ]
-    con = Console(port or find_console_port())
+    con.drain(1.0)
+    con.send("\n")
+    con.drain(0.5)
+    con.buf = ""
     results: dict[str, str] = {}
-    try:
-        con.drain(1.0)
-        con.send("\n")
-        con.drain(0.5)
-        con.buf = ""
-        for title, cmd in probes:
-            con.send(cmd + '; echo "__EO""C__"\n')
-            results[title] = con.expect("__EOC__", timeout=20).strip()
-        con.close()
-    finally:
-        try:
-            con.close()
-        except OSError:
-            pass
+    for title, cmd in PROBES:
+        con.send(cmd + '; echo "__EO""C__"\n')
+        results[title] = con.expect("__EOC__", timeout=20).strip()
+    return results
 
+
+def print_summary(results: dict[str, str]) -> None:
+    """从探测输出提取关键字段并打印判定汇总。"""
     # 汇总判定（只输出精简结果；设备会回显命令，故取值时剔除回显行）
     def body_of(title: str) -> list[str]:
         # 回显行 = 原命令文本，包含探测命令特征词，剔除后才是真实输出
+        # 剔除回显的命令行：设备会原样回显整条命令，其中含探测关键词与
+        # 换行回绕碎片（如 "echo __EO C__<"），统一按特征词过滤
         return [ln for ln in results.get(title, "").splitlines()
                 if ln.strip() and not re.search(
                     r"os-release|/proc/net|hciconfig|sys/class|grep -v grep|"
-                    r"ip -o addr|ifconfig -a|iw dev|iwconfig|em-info", ln)]
+                    r"ip -o addr|ifconfig -a|iw dev|iwconfig|em-info|em-wifi|"
+                    r"/data/emos|wpa\.conf|ssid=|__EO|__EC|__E.?O.?C|2>/dev/null|"
+                    r"2>/dev/null|ls -l|grep \^|&&|echo|version|ls /data", ln)]
 
     all_out = "\n".join(results.values())
     ip = re.search(r"inet (\d+\.\d+\.\d+\.\d+)", all_out)
@@ -480,11 +489,18 @@ def step_probe(port: str) -> None:
     level = re.search(r"wlan0:\s*\d+\s*\d+\.\s*(\d+)\.", all_out)
     wifi_lines = body_of("WiFi 配置")
     ver_lines = body_of("emOS 版本")
-    ssid = next((m.group(1).strip().strip('"\'') for ln in wifi_lines
-                 if (m := re.match(r'\s*ssid=(.+)$', ln))), "(未配置)")
+    # SSID：只有真实取到值才显示（wpa.conf 路径/格式在不同 emOS 版本不一致，
+    # 取不到就整个不打印该行，避免 "(未配置)" 与实际已联网状态矛盾）。
+    # 从原始输出取：行首即 ssid= 且不含命令特征词（回显行含 grep/echo 等）
+    ssid = next((m.group(1).strip().strip('"\'')
+                 for ln in results.get("WiFi 配置", "").splitlines()
+                 if (m := re.match(r'\s*ssid=(.+)$', ln))
+                 and not re.search(r"grep|echo|wpa\.conf|2>/dev/null|\|\|", ln)),
+                None)
     version = next((ln.strip() for ln in ver_lines
                     if re.search(r"v?\d+\.\d+|emos", ln, re.I)), "?")
-    wifi_cfg = any("wpa.conf" in ln for ln in wifi_lines) or ssid != "(未配置)"
+    # 已配网判定以"拿到 IP"为准（wpa.conf 路径在不同 emOS 版本不一致，不可靠）
+    wifi_cfg = bool(ip)
     print("\n══ 判定汇总 ══")
     print(f"主机名:      {host.group(1) if host else '?'}")
     print(f"系统版本:    {version}")
@@ -492,12 +508,21 @@ def step_probe(port: str) -> None:
     print(f"MAC (wlan0): {mac.group(1) if mac else '?'}")
     print(f"信号 level:  {level.group(1) if level else '?'} (/proc/net/wireless，非负值，越小越好)")
     print(f"已配网:      {'是' if wifi_cfg else '否'}")
-    print(f"SSID:        {ssid}")
-    if ip:
-        print("下一步:      `dns-sd -B _emcontroller._tcp` 看服务器广播；"
-              "服务器日志流等 echomuse 设备接入。若无，检查 [echomuse] enabled 与设备可达性")
-    else:
-        print("下一步:      `python3 tools/emos_install.py --wifi` 配网")
+    if ssid:
+        print(f"SSID:        {ssid}")
+
+
+def step_probe(port: str) -> None:
+    """串口探针：确认 emOS 运行状态、网络/IP/MAC、无线与蓝牙线索。"""
+    con = Console(port or find_console_port())
+    try:
+        results = run_probes(con)
+    finally:
+        try:
+            con.close()
+        except OSError:
+            pass
+    print_summary(results)
 
 
 def main() -> None:
