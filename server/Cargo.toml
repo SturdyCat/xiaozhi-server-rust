@@ -11,6 +11,8 @@ license = "MIT"
 default = []
 sherpa = ["dep:sherpa-onnx", "dep:audiopus"]
 # TinyBERT 意图分类（技能级联第二级的语义模型实现）：需要 ONNX 运行时 + HF tokenizers。
+# ort 用 load-dynamic：运行时 dlopen libonnxruntime（镜像内 ORT_DYLIB_PATH 指路），
+# 不静态链 onnxruntime/onnx——否则与 sherpa-onnx-sys 的静态 onnx 对象符号重复，链接失败。
 # 仅类型检查用 `DOCS_RS=1 cargo check --features nlu`；真实推理需模型文件（见 config.example.toml [nlu]）。
 nlu = ["dep:ort", "dep:tokenizers"]
 
@@ -28,13 +30,15 @@ tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 uuid = { version = "1.11.0", features = ["v4"] }
 futures-util = "0.3.31"
 tower-http = { version = "0.6", features = ["fs"] }
+# EchoMuse 设备发现（`[echomuse].enabled` 时广播 `_emcontroller._tcp`；纯 Rust，无系统依赖）
+mdns-sd = "0.11"
 
 # 仅在 sherpa feature 下引入（需要网络下载原生库 + 系统 libopus）
 sherpa-onnx = { version = "1.13.8", optional = true }
 audiopus = { version = "0.2", optional = true }
 
 # 仅在 nlu feature 下引入（ONNX Runtime 动态库 + 分词器）
-ort = { version = "2.0.0-rc.10", optional = true }
+ort = { version = "2.0.0-rc.10", optional = true, features = ["load-dynamic"] }
 tokenizers = { version = "0.21", optional = true, default-features = false, features = ["onig"] }
 tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots", "url"] }
 hmac = "0.13.0"

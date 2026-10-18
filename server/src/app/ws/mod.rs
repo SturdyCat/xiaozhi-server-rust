@@ -213,7 +213,10 @@ pub fn router(engines: Arc<Engines>) -> Router {
         .route("/api/ota/", get(ota).post(ota))
         // 固件托管（上传/下载/当前版本查询）+ 发音人目录，并入同一 /api 前缀
         .merge(crate::app::firmware::router())
-        .merge(crate::app::voices::router());
+        .merge(crate::app::voices::router())
+        // EchoMuse 设备入口（Echo Dot 2 / emOS）：`[echomuse].enabled=true` 才生效
+        // （路由内部自检开关，关闭时返回 404；挂载本身零行为变化）。
+        .merge(crate::app::echomuse::routes::em_routes());
 
     let app = if Path::new(&admin_dir).is_dir() {
         // SPA：未知路径回退到 index.html，交给前端路由处理。

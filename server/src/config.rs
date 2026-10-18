@@ -34,6 +34,7 @@
 use serde::{Deserialize, Serialize};
 
 // 引擎子配置段随插件走（定义在各插件 mod.rs），此处转发以维持 `crate::config::*` 路径稳定：
+pub use crate::app::echomuse::EchomuseConfig;
 pub use crate::plugins::aiui::AiuiConfig;
 pub use crate::plugins::asr::AsrConfig;
 pub use crate::plugins::command::CommandConfig;
@@ -158,6 +159,12 @@ pub struct Config {
     /// 稳态下每次唤醒零 LLM、零 TTS。默认关闭。
     #[serde(default)]
     pub wakeup: WakeConfig,
+    /// EchoMuse 设备入口（`[echomuse]`）：Echo Dot 2 刷 emOS 后以 EchoMuse 设备协议
+    /// （`/em/control` + `/em/data` 双 WS、mic PCM 16k、`X-EM-Token` 鉴权、mDNS
+    /// `_emcontroller._tcp` 发现）直接接入，复用与 xiaozhi 设备同一条会话流水线。
+    /// 默认关闭；关闭时零路由、零 mDNS、行为与今天一致。
+    #[serde(default)]
+    pub echomuse: EchomuseConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -410,6 +417,7 @@ impl Default for Config {
             command: CommandConfig::default(),
             nlu: NluConfig::default(),
             wakeup: WakeConfig::default(),
+            echomuse: EchomuseConfig::default(),
         };
         c.normalize();
         c
@@ -433,6 +441,7 @@ impl Config {
         self.soul.normalize();
         self.command.normalize();
         self.wakeup.normalize();
+        self.echomuse.normalize();
     }
 
     /// 是否处于「真实音频模式」：`sherpa` feature（唯一路径，无 mock）。

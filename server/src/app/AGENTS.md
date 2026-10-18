@@ -6,7 +6,7 @@
 - 改音频先读[下行说明](<downlink/AGENTS.md>)；不得删除 pacing、逐句预取或背压，也不得在句间重置回复节拍。
 - 改会话先读[会话说明](<session/AGENTS.md>)；推理许可、abort、MCP 抽帧与缓存路径均有独立边界。
 - 改 HTTP 先读[网关说明](<ws/AGENTS.md>)；配置更新继续走唯一合并/打码/持久化管线，热生效规则来自注册表。
-- 固件托管见[OTA 说明](<firmware/AGENTS.md>)，发音人目录见[音色说明](<voices/AGENTS.md>)。
+- 固件托管见[OTA 说明](<firmware/AGENTS.md>)，发音人目录见[音色说明](<voices/AGENTS.md>)，EchoMuse 设备直连见[EchoMuse 说明](<echomuse/AGENTS.md>)（协议映射见[根文档](<../../../docs/echomuse.md>)）。
 
 跨层结构见[架构概览](<../../../docs/architecture.md>)；历史三项缺口设计、接线清单与实施护栏见[三项缺口设计](<../../../docs/gap-implementation-design.md>)，不作为现状规范。
 
@@ -17,6 +17,7 @@
 ## 直属下级
 
 - [downlink](<downlink/AGENTS.md>)
+- [echomuse](<echomuse/AGENTS.md>)
 - [firmware](<firmware/AGENTS.md>)
 - [inference](<inference/AGENTS.md>)
 - [mcp](<mcp/AGENTS.md>)

@@ -5,6 +5,7 @@
 pub mod audio;
 pub mod bench_api;
 pub mod downlink;
+pub mod echomuse;
 pub mod events;
 pub mod firmware;
 pub mod hot_audio;

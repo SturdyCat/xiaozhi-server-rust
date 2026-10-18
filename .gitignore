@@ -26,4 +26,4 @@ target
 
 .DS_Store
 
-config.toml
+config.toml__pycache__/

@@ -244,6 +244,17 @@ persist = true                      # 把成品音频（已编码的下行 Opus 
                                     # 缓存被关掉时配置校验会拦下并提示怎么改。
                                     # 稳态下每次唤醒零 LLM、零 TTS；换音色会自动重新合成并另存一份。
 
+# ===== EchoMuse 设备入口（Echo Dot 2 刷 emOS 后直连本服务器，无需 Home Assistant）：
+#       设备经 mDNS `_emcontroller._tcp` 发现本服务器，走 `/em/control` + `/em/data`
+#       双 WebSocket 接入，与 xiaozhi 设备共用同一条 ASR→LLM/技能→TTS 流水线。
+#       前置：Dot 需先用 firebreak 解锁并经 EchoMuse 官方向导刷入 emOS（一次性）。
+#       ⚠️ 改动本段需**重启**生效。
+[echomuse]
+enabled = false                     # true = 挂载 /em/control、/em/data 路由并广播 mDNS
+token = ""                          # 期望的设备 token（`X-Em-Token` 头）；留空 = 不校验。
+                                    # 取 Dot 上 EchoMuse 凭据文件里的 token（配对时下发）；
+                                    # 生产建议设置——同网段任何设备都能按此协议连进来。
+
 # ===== AIUI 全链路（极速超拟人链路）：启用后设备流水线切换为 VAD 切段 → AIUI 云端闭环
 #       （识别 + 大模型 + 合成一体，发音人目录见 AIUI 文档 3.9），本地 ASR/LLM/TTS 引擎闲置。
 #       ⚠️ 需在 AIUI 平台（aiui.xfyun.cn）开通极速超拟人服务；对话上下文按连接保留。

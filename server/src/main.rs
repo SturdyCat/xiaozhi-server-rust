@@ -116,6 +116,11 @@ async fn run(config: Config, config_store: Arc<dyn ConfigStore>) -> Result<()> {
         Err(e) => return Err(anyhow::anyhow!(e).context(format!("绑定 {addr} 失败"))),
     };
     tracing::info!("xiaozhi-server-rust 监听于 {addr}");
+    // EchoMuse 设备发现（`[echomuse].enabled=true` 时）：广播 `_emcontroller._tcp`，
+    // emOS 设备在同网段即可发现本服务器。失败只告警（设备也可凭 endpoint 文件直连）。
+    if config.echomuse.enabled {
+        crate::app::echomuse::spawn_mdns(config.server.port);
+    }
     serve(listener, app).await?;
     Ok(())
 }
