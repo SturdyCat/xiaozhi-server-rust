@@ -73,6 +73,8 @@ const SECRET_PATHS: &[&[&str]] = &[
     &["aiui", "api_secret"],
     // 记忆抽取的独立模型路由（空 = 复用 [llm]）
     &["memory", "extractor", "api_key"],
+    // EchoMuse 设备接入凭据（同网段设备接入令牌；空串 = 不校验）
+    &["echomuse", "token"],
 ];
 
 /// presence 标记字段名：`api_key` → `has_api_key`（`api_secret` → `has_api_secret`）。

@@ -137,3 +137,29 @@ fn presence_and_revision_keys_never_persist() {
     assert!(!text.contains("has_api_secret"));
     assert!(!text.contains("revision"));
 }
+
+/// `[echomuse]`：`token` 已入 [`SECRET_PATHS`]（GET 打码 + 空串保留原值），
+/// `enabled` 是普通布尔字段、经管理台补丁**透传生效**（sanitize 不丢段）。
+#[test]
+fn echomuse_token_is_secret_and_enabled_passes_through() {
+    let mut current = full_test_config();
+    current.echomuse.enabled = false;
+    current.echomuse.token = "em-pair-secret".into();
+
+    // GET 打码：token 明文摘除，只回 has_token presence
+    let mut v = serde_json::to_value(&current).unwrap();
+    redact_secrets(&mut v);
+    assert!(
+        v["echomuse"].get("token").is_none(),
+        "token 明文不应出现在 GET 响应中"
+    );
+    assert_eq!(v["echomuse"]["has_token"], true);
+
+    // 旧客户端把打码后的 GET 结果原样回传：空串 + presence 不清密钥；enabled 透传生效
+    let echo = serde_json::json!({
+        "echomuse": {"enabled": true, "token": "", "has_token": true},
+    });
+    let out = simulate_put(&current, echo);
+    assert!(out.echomuse.enabled, "echomuse.enabled 应透传生效");
+    assert_eq!(out.echomuse.token, "em-pair-secret", "空串 token 保留原值");
+}

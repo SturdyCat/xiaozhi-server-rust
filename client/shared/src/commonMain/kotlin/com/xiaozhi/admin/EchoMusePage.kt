@@ -36,8 +36,8 @@ fun ViewContainer<*, *>.renderEchoMuse(
     vif({ state.loaded && !state.enabled }) {
         groupedCard("EchoMuse 未启用") {
             textNote(
-                "服务端未开启 EchoMuse 能力（[echomuse] 配置段）。开启并重启服务端后，" +
-                    "EchoMuse 设备会在连上服务端时登记到这里，经批准后即可远程管理" +
+                "服务端未开启 EchoMuse 能力。请到「配置 → EchoMuse」分区打开「启用 EchoMuse 设备入口」" +
+                    "并重启服务端；之后 EchoMuse 设备会在连上服务端时登记到这里，经批准后即可远程管理" +
                     "（重启、下发 WiFi 配置）。",
                 micro = true,
             )

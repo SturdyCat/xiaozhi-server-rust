@@ -143,6 +143,7 @@ fun ViewContainer<*, *>.renderConfigSection(
             "nlu" -> nluConfigCard(form, ctx)
             "wakeup" -> wakeupConfigCard(form)
             "aiui" -> aiuiConfigCard(form)
+            "echomuse" -> echomuseConfigCard(form)
             "soul" -> soulConfigCard(form, ctx)
             "memory" -> memoryConfigCard(form, ctx)
             // 未注册内容不要静默留白（"新加了 section 却忘了写内容"会表现成点进去什么都没有）
@@ -654,7 +655,7 @@ fun ViewContainer<*, *>.aiuiConfigCard(form: ConfigFormState) {
  *   以为必须重填（重填会覆盖）；
  * - `configured = false` → 明确提示尚未配置。
  */
-private fun secretHint(configured: Boolean): String =
+internal fun secretHint(configured: Boolean): String =
     if (configured) "已配置（留空则不修改）" else "未配置"
 
 // ============================================================

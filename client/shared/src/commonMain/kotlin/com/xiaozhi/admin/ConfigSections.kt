@@ -67,6 +67,11 @@ object ConfigSections {
             "audio", 50, "Audio", "voice",
             listOf("采样率", "帧长", "缓冲", "下行", "audio", "音频", "抖动"),
         ),
+        // EchoMuse 设备入口（RestartOnly）：开启后 Echo Dot 2 / emOS 设备可经 mDNS 发现接入
+        SectionDescriptor(
+            "echomuse", 55, "EchoMuse", "service",
+            listOf("echomuse", "echo", "音箱", "dot", "emos", "设备入口"),
+        ),
         SectionDescriptor("asr", 60, "ASR", "voice", listOf("识别", "语音识别", "sensevoice", "asr")),
         SectionDescriptor("vad", 70, "VAD", "voice", listOf("静音", "语音端点", "vad", "切段")),
         SectionDescriptor(

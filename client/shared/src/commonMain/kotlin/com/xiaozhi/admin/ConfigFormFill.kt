@@ -127,6 +127,8 @@ internal fun ConfigFormState.fill(obj: JSONObject) {
     wake.fill(obj)
     // [nlu]（技能级联）：映射集中在 ConfigNluState（含 intents/slots 嵌套数组）
     nlu.fill(obj)
+    // [echomuse]（设备入口）：映射集中在 EchoMuseSectionState（token presence 打码）
+    em.fill(obj)
 }
 
 /**

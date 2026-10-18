@@ -361,6 +361,21 @@ fn llm_sentence_flush_ms_clamped_by_normalize() {
     assert_eq!(cfg.llm.sentence_flush_ms, 2_500);
 }
 
+/// `[llm].enabled` 总开关：默认 `true`（行为不变），`false` 反序列化生效（回声模式）。
+#[test]
+fn llm_enabled_defaults_true_and_deserializes_false() {
+    let cfg = Config::default();
+    assert!(cfg.llm.enabled, "serde 默认必须为 true（缺省零行为变化）");
+
+    let cfg: Config =
+        toml::from_str("[llm]\nenabled = false\n").expect("解析含 enabled=false 的配置");
+    assert!(!cfg.llm.enabled, "显式 false 必须生效（回声模式）");
+
+    // 旧配置文件没有 enabled 键：缺省回 true，不产生兼容性破坏。
+    let cfg: Config = toml::from_str("[llm]\nmodel = \"gpt-4o\"\n").expect("解析无 enabled 的配置");
+    assert!(cfg.llm.enabled, "缺 enabled 键时回默认 true");
+}
+
 /// 缺口①（同类护栏顺带）：`[asr]/[tts].max_concurrent` 的 clamp ≥ 1 语义。
 #[test]
 fn inference_gate_permits_clamped_to_at_least_one() {
