@@ -50,7 +50,10 @@ fn main() -> Result<()> {
 async fn run(config: Config, config_store: Arc<dyn ConfigStore>) -> Result<()> {
     // registry + 各层手工组装：日志采集层（/api/logs WS）需要插在 fmt 之前，
     // SubscriberBuilder 的 `.with` 只接受格式层，无法直接挂自定义 Layer。
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    // 默认 info，但压掉 ort::logging（ONNX 会话初始化的分配明细等 INFO 噪声，
+    // 只留 WARN+）；RUST_LOG 显式设置时完全尊重用户配置。
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,ort=warn"));
     let subscriber = tracing_subscriber::registry()
         .with(filter) // 全局日志采集层：每条 INFO+ 事件进入环形缓冲 + 广播，
         // 供 `GET /api/logs` WS 客户端（macApp / AI 调试）实时读取。
