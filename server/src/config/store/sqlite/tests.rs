@@ -3,9 +3,9 @@
 
 use std::sync::Arc;
 
-use crate::config::Config;
 use crate::config::store::sqlite::SqliteConfigStore;
 use crate::config::store::ConfigStore;
+use crate::config::Config;
 
 /// 在临时文件上开一个配置库（测试间互不干扰）。
 fn tmp_store(tag: &str) -> (Arc<SqliteConfigStore>, std::path::PathBuf) {
@@ -26,6 +26,22 @@ fn load_persist_round_trip() {
     let loaded = store.load().unwrap();
     // 除运行期默认值外，关键字段应一致（这里仅验证可往返解析）。
     assert_eq!(loaded.server.port, cfg.server.port);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn persist_identical_content_twice_succeeds() {
+    // 回归：cfg_revisions.revision 是内容指纹主键，内容不变的重复保存
+    // （如密钥打码回传）不得撞 UNIQUE 约束导致保存失败。
+    let (store, path) = tmp_store("dupsave");
+    let cfg = Config::default();
+    store.persist(&cfg).unwrap();
+    store.persist(&cfg).unwrap(); // 第二次内容相同 → 历史表跳过，不报错
+    let n: i64 = store
+        .conn()
+        .query_row("SELECT COUNT(*) FROM cfg_revisions", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(n, 1, "同内容重复保存只应留一条历史");
     let _ = std::fs::remove_file(&path);
 }
 
@@ -57,7 +73,10 @@ fn bootstrap_default_if_empty_idempotent() {
         .and_then(|row| row.get("n").cloned())
         .and_then(|v| v.as_i64())
         .unwrap_or(0);
-    assert_eq!(n, 1, "自举应在 cfg_revisions 留下 source=bootstrap 的初始版本");
+    assert_eq!(
+        n, 1,
+        "自举应在 cfg_revisions 留下 source=bootstrap 的初始版本"
+    );
     let _ = std::fs::remove_file(&path);
 }
 
@@ -118,9 +137,7 @@ fn query_read_only_guard() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["id"], 1);
     // 多语句被拒
-    assert!(store
-        .query("SELECT 1; DROP TABLE cfg_documents")
-        .is_err());
+    assert!(store.query("SELECT 1; DROP TABLE cfg_documents").is_err());
     // 写入被拒
     assert!(store
         .query("UPDATE cfg_documents SET revision='x'")

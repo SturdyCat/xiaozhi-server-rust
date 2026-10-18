@@ -54,8 +54,7 @@ impl SqliteConfigStore {
                 }
             }
         }
-        let conn =
-            Connection::open(path).with_context(|| format!("打开配置库 {path} 失败"))?;
+        let conn = Connection::open(path).with_context(|| format!("打开配置库 {path} 失败"))?;
         conn.busy_timeout(Duration::from_millis(5000))
             .context("设置 busy_timeout 失败")?;
         // :memory: 的 journal_mode 返回 "memory"，不是错误；显式忽略结果即可。
@@ -119,9 +118,12 @@ impl SqliteConfigStore {
             params![doc, rev, now, source],
         )
         .context("写入 cfg_documents 失败")?;
+        // revision 是内容指纹：与已有历史完全一致（如密钥打码回传、无实质变更的保存）
+        // 时跳过插入，不视为错误（同一指纹即同一条历史）。
         tx.execute(
             "INSERT INTO cfg_revisions (revision, doc, created_at, source, author, note)
-             VALUES (?1, ?2, ?3, ?4, NULL, NULL)",
+             VALUES (?1, ?2, ?3, ?4, NULL, NULL)
+             ON CONFLICT(revision) DO NOTHING",
             params![rev, doc, now, source],
         )
         .context("写入 cfg_revisions 失败")?;
@@ -186,7 +188,9 @@ impl ConfigStore for SqliteConfigStore {
     fn load(&self) -> Result<Config> {
         let conn = self.conn();
         let doc: Option<String> = conn
-            .query_row("SELECT doc FROM cfg_documents WHERE id = 1", [], |r| r.get(0))
+            .query_row("SELECT doc FROM cfg_documents WHERE id = 1", [], |r| {
+                r.get(0)
+            })
             .optional()
             .context("读取 cfg_documents 失败")?;
         match doc {
@@ -262,7 +266,10 @@ impl ConfigStore for SqliteConfigStore {
             .query_map([], |r| r.get::<_, String>(0))
             .context("查询预设列表失败")?;
         let mut names = Vec::new();
-        for n in rows.collect::<rusqlite::Result<Vec<_>>>().context("读取预设列表失败")? {
+        for n in rows
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .context("读取预设列表失败")?
+        {
             names.push(n);
         }
         Ok(names)
