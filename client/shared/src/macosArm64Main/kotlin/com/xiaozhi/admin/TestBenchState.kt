@@ -299,12 +299,15 @@ class TestBenchState(private val scope: PagerScope) {
             statusMsg = "TTS 播放完成，可回听（${ttsEngine.ifEmpty { "未知引擎" }}）"
             refreshWave(ctx, "tts")
         }
-        // 合成+下发超时兜底：60s 未收到 tts stop 则恢复按钮（模型首次加载可能较慢）
+        // 合成+下发超时兜底：60s 未收到 tts stop 则恢复按钮（服务端 tts_test 有 30s
+        // 合成链预算，正常错误会以结果帧先回；走到这里说明服务器整链未回包/连接异常）。
+        // 只解锁按钮与提示，不锁死——允许直接再次发起合成。
         ctx.setTimeout(60_000) {
             if (ttsBusy) {
                 ttsBusy = false
                 speaking = false
-                statusMsg = "合成超时：请检查服务器日志或重试"
+                ttsError = "未收到服务器结果，请查看服务器日志"
+                statusMsg = "合成超时：未收到服务器结果，请查看服务器日志（可重试）"
             }
         }
     }

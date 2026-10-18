@@ -4,6 +4,7 @@ import com.tencent.kuikly.core.base.ViewContainer
 import com.tencent.kuikly.core.directives.vfor
 import com.tencent.kuikly.core.directives.vif
 import com.tencent.kuikly.core.pager.Pager
+import com.tencent.kuikly.core.views.ScrollParams
 import com.tencent.kuikly.core.views.Scroller
 import com.tencent.kuikly.core.views.TabItem
 import com.tencent.kuikly.core.views.Tabs
@@ -86,11 +87,19 @@ fun ViewContainer<*, *>.renderConfigLayout(
 }
 
 /**
- * 二级横向 tab 条（官方 Tabs + TabItem + 底部指示条，样式对齐 AdminComponents.tabbedPanel）。
- * 选中态 = 派生自 `form.configSection`（defaultInitIndex 只在首建生效，后续点击由
- * TabItem 内部状态与我们的赋值同步推进）。
+ * tab 项等宽节距：官方 Tabs 指示条位置由 scrollParams 驱动（见 TabsView 源码，
+ * defaultInitIndex 只在首建生效、TabItem 点击不直接推动指示条），本页无配对 PageList，
+ * 由 configSection 派生 offset 手动喂 ScrollParams（等宽节距使 offset/pitch 恰为选中 index）。
+ */
+private const val TAB_ITEM_WIDTH = 96f
+
+/** 二级横向 tab 条（官方 Tabs + TabItem + 底部指示条，样式对齐 AdminComponents.tabbedPanel）。
+ *  选中态单源 = `form.configSection`：点击与外部跳转都改它，attr 内派生 index 喂 scrollParams，
+ *  指示条与 TabItem 高亮随 observable 重渲染自动跟随。
  */
 private fun ViewContainer<*, *>.configTabBar(form: ConfigFormState) {
+    val pitch = TAB_ITEM_WIDTH + 2 * AdminSpace.md
+    val tabCount = ConfigSections.tabs.size
     Tabs {
         attr {
             flex(1f)
@@ -99,6 +108,21 @@ private fun ViewContainer<*, *>.configTabBar(form: ConfigFormState) {
             defaultInitIndex(
                 ConfigSections.tabs.indexOfFirst { it.first == ConfigSections.tabOf(form.configSection) }
                     .coerceAtLeast(0),
+            )
+            // 响应式读取 configSection：变化时重建 ScrollParams → 指示条动画滑动到目标项
+            val selectedIndex =
+                ConfigSections.tabs.indexOfFirst { it.first == ConfigSections.tabOf(form.configSection) }
+                    .coerceAtLeast(0)
+            scrollParams(
+                ScrollParams(
+                    offsetX = selectedIndex * pitch,
+                    offsetY = 0f,
+                    contentWidth = pitch * tabCount,
+                    contentHeight = 44f,
+                    viewWidth = pitch,
+                    viewHeight = 44f,
+                    isDragging = false,
+                ),
             )
             indicatorInTabItem {
                 View {
@@ -114,6 +138,7 @@ private fun ViewContainer<*, *>.configTabBar(form: ConfigFormState) {
         for ((tabId, tabLabel) in ConfigSections.tabs) {
             TabItem { state ->
                 attr {
+                    width(TAB_ITEM_WIDTH)
                     marginLeft(AdminSpace.md)
                     marginRight(AdminSpace.md)
                     allCenter()
