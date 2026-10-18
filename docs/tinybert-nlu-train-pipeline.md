@@ -12,7 +12,7 @@
   ① 导出训练规格：解析当前 [nlu].intents/slots + 槽位值表
      → /data/nlu-training/spec.json（种子句、负样本、标签表）
   ② （可选）用已配云 LLM 把种子句改写成口语变体，每意图凑 N 句
-  ③ docker run --rm -v /data/nlu-training:/work python:3.11-slim（固定官方镜像，无专属镜像：依赖装共享卷、脚本由服务端提供）
+  ③ docker run --rm -v /data/nlu-training:/work 专用训练镜像（依赖在镜像构建期装好，见 tools/nlu-trainer/Dockerfile，阿里云 ACR 构建发布）
      容器内：读 spec.json → 微调 TinyBERT4 → optimum 导出 → int8 量化
      产物写回 /work/out/：model.onnx + vocab.txt（或 tokenizer.json）+ labels.txt
   ④ 服务端验收：三件套齐全、labels 行序与 bert_label_map 对齐、试推理一句
@@ -26,7 +26,7 @@
 
 | 项 | 结论 |
 |---|---|
-| 训练环境 | 固定官方镜像 `python:3.11-slim`（无专属镜像）：脚本与 requirements 由服务端镜像内置并复制进数据目录，依赖首次引导时装进共享卷 `nlu-train-env/` 复用，之后离线可跑。TinyBERT4 仅 14.5M 参数，GPU 非必需，CPU 十分钟内量级 |
+| 训练环境 | 专用训练镜像（`tools/nlu-trainer/Dockerfile`，基于 `python:3.11-slim`）：Python 依赖与训练脚本在镜像构建期全部装好，服务端只 `docker pull` + `docker run`，无运行期 pip 引导。TinyBERT4 仅 14.5M 参数，GPU 非必需，CPU 十分钟内量级 |
 | 服务器前置条件 | 宿主机装有 Docker；server 容器需挂载 `/var/run/docker.sock`（或宿主 docker CLI）并共享 `/data` 卷 |
 | CPU 争抢 | 容器内 `torch.set_num_threads` 限核 + nice 低优先级；训练是一次性事件，不进常驻推理预算（`app/inference.rs` 闸门不管训练进程） |
 | Rust 侵入面 | 仅四块：spec 导出器、docker 子进程封装（超时 + 取消 + 日志尾随）、三件套验收器、`NluTrainStart/NluTrainResult` 两条 WS 消息 + 注册表字段 |

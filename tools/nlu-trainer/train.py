@@ -157,17 +157,23 @@ def main():
 
     # 导出 ONNX（动态轴）→ int8 动态量化。
     from optimum.onnxruntime import ORTModelForSequenceClassification
-    from optimum.onnxruntime.configuration import OptimizationConfig
     import onnxruntime as ort
     from onnxruntime.quantization import quantize_dynamic, QuantType
 
     os.makedirs(OUTDIR, exist_ok=True)
     export_dir = "/work/onnx-fp32"
+    # optimum 的 from_pretrained 只接受路径（传内存对象会在 model_id.split 崩），
+    # 训练完的模型先落盘再导出。
+    final_dir = "/work/ckpt/final"
+    # 新版 transformers/safetensors 保存时拒绝非连续张量，先统一转连续内存。
+    for p in model.parameters():
+        p.data = p.data.contiguous()
+    model.save_pretrained(final_dir)
+    tokenizer.save_pretrained(final_dir)
     ort_model = ORTModelForSequenceClassification.from_pretrained(
-        model, tokenizer, export=True
+        final_dir, export=True
     )
-    opt = OptimizationConfig(optimize_transformers_placeholders=False)
-    ort_model = ort_model.optimize(opt, save_dir=export_dir)
+    ort_model.save_pretrained(export_dir)
     onnx_path = os.path.join(export_dir, "model.onnx")
     quantized = os.path.join(OUTDIR, "model.onnx")
     quantize_dynamic(onnx_path, quantized, weight_type=QuantType.QInt8)

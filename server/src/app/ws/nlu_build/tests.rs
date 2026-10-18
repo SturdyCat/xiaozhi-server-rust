@@ -1,7 +1,8 @@
 //! [`super::nlu_build`] 测试：端点纯逻辑部分。
 //!
 //! docker 真训练不在单测范围（同 sherpa 口径：单测桩不冒充可运行服务）；
-//! 这里验证：前置校验拒绝口径、状态端点形状、日志尾部截断（UTF-8 边界安全）。
+//! 这里验证：前置校验拒绝口径、状态端点形状、日志尾部截断（UTF-8 边界安全）、
+//! docker.sock 挂载路径的宿主侧换算。
 
 use super::*;
 
@@ -46,21 +47,6 @@ async fn push_log_keeps_tail_only_and_utf8_safe() {
     assert!(job.log.len() <= 8 * 1024 + 32);
     assert!(job.log.is_char_boundary(0));
     assert!(job.log.ends_with('\n'));
-}
-
-#[test]
-fn deps_marker_matches_when_requirements_identical() {
-    // 依赖卷标记与清单一致 → 跳过引导安装；空白差异视为一致（编辑器尾随换行）。
-    let req = "torch\ntransformers>=4.44\n";
-    assert!(deps_up_to_date(Some(req), req));
-    assert!(deps_up_to_date(Some("torch\ntransformers>=4.44\n\n"), req.trim_end()));
-}
-
-#[test]
-fn deps_stale_when_marker_missing_or_drifted() {
-    // 无标记（首次训练）或清单变化 → 触发重装。
-    assert!(!deps_up_to_date(None, "torch\n"));
-    assert!(!deps_up_to_date(Some("torch\nonnxruntime\n"), "torch\naccelerate\n"));
 }
 
 #[test]

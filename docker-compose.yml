@@ -63,8 +63,7 @@ services:
       #   旧版「单文件 bind mount → rename EBUSY → 回退原地写」的问题自此布局起不存在。
       - ./server-data:/data
       # NLU 模型训练（POST /api/nlu/model/build）在**宿主** docker 里跑一个临时训练容器：
-      #   挂入宿主 docker.sock，服务端只 docker run 官方 python:3.11-slim（--rm，
-      #   --cpus/--memory 限核限内存）。脚本与 requirements 由服务端镜像内置并复制到
-      #   数据目录；Python 依赖首次训练时装进 <data>/nlu-train-env/ 共享卷复用。
-      #   不构建、不依赖任何专属训练镜像。
+      #   挂入宿主 docker.sock，服务端只 docker run 专用训练镜像（--rm，--cpus/--memory
+      #   限核限内存）。依赖在镜像构建期装好（tools/nlu-trainer/Dockerfile，阿里云 ACR
+      #   构建发布 registry.../notip-com-cn/nlu-trainer），服务端缺失时只 pull。
       - /var/run/docker.sock:/var/run/docker.sock

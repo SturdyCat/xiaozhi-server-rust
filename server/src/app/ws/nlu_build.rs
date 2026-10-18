@@ -6,13 +6,10 @@
 //! 1. 读当前生效配置的 `[nlu]` 段，与内置提醒技能合并（[`NluConfig::with_builtins`]，
 //!    与运行时技能目录同一份合并结果——训练标签与技能名必然一致）；
 //! 2. 把 intents/slots 写成 `input.json` 落到数据目录 `<data>/nlu-train/`；
-//! 3. **固定官方镜像 + 共享卷依赖**（不构建、不拉取任何专属镜像）：训练脚本与
-//!    `requirements.txt` 随服务端镜像内置（`/opt/nlu-trainer`，见根 Dockerfile），
-//!    每次训练复制进 `<data>/nlu-train/`；Python 依赖（torch 等）首次训练时由官方
-//!    `python:3.11-slim` 容器装进 `<data>/nlu-train-env/`（共享卷，跨任务复用，
-//!    清单变化自动重装）。训练就是一条 `docker run --rm`：挂工作目录 + 依赖卷 +
-//!    产物目录，`--cpus/--memory` 上限与实时推理隔离；跑完容器自动删除，
-//!    产物三件套留在 `<data>/models/nlu/`；
+//! 3. **专用训练镜像**：Python 依赖（torch 等）在镜像构建期全部装好（见
+//!    `tools/nlu-trainer/Dockerfile`，阿里云 ACR 自动构建）。训练就是一条
+//!    `docker run --rm`：挂工作目录 + 产物目录，`--cpus/--memory` 上限与实时推理
+//!    隔离；跑完容器自动删除，产物三件套留在 `<data>/models/nlu/`；
 //! 4. 训练完成后把 `[nlu].bert_*` 指到该目录（`bert_vocab` 用 `tokenizer.json`）、
 //!    `bert_enabled=true`，新会话生效。
 //!
@@ -32,11 +29,9 @@ use tokio::sync::{broadcast, Mutex};
 use crate::config::Config;
 use crate::engine::Engines;
 
-/// 运行训练的**官方**基础镜像（Docker Hub 公共 tag，任何环境都能 pull 到；
-/// 可用 `NLU_TRAINER_IMAGE` 指向内网镜像仓库的同版本 tag）。
-const TRAINER_IMAGE: &str = "python:3.11-slim";
-/// 服务端镜像内置的训练资产目录（train.py + requirements.txt，见根 Dockerfile COPY）。
-const TRAINER_ASSETS: &str = "/opt/nlu-trainer";
+/// **专用训练镜像**（依赖已在镜像内装好，见 tools/nlu-trainer/Dockerfile；
+/// 可用 `NLU_TRAINER_IMAGE` 覆盖）。缺失时服务端只 pull，不 build。
+const TRAINER_IMAGE: &str = "registry.cn-hangzhou.aliyuncs.com/notip-com-cn/nlu-trainer:latest";
 
 /// 一次训练任务的状态（进程内单例；重启清零，与 devices/sessions 同口径）。
 #[derive(Default)]
@@ -148,7 +143,6 @@ pub(super) async fn start_build(State(engines): State<Arc<Engines>>) -> Response
     // 训练在独立 tokio 任务里跑（docker 命令是长阻塞子进程）。
     let data = data_dir(&cfg);
     let work_dir = data.join("nlu-train");
-    let env_dir = data.join("nlu-train-env");
     let out_dir = data.join("models").join("nlu");
     let intents = nlu
         .intents
@@ -161,7 +155,7 @@ pub(super) async fn start_build(State(engines): State<Arc<Engines>>) -> Response
         .map(|s| json!({ "name": s.name, "values": s.values, "optional": s.optional }))
         .collect::<Vec<_>>();
     tokio::spawn(async move {
-        run_training(work_dir, env_dir, out_dir, json!({ "intents": intents, "slots": slots })).await;
+        run_training(work_dir, out_dir, json!({ "intents": intents, "slots": slots })).await;
     });
     axum::Json(json!({ "started": true, "state": "running" })).into_response()
 }
@@ -195,26 +189,6 @@ async fn run_cmd(mut cmd: tokio::process::Command) -> anyhow::Result<()> {
         anyhow::bail!("命令退出码 {:?}：{}", out.status.code(), stderr.trim());
     }
     Ok(())
-}
-
-/// 依赖是否需要（重）装：依赖卷里的清单标记与当前 requirements 不一致时重装。
-/// 纯函数供单测；标记文件内容就是完整 requirements 文本（原样比对，不做哈希）。
-fn deps_up_to_date(marker: Option<&str>, requirements: &str) -> bool {
-    marker.map(str::trim) == Some(requirements.trim())
-}
-
-/// 从服务端内置资产目录把训练脚本与依赖清单复制进工作目录（每次训练都刷新，
-/// 保证脚本版本与部署的服务端一致）；返回 requirements 文本。
-async fn stage_assets(assets: &str, work_dir: &std::path::Path) -> anyhow::Result<String> {
-    let req_bytes = tokio::fs::read(format!("{assets}/requirements.txt"))
-        .await
-        .map_err(|e| anyhow::anyhow!("读取内置训练资产失败（{assets}/requirements.txt）: {e}"))?;
-    let requirements = String::from_utf8(req_bytes)?;
-    tokio::fs::copy(format!("{assets}/train.py"), work_dir.join("train.py"))
-        .await
-        .map_err(|e| anyhow::anyhow!("复制训练脚本失败（{assets}/train.py）: {e}"))?;
-    tokio::fs::write(work_dir.join("requirements.txt"), &requirements).await?;
-    Ok(requirements)
 }
 
 /// 把传给宿主 docker 的挂载路径从容器内路径换算成宿主真实路径。
@@ -313,29 +287,20 @@ async fn docker_host_path(path: &std::path::Path) -> String {
     }
 }
 
-async fn run_training(
-    work_dir: PathBuf,
-    env_dir: PathBuf,
-    out_dir: PathBuf,
-    input: serde_json::Value,
-) {
+async fn run_training(work_dir: PathBuf, out_dir: PathBuf, input: serde_json::Value) {
     let image = std::env::var("NLU_TRAINER_IMAGE").unwrap_or_else(|_| TRAINER_IMAGE.to_string());
-    let assets = std::env::var("NLU_TRAINER_ASSETS").unwrap_or_else(|_| TRAINER_ASSETS.to_string());
     // 训练容器资源上限：训练是 CPU 重活，必须与实时推理隔离（可用 env 放宽）。
     let cpus = std::env::var("NLU_TRAINER_CPUS").unwrap_or_else(|_| "2".to_string());
     let memory = std::env::var("NLU_TRAINER_MEMORY").unwrap_or_else(|_| "4g".to_string());
-    // 容器内挂载点：/work=工作目录（脚本+input） /opt/env=共享依赖卷 /work/output=产物。
-    let marker_path = env_dir.join(".requirements");
+    // 容器内挂载点：/work=工作目录（input.json） /work/output=产物目录。
     let result: anyhow::Result<()> = (|| async {
         tokio::fs::create_dir_all(&work_dir).await?;
-        tokio::fs::create_dir_all(&env_dir).await?;
         tokio::fs::create_dir_all(&out_dir).await?;
         tokio::fs::write(work_dir.join("input.json"), input.to_string()).await?;
-        let requirements = stage_assets(&assets, &work_dir).await?;
         job().lock().await.output_dir = Some(out_dir.display().to_string());
 
-        // 基础镜像缺失时 pull 一次（官方公共 tag；内网环境可把 NLU_TRAINER_IMAGE
-        // 指到镜像仓库同版本 tag，同样只 pull 不 build）。
+        // 训练镜像缺失时 pull 一次（阿里云 ACR tag；可用 NLU_TRAINER_IMAGE 覆盖，
+        // 同样只 pull 不 build——依赖全部在镜像构建期装好）。
         let inspect = tokio::process::Command::new("docker")
             .args(["image", "inspect", &image])
             .stdout(std::process::Stdio::null())
@@ -345,7 +310,7 @@ async fn run_training(
         match inspect {
             Ok(s) if s.success() => {}
             Ok(_) => {
-                push_log(&format!("基础镜像 {image} 不存在，docker pull（首次较慢）…")).await;
+                push_log(&format!("训练镜像 {image} 不存在，docker pull（首次较慢）…")).await;
                 let mut pull = tokio::process::Command::new("docker");
                 pull.args(["pull", &image]);
                 run_cmd(pull).await?;
@@ -353,48 +318,18 @@ async fn run_training(
             Err(e) => anyhow::bail!("无法调用 docker: {e}（需要 docker CLI 与 docker.sock 挂载）"),
         }
 
-        // 依赖引导：首次训练（或 requirements 变化）时把依赖装进共享卷，之后离线复用。
-        // torch 主源走官方 CPU 轮子仓库，失败回退清华 PyPI 镜像。
-        let marker = tokio::fs::read_to_string(&marker_path).await.ok();
-        // 宿主 docker 按宿主路径解析挂载：容器内路径必须先换算（见 mount_host_path）。
-        let host_work = docker_host_path(&work_dir).await;
-        let host_env = docker_host_path(&env_dir).await;
-        let host_out = docker_host_path(&out_dir).await;
-        if !deps_up_to_date(marker.as_deref(), &requirements) {
-            push_log("安装训练依赖到共享卷（仅首次或清单变化时，torch 较大请耐心）…").await;
-            let mut pip = tokio::process::Command::new("docker");
-            pip.args(["run", "--rm", "--cpus", &cpus, "--memory", &memory])
-                .arg("-v")
-                .arg(format!("{}:/work", host_work))
-                .arg("-v")
-                .arg(format!("{}:/opt/env", host_env))
-                .env("PIP_NO_CACHE_DIR", "1")
-                .env("PIP_RETRIES", "5")
-                .env("PIP_TIMEOUT", "60")
-                .args([&image, "sh", "-lc", &format!(
-                    "(pip install --index-url https://download.pytorch.org/whl/cpu \
-                     -r /work/requirements.txt --target /opt/env \
-                     || pip install -i https://pypi.tuna.tsinghua.edu.cn/simple \
-                     -r /work/requirements.txt --target /opt/env)"
-                )]);
-            run_cmd(pip).await?;
-            tokio::fs::write(&marker_path, &requirements).await?;
-        }
-
-        // 训练：PYTHONPATH 指向共享依赖卷；产物直接写进挂载的正式产物目录。
+        // 训练：镜像 ENTRYPOINT 即训练脚本；宿主 docker 按宿主路径解析挂载，
+        // 容器内路径必须先换算（见 docker_host_path）。
         push_log("开始训练（HF 拉权重 + 微调 + ONNX int8 导出）…").await;
+        let host_work = docker_host_path(&work_dir).await;
+        let host_out = docker_host_path(&out_dir).await;
         let mut run = tokio::process::Command::new("docker");
         run.args(["run", "--rm", "--cpus", &cpus, "--memory", &memory])
             .arg("-v")
             .arg(format!("{}:/work", host_work))
             .arg("-v")
             .arg(format!("{}:/work/output", host_out))
-            .arg("-v")
-            .arg(format!("{}:/opt/env", host_env))
-            .env("PYTHONPATH", "/opt/env")
-            .env("HF_ENDPOINT", "https://hf-mirror.com")
-            .env("MODEL_NAME", "hfl/rbt3")
-            .args([&image, "python", "/work/train.py"]);
+            .args([&image]);
         run_cmd(run).await?;
 
         // 产物三件套齐全才算成功。
