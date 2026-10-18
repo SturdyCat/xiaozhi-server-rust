@@ -602,3 +602,33 @@ fn wake_greeting_is_optional_hot_reloadable_and_flags_cache_conflict() {
         .collect();
     assert_eq!(keys, vec!["enabled", "greeting", "persist"], "{keys:?}");
 }
+
+/// `[llm].enabled` 总开关的注册表语义护栏：默认 true（缺省零行为变化）、
+/// 字段必须暴露给管理页且档位为 NextSession（保存后新会话生效）。
+#[test]
+fn llm_enabled_switch_is_next_session_and_projected() {
+    assert!(Config::default().llm.enabled, "llm.enabled 默认必须为 true");
+    assert_eq!(
+        field_hot(&["llm", "enabled"]),
+        Some(HotReload::NextSession),
+        "llm.enabled 是会话级开关：新会话生效（eff_config 会话开始热刷新）"
+    );
+    let v = schema_json();
+    let llm = v["capabilities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["id"] == "llm")
+        .expect("schema 应包含 llm 能力");
+    let common = llm["common_fields"]
+        .as_array()
+        .expect("llm 应有公共字段表")
+        .iter()
+        .flat_map(|g| g["fields"].as_array().unwrap().clone())
+        .filter_map(|f| f["key"].as_str().map(str::to_string))
+        .collect::<Vec<_>>();
+    assert!(
+        common.iter().any(|k| k == "enabled"),
+        "管理页必须能看到 llm.enabled 开关，实际公共字段: {common:?}"
+    );
+}

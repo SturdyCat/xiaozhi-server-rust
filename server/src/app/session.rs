@@ -279,7 +279,7 @@ impl<'a, T: Transport> Session<'a, T> {
     }
 
     /// 管理台注入的一轮（P1-2）：文本**作为用户话语**走与语音完全相同的管线入口
-    /// （`decide_user_text` 记录+指令闸门 → `stream_response` LLM→TTS→下行）。
+    /// （`decide_user_text` 记录+指令闸门 → `respond` 统一响应入口：LLM 或回声→TTS→下行）。
     ///
     /// 这让"上游 LLM/TTS 是否正常"可以不经 ASR 直接验证（联调利器），且对话记录、
     /// 事件总线、打断语义（设备仍可 abort）与正常轮次一一一致。
@@ -299,7 +299,7 @@ impl<'a, T: Transport> Session<'a, T> {
             // 主循环下一轮即按 close_requested 收尾——语义与语音触发的指令一致。
             UtteranceDecision::NluStop => {}
             UtteranceDecision::Respond => {
-                if let Err(e) = self.stream_response(text, &trace).await {
+                if let Err(e) = self.respond(text, &trace).await {
                     tracing::warn!(
                         turn = trace.turn_id(),
                         "session {} 注入轮次流水线失败: {e}",
@@ -383,7 +383,7 @@ impl<'a, T: Transport> Session<'a, T> {
             match self.decide_user_text(&user_text, turn).await {
                 UtteranceDecision::NluStop => return, // 本批剩余语音段一并丢弃
                 UtteranceDecision::Respond => {
-                    if let Err(e) = self.stream_response(&user_text, &trace).await {
+                    if let Err(e) = self.respond(&user_text, &trace).await {
                         tracing::warn!(turn, "session {session_id} 流水处理失败: {e}");
                     }
                 }

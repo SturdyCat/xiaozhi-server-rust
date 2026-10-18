@@ -51,6 +51,7 @@ fn whole_response_no_output() {
 #[test]
 fn build_input_maps_history_roles() {
     let cfg = LlmConfig {
+        enabled: true,
         engine: String::new(),
         api_base: "https://example.com/v1/responses".into(),
         api_key: String::new(),

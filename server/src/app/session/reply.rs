@@ -126,6 +126,79 @@ impl<'a, T: Transport> Session<'a, T> {
         });
     }
 
+    /// 一条用户话语在技能级联未命中后的**统一响应入口**（注入轮与语音轮共用）。
+    ///
+    /// - `[llm].enabled = true`（默认）：照常 `stream_response`（LLM→TTS→下行）；
+    /// - `false`：**回声模式**——不调 LLM，把 ASR 文本原样 TTS 下发（见
+    ///   [`Self::echo_response`]），用于验证 ASR→TTS 链路。
+    ///
+    /// 档位 NextSession：`eff_config` 在会话开始热刷新，保存后**新会话**生效。
+    /// ⚠️ 仅**全局**生效：`llm.enabled` 不在设备 overlay 白名单（`config/overlay.rs`
+    /// 的 llm 段只放行 system_prompt/max_history）——它是全局测试开关，不随设备下发。
+    pub(super) async fn respond(
+        &mut self,
+        user_text: &str,
+        trace: &Arc<TurnTrace>,
+    ) -> anyhow::Result<()> {
+        if !self.eff_config.llm.enabled {
+            return self.echo_response(user_text, trace).await;
+        }
+        self.stream_response(user_text, trace).await
+    }
+
+    /// 回声模式（`[llm].enabled=false`）：跳过 LLM 与记忆，把用户文本原样送 TTS。
+    ///
+    /// 帧序列与正常轮对齐：先 `Stt`（设备 UI 显示识别文本）+ `Llm` 心跳——**Llm 必须
+    /// 发**：设备端靠收到任意服务器消息刷新 `last_incoming_time_`，缺了它 TTS 合成
+    /// 等待期会被 ESP `IsTimeout()` 判断连（见 `stream_response` 内同款注释）；随后
+    /// 复用 [`Self::speak_canned`] 的完整下行链路（预取/节拍器/tts start/stop/打断）。
+    ///
+    /// 测试路径刻意**不写对话历史、不做记忆写入**；对话记录/事件沿用 `speak_canned`
+    /// 现状（anchor=canned 的独立一轮）。
+    async fn echo_response(
+        &mut self,
+        user_text: &str,
+        trace: &Arc<TurnTrace>,
+    ) -> anyhow::Result<()> {
+        self.abort.store(false, Ordering::Relaxed);
+        Self::send_stt_and_llm_heartbeat(self.transport, &self.session_id, user_text).await?;
+        tracing::info!(
+            turn = trace.turn_id(),
+            "session {} 回声模式（[llm].enabled=false）：跳过 LLM，原话 TTS 下发（{} 字）",
+            self.session_id,
+            user_text.chars().count()
+        );
+        self.speak_canned(user_text).await
+    }
+
+    /// 下发 `Stt` + `Llm` 心跳（正常轮与回声轮共用的帧序列头部）。
+    ///
+    /// `Llm` 心跳的语义：协议约定它仅做表情同步、回复正文走 `tts.sentence_start`，
+    /// 但设备端把它当"服务器还活着"的信号刷新 `last_incoming_time_`——**不能省**。
+    async fn send_stt_and_llm_heartbeat(
+        transport: &mut T,
+        session_id: &str,
+        user_text: &str,
+    ) -> anyhow::Result<()> {
+        send_text(
+            transport,
+            &ServerMessage::Stt {
+                session_id: session_id.to_string(),
+                text: user_text.to_string(),
+            },
+        )
+        .await?;
+        send_text(
+            transport,
+            &ServerMessage::Llm {
+                session_id: session_id.to_string(),
+                emotion: Some("neutral".to_string()),
+                text: None,
+            },
+        )
+        .await
+    }
+
     /// 从用户文本开始：stt → LLM 流式按句切分 → 逐句 TTS + 逐帧下行（流水线重叠）。
     ///
     /// 生产者 task 读 LLM SSE 流并按句切分推入 channel（含定时 flush watchdog，缺口③，
@@ -146,25 +219,7 @@ impl<'a, T: Transport> Session<'a, T> {
         let session_id = self.session_id.clone();
         let turn = trace.turn_id();
         self.abort.store(false, Ordering::Relaxed); // 新一轮对话重置打断标志
-        send_text(
-            self.transport,
-            &ServerMessage::Stt {
-                session_id: session_id.clone(),
-                text: user_text.to_string(),
-            },
-        )
-        .await?;
-        // 早发 llm 状态：刷新设备 last_incoming_time_，避免 LLM 首字等待期被 ESP IsTimeout() 断连。
-        // （协议约定 llm 消息仅做表情同步，回复正文走 tts.sentence_start。）
-        send_text(
-            self.transport,
-            &ServerMessage::Llm {
-                session_id: session_id.clone(),
-                emotion: Some("neutral".to_string()),
-                text: None,
-            },
-        )
-        .await?;
+        Self::send_stt_and_llm_heartbeat(self.transport, &session_id, user_text).await?;
 
         let t0 = std::time::Instant::now();
         // 本轮上下文：人格 + 记忆召回（**在 LLM 之前**，且召回失败不影响继续）

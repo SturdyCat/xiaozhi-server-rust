@@ -28,6 +28,12 @@ const DEFAULT_LLM_ENGINE: &str = "openai";
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct LlmConfig {
+    /// 总开关（`[llm].enabled`，默认 `true`）。`false` = **回声模式**：技能级联
+    /// （command/nlu 两级本地识别）照常工作、命中照常执行；**未命中**时不调云端 LLM，
+    /// 把 ASR 识别文本原样 TTS 下发（回声）——用于验证 ASR→TTS 链路。
+    /// 回声轮不写对话历史、不做记忆写入；热生效档位 NextSession（会话开始刷新）。
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
     /// 实现 id（`[llm].engine`，约定见 `crate::config` 模块文档）；空 = 默认 `openai`。
     #[serde(default)]
     pub engine: String,
@@ -77,6 +83,11 @@ fn default_temperature() -> f32 {
 }
 
 fn default_stream() -> bool {
+    true
+}
+
+/// `[llm].enabled` 默认 `true`（关闭 = 技能未命中时回声 ASR 文本，见字段注释）。
+fn default_enabled() -> bool {
     true
 }
 
@@ -217,6 +228,7 @@ pub fn build_llm(cfg: &LlmConfig) -> Llm {
 impl Default for LlmConfig {
     fn default() -> Self {
         LlmConfig {
+            enabled: default_enabled(),
             engine: String::new(), // 空 → engine_id() 取默认；normalize() 会补全
             api_base: default_api_base(),
             api_key: String::new(),

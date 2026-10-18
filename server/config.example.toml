@@ -146,6 +146,9 @@ voice = "xiaoyan"
 [llm]
 # 引擎选择（P4 约定，可选 openai）；改后对新会话生效。
 engine = "openai"
+# 总开关（默认 true，新会话生效）：false = 回声模式——技能级联（command/nlu）照常，
+# 未命中时不调云端 LLM，把 ASR 文本原样 TTS 回放（测试 ASR→TTS 链路用；不写历史/记忆）。
+enabled = true
 # LLM 恒为 OpenAI 兼容 Responses API（HTTP），无 mock。
 # OpenAI **Responses API** 端点（POST /v1/responses，非 chat/completions）；
 # 请求体为 model/instructions/input[]/stream，SSE 流式见下方 stream。

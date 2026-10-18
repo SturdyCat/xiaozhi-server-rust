@@ -109,15 +109,27 @@ pub(super) const CAPABILITY_COMMON_FIELDS: &[(
     (
         Capability::Llm,
         &["llm"],
-        &[FieldSchema {
-            key: "engine",
-            label: "LLM 实现",
-            kind: FieldKind::Enum(&["openai"]),
-            default_hint: "openai",
-            help: "选择 `[llm]` 的实现；当前只有 OpenAI 兼容 Responses API。改后新会话生效。",
-            hot: HotReload::NextSession,
-            required: true,
-        }],
+        &[
+            FieldSchema {
+                key: "enabled",
+                label: "启用 LLM",
+                kind: FieldKind::Bool,
+                default_hint: "true",
+                help: "false = 回声模式：技能级联照常，未命中时不调云端 LLM，\
+                        ASR 文本原样 TTS 回放（测试 ASR→TTS 链路用）。新会话生效。",
+                hot: HotReload::NextSession,
+                required: false,
+            },
+            FieldSchema {
+                key: "engine",
+                label: "LLM 实现",
+                kind: FieldKind::Enum(&["openai"]),
+                default_hint: "openai",
+                help: "选择 `[llm]` 的实现；当前只有 OpenAI 兼容 Responses API。改后新会话生效。",
+                hot: HotReload::NextSession,
+                required: true,
+            },
+        ],
     ),
     (
         Capability::FullChain,

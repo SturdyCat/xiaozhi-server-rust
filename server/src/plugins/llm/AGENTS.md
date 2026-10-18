@@ -6,6 +6,7 @@
 - 失败按[具名类别](<failure.rs>)路由，不解析错误文案。超时分建连/请求兜底/流空闲，重试由[装饰器](<retry.rs>)执行，有次数与总预算。
 - 已吐文本后不重试，避免重复播报；取消不重试，空回复不是正常成功。失败经会话兜底而非静默。
 - usage 是 token 口径，不是金额；估算与真实上游用量区分，CJK 不能照搬四字符一 token。
+- `[llm].enabled` 是回声测试开关（默认 true）：false 时技能级联照常、未命中不调 LLM，ASR 文本原样 TTS 回放（会话侧入口 `session/reply.rs::respond`；不写历史/记忆）；档位 NextSession、不进设备 overlay。
 - 新 provider 必须实现 TurnPrompt 和流式取消契约，并覆盖 SSE、失败分类、空回复、重试边界与用量测试。
 
 回归：`failure/tests.rs`、`openai/tests.rs`、`retry/tests.rs`。人格与提示词组装见[soul](<../soul/AGENTS.md>)、[prompt](<../prompt/AGENTS.md>)。
