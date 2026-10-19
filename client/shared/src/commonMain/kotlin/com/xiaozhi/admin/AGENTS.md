@@ -10,11 +10,13 @@
 - 页面/配置分区由[AdminNav](<AdminNav.kt>)和[ConfigSections](<ConfigSections.kt>)常量表驱动，id 稳定、order 确定。新增分区同时补渲染分支。
 - Tabs/PageList 显式提供 pageItemWidth/Height；滚动事件回传 Tabs.scrollParams，点击 tab 调 scrollToPageIndex。不自画指示器。
 - 嵌套 DSL 先 `val ctx=this` 再显式访问 Pager；复用渲染为文件级 ViewContainer 扩展，ViewBuilder 显式传接收者。observable 在 attr/vif 闭包内读取才被跟踪。
+- 可点击目标（侧边栏项/标签页/按钮/下拉与选项行/健康跳转行）一律 `attr { cursor(CursorType.POINTER) }`；core 的 cursor prop 仅 macOS 原生直读，web 端靠 h5App 的 `WebCursorPropHandler` 外部处理器落 `style.cursor`，别在业务里散写 CSS。
 - 官方 compose Button 负责居中；不塞子节点 loading 菊花。NMAllResponse.data 非空，不复制恒假的 data==null 判断。
 
 ## 表单与网络契约
 
 - [ConfigFormState](<ConfigFormState.kt>)保存草稿，[fill](<ConfigFormFill.kt>)映射读取；密钥只读 presence、写入 putSecret，空草稿不发送。新增密钥与服务端 SECRET_PATHS 同批改。
+- 整型字段用 labeledIntField、浮点字段用 labeledDecimalField（[AdminFormControls](<AdminFormControls.kt>)，输入侧实时剥离非法字符）：裸 labeledField 留给文本/密钥——整数字段混入脏输入会让 `toIntOrNull() ?: 默认值` 把错误静默存成默认值。
 - hot/字段提示由[FormSchemaState](<FormSchemaState.kt>)消费服务端 schema，不手写另一套档位。schema 不是自动布局，engine/preset 可选项仍需两端同步。
 - 409 保留草稿，显式“重新加载”，不静默覆盖。preset 应用复用服务端配置管线；overlay 编辑只提交设备增量，不能混成全局整份配置。
 - NetworkModule 只支持 GET/POST，使用服务端 POST 别名；curl 的 PUT/DELETE 能用不等于页面可用。
@@ -41,7 +43,7 @@
 | 概览 | `GET /api/stats` + `/api/plugins` | 设备在线数、活会话、11 个能力健康（degraded/failed 可点击跳配置） |
 | 测试台 | —（仅 macOS 客户端） | 依赖原生麦克风/音频链路，`NavDescriptor.macOnly`：web 不显示该菜单；端到端语音测试用 macOS 客户端 |
 | 设备 | `GET /api/devices` | 连过的设备、协商参数、上次会话为什么断；消息注入、个性化配置入口 |
-| EchoMuse | `GET /api/echomuse/devices` | EchoMuse 设备批准制登记（在线/离线、版本、base_os）；批准、重启、下发 WiFi 配置、唤醒词设置（离线可保存，上线自动推送） |
+| EchoMuse | `GET /api/echomuse/devices` + `/devices/wait` | EchoMuse 设备批准制登记（在线/离线、版本、base_os）；批准、重启、下发 WiFi 配置、唤醒词设置（离线可保存，上线自动推送）、删除记录（清理 mock 设备）；时间戳本地格式化；页面停留期间经 `/wait` 事件保持长挂（有变化才回包）实时刷新，无固定轮询 |
 | 会话 | `GET /api/sessions` | 此刻活着的连接与阶段（聆听/思考/说话） |
 | 对话记录 | `GET /api/conversations` | 最近聊了什么（内存环形，非持久化） |
 | 用量 | `GET /api/usage` | 令牌去向、记忆/人格把上下文撑大了多少 |
@@ -64,7 +66,7 @@
 | `GET /api/memory/status`、`POST /api/memory/{recall,maintain,clear,rag/reindex}` | 记忆状态 / 手动试召回 / 立即维护 / 清空 / RAG 索引重建 |
 | `GET /api/soul/presets`、`POST /api/soul/preview` | 人格预设清单 / 最终提示词预览 |
 | `POST /api/devices/{id}/inject` | 设备消息注入（文本作为用户话语走完整管线） |
-| `GET /api/echomuse/devices`、`POST /api/echomuse/devices/{id}/{approve,command,settings}` | EchoMuse 设备：列表 / 批准（body `label`）/ 下发指令（`reboot`、`wifi`，202 已排队、409 设备离线）/ 唤醒词设置（白名单部分更新，在线 202 `delivered:true`、离线 200 已保存） |
+| `GET /api/echomuse/devices`、`GET /api/echomuse/devices/wait?after=<n>`、`POST /api/echomuse/devices/{id}/{approve,command,settings,delete}` | EchoMuse 设备：列表（含 `version` 游标）/ 变更长挂（事件保持，变化立即回、无变化 25s 超时，管理台实时刷新用）/ 批准（body `label`）/ 下发指令（`reboot`、`wifi`，202 已排队、409 设备离线）/ 唤醒词设置（白名单部分更新，在线 202 `delivered:true`、离线 200 已保存）/ 删除登记记录（`delete`，仅 GET/POST 故走 POST 别名） |
 | `GET /api/metrics`、`GET /api/usage` | 延迟大盘 / 令牌用量（内存态） |
 
 ```bash
