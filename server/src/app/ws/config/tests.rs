@@ -515,3 +515,68 @@ fn partial_update_survives_disk_roundtrip() {
     assert_eq!(loaded.aiui.pace_ms, 12);
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// GET 回包的浮点噪声清理：`Config` 浮点字段全是 `f32`，`to_value` 会把
+/// `0.3f32` 加宽成 `0.30000001192092896`（`Value::Number` 只存 f64），
+/// 管理台表单回填就显示巨长小数。清理后必须回到 f32 最短表示。
+#[test]
+fn get_body_f32_float_noise_is_cleaned() {
+    let cfg = full_test_config();
+    let mut body = serde_json::to_value(&cfg).unwrap();
+    assert!(
+        serde_json::to_string(&body)
+            .unwrap()
+            .contains("0.300000011"),
+        "前置：未清理的 to_value 回包确实含 f32 加宽噪声"
+    );
+    super::clean_floats::clean_widened_f32(&mut body);
+
+    let text = serde_json::to_string(&body).unwrap();
+    assert!(
+        !text.contains("0.300000011"),
+        "GET 回包不得含 f32 加宽噪声: {text}"
+    );
+    assert_eq!(
+        body["llm"]["temperature"].as_f64().unwrap(),
+        0.3,
+        "0.3f32 应收短为 0.3"
+    );
+    assert_eq!(
+        body["memory"]["extractor"]["temperature"].as_f64().unwrap(),
+        0.3,
+        "嵌套段（记忆抽取温度）同样被清理"
+    );
+    // 数值等价性：清理只是表示变化，回读进 f32 字段仍是同一个值。
+    let back: Config = serde_json::from_value(body).unwrap();
+    assert_eq!(back.llm.temperature, cfg.llm.temperature);
+    assert_eq!(
+        back.memory.extractor.temperature,
+        cfg.memory.extractor.temperature
+    );
+}
+
+/// 清理必须无损：客户端原生的 f64（非 f32 加宽产物）不得被改动；
+/// 整数保持整数形态（端口/条数不得变 `8000.0`）；整数形浮点保住浮点形态
+///（`speed: 1.0` 不被写成 `1`）；嵌套数组同样覆盖；字符串内容不误伤。
+#[test]
+fn float_cleaning_preserves_native_f64_and_float_shape() {
+    let mut v = serde_json::json!({
+        "native_f64": 0.7000000001,
+        "one_dot_zero": 1.0f32,
+        "int_field": 8000,
+        "arr": [0.1f32, 2],
+        "s": "0.699999988079071"
+    });
+    super::clean_floats::clean_widened_f32(&mut v);
+    let text = serde_json::to_string(&v).unwrap();
+
+    assert_eq!(
+        v["native_f64"].as_f64().unwrap(),
+        0.7000000001,
+        "非 f32 可表示的 f64 原样保留"
+    );
+    assert_eq!(
+        text,
+        r#"{"arr":[0.1,2],"int_field":8000,"native_f64":0.7000000001,"one_dot_zero":1.0,"s":"0.699999988079071"}"#
+    );
+}

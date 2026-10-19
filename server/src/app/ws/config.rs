@@ -26,6 +26,7 @@ use crate::engine::Engines;
 
 use super::json_ok;
 
+mod clean_floats;
 pub(super) mod device_overlay;
 mod impact;
 pub(super) mod presets;
@@ -241,6 +242,7 @@ pub(super) async fn get_config(State(engines): State<Arc<Engines>>) -> Response 
                 .into_response();
         }
     };
+    clean_floats::clean_widened_f32(&mut body);
     body["revision"] = serde_json::json!(config_revision(&cfg));
     // 密钥打码：明文字段摘除，只留 `has_<field>` presence 标记（客户端据此显示"已配置"）
     redact_secrets(&mut body);
