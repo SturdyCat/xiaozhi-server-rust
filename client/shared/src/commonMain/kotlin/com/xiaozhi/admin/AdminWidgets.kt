@@ -2,6 +2,7 @@ package com.xiaozhi.admin
 
 import com.tencent.kuikly.core.base.Border
 import com.tencent.kuikly.core.base.BorderStyle
+import com.tencent.kuikly.core.base.CursorType
 import com.tencent.kuikly.core.base.ViewBuilder
 import com.tencent.kuikly.core.base.ViewContainer
 import com.tencent.kuikly.core.directives.vfor
@@ -48,6 +49,8 @@ fun ViewContainer<*, *>.dropdownField(
             borderRadius(AdminShape.radiusSm)
             paddingLeft(AdminSpace.sm)
             paddingRight(AdminSpace.sm)
+            // 下拉框是点击目标（弹选择层）：悬停指针
+            cursor(CursorType.POINTER)
         }
         event { click { onToggle() } }
         Text {
@@ -104,6 +107,8 @@ fun ViewContainer<*, *>.dropdownField(
                                     alignItemsCenter()
                                     paddingLeft(AdminSpace.sm)
                                     paddingRight(AdminSpace.md)
+                                    // 选项行可点击选中
+                                    cursor(CursorType.POINTER)
                                 }
                                 event {
                                     click {
@@ -170,6 +175,8 @@ fun ViewContainer<*, *>.waveformPlayer(
             flexDirectionRow()
             alignItemsCenter()
             marginTop(AdminSpace.fieldGap)
+            // 整块可点（含波形区）切换播放/停止
+            cursor(CursorType.POINTER)
         }
         event { click { if (enabled()) onToggle() } }
         // 播放/停止圆钮（禁用=中性灰，与按钮家族禁用态一致）

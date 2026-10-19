@@ -2,6 +2,7 @@ package com.xiaozhi.admin
 
 import com.tencent.kuikly.core.base.Border
 import com.tencent.kuikly.core.base.BorderStyle
+import com.tencent.kuikly.core.base.CursorType
 import com.tencent.kuikly.core.base.PagerScope
 import com.tencent.kuikly.core.base.ViewBuilder
 import com.tencent.kuikly.core.base.ViewContainer
@@ -239,6 +240,8 @@ fun ViewContainer<*, *>.tabbedPanel(
                     marginLeft(10f)
                     marginRight(10f)
                     allCenter()
+                    // tab 是点击目标：悬停指针
+                    cursor(CursorType.POINTER)
                 }
                 event {
                     click { ui.switchTo(index) }

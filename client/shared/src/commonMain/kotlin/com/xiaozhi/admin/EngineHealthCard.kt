@@ -1,5 +1,6 @@
 package com.xiaozhi.admin
 
+import com.tencent.kuikly.core.base.CursorType
 import com.tencent.kuikly.core.base.ViewContainer
 import com.tencent.kuikly.core.directives.vfor
 import com.tencent.kuikly.core.directives.vif
@@ -52,6 +53,10 @@ private fun ViewContainer<*, *>.healthBannerRow(row: HealthRow, onJump: (section
             alignItemsCenter()
             paddingTop(AdminSpace.xs)
             paddingBottom(AdminSpace.xs)
+            // 可跳转行悬停指针（不可跳转行保持默认箭头）
+            if (row.jumpable) {
+                cursor(CursorType.POINTER)
+            }
         }
         // 可跳转的行给可点击语义（voice 这类无 section 的偏离行只展示）
         if (row.jumpable) {
@@ -178,6 +183,10 @@ private fun ViewContainer<*, *>.healthCardRow(row: HealthRow, onJump: (section: 
                 attr {
                     flexDirectionRow()
                     alignItemsCenter()
+                    // 可跳转行悬停指针
+                    if (row.jumpable) {
+                        cursor(CursorType.POINTER)
+                    }
                 }
                 if (row.jumpable) {
                     event { click { onJump(row.configSection) } }

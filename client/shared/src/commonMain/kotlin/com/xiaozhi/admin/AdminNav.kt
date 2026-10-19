@@ -1,5 +1,6 @@
 package com.xiaozhi.admin
 
+import com.tencent.kuikly.core.base.CursorType
 import com.tencent.kuikly.core.base.ViewContainer
 import com.tencent.kuikly.core.directives.vif
 import com.tencent.kuikly.core.views.Text
@@ -117,6 +118,8 @@ fun ViewContainer<*, *>.sidebarItem(
             paddingRight(AdminSpace.md)
             borderRadius(AdminShape.radiusMd)
             backgroundColor(if (isSelected()) AdminColors.sidebarSelectedBg else AdminColors.transparent)
+            // 桌面端悬停指针：菜单是点击目标，不是文本输入区（web 靠 h5App 的 cursor 处理器落 CSS）
+            cursor(CursorType.POINTER)
         }
         event { click { if (enabled) onClick() } }
         // 左侧选中指示条（3px 品牌绿竖条，vif 响应式）

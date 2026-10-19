@@ -1,5 +1,6 @@
 package com.xiaozhi.admin
 
+import com.tencent.kuikly.core.base.CursorType
 import com.tencent.kuikly.core.base.ViewContainer
 import com.tencent.kuikly.core.directives.vfor
 import com.tencent.kuikly.core.directives.vif
@@ -142,6 +143,8 @@ private fun ViewContainer<*, *>.configTabBar(form: ConfigFormState) {
                     marginLeft(AdminSpace.md)
                     marginRight(AdminSpace.md)
                     allCenter()
+                    // tab 是点击目标：悬停显手型而非文本 I-beam
+                    cursor(CursorType.POINTER)
                 }
                 event {
                     click { form.configSection = ConfigSections.firstSectionIn(tabId) }

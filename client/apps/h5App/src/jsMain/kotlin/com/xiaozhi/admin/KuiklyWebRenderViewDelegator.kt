@@ -21,6 +21,9 @@ class KuiklyWebRenderViewDelegator : KuiklyRenderViewDelegatorDelegate {
 
     override fun registerExternalModule(kuiklyRenderExport: IKuiklyRenderExport) {
         super.registerExternalModule(kuiklyRenderExport)
+        // web 端补齐 cursor 样式（base-js 不消费 "cursor" prop）：业务侧 attr { cursor(...) }
+        // 经此处理器落到 DOM style.cursor，菜单/Tabs/按钮等点击目标悬停显手型——见 WebCursorPropHandler
+        kuiklyRenderExport.viewPropExternalHandlerExport(WebCursorPropHandler())
         // 注册自定义模块（示例）
         // kuiklyRenderExport.moduleExport(KRBridgeModule.MODULE_NAME) { KRBridgeModule() }
     }
