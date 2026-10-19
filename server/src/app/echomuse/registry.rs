@@ -153,6 +153,19 @@ impl Registry {
         Some(snapshot)
     }
 
+    /// 删除一台设备的登记记录（管理面「删除记录」动作，清理 mock/联调设备等）。
+    /// 只删静态登记：在线设备的会话不受影响，设备再次 register 会重新登记。
+    /// 返回删除前是否存在（HTTP 层据此回 200/404）。
+    pub fn remove(&self, device_id: &str) -> bool {
+        let mut guard = self.devices.lock().expect("echomuse registry 锁中毒");
+        let removed = guard.remove(device_id).is_some();
+        drop(guard);
+        if removed {
+            self.save();
+        }
+        removed
+    }
+
     /// 单台记录。
     pub fn get(&self, device_id: &str) -> Option<DeviceRecord> {
         self.devices

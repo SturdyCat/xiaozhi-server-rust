@@ -50,7 +50,11 @@ pub mod transport;
 
 pub(crate) mod admin;
 #[cfg(test)]
+mod admin_tests;
+#[cfg(test)]
 mod ble_tests;
+#[cfg(test)]
+mod hub_tests;
 pub(crate) mod registry;
 pub(crate) mod routes;
 #[cfg(test)]
@@ -63,6 +67,7 @@ use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::sync::watch;
 
 /// `[echomuse]` 配置段：EchoMuse 设备入口开关与凭据。
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -114,8 +119,9 @@ pub enum ControlOut {
 pub type DataOut = Vec<u8>;
 
 /// 一台已通过 register 的设备的交接件，登记在 hub 里存活到会话结束；data 路由
-/// 只认领其中的 [`PendingDevice::data_rx`]（每会话恰一次），其余字段（control/data
-/// 出站口、蓝牙代理链路）供管理面在设备完全在线期间随时使用。
+/// 只认领其中的 [`PendingDevice::data_rx`]（认领后 data 任务退出时经
+/// [`hub_restore_data`] 归还，设备重拨 `/em/data` 不必等下次 register），其余字段
+/// （control/data 出站口、蓝牙代理链路）供管理面在设备完全在线期间随时使用。
 #[derive(Debug)]
 pub struct PendingDevice {
     /// 上行 channel 发送端：data 任务把翻译后的会话帧推给它（会话侧消费）。
@@ -134,12 +140,17 @@ pub struct PendingDevice {
     pub ble: Arc<Mutex<ble::BleLink>>,
 }
 
-/// `hub_claim_data` / `hub_claim_only` 的认领结果：data 任务需要的全部交接件。
+/// data 路由认领 `data_rx` 后 data 任务需要的全部交接件；任务退出时整包经
+/// [`hub_restore_data`] 归还（设备重拨 `/em/data` 立即可再认领，不必等下次 register）。
 pub(crate) struct DataClaim {
+    /// 所属设备（归还时定位 hub 条目）。
+    pub device_id: String,
     /// 上行发送端（data 任务把翻译后的会话帧推入）。
     pub up_tx: UnboundedSender<crate::app::transport::IncomingFrame>,
     /// data 面出站接收端（已从条目取走）。
     pub data_rx: UnboundedReceiver<DataOut>,
+    /// data 面出站发送端探针：归还时校验 hub 条目仍是本会话（未被新 register 替换）。
+    pub data_tx: UnboundedSender<DataOut>,
     /// 蓝牙代理链路（data 任务收发 `0x06`/`0x08` 用；与 hub 条目同享）。
     pub ble: Arc<Mutex<ble::BleLink>>,
 }
@@ -161,6 +172,37 @@ fn hub() -> &'static EchomuseHub {
     HUB.get_or_init(EchomuseHub::default)
 }
 
+/// 设备面变化版本号（进程级 watch 通道）：hub 登记/移除与管理面登记变更时自增。
+/// 管理台没有常驻 WebSocket（Kuikly commonMain 只有 HTTP 能力），`GET
+/// /api/echomuse/devices/wait` 凭它在**有变化时**才回包——事件保持式推送，
+/// 而不是固定间隔轮询。
+static DEVICES_VERSION: OnceLock<watch::Sender<u64>> = OnceLock::new();
+
+fn devices_version_tx() -> &'static watch::Sender<u64> {
+    DEVICES_VERSION.get_or_init(|| watch::channel(0).0)
+}
+
+/// 当前设备面版本号（`devices` 列表回包携带，客户端拿它当 `/wait` 的游标）。
+pub(crate) fn devices_version() -> u64 {
+    *devices_version_tx().borrow()
+}
+
+/// 通知"设备面已变化"（hub 登记/移除、批准/设置/删除登记后调用）。
+/// 两步走，两处都有坑：`send` 在无订阅者时返回 Err 且不更新值（丢更新）；
+/// `send_replace(borrow()+1)` 会自死锁——参数里的读锁 `Ref` 要到调用返回才释放，
+/// 写锁等读者、读者等表达式结束。先取出值再替换。
+pub(crate) fn bump_devices_version() {
+    let tx = devices_version_tx();
+    let next = tx.borrow().wrapping_add(1);
+    tx.send_replace(next);
+}
+
+/// 订阅变化通知（管理面 `/wait` 长挂用；watch 惰性初始化，订阅前已发生的
+/// 变化用版本号数值对齐，不依赖通道回放）。
+pub(crate) fn subscribe_devices_version() -> watch::Receiver<u64> {
+    devices_version_tx().subscribe()
+}
+
 /// 登记（control 侧）；同名旧记录被替换（设备重拨是常态，旧通道随任务退出关闭）。
 fn hub_insert(device_id: &str, entry: PendingDevice) {
     hub()
@@ -168,16 +210,24 @@ fn hub_insert(device_id: &str, entry: PendingDevice) {
         .lock()
         .expect("echomuse hub 锁中毒")
         .insert(device_id.to_string(), entry);
+    // 上线/下线对管理台列表可见（online / connected_secs）。
+    bump_devices_version();
 }
 
-/// 认领 data 面出站接收端（每会话恰一次；已认领/不存在返回 None），条目保留。
+/// 认领 data 面出站接收端（已认领/不存在返回 None），条目保留。
 pub(crate) fn hub_claim_data(device_id: &str) -> Option<DataClaim> {
     let mut guard = hub_iter();
     let entry = guard.get_mut(device_id)?;
     let data_rx = entry.data_rx.take()?;
+    let data_tx = entry
+        .data_tx
+        .clone()
+        .expect("register 构造的条目 data_tx 必在");
     Some(DataClaim {
+        device_id: device_id.to_string(),
         up_tx: entry.up_tx.clone(),
         data_rx,
+        data_tx,
         ble: entry.ble.clone(),
     })
 }
@@ -196,11 +246,37 @@ pub(crate) fn hub_claim_only() -> Option<DataClaim> {
     }
     let entry = guard.get_mut(found.as_deref()?)?;
     let data_rx = entry.data_rx.take()?;
+    let data_tx = entry
+        .data_tx
+        .clone()
+        .expect("register 构造的条目 data_tx 必在");
     Some(DataClaim {
+        device_id: found.expect("上面已写入"),
         up_tx: entry.up_tx.clone(),
         data_rx,
+        data_tx,
         ble: entry.ble.clone(),
     })
+}
+
+/// data 任务退出时归还认领：条目还在（会话未结束）、`data_rx` 未被再次取走、且
+/// 条目仍是本会话的（`data_tx` 同 channel，未被新 register 替换）才放回，供设备
+/// 重拨 `/em/data` 立即再认领；任一不满足则丢弃（新会话自有全新交接件）。
+pub(crate) fn hub_restore_data(
+    device_id: &str,
+    data_rx: UnboundedReceiver<DataOut>,
+    probe: &UnboundedSender<DataOut>,
+) {
+    let mut guard = hub_iter();
+    if let Some(entry) = guard.get_mut(device_id) {
+        let same_session = entry
+            .data_tx
+            .as_ref()
+            .is_some_and(|tx| tx.same_channel(probe));
+        if same_session && entry.data_rx.is_none() {
+            entry.data_rx = Some(data_rx);
+        }
+    }
 }
 
 /// 当前登记快照（只读）。
@@ -252,11 +328,16 @@ pub(crate) fn status_json(enabled: bool) -> serde_json::Value {
 
 /// 会话结束后的清理（control 任务退出时调用；不存在则忽略）。
 fn hub_remove(device_id: &str) {
-    hub()
+    let removed = hub()
         .pending
         .lock()
         .expect("echomuse hub 锁中毒")
-        .remove(device_id);
+        .remove(device_id)
+        .is_some();
+    if removed {
+        // 下线对管理台列表可见（online 消失）。
+        bump_devices_version();
+    }
 }
 
 /// 设备 → 服务器 的 register 负载（只取本项目用到的字段，其余忽略——协议前向兼容）。

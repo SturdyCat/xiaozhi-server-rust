@@ -189,16 +189,15 @@ async fn try_recv_empty_is_none_not_closed() {
 
 // ---- /em/status 状态查询 ----
 
-use std::sync::Mutex;
+use super::hub_tests::HUB_LOCK;
 
 use super::{hub_insert, hub_remove, status_json, PendingDevice};
 
 /// hub 是进程级单例，读写它的测试必须串行（否则 `status_disabled_shape` 会读到
-/// 并行探针）。所有触碰 hub 的测试持锁。
-static HUB_LOCK: Mutex<()> = Mutex::new(());
+/// 并行探针）。锁本体与登记助手见 [`super::hub_tests`]。
 
 /// 借真实 hub 登记一台假设备，测试完清理（hub 是进程级单例，不能留残）。
-fn insert_probe(device_id: &str) {
+pub(super) fn insert_probe(device_id: &str) {
     let (up_tx, _up_rx) = mpsc::unbounded_channel::<IncomingFrame>();
     let (_ctl_tx, _ctl_rx) = mpsc::unbounded_channel::<ControlOut>();
     let (_data_tx, data_rx) = mpsc::unbounded_channel::<Vec<u8>>();
@@ -262,7 +261,7 @@ use super::registry::Registry;
 use super::DeviceRegister;
 
 /// 独立临时文件的 registry（不碰进程级 global；测试完删除落盘文件）。
-fn temp_registry(tag: &str) -> (Registry, std::path::PathBuf) {
+pub(super) fn temp_registry(tag: &str) -> (Registry, std::path::PathBuf) {
     let path = std::env::temp_dir().join(format!(
         "echomuse-reg-test-{}-{}.json",
         tag,
@@ -272,7 +271,7 @@ fn temp_registry(tag: &str) -> (Registry, std::path::PathBuf) {
     (Registry::load(path.clone()), path)
 }
 
-fn reg_load(device_id: &str, version: &str) -> DeviceRegister {
+pub(super) fn reg_load(device_id: &str, version: &str) -> DeviceRegister {
     serde_json::from_str(&format!(
         r#"{{"device_id":"{device_id}","version":"{version}","board":"echo-dot-2","base_os":"emOS 0.10","capabilities":["mic"]}}"#
     ))
@@ -310,6 +309,23 @@ fn registry_upsert_and_roundtrip() {
 }
 
 #[test]
+fn registry_remove_deletes_and_persists() {
+    let (reg, path) = temp_registry("remove");
+    reg.upsert(&reg_load("dev-mock", "1.0"), 100);
+    reg.upsert(&reg_load("dev-real", "2.0"), 200);
+    // 删除存在的记录：true，get/list 落盘后均不可见；别的记录不受影响。
+    assert!(reg.remove("dev-mock"));
+    let reloaded = Registry::load(path.clone());
+    assert!(reloaded.get("dev-mock").is_none());
+    assert!(reloaded.get("dev-real").is_some());
+    assert_eq!(reloaded.list().len(), 1);
+    // 再删同一条：false（HTTP 层转 404）。
+    assert!(!reg.remove("dev-mock"));
+    assert!(!reloaded.remove("dev-mock"));
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
 fn registry_approve_sets_flag_and_label() {
     let (reg, path) = temp_registry("approve");
     reg.upsert(&reg_load("dev-ap-1", "1.0"), 100);
@@ -330,262 +346,6 @@ fn registry_approve_sets_flag_and_label() {
     );
     assert!(reloaded.approve("dev-missing", None).is_none());
     let _ = std::fs::remove_file(&path);
-}
-
-// ---- 管理面（/api/echomuse/*）纯函数决策 ----
-
-use super::admin::{approve as admin_approve, command_plan, device_payload, devices_payload};
-
-/// 登记一台带 ctl 出站口的假在线设备，保留 rx 防通道关闭，测试完清理 hub。
-fn insert_online(device_id: &str) -> mpsc::UnboundedReceiver<ControlOut> {
-    let (up_tx, _up_rx) = mpsc::unbounded_channel::<IncomingFrame>();
-    let (ctl_tx, ctl_rx) = mpsc::unbounded_channel::<ControlOut>();
-    let (data_tx, data_rx) = mpsc::unbounded_channel::<Vec<u8>>();
-    hub_insert(
-        device_id,
-        PendingDevice {
-            up_tx,
-            data_rx: Some(data_rx),
-            since: std::time::Instant::now(),
-            ctl_tx: Some(ctl_tx),
-            data_tx: Some(data_tx),
-            ble: std::sync::Arc::new(std::sync::Mutex::new(super::ble::BleLink::default())),
-        },
-    );
-    ctl_rx
-}
-
-/// data 认领后条目保留（设备完全在线期间管理面 hub_ctl/hub_data/hub_ble 仍可用），
-/// 且每会话只认领一次。
-#[test]
-fn hub_claim_keeps_entry_and_is_once() {
-    use super::{hub_ble, hub_claim_data, hub_ctl, hub_data};
-    let _g = HUB_LOCK.lock().unwrap();
-    let ctl_rx = insert_online("dev-claim-1");
-    // 首次认领成功；条目仍在：ctl/data 出站口与 ble 链路可继续访问。
-    let claim = hub_claim_data("dev-claim-1").expect("首次认领应成功");
-    drop(claim.data_rx);
-    assert!(hub_ctl("dev-claim-1").is_some());
-    assert!(hub_data("dev-claim-1").is_some());
-    assert!(hub_ble("dev-claim-1", |l| l.alloc_req()).is_some());
-    // 二次认领失败（每会话恰一次）。
-    assert!(hub_claim_data("dev-claim-1").is_none());
-    // 不存在的设备认领失败。
-    assert!(hub_claim_data("dev-claim-ghost").is_none());
-    hub_remove("dev-claim-1");
-    assert!(hub_ctl("dev-claim-1").is_none());
-    assert!(hub_data("dev-claim-1").is_none());
-    drop(ctl_rx);
-}
-
-#[test]
-fn devices_payload_merges_hub_online() {
-    let _g = HUB_LOCK.lock().unwrap();
-    let (reg, path) = temp_registry("payload");
-    reg.upsert(&reg_load("dev-on-1", "1.0"), 100);
-    let ctl_rx = insert_online("dev-on-1");
-    let v = devices_payload(true, &reg);
-    assert_eq!(v["enabled"], true);
-    let devices = v["devices"].as_array().unwrap();
-    let a = devices
-        .iter()
-        .find(|d| d["device_id"] == "dev-on-1")
-        .unwrap();
-    assert_eq!(a["online"], true);
-    assert!(a["connected_secs"].is_u64());
-    assert_eq!(a["label"], "dev-on-1");
-    // 单台详情同口径；registry 没有的 hub 设备不出现在列表（registry 全表 left join hub）。
-    assert_eq!(device_payload(&reg, "dev-on-1").unwrap()["online"], true);
-    assert!(device_payload(&reg, "dev-missing").is_none());
-    hub_remove("dev-on-1");
-    drop(ctl_rx);
-    let v = devices_payload(true, &reg);
-    let a = v["devices"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|d| d["device_id"] == "dev-on-1")
-        .unwrap();
-    assert_eq!(a["online"], false);
-    assert!(a["connected_secs"].is_null());
-    let _ = std::fs::remove_file(&path);
-}
-
-#[test]
-fn approve_payload_and_missing_404_path() {
-    let (reg, path) = temp_registry("approve-payload");
-    reg.upsert(&reg_load("dev-ap-2", "1.0"), 100);
-    let v = admin_approve(&reg, "dev-ap-2", &serde_json::json!({"label":"卧室"})).unwrap();
-    assert_eq!(v["approved"], true);
-    assert_eq!(v["label"], "卧室");
-    // registry 无记录 → None（handler 转 404）。
-    assert!(admin_approve(&reg, "dev-missing", &serde_json::json!({})).is_none());
-    let _ = std::fs::remove_file(&path);
-}
-
-#[test]
-fn command_plan_disabled_is_404() {
-    let (code, body, out) = command_plan(false, true, &serde_json::json!({"action":"reboot"}));
-    assert_eq!(code, axum::http::StatusCode::NOT_FOUND);
-    assert_eq!(body["error"], "echomuse disabled");
-    assert!(out.is_none());
-}
-
-#[test]
-fn command_plan_offline_is_409() {
-    let (code, body, out) = command_plan(true, false, &serde_json::json!({"action":"reboot"}));
-    assert_eq!(code, axum::http::StatusCode::CONFLICT);
-    assert_eq!(body["error"], "device offline");
-    assert!(out.is_none());
-}
-
-#[test]
-fn command_plan_reboot_and_wifi_shapes() {
-    let (code, body, out) = command_plan(true, true, &serde_json::json!({"action":"reboot"}));
-    assert_eq!(code, axum::http::StatusCode::ACCEPTED);
-    assert_eq!(body["queued"], true);
-    match out {
-        Some(ControlOut::Json(s)) => {
-            let v: serde_json::Value = serde_json::from_str(&s).unwrap();
-            assert_eq!(v["type"], "reboot");
-        }
-        other => panic!("reboot 应产出 Json 下发，实际 {other:?}"),
-    }
-    let (code, _, out) = command_plan(
-        true,
-        true,
-        &serde_json::json!({"action":"wifi","ssid":" home ","psk":"secret"}),
-    );
-    assert_eq!(code, axum::http::StatusCode::ACCEPTED);
-    match out {
-        Some(ControlOut::Json(s)) => {
-            let v: serde_json::Value = serde_json::from_str(&s).unwrap();
-            assert_eq!(v["type"], "wifi_change");
-            assert_eq!(v["ssid"], "home"); // trim 生效
-            assert_eq!(v["psk"], "secret");
-        }
-        other => panic!("wifi 应产出 Json 下发，实际 {other:?}"),
-    }
-}
-
-#[test]
-fn command_plan_bad_requests_are_400() {
-    let (code, _, out) = command_plan(true, true, &serde_json::json!({"action":"leds"}));
-    assert_eq!(code, axum::http::StatusCode::BAD_REQUEST);
-    assert!(out.is_none());
-    let (code, _, out) = command_plan(true, true, &serde_json::json!({"action":"wifi","psk":"x"}));
-    assert_eq!(code, axum::http::StatusCode::BAD_REQUEST);
-    assert!(out.is_none());
-}
-
-// ---- 管理面 settings（唤醒词配置） ----
-
-use super::admin::{filter_settings, settings_plan};
-use axum::http::StatusCode;
-
-#[test]
-fn filter_settings_allowlist_and_types() {
-    let (ok, err) = filter_settings(&serde_json::json!({
-        "owwThreshold": 0.55, "wakeWordEnabled": false, "owwModel": "alexa", "wakeMic": 0
-    }));
-    assert!(err.is_none());
-    assert_eq!(ok.len(), 4);
-    // 白名单外的键整体拒绝；类型错也拒绝。
-    assert!(filter_settings(&serde_json::json!({"volume": 5}))
-        .1
-        .is_some());
-    assert!(
-        filter_settings(&serde_json::json!({"owwThreshold": "high"}))
-            .1
-            .is_some()
-    );
-    assert!(filter_settings(&serde_json::json!({"owwModel": true}))
-        .1
-        .is_some());
-    assert!(filter_settings(&serde_json::json!([1])).1.is_some());
-    // 蓝牙代理的每设备开关在白名单内（bool），类型错拒绝。
-    let (ok, err) = filter_settings(
-        &serde_json::json!({"bleProxyEnabled": true, "bleProxyConnections": false}),
-    );
-    assert!(err.is_none());
-    assert_eq!(ok.len(), 2);
-    assert!(
-        filter_settings(&serde_json::json!({"bleProxyEnabled": "on"}))
-            .1
-            .is_some()
-    );
-}
-
-#[test]
-fn settings_plan_offline_persists_without_delivery() {
-    let (code, body, outs) =
-        settings_plan(true, false, true, &serde_json::json!({"owwThreshold": 0.4}));
-    assert_eq!(code, StatusCode::OK);
-    assert_eq!(body["persisted"], true);
-    assert_eq!(body["delivered"], false);
-    assert!(outs.is_empty());
-}
-
-#[test]
-fn settings_plan_online_queues_config_with_wakewordenabled_separate() {
-    let (code, body, outs) = settings_plan(
-        true,
-        true,
-        true,
-        &serde_json::json!({"owwOnDevice": false, "wakeWordEnabled": false}),
-    );
-    assert_eq!(code, StatusCode::ACCEPTED);
-    assert_eq!(body["delivered"], true);
-    assert_eq!(outs.len(), 2, "wakeWordEnabled 按协议单独一条 config");
-    let texts: Vec<String> = outs
-        .into_iter()
-        .map(|o| match o {
-            ControlOut::Json(t) => t,
-            _ => panic!("应为 Json"),
-        })
-        .collect();
-    let first: serde_json::Value = serde_json::from_str(&texts[0]).unwrap();
-    assert_eq!(first["type"], "config");
-    assert_eq!(first["owwOnDevice"], false);
-    // 基线键仍在（streamReply），wakeWordEnabled 不混入存储配置条。
-    assert_eq!(first["streamReply"], true);
-    assert!(first.get("wakeWordEnabled").is_none());
-    let second: serde_json::Value = serde_json::from_str(&texts[1]).unwrap();
-    assert_eq!(second["wakeWordEnabled"], false);
-}
-
-#[test]
-fn settings_plan_gates() {
-    let body = serde_json::json!({"owwThreshold": 0.5});
-    let (code, _, outs) = settings_plan(false, true, true, &body);
-    assert_eq!(code, StatusCode::NOT_FOUND);
-    assert!(outs.is_empty());
-    let (code, _, _) = settings_plan(true, true, false, &body);
-    assert_eq!(code, StatusCode::NOT_FOUND);
-    let (code, _, _) = settings_plan(true, true, true, &serde_json::json!({"nope": 1}));
-    assert_eq!(code, StatusCode::BAD_REQUEST);
-}
-
-#[test]
-fn registry_settings_roundtrip_and_payload() {
-    let (reg, path) = temp_registry("settings");
-    reg.upsert(&reg_load("dev-set", "1.0"), 100);
-    let mut m = std::collections::HashMap::new();
-    m.insert("owwModel".to_string(), serde_json::json!("alexa"));
-    let rec = reg.set_settings("dev-set", m.clone()).unwrap();
-    assert_eq!(rec.settings["owwModel"], "alexa");
-    // 落盘往返。
-    let reloaded = Registry::load(path);
-    assert_eq!(
-        reloaded.get("dev-set").unwrap().settings["owwModel"],
-        "alexa"
-    );
-    // payload 暴露 settings。
-    assert_eq!(
-        reloaded.get("dev-set").unwrap().payload(None)["settings"]["owwModel"],
-        "alexa"
-    );
-    assert!(reg.set_settings("ghost", m).is_none());
 }
 
 // ---- mDNS 广播地址解析（纯动态探测，无配置项） ----

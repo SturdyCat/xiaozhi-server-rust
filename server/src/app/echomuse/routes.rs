@@ -33,7 +33,7 @@ use super::frames::{self, UplinkFrame};
 use super::transport::EchomuseTransport;
 use super::{
     ack_message, config_baseline, config_push_with, hub_claim_data, hub_claim_only, hub_insert,
-    hub_remove, session_params, ControlOut, DataOut, DeviceRegister,
+    hub_remove, hub_restore_data, session_params, ControlOut, DataOut, DeviceRegister,
 };
 
 /// data 面入站消息认领失败时的日志前缀（诊断"只连了 data 没 control"类配置错误）。
@@ -307,16 +307,25 @@ async fn em_data(
             return;
         };
         let ble_on = engines.config.echomuse.ble_proxy;
-        data_loop(socket, claim, ble_on).await;
+        // data 任务退出时归还认领：链路闪断重拨立即可再认领，不必等下次 register。
+        if let Some(claim) = data_loop(socket, claim, ble_on).await {
+            hub_restore_data(&claim.device_id, claim.data_rx, &claim.data_tx);
+        }
     })
 }
 
 /// data 任务：上行帧翻译（PCM→Opus、哨兵→listen stop、蓝牙代理 0x06/0x08 采集）
-/// + 下行帧直发。
-async fn data_loop(socket: WebSocket, claim: super::DataClaim, ble_on: bool) {
+/// + 下行帧直发。返回 `Some(claim)` 表示应把认领归还 hub（所有退出路径都归还）。
+async fn data_loop(
+    socket: WebSocket,
+    claim: super::DataClaim,
+    ble_on: bool,
+) -> Option<super::DataClaim> {
     let super::DataClaim {
+        device_id,
         up_tx,
         mut data_rx,
+        data_tx,
         ble,
     } = claim;
     let (mut sink, mut stream) = socket.split();
@@ -324,7 +333,13 @@ async fn data_loop(socket: WebSocket, claim: super::DataClaim, ble_on: bool) {
         Ok(enc) => enc,
         Err(e) => {
             tracing::warn!("[echomuse] 上行编码器创建失败: {e}");
-            return;
+            return Some(super::DataClaim {
+                device_id,
+                up_tx,
+                data_rx,
+                data_tx,
+                ble,
+            });
         }
     };
     // 上行 PCM 暂存：攒满一个 60ms 帧（960 样本）编一包 Opus。
@@ -392,6 +407,13 @@ async fn data_loop(socket: WebSocket, claim: super::DataClaim, ble_on: bool) {
     }
     // 链路收尾：丢弃全部待应答 GATT 请求（等待方立即得到"离线"）并清空采集数据。
     ble.lock().expect("echomuse ble link 锁中毒").reset();
+    Some(super::DataClaim {
+        device_id,
+        up_tx,
+        data_rx,
+        data_tx,
+        ble,
+    })
 }
 
 /// 把 S16_LE 字节推入 i16 缓冲（截掉奇数尾巴）。
