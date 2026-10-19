@@ -314,7 +314,12 @@ class Console:
     """
 
     def __init__(self, port: str):
-        self.fd = os.open(port, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+        self.port = port
+        self._open()
+        self.buf = ""
+
+    def _open(self) -> None:
+        self.fd = os.open(self.port, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
         attrs = termios.tcgetattr(self.fd)
         iflag, oflag, cflag, lflag, ispeed, ospeed, cc = attrs
         iflag &= ~(termios.IGNBRK | termios.BRKINT | termios.PARMRK
@@ -329,6 +334,16 @@ class Console:
         # 直接覆盖为 raw（速率沿用 attrs 里驱动设置的默认值）
         termios.tcsetattr(self.fd, termios.TCSANOW,
                           [iflag, oflag, cflag, lflag, ispeed, ospeed, cc])
+
+    def reopen(self) -> None:
+        """关掉重开同一串口节点（对应官方 push_file.py 的通道重连：
+        shell 会话持续负载 ~50s 会掉，USB 侧的等价恢复就是重开 tty）。"""
+        try:
+            os.close(self.fd)
+        except OSError:
+            pass
+        time.sleep(0.5)  # 留给 macOS 串口栈释放节点
+        self._open()
         self.buf = ""
 
     def send(self, s: str) -> None:
