@@ -12,6 +12,7 @@
 |---|---|---|
 | `enabled` | `false` | 挂载 `/em/control`、`/em/data` 路由并广播 mDNS `_emcontroller._tcp`；关闭时零行为变化 |
 | `token` | 空 | 校验设备 `X-Em-Token` 头；留空不校验。生产建议设置（同网段任何设备都能按此协议连进来） |
+| `ble_proxy` | `false` | 开启蓝牙代理：ack 向声明了 `ble_connect` 的设备回声明 `ble_connect` + `ble_adverts_data`，接入时推送 `bleProxyEnabled`/`bleProxyConnections`（每设备 settings 可覆盖）；关闭时 ack 不声明、`0x06`/`0x08` 按未知帧忽略、管理面 BLE 端点 404——零行为变化 |
 
 mDNS 广播地址**无配置项**：启动时动态探测部署机默认出口的局域网 IPv4，部署在哪台机器、是什么 IP 就广播什么。docker 容器部署会探测到容器内网 IP（设备连不上），请改用 host 网络部署。
 
@@ -29,13 +30,29 @@ mDNS 广播地址**无配置项**：启动时动态探测部署机默认出口�
 | `tts stop` 文本 | 残段补齐 + `0x03` speaker EOS | 其余服务器 JSON（stt/llm/tts 句起）设备不消费，不下发 |
 | 会话 `close` | `Shutdown` → control 任务退出、连接关闭 | 与 WsTransport 的粘滞 `Closed` 同语义 |
 
-能力协商：`ack.features` 只声明 `mic/speaker/leds/buttons/oww_trigger/oww_local_only`。**不声明** `listen_session`（不走 `0x07` 私听会话）、`audio_mix`（不做音乐面）、`ble_connect`（不做 BLE 代理）——按协议"未声明即降级"静默关闭；未知帧型/未知 JSON 双向忽略。
+能力协商：`ack.features` 只声明 `mic/speaker/leds/buttons/oww_trigger/oww_local_only`。**不声明** `listen_session`（不走 `0x07` 私听会话）、`audio_mix`（不做音乐面）——按协议"未声明即降级"静默关闭；未知帧型/未知 JSON 双向忽略。`ble_connect` + `ble_adverts_data` 仅在 `[echomuse].ble_proxy=true` **且**设备 register 声明 `ble_connect` 时条件追加（协议要求双向声明才启用）。
+
+## 蓝牙代理（`ble_proxy=true`，EchoMuse `ble_connect` / `ble_adverts_data`）
+
+把 Dot 当作服务端的 **BLE 代理**：设备侧被动扫描 + 最多 3 条 GATT 链接（协议上限），服务端采集并直驱外围 IoT 设备。协议权威来源同上（`0x06`/`0x08` 帧、GATT 请求表与错误码清单），服务端实现见 `server/src/app/echomuse/ble.rs`。
+
+- **采集**：设备把被动扫描的广播批次经 `0x06` 帧上报（条目 `{"addr","addrType","rssi","data"(base64)}`，旧固件回退 control 面 `ble_adverts` JSON，同样接收），服务端按 addr 合并并附 `seenAt`，上限 256 条按 seenAt 淘汰；`slots` 事件（连接槽位 `free/limit/addrs`）与 `notify`/`disconnected` 事件存进每设备事件环（容量 100，`state` 端点取尾 50）。
+- **控制**：管理面 `POST .../ble/gatt` 按 body 构造 `0x08` 请求下发，`req` 自动分配，等待设备同号 `result`（connect/disconnect/services/read/write/slots 六种 `t`；`value` 走标准 base64）后原样返回——`ok:false` 也是有效应答（设备自守时：connect 20s、ATT 30s 超时先答；服务器 35s 只兜链路静默死亡）。
+- **启用链**：配置开启 + 设备声明 `ble_connect` + 设备配置 `bleProxyEnabled`/`bleProxyConnections` 两键都在（接入时基线推送 `true`，单台 POST settings 可覆盖，例如关连接留扫描）。GATT 请求只对 registry 里最新 register 声明过 `ble_connect` 的设备下发（409 `device not ble capable`）。
+- **生命周期**：BLE 链路状态挂在设备会话上——control 连接断开设备即按协议丢弃全部 BLE 链接，服务端同刻清状态，等待中的 GATT 请求立即按离线回错。hub 条目存活到会话结束（data 认领只取走 `data_rx`），设备完全在线期间管理面随时可下发。
+- **不做**：无配对/加密（协议规定 Security Request 答 Pairing Not Supported，加密属性 `att:5` 失败）、不做 HA/ESPHome 转发面（那是官方控制器的用法）、`0x06` 遵守"bounded turn 期间不写遥测"的设备侧规则（服务端不干预）。
+
+### BLE 管理面 API（同 `/api/echomuse/*` 鉴权；`ble_proxy=false` 时统一 404 `{"error":"ble proxy disabled"}`）
+
+- `GET /api/echomuse/devices/{id}/ble/adverts` → `{"device_id","updatedAt","count","adverts":[{"addr","addrType","rssi","data","seenAt"}...]}`（按 addr 排序；离线 409）。
+- `GET /api/echomuse/devices/{id}/ble/state` → `{"device_id","slots":{free,limit,addrs}|null,"events":[notify|disconnected ...]}`（最旧在前；离线 409）。
+- `POST /api/echomuse/devices/{id}/ble/gatt`，body `{"t":"connect","addr":"aa:bb:cc:dd:ee:ff","addr_type":0}` / `{"t":"read","addr":...,"handle":3}` / `{"t":"write","addr":...,"handle":3,"value":"AQID","response":true}` / `{"t":"slots"}` 等 → 200 + 设备 result 原文；body 非法 400，设备未声明能力/离线 409，等待超时 504。
 
 会话入口无 xiaozhi hello 交换：`session_params()` 固定构造参数后直接进 `run_session`（`app::echomuse::routes::control_session`）。
 
 ## 刻意不做的范围
 
-`/shell` 面、TLS/wss、音乐面（`0x04/0x05` 下行）、BLE、Sendspin、WiFi 配置推送、设备音频链路参数（EQ/AEC/波束）推送均不实现。TLS 是二期项（协议文档给了完整 CA/时钟钳制规范）；无 CA 的设备拨 `ws://` 明文，首版即够用。
+`/shell` 面、TLS/wss、音乐面（`0x04/0x05` 下行）、Sendspin、WiFi 配置推送、设备音频链路参数（EQ/AEC/波束）推送均不实现。TLS 是二期项（协议文档给了完整 CA/时钟钳制规范）；无 CA 的设备拨 `ws://` 明文，首版即够用。蓝牙代理已实现但范围受限（直驱 GATT + 广播采集，无配对/加密、无 HA 转发面），见上文。
 
 ## 部署前置（一次性，服务端之外）
 
@@ -48,17 +65,17 @@ mDNS 广播地址**无配置项**：启动时动态探测部署机默认出口�
 
 经 `auth_ok` 鉴权（`Authorization: Bearer <token>` 或 `?token=`）；`[echomuse].enabled=false` 时除鉴权外一律 404（`{"error":"echomuse disabled"}`）。设备登记持久化在 `<memory.db_path 父目录>/echomuse_devices.json`（与配置库同卷，默认 `/data`），register 时 upsert，`online`/`connected_secs` 不落盘、由 hub 实时合并。
 
-- `GET /api/echomuse/devices` → `{"enabled":true,"devices":[{"device_id","label","approved","version","board","base_os","first_seen","last_seen","online","connected_secs"}]}`（registry 全表，按 device_id 排序；`connected_secs` 离线为 `null`）。
+- `GET /api/echomuse/devices` → `{"enabled":true,"devices":[{"device_id","label","approved","version","board","base_os","capabilities","first_seen","last_seen","online","connected_secs","settings"}]}`（registry 全表，按 device_id 排序；`connected_secs` 离线为 `null`；`capabilities` 为最近一次 register 上报的能力表）。
 - `GET /api/echomuse/devices/{id}` → 单台（同上形状）；不存在 404 `{"error":"device not found"}`。
 - `POST /api/echomuse/devices/{id}/approve`，body `{"label":"客厅音箱"}`（label 可省）→ 200 + 该设备 JSON（`approved=true`，label trim 后非空才改名）；不存在 404。
 - `POST /api/echomuse/devices/{id}/command`，body `{"action":"reboot"}` 或 `{"action":"wifi","ssid":"...","psk":"..."}`：在线（hub 有 control 通道）返回 202 `{"queued":true}` 并经 `ControlOut::Json` 下发 `{"type":"reboot"}` / `{"type":"wifi_change","ssid","psk"}`；不在线 409 `{"error":"device offline"}`；action 非法 / wifi 缺 ssid 400。
-- `POST /api/echomuse/devices/{id}/settings`，body 为**部分更新**的每设备配置，白名单：`wakeWordEnabled`/`owwOnDevice`（bool）、`owwModel`（string）、`owwThreshold`/`wakeSoundLevel`/`wakeMic`（number），白名单外或类型不符 400。先持久化到 registry `settings` 字段；设备在线 202 `{"persisted":true,"delivered":true}` 并即时下发 `config`（`wakeWordEnabled` 按协议**单独一条**），离线 200 `{"persisted":true,"delivered":false}`（设备下次接入时 control_session 自动推送）。`GET devices`/`{id}` 的设备对象新增 `settings` 字段。
+- `POST /api/echomuse/devices/{id}/settings`，body 为**部分更新**的每设备配置，白名单：`wakeWordEnabled`/`owwOnDevice`/`wakeSound`/`bleProxyEnabled`/`bleProxyConnections`（bool）、`owwModel`（string）、`owwThreshold`/`wakeSoundLevel`/`wakeMic`（number），白名单外或类型不符 400。先持久化到 registry `settings` 字段；设备在线 202 `{"persisted":true,"delivered":true}` 并即时下发 `config`（`wakeWordEnabled` 按协议**单独一条**），离线 200 `{"persisted":true,"delivered":false}`（设备下次接入时 control_session 自动推送）。
 
-遗留限制：`reboot`/`wifi_change` 的设备侧支持需真机验证——命名按 EchoMuse `device-controller-interface.md`，设备不认识的 type 按协议忽略（静默无效果，不会报错）。emOS OTA 管理刻意未实现：官方控制器经 `/shell` root shell 读 boot 分区重打包镜像（`em_emos_update`），复刻需先实现 shell 面与镜像重建流水线，刷写风险高，需要时单独立项。
+遗留限制：`reboot`/`wifi_change` 与蓝牙代理的设备侧行为均需真机验证——命名按 EchoMuse `device-controller-interface.md`，设备不认识的 type/字段按协议忽略（静默无效果，不会报错）。BLE 采集/控制的联调可在 mock 设备基础上补 `0x06`/`0x08` 模拟（`tools/echomuse_mock_device.py` 当前只覆盖语音回路）。emOS OTA 管理刻意未实现：官方控制器经 `/shell` root shell 读 boot 分区重打包镜像（`em_emos_update`），复刻需先实现 shell 面与镜像重建流水线，刷写风险高，需要时单独立项。
 
 ## 维护约束
 
-- 帧型按**方向**分命名空间（`0x04/0x05` 下行是音乐帧、上行是哨兵），解析只走 `frames::parse_uplink`。
-- `/em/data` 认领：显式 `?device_id=` 优先，否则仅当恰好一台待认领时取它；多台设备并存必须带 device_id（协议允许按对端地址收紧，真机多设备联调时再做）。
+- 帧型按**方向**分命名空间（`0x04/0x05` 下行是音乐帧、上行是哨兵），解析只走 `frames::parse_uplink`；`0x06`/`0x08` 是蓝牙代理帧（`ble_proxy` 开启才翻译，`ble.rs` 消费）。
+- `/em/data` 认领：显式 `?device_id=` 优先，否则仅当恰好一台未认领时取它；多台设备并存必须带 device_id（协议允许按对端地址收紧，真机多设备联调时再做）。认领只取走 `data_rx`，hub 条目存活到会话结束（管理面在线判定/GATT 下发依赖这一点）。
 - `GET /em/status` 只读状态查询：`{"enabled":bool,"devices":[{"device_id","connected_secs"}]}`，devices 取 hub 当前 key（= 处于会话中的在线设备）；关闭时也返回 200 + `enabled:false`（排查用，不 404、无鉴权）。
-- 帧编解码、能力协商形状、transport 翻译的回归在 `server/src/app/echomuse/tests.rs`；注册表 `APP_SECTION_HOT` 已登记 `echomuse: RestartOnly`（护栏测试会抓遗漏）。
+- 帧编解码、能力协商形状、transport 翻译、蓝牙代理状态机与 GATT 请求构造的回归在 `server/src/app/echomuse/tests.rs` 与 `ble_tests.rs`（channel 直驱不起真实 WS）；真机联调用 `tools/echomuse_mock_device.py`。注册表 `APP_SECTION_HOT` 已登记 `echomuse: RestartOnly`（护栏测试会抓遗漏）。

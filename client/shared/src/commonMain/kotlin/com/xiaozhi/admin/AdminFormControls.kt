@@ -38,6 +38,8 @@ fun ViewContainer<*, *>.fieldLabel(label: String) {
  * Input 透明背景 flex(1) 填满容器。
  * ⚠️ 输入绑定走 `textInputState` 通道（不可用 `text()`+`textDidChange` 受控回写：
  * Catalyst 上编程式 setText 会打断 IME 组词并形成回声循环 → 文字/拼音交替闪烁）。
+ * ⚠️ web 渲染器例外：`setProp` 不处理 textInputState attr，不绑 `text()` 输入框永远显示
+ * placeholder（误读成「保存的值丢了」）——经 [INPUT_NEEDS_TEXT_PROP] 仅 web 补绑 `text()`。
  * textInputState 通道由框架内置防回环（InputView/TextAreaView 的
  * isProcessingNativeEvent + lastSyncedTextInputState 挡住同态回填）；组词期间不回传 onChange。
  */
@@ -69,6 +71,12 @@ fun ViewContainer<*, *>.labeledField(
                 backgroundColor(AdminColors.transparent)
                 fontSize(AdminType.body)
                 color(AdminColors.textPrimary)
+                // web 渲染器不处理 textInputState attr（只认 text prop），不绑则输入框
+                // 永远显示 placeholder——用户会误读成「保存的值丢了」（仅 web 绑，见
+                // AdminPlatform.INPUT_NEEDS_TEXT_PROP；原生绑 text() 会打断 IME 组词）
+                if (INPUT_NEEDS_TEXT_PROP) {
+                    text(getValue())
+                }
                 textInputState { TextInputState(text = getValue()) }
                 placeholder(placeholder)
             }
@@ -77,6 +85,17 @@ fun ViewContainer<*, *>.labeledField(
                 textInputStateChange { state ->
                     if (state.compositionStart == TextInputState.NO_COMPOSITION && state.text != getValue()) {
                         onChange(state.text)
+                    }
+                }
+                // web 渲染器用户键入只走 textDidChange（input 事件→To 回调），
+                // textInputStateChange 仅在框架回写文本时触发——不补挂则 web 上用户
+                // 输入永远进不了表单状态，「保存」回传的是 fill 的旧值（保存无效的根因）。
+                // 与 textInputStateChange 双挂安全：onChange 由 `state.text != getValue()` 幂等去重。
+                if (INPUT_NEEDS_TEXT_PROP) {
+                    textDidChange { params ->
+                        if (params.text != getValue()) {
+                            onChange(params.text)
+                        }
                     }
                 }
             }
@@ -125,6 +144,10 @@ fun ViewContainer<*, *>.labeledTextArea(
                 backgroundColor(AdminColors.transparent)
                 fontSize(AdminType.body)
                 color(AdminColors.textPrimary)
+                // 同 labeledField：仅 web 需要 text() 才能显示已存值
+                if (INPUT_NEEDS_TEXT_PROP) {
+                    text(getValue())
+                }
                 textInputState { TextInputState(text = getValue()) }
                 placeholder(placeholder)
             }
@@ -133,6 +156,14 @@ fun ViewContainer<*, *>.labeledTextArea(
                 textInputStateChange { state ->
                     if (state.compositionStart == TextInputState.NO_COMPOSITION && state.text != getValue()) {
                         onChange(state.text)
+                    }
+                }
+                // web 用户键入走 textDidChange（同 labeledField；onChange 幂等去重）
+                if (INPUT_NEEDS_TEXT_PROP) {
+                    textDidChange { params ->
+                        if (params.text != getValue()) {
+                            onChange(params.text)
+                        }
                     }
                 }
             }

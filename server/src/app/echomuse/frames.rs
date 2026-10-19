@@ -4,12 +4,17 @@
 //! 首字节是帧型，其余是负载；**帧型按方向分命名空间**——`0x04`/`0x05` 在两个方向
 //! 含义不同（下行是音乐帧，上行是 VAD 哨兵），这是协议刻意的设计。
 //!
-//! 当前实现范围（MVP）：
+//! 当前实现范围（MVP + 蓝牙代理）：
 //! - 上行：`0x01` mic PCM（mono S16_LE 16kHz）、`0x07` 私听会话音频
-//!   （`[session u32 BE][seq u16 BE][PCM]` 头）、`0x04`/`0x05` bounded-turn 哨兵。
-//! - 下行：`0x02` speaker PCM、`0x03` speaker EOS。
-//! - 其余帧型（音乐面 `0x04/0x05` 下行、`0x06/0x08` BLE）**不解析、静默忽略**——
-//!   协议规定"未知帧型双向忽略"，即正确的前向兼容降级。
+//!   （`[session u32 BE][seq u16 BE][PCM]` 头）、`0x04`/`0x05` bounded-turn 哨兵、
+//!   `0x06` BLE 广播批次（`ble_proxy` 开启时经 [`super::ble`] 采集）。
+//! - 下行：`0x02` speaker PCM、`0x03` speaker EOS、`0x08` BLE 连接桥 JSON
+//!   （管理面直驱 GATT 请求）。
+//! - 其余帧型（音乐面 `0x04/0x05` 下行）**不解析、静默忽略**——协议规定"未知帧型
+//!   双向忽略"，即正确的前向兼容降级。
+//!
+//! `ble_connect`/`ble_adverts_data` 是能力协商的产物：服务器 ack 不声明时设备不发
+//! `0x06`/`0x08`（见 [`super::ack_message`]），data 任务也只在 `ble_proxy` 开启时翻译。
 
 /// 上行：mic PCM 块（mono S16_LE, 16 kHz）。
 pub const FRAME_MIC: u8 = 0x01;
@@ -19,6 +24,12 @@ pub const FRAME_VAD_END: u8 = 0x04;
 pub const FRAME_NO_SPEECH: u8 = 0x05;
 /// 上行：私听会话音频，头 `session u32 BE + seq u16 BE`，其后是 PCM。
 pub const FRAME_SESSION_AUDIO: u8 = 0x07;
+/// 上行：BLE 广播批次（`{"adverts":[...]}` JSON，UTF-8）。仅当 ack 声明
+/// `ble_adverts_data` 后设备才发送；负载由 [`super::ble::BleLink::merge_adverts`] 消费。
+pub const FRAME_BLE_ADVERTS: u8 = 0x06;
+/// 双向：BLE 连接桥一条 JSON 消息（服务器请求 / 设备 result·notify·disconnected·slots）。
+/// 仅当双方都在 ack 声明 `ble_connect` 后使用；负载由 [`super::ble`] 收发。
+pub const FRAME_BLE_GATT: u8 = 0x08;
 /// 下行：voice-response PCM 块（设备立即播放）。
 pub const FRAME_SPEAKER: u8 = 0x02;
 /// 下行：voice 流结束。
@@ -41,6 +52,10 @@ pub enum UplinkFrame<'a> {
     VadEnd,
     /// 超时无语音。
     NoSpeech,
+    /// BLE 广播批次负载（`0x06` 后的 JSON 字节）。
+    BleAdverts(&'a [u8]),
+    /// BLE 连接桥 JSON 负载（`0x08` 后的字节）。
+    BleGatt(&'a [u8]),
     /// 未知帧型（按协议静默忽略）。
     Unknown(u8),
 }
@@ -62,6 +77,8 @@ pub fn parse_uplink(data: &[u8]) -> UplinkFrame<'_> {
         }
         FRAME_VAD_END => UplinkFrame::VadEnd,
         FRAME_NO_SPEECH => UplinkFrame::NoSpeech,
+        FRAME_BLE_ADVERTS => UplinkFrame::BleAdverts(&data[1..]),
+        FRAME_BLE_GATT => UplinkFrame::BleGatt(&data[1..]),
         other => UplinkFrame::Unknown(other),
     }
 }
@@ -77,6 +94,14 @@ pub fn frame_speaker(pcm: &[u8]) -> Vec<u8> {
 /// 打一条下行 speaker EOS 帧（`0x03`）。
 pub fn frame_speaker_eos() -> Vec<u8> {
     vec![FRAME_SPEAKER_EOS]
+}
+
+/// 打一条下行 BLE 连接桥帧（`0x08` + JSON 文本；管理面 GATT 请求用）。
+pub fn frame_ble_gatt(json: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(json.len() + 1);
+    out.push(FRAME_BLE_GATT);
+    out.extend_from_slice(json.as_bytes());
+    out
 }
 
 /// 下行 PCM 块大小（字节）：40ms @16kHz mono S16LE = 1280 字节。

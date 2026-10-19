@@ -567,6 +567,9 @@ fun ViewContainer<*, *>.llmConfigCard(form: ConfigFormState, ctx: Pager) {
         // 系统提示词是散文输入：官方 TextArea 多行（此前用单行 Input 输不了换行）
         labeledTextArea("system_prompt", { form.llmSystemPrompt }, { form.llmSystemPrompt = it; form.markDirty() }, height = 100f)
         labeledField("temperature", { form.llmTemperature }, { form.llmTemperature = it; form.markDirty() })
+        switchRow("enabled（LLM 回声开关；关闭后技能未命中原文回声，不走 LLM）", form.llmEnabled == "true") {
+            form.toggleStringBool(form::llmEnabled)
+        }
         switchRow("stream（SSE 流式）", form.llmStream == "true") {
             form.toggleStringBool(form::llmStream)
         }

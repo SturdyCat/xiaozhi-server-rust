@@ -257,6 +257,13 @@ enabled = false                     # true = 挂载 /em/control、/em/data 路�
 token = ""                          # 期望的设备 token（`X-Em-Token` 头）；留空 = 不校验。
                                     # 取 Dot 上 EchoMuse 凭据文件里的 token（配对时下发）；
                                     # 生产建议设置——同网段任何设备都能按此协议连进来。
+ble_proxy = false                   # true = 开启蓝牙代理：ack 向声明了 ble_connect 的设备回声明
+                                    # ble_connect + ble_adverts_data，并在接入时推送
+                                    # bleProxyEnabled/bleProxyConnections（每设备 settings 可覆盖，
+                                    # 关连接留扫描时对单台 POST settings 即可）。服务器经
+                                    # /api/echomuse/devices/{id}/ble/adverts|state 采集广播与
+                                    # 槽位/通知事件，经 .../ble/gatt 直驱外围设备读写。
+                                    # 无配对/加密（协议规定 Security Request 答不支持）。
 # mDNS 广播地址无配置项：启动时动态探测部署机默认出口的局域网 IPv4，部署在哪台
 # 机器就广播哪个 IP。docker 容器部署探测到的是容器内网 IP，请改用 host 网络。
 

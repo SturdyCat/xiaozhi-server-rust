@@ -227,7 +227,10 @@ pub fn router(engines: Arc<Engines>) -> Router {
         // （路由内部自检开关，关闭时返回 404；挂载本身零行为变化）。
         .merge(crate::app::echomuse::routes::em_routes())
         // EchoMuse 管理面（/api/echomuse/*，经 auth_ok 鉴权）：registry 全表 + 认领 + 下行指令
-        .merge(crate::app::echomuse::admin::admin_routes());
+        .merge(crate::app::echomuse::admin::admin_routes())
+        // EchoMuse 蓝牙代理管理面（/api/echomuse/devices/{id}/ble/*，同 gate 鉴权）：
+        // 广播采集查询 + GATT 直驱；`[echomuse].ble_proxy=false` 时统一 404。
+        .merge(crate::app::echomuse::ble::ble_routes());
 
     let app = if Path::new(&admin_dir).is_dir() {
         // SPA：未知路径回退到 index.html，交给前端路由处理。

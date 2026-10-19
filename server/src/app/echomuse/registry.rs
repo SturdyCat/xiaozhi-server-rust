@@ -32,6 +32,10 @@ pub struct DeviceRecord {
     pub board: Option<String>,
     #[serde(default)]
     pub base_os: Option<String>,
+    /// register 上报的能力表（最新一次为准）。蓝牙代理管理面以此判定设备是否
+    /// 声明了 `ble_connect`（协议要求双向声明才启用）。
+    #[serde(default)]
+    pub capabilities: Vec<String>,
     /// 首次见到（unix 秒）。
     pub first_seen: u64,
     /// 最近一次接入（unix 秒，register 时刷新）。
@@ -43,11 +47,12 @@ pub struct DeviceRecord {
 }
 
 impl DeviceRecord {
-    /// 合并一次 register 上报：刷新版本/板型/last_seen，保留 label/approved/first_seen。
+    /// 合并一次 register 上报：刷新版本/板型/能力/last_seen，保留 label/approved/first_seen。
     fn absorb(&mut self, reg: &DeviceRegister, now: u64) {
         self.version = reg.version.clone();
         self.board = reg.board.clone();
         self.base_os = reg.base_os.clone();
+        self.capabilities = reg.capabilities.clone();
         self.last_seen = now;
     }
 
@@ -60,6 +65,7 @@ impl DeviceRecord {
             "version": self.version,
             "board": self.board,
             "base_os": self.base_os,
+            "capabilities": self.capabilities,
             "first_seen": self.first_seen,
             "last_seen": self.last_seen,
             "online": connected_secs.is_some(),
@@ -105,6 +111,7 @@ impl Registry {
                 version: String::new(),
                 board: None,
                 base_os: None,
+                capabilities: Vec::new(),
                 first_seen: now,
                 last_seen: now,
                 settings: HashMap::new(),

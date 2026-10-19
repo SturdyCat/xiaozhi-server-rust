@@ -207,7 +207,7 @@ private fun ViewContainer<*, *>.configGroupPane(
     }
 }
 
-/** section 内容栏：`vfor(configSectionList)` 单元素技巧驱动响应式重建（选中变化必重渲染）。 */
+/** section 内容栏：`vfor(configSectionList)` 单元素技巧驱动响应式重建（选中变化或配置重新加载必重渲染）。 */
 private fun ViewContainer<*, *>.configContentPane(
     form: ConfigFormState,
     meta: PluginMetaState,
@@ -223,8 +223,10 @@ private fun ViewContainer<*, *>.configContentPane(
             flexDirectionColumn()
         }
         opsScroller {
-            vfor({ form.configSectionList }) { sectionId ->
-                renderConfigSection(form, meta, health, mcp, ota, toast, ctx, sectionId)
+            vfor({ form.configSectionList }) { renderKey ->
+                // 重建键 = "<section>@<revision>"（见 ConfigFormState.configSectionList）；
+                // 派发仍按 @ 前的 section id
+                renderConfigSection(form, meta, health, mcp, ota, toast, ctx, renderKey.substringBefore('@'))
             }
         }
     }

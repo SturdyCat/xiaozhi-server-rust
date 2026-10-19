@@ -17,7 +17,7 @@
 #   build  —— 编译 Rust server（--features sherpa,nlu，真实 ASR/TTS 引擎 + TinyBERT NLU）
 #   运行时 —— debian-slim：同源托管 管理页(/) + /api + /api/ws，模型缺失由入口脚本自下载
 #
-# 运行镜像内浏览器访问 `http://<host>:8000/` 即管理页，`/api/config` 读写 config.toml，
+# 运行镜像内浏览器访问 `http://<host>:8000/` 即管理页，`/api/config` 读写 SQLite 配置库（data.db），
 # `/api/ws` 供设备（xiaozhi-esp32）WebSocket 接入；静态页与 API 同源，无 CORS 问题。
 # ============================================================
 
@@ -152,7 +152,7 @@ COPY --from=build /app/target/release/xiaozhi-server-rust /app/server
 # 同源托管的管理页静态产物（server [server].admin_dir 由下方 ENV 指到 /app/web）
 COPY --from=web /src/client/apps/h5App/web /app/web
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
-# 内置配置示例：首启 /data/config.toml 缺失时由入口脚本生成为默认配置
+# 内置配置示例：字段说明参照（配置真源为 SQLite data.db；示例不再作为首启配置生成）
 COPY server/config.example.toml /app/config.example.toml
 RUN chmod +x /app/docker-entrypoint.sh
 

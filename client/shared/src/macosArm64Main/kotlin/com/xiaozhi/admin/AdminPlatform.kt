@@ -15,6 +15,9 @@ import com.tencent.kuikly.core.views.View
 /** macOS 客户端：测试台、XiaoZhiModule 原生桥与「切换服务器」仅此平台启用。 */
 actual val IS_MACOS: Boolean = true
 
+/** 原生渲染器由 textInputState 通道显示；再绑 text() 会打断 IME 组词（见 AdminFormControls）。 */
+actual val INPUT_NEEDS_TEXT_PROP: Boolean = false
+
 /** 测试台依赖的原生桥（WS 建连 / 麦克风采集 / 播放 / Opus 编解码，实现在 apps/macosApp）。 */
 actual fun Pager.platformExternalModules(): Map<String, Module> =
     mapOf(XiaoZhiModule.MODULE_NAME to XiaoZhiModule())

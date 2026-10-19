@@ -31,7 +31,13 @@ fun ViewContainer<*, *>.healthBanner(health: EngineHealthState, onJumpSection: (
     vif({ health.loaded && health.deviations.size > 0 }) {
         groupedCard("引擎健康（${health.deviations.size} 项偏离）") {
             vfor({ health.deviations }) { row ->
-                healthBannerRow(row) { section -> onJumpSection(section) }
+                // 单一根容器包裹：vfor 项闭包只允许生成一个孩子（2.29.1 起严格校验，
+                // healthBannerRow 在 reason 非空时会生成「行 + 原因」两个根节点，直接抛
+                // "vfor creator闭包内必须需要且仅一个孩子节点"→ 整页白屏）
+                View {
+                    attr { flexDirectionColumn() }
+                    healthBannerRow(row) { section -> onJumpSection(section) }
+                }
             }
             textNote("点击条目可跳到对应配置项修复；探测为本地文件系统检查，服务端每次请求实时执行。", micro = true)
         }

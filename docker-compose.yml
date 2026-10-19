@@ -60,8 +60,8 @@ services:
     volumes:
       # ★ 唯一数据卷：宿主 ./server-data ↔ 容器 /data，**内部分目录**各司其职：
       #   /data/models/SenseVoiceSmall 等   模型（首启缺失时入口脚本自动下载，持久化）
-      #   /data/config.toml                 服务端配置（管理页「保存配置」回写此文件；
-      #                                首启缺失时入口脚本用内置示例自动生成）
+      #   /data/data.db                     配置+记忆共用的 SQLite 库（配置唯一真源：
+      #                                管理页「保存配置」写 cfg_documents；空库首启自举默认配置）
       #   /data/firmware/<功能>/<型号>/<板型|_>/
       #                             ESP32 固件 OTA 托管（按「功能 + 型号」分目录，
       #                               /api/ota/firmware 上传；设备经 /api/ota 按同功能同型号匹配并自升级）

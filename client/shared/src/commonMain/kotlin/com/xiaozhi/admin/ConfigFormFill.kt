@@ -93,6 +93,7 @@ internal fun ConfigFormState.fill(obj: JSONObject) {
         }
     }
     obj.optJSONObject("llm")?.let { l ->
+        llmEnabled = l.optBoolean("enabled", llmEnabled.toBooleanStrictOrNull() ?: true).toString()
         llmApiBase = l.optString("api_base", llmApiBase)
         llmApiKey = l.optString("api_key", llmApiKey)
         llmApiKeyConfigured = l.optBoolean("has_api_key", llmApiKey.isNotBlank())
@@ -129,6 +130,9 @@ internal fun ConfigFormState.fill(obj: JSONObject) {
     nlu.fill(obj)
     // [echomuse]（设备入口）：映射集中在 EchoMuseSectionState（token presence 打码）
     em.fill(obj)
+    // 全部字段已就位：刷新内容栏重建键，强制表单整段重渲染——web 渲染器不会在异步
+    // fill 后重 diff Input props，不重建则输入框停留在 build 时的初始值（误读成「保存的值丢了」）
+    notifyConfigReloaded()
 }
 
 /**

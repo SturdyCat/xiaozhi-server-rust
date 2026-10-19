@@ -26,18 +26,31 @@
 //! 上行 channel；[`EchomuseTransport::recv`] 只是取 channel。PCM↔Opus 转换用与流水线
 //! 相同的 [`crate::app::audio`] 编解码器，会话侧拿到的是标准 Opus 帧，零改动。
 //!
+//! ## 蓝牙代理（`ble_connect` + `ble_adverts_data`，`[echomuse].ble_proxy` 开启时）
+//!
+//! 设备侧 BLE 扫描与 GATT 连接桥的服务端承载：广播批次经 `0x06` 帧上报进
+//! [`ble::BleLink`] 合并表，GATT 请求/结果经 `0x08` 帧与设备互通（`req` 关联），
+//! 管理面 `/api/echomuse/devices/{id}/ble/*` 对外。仅当 ack 声明对应能力且设备
+//! register 也声明 `ble_connect` 时启用；关闭时零行为变化。协议契约见根文档与
+//! EchoMuse `device-controller-interface.md`。
+//!
 //! ## 刻意不做的范围（靠能力协商静默关闭）
 //!
-//! `/shell` 面、音乐面（`audio_mix`）、BLE 代理（`ble_connect`）、Sendspin、WiFi 配置
-//! 推送、TLS/wss 一概不实现：`ack.features` 只声明我们支持的能力子集，设备按协议
-//! "未声明即降级"处理；未知帧型/未知 JSON 消息双向忽略，不产生错误。
+//! `/shell` 面、音乐面（`audio_mix`）、Sendspin、WiFi 配置推送、TLS/wss 一概不
+//! 实现：`ack.features` 只声明我们支持的能力子集，设备按协议"未声明即降级"处理；
+//! 未知帧型/未知 JSON 消息双向忽略，不产生错误。蓝牙代理只做**直驱 GATT + 广播
+//! 采集**，不做 HA/ESPHome 转发面，也不做配对/加密（协议规定 Security Request 答
+//! Pairing Not Supported，加密属性以 `att:5` 失败）。
 //!
 //! [`crate::app::audio`]: crate::app::audio
 
+pub mod ble;
 pub mod frames;
 pub mod transport;
 
 pub(crate) mod admin;
+#[cfg(test)]
+mod ble_tests;
 pub(crate) mod registry;
 pub(crate) mod routes;
 #[cfg(test)]
@@ -45,7 +58,7 @@ mod tests;
 
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
@@ -61,6 +74,12 @@ pub struct EchomuseConfig {
     /// 对应 EchoMuse 设备凭据文件里的 token（配对时由 controller 下发）。
     #[serde(default)]
     pub token: String,
+    /// 蓝牙代理总开关。默认 **false**：ack 不声明 `ble_connect`/`ble_adverts_data`、
+    /// `0x06`/`0x08` 帧按未知忽略、管理面 BLE 端点 404——行为与关闭前完全一致。
+    /// 开启后接入时向设备推送 `bleProxyEnabled`/`bleProxyConnections`（每设备
+    /// settings 可覆盖），仅对 register 声明 `ble_connect` 的固件实际生效。
+    #[serde(default)]
+    pub ble_proxy: bool,
 }
 
 impl Default for EchomuseConfig {
@@ -68,6 +87,7 @@ impl Default for EchomuseConfig {
         EchomuseConfig {
             enabled: false,
             token: String::new(),
+            ble_proxy: false,
         }
     }
 }
@@ -93,25 +113,43 @@ pub enum ControlOut {
 /// data 面出站消息：已完整组帧的字节（`0x02`/`0x03`）。
 pub type DataOut = Vec<u8>;
 
-/// 一台已通过 register 的设备的交接件，data 路由按它接管 `/em/data` 连接。
+/// 一台已通过 register 的设备的交接件，登记在 hub 里存活到会话结束；data 路由
+/// 只认领其中的 [`PendingDevice::data_rx`]（每会话恰一次），其余字段（control/data
+/// 出站口、蓝牙代理链路）供管理面在设备完全在线期间随时使用。
 #[derive(Debug)]
 pub struct PendingDevice {
     /// 上行 channel 发送端：data 任务把翻译后的会话帧推给它（会话侧消费）。
     pub up_tx: UnboundedSender<crate::app::transport::IncomingFrame>,
-    /// data 面出站接收端：data 任务取走后直发设备（`0x02`/`0x03`）。
-    pub data_rx: UnboundedReceiver<DataOut>,
+    /// data 面出站接收端：data 路由认领时取走（`hub_claim_data`），认领后置 None。
+    pub data_rx: Option<UnboundedReceiver<DataOut>>,
     /// 登记时刻（`/em/status` 用它算 `connected_secs`）。
     pub since: Instant,
     /// control 出站发送端的克隆：管理面下发 `reboot`/`wifi_change` 走它
     /// （`ControlOut::Json` → control_loop → 设备）。control 会话自己持原件。
     pub ctl_tx: Option<UnboundedSender<ControlOut>>,
+    /// data 面出站发送端的克隆：蓝牙代理 GATT 请求（`0x08`）经它下发
+    /// （管理面 → hub → data 任务 → 设备）。
+    pub data_tx: Option<UnboundedSender<DataOut>>,
+    /// 蓝牙代理链路状态（请求关联 + 广播/事件采集）；会话结束随条目消失。
+    pub ble: Arc<Mutex<ble::BleLink>>,
+}
+
+/// `hub_claim_data` / `hub_claim_only` 的认领结果：data 任务需要的全部交接件。
+pub(crate) struct DataClaim {
+    /// 上行发送端（data 任务把翻译后的会话帧推入）。
+    pub up_tx: UnboundedSender<crate::app::transport::IncomingFrame>,
+    /// data 面出站接收端（已从条目取走）。
+    pub data_rx: UnboundedReceiver<DataOut>,
+    /// 蓝牙代理链路（data 任务收发 `0x06`/`0x08` 用；与 hub 条目同享）。
+    pub ble: Arc<Mutex<ble::BleLink>>,
 }
 
 /// 进程级单例：设备 → 交接件 的登记表。
 ///
-/// control 路由在 register 通过后登记，data 路由凭 `?device_id=`（显式）或"唯一
-/// 待认领"弹出。协议要求 `/data` 与 `/control` 来自同一地址；多台设备在同一出口
-/// IP（NAT）后时必须靠 device_id 消歧，真机联调再按地址收紧。
+/// control 路由在 register 通过后登记，条目**存活到会话结束**（`hub_remove` 清理）；
+/// data 路由凭 `?device_id=`（显式）或"唯一未认领"取出 [`DataClaim`]。协议要求
+/// `/data` 与 `/control` 来自同一地址；多台设备在同一出口 IP（NAT）后时必须靠
+/// device_id 消歧，真机联调再按地址收紧。
 #[derive(Default)]
 pub struct EchomuseHub {
     pending: Mutex<HashMap<String, PendingDevice>>,
@@ -132,16 +170,40 @@ fn hub_insert(device_id: &str, entry: PendingDevice) {
         .insert(device_id.to_string(), entry);
 }
 
-/// 弹出（data 侧）。
-fn hub_take(device_id: &str) -> Option<PendingDevice> {
-    hub()
-        .pending
-        .lock()
-        .expect("echomuse hub 锁中毒")
-        .remove(device_id)
+/// 认领 data 面出站接收端（每会话恰一次；已认领/不存在返回 None），条目保留。
+pub(crate) fn hub_claim_data(device_id: &str) -> Option<DataClaim> {
+    let mut guard = hub_iter();
+    let entry = guard.get_mut(device_id)?;
+    let data_rx = entry.data_rx.take()?;
+    Some(DataClaim {
+        up_tx: entry.up_tx.clone(),
+        data_rx,
+        ble: entry.ble.clone(),
+    })
 }
 
-/// 当前登记快照（只读；`hub_take_only` 借它判断"唯一待认领"）。
+/// 恰好一台 data 未认领时取它；零台或多台都返回 None（多台必须显式 device_id）。
+pub(crate) fn hub_claim_only() -> Option<DataClaim> {
+    let mut guard = hub_iter();
+    let mut found: Option<String> = None;
+    for (id, entry) in guard.iter() {
+        if entry.data_rx.is_some() {
+            if found.is_some() {
+                return None;
+            }
+            found = Some(id.clone());
+        }
+    }
+    let entry = guard.get_mut(found.as_deref()?)?;
+    let data_rx = entry.data_rx.take()?;
+    Some(DataClaim {
+        up_tx: entry.up_tx.clone(),
+        data_rx,
+        ble: entry.ble.clone(),
+    })
+}
+
+/// 当前登记快照（只读）。
 fn hub_iter() -> std::sync::MutexGuard<'static, HashMap<String, PendingDevice>> {
     hub().pending.lock().expect("echomuse hub 锁中毒")
 }
@@ -159,6 +221,22 @@ pub(crate) fn hub_status() -> Vec<(String, u64)> {
 /// 某设备 control 出站口的克隆（管理面下发 command 用）；不在线（不在 hub）返回 None。
 pub(crate) fn hub_ctl(device_id: &str) -> Option<UnboundedSender<ControlOut>> {
     hub_iter().get(device_id).and_then(|p| p.ctl_tx.clone())
+}
+
+/// 某设备 data 出站口的克隆（蓝牙代理 GATT 请求下发用）；不在线返回 None。
+pub(crate) fn hub_data(device_id: &str) -> Option<UnboundedSender<DataOut>> {
+    hub_iter().get(device_id).and_then(|p| p.data_tx.clone())
+}
+
+/// 借某设备的蓝牙代理链路执行 `f`（不在线返回 None）。外层 hub 锁先放再取内层
+/// 锁，避免两把锁嵌套。
+pub(crate) fn hub_ble<T>(device_id: &str, f: impl FnOnce(&mut ble::BleLink) -> T) -> Option<T> {
+    let link = {
+        let guard = hub_iter();
+        guard.get(device_id)?.ble.clone()
+    };
+    let mut link = link.lock().expect("echomuse ble link 锁中毒");
+    Some(f(&mut link))
 }
 
 /// `GET /em/status` 的响应体（与 HTTP 层解耦，便于单测直接断言形状）。
@@ -199,13 +277,46 @@ pub struct DeviceRegister {
 /// 服务器 → 设备 的 `ack`（能力协商：`features` 是**服务器**的能力表，
 /// 未列出的能力设备按协议降级——`listen_session` 不列出即不会走 `0x07` 私听会话，
 /// 统一走 `mic_start{lock_mic:true}` bounded turn，服务端只处理 `0x01`/`0x04`/`0x05`）。
-pub fn ack_message(device_id: &str) -> String {
+///
+/// `ble=true` 时追加 `ble_connect` + `ble_adverts_data`：调用方（control 接入）仅在
+/// `[echomuse].ble_proxy` 开启**且**设备 register 声明 `ble_connect` 时置位（协议
+/// 要求双向声明才启用，设备按"未声明即降级"静默关闭）。
+pub fn ack_message(device_id: &str, ble: bool) -> String {
+    let mut features = vec![
+        "mic",
+        "speaker",
+        "leds",
+        "buttons",
+        "oww_trigger",
+        "oww_local_only",
+    ];
+    if ble {
+        features.push("ble_connect");
+        features.push("ble_adverts_data");
+    }
     serde_json::json!({
         "type": "ack",
         "device_id": device_id,
-        "features": ["mic", "speaker", "leds", "buttons", "oww_trigger", "oww_local_only"],
+        "features": features,
     })
     .to_string()
+}
+
+/// control 接入时的 config 基线：`ble_proxy` 开启时默认打开设备侧扫描与连接
+/// （协议键 `bleProxyEnabled`/`bleProxyConnections`，两键都在设备才会行动），
+/// 每设备保存的 settings 覆盖基线（协议部分更新语义，零/缺省字段被忽略）。
+pub(crate) fn config_baseline(ble_proxy: bool, settings: &serde_json::Value) -> serde_json::Value {
+    let mut eff = serde_json::Map::new();
+    if ble_proxy {
+        eff.insert("bleProxyEnabled".into(), serde_json::Value::from(true));
+        eff.insert("bleProxyConnections".into(), serde_json::Value::from(true));
+    }
+    if let Some(obj) = settings.as_object() {
+        for (k, v) in obj {
+            eff.insert(k.clone(), v.clone());
+        }
+    }
+    serde_json::Value::Object(eff)
 }
 
 /// 服务器 → 设备 的极简 `config` 推送：只写行为开关，不碰设备音频链路参数

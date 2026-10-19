@@ -28,11 +28,12 @@ use crate::app::session::run_session;
 use crate::app::transport::IncomingFrame;
 use crate::engine::Engines;
 
+use super::ble::BleLink;
 use super::frames::{self, UplinkFrame};
 use super::transport::EchomuseTransport;
 use super::{
-    ack_message, config_push_with, hub_insert, hub_iter, hub_remove, hub_take, session_params,
-    ControlOut, DataOut, DeviceRegister,
+    ack_message, config_baseline, config_push_with, hub_claim_data, hub_claim_only, hub_insert,
+    hub_remove, session_params, ControlOut, DataOut, DeviceRegister,
 };
 
 /// data 面入站消息认领失败时的日志前缀（诊断"只连了 data 没 control"类配置错误）。
@@ -105,14 +106,21 @@ async fn control_session(socket: WebSocket, engines: Arc<Engines>) -> anyhow::Re
         register.capabilities.join(","),
     );
 
+    // 蓝牙代理按协议双向协商：服务器配置开启 且 设备声明 ble_connect 才在 ack 里
+    // 回声明（未声明即降级，设备侧扫描/连接保持关闭）。
+    let ble_on = engines.config.echomuse.ble_proxy
+        && register.capabilities.iter().any(|c| c == "ble_connect");
     // ack（能力协商：只声明服务器支持的子集）+ config 推送（基线 + 每设备保存的设置）。
-    sink.send(Message::Text(ack_message(&device_id).into()))
+    sink.send(Message::Text(ack_message(&device_id, ble_on).into()))
         .await?;
     let settings = super::registry::global(&engines.config)
         .get(&device_id)
         .map(|r| serde_json::Value::Object(r.settings.into_iter().collect()))
         .unwrap_or_else(|| serde_json::json!({}));
-    for msg in config_push_with(&settings) {
+    for msg in config_push_with(&config_baseline(
+        engines.config.echomuse.ble_proxy,
+        &settings,
+    )) {
         sink.send(Message::Text(msg.into())).await?;
     }
 
@@ -124,19 +132,23 @@ async fn control_session(socket: WebSocket, engines: Arc<Engines>) -> anyhow::Re
     // 静态元数据落盘（label/approved/版本/首末见时间；online 由 hub 实时合并）。
     super::registry::global(&engines.config).upsert(&register, super::registry::now_secs());
 
+    let ble = Arc::new(std::sync::Mutex::new(BleLink::default()));
     hub_insert(
         &device_id,
         super::PendingDevice {
             up_tx: up_tx.clone(),
-            data_rx,
+            data_rx: Some(data_rx),
             since: std::time::Instant::now(),
             // 管理面下发 reboot/wifi_change 的通道；control 会话自己持原件。
             ctl_tx: Some(ctl_tx.clone()),
+            // 蓝牙代理 GATT 请求（0x08）的管理面下发口；control 会话自己持原件。
+            data_tx: Some(data_tx.clone()),
+            ble: ble.clone(),
         },
     );
 
-    // control 任务：收设备事件（唤醒/按钮）+ 发 mic_start 等出站。
-    let ctl_task = tokio::spawn(control_loop(sink, stream, ctl_rx, up_tx));
+    // control 任务：收设备事件（唤醒/按钮/旧固件 ble_adverts）+ 发 mic_start 等出站。
+    let ctl_task = tokio::spawn(control_loop(sink, stream, ctl_rx, up_tx, ble, ble_on));
 
     // 进入会话主循环（无 hello：参数固定，设备不做 xiaozhi 协商）。
     let params = session_params(&engines.config);
@@ -165,6 +177,8 @@ async fn control_loop(
     mut stream: futures_util::stream::SplitStream<WebSocket>,
     mut ctl_rx: mpsc::UnboundedReceiver<ControlOut>,
     up_tx: mpsc::UnboundedSender<IncomingFrame>,
+    ble: Arc<std::sync::Mutex<BleLink>>,
+    ble_on: bool,
 ) {
     // 当前是否处于一轮聆听（唤醒后到哨兵/停止之间）。
     let mut listening = false;
@@ -173,7 +187,10 @@ async fn control_loop(
             inbound = stream.next() => {
                 let Some(Ok(msg)) = inbound else { break };
                 if let Message::Text(t) = msg {
-                    if handle_control_text(&t, &mut listening, &mut sink, &up_tx).await.is_err() {
+                    if handle_control_text(&t, &mut listening, &mut sink, &up_tx, &ble, ble_on)
+                        .await
+                        .is_err()
+                    {
                         break;
                     }
                 }
@@ -192,11 +209,14 @@ async fn control_loop(
 
 /// 解析 control 面的一条设备 JSON。只关心能开启一轮聆听的事件，其余忽略
 /// （协议规定未知类型双向忽略；listen_state/stats/log/pong 等当前不消费）。
+/// `ble_adverts` 是旧固件的广播回退路径（`0x06` 未被 ack 声明时设备改走 control 面）。
 async fn handle_control_text(
     text: &str,
     listening: &mut bool,
     sink: &mut futures_util::stream::SplitSink<WebSocket, Message>,
     up_tx: &mpsc::UnboundedSender<IncomingFrame>,
+    ble: &Arc<std::sync::Mutex<BleLink>>,
+    ble_on: bool,
 ) -> anyhow::Result<()> {
     let Ok(v) = serde_json::from_str::<serde_json::Value>(text) else {
         return Ok(()); // control 面恒为 JSON；防御式忽略而非报错
@@ -208,6 +228,13 @@ async fn handle_control_text(
         "oww_wake" => start_turn(listening, sink, up_tx).await?,
         // 动作键单击 = 无唤醒词模型的兜底入口；mute/音量走 mute_state/volume_state，不进这里。
         "button" => start_turn(listening, sink, up_tx).await?,
+        "ble_adverts" if ble_on => {
+            if let Some(list) = v.get("adverts").and_then(|a| a.as_array()) {
+                ble.lock()
+                    .expect("echomuse ble link 锁中毒")
+                    .merge_adverts(list, super::registry::now_secs());
+            }
+        }
         _ => {}
     }
     Ok(())
@@ -248,37 +275,30 @@ async fn em_data(
         return (StatusCode::UNAUTHORIZED, "bad token").into_response();
     }
     ws.on_upgrade(move |socket| async move {
-        // 认领：显式 ?device_id=（测试/同 IP 多设备）优先；否则仅当恰好一台待认领时
+        // 认领：显式 ?device_id=（测试/同 IP 多设备）优先；否则仅当恰好一台未认领时
         // 取它（单设备家庭场景的默认路径）。协议允许按对端地址匹配，真机多设备联调
         // 时再按地址消歧。
-        let pending = match query.get("device_id") {
-            Some(id) => hub_take(id),
-            None => hub_take_only(),
+        let claimed = match query.get("device_id") {
+            Some(id) => hub_claim_data(id),
+            None => hub_claim_only(),
         };
-        let Some(pending) = pending else {
+        let Some(claim) = claimed else {
             tracing::warn!("{CLAIM_FAIL}");
             return;
         };
-        data_loop(socket, pending).await;
+        let ble_on = engines.config.echomuse.ble_proxy;
+        data_loop(socket, claim, ble_on).await;
     })
 }
 
-/// 恰好一台待认领时取它；零台或多台都返回 None（多台必须显式 device_id）。
-fn hub_take_only() -> Option<super::PendingDevice> {
-    let guard = hub_iter();
-    if guard.len() != 1 {
-        return None;
-    }
-    let id = guard.keys().next().cloned()?;
-    drop(guard);
-    hub_take(&id)
-}
-
-/// data 任务：上行帧翻译（PCM→Opus、哨兵→listen stop）+ 下行帧直发。
-async fn data_loop(socket: WebSocket, pending: super::PendingDevice) {
-    let super::PendingDevice {
-        up_tx, mut data_rx, ..
-    } = pending;
+/// data 任务：上行帧翻译（PCM→Opus、哨兵→listen stop、蓝牙代理 0x06/0x08 采集）
+/// + 下行帧直发。
+async fn data_loop(socket: WebSocket, claim: super::DataClaim, ble_on: bool) {
+    let super::DataClaim {
+        up_tx,
+        mut data_rx,
+        ble,
+    } = claim;
     let (mut sink, mut stream) = socket.split();
     let mut up_enc = match OpusFrameEncoder::new(frames::MIC_SAMPLE_RATE) {
         Ok(enc) => enc,
@@ -323,6 +343,20 @@ async fn data_loop(socket: WebSocket, pending: super::PendingDevice) {
                             r#"{"type":"listen","state":"stop"}"#.into(),
                         ));
                     }
+                    UplinkFrame::BleAdverts(payload) if ble_on => {
+                        if let Ok(v) = serde_json::from_slice::<serde_json::Value>(payload) {
+                            if let Some(list) = v.get("adverts").and_then(|a| a.as_array()) {
+                                ble.lock()
+                                    .expect("echomuse ble link 锁中毒")
+                                    .merge_adverts(list, super::registry::now_secs());
+                            }
+                        }
+                    }
+                    UplinkFrame::BleGatt(payload) if ble_on => {
+                        ble.lock().expect("echomuse ble link 锁中毒").on_gatt(payload);
+                    }
+                    // ble_proxy 关闭时按未知帧忽略（与能力未声明一致，行为零变化）。
+                    UplinkFrame::BleAdverts(_) | UplinkFrame::BleGatt(_) => {}
                     UplinkFrame::Unknown(_) => {}
                 }
             }
@@ -336,6 +370,8 @@ async fn data_loop(socket: WebSocket, pending: super::PendingDevice) {
             }
         }
     }
+    // 链路收尾：丢弃全部待应答 GATT 请求（等待方立即得到"离线"）并清空采集数据。
+    ble.lock().expect("echomuse ble link 锁中毒").reset();
 }
 
 /// 把 S16_LE 字节推入 i16 缓冲（截掉奇数尾巴）。

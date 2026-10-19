@@ -63,7 +63,7 @@ fn speaker_frames_shape() {
 
 #[test]
 fn ack_declares_supported_subset_only() {
-    let ack = ack_message("dev-1");
+    let ack = ack_message("dev-1", false);
     let v: serde_json::Value = serde_json::from_str(&ack).unwrap();
     assert_eq!(v["type"], "ack");
     assert_eq!(v["device_id"], "dev-1");
@@ -74,6 +74,7 @@ fn ack_declares_supported_subset_only() {
     assert!(!names.contains(&"listen_session"));
     assert!(!names.contains(&"audio_mix"));
     assert!(!names.contains(&"ble_connect"));
+    assert!(!names.contains(&"ble_adverts_data"));
 }
 
 #[test]
@@ -205,9 +206,11 @@ fn insert_probe(device_id: &str) {
         device_id,
         PendingDevice {
             up_tx,
-            data_rx,
+            data_rx: Some(data_rx),
             since: std::time::Instant::now(),
             ctl_tx: None,
+            data_tx: None,
+            ble: std::sync::Arc::new(std::sync::Mutex::new(super::ble::BleLink::default())),
         },
     );
 }
@@ -337,17 +340,42 @@ use super::admin::{approve as admin_approve, command_plan, device_payload, devic
 fn insert_online(device_id: &str) -> mpsc::UnboundedReceiver<ControlOut> {
     let (up_tx, _up_rx) = mpsc::unbounded_channel::<IncomingFrame>();
     let (ctl_tx, ctl_rx) = mpsc::unbounded_channel::<ControlOut>();
-    let (_data_tx, data_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    let (data_tx, data_rx) = mpsc::unbounded_channel::<Vec<u8>>();
     hub_insert(
         device_id,
         PendingDevice {
             up_tx,
-            data_rx,
+            data_rx: Some(data_rx),
             since: std::time::Instant::now(),
             ctl_tx: Some(ctl_tx),
+            data_tx: Some(data_tx),
+            ble: std::sync::Arc::new(std::sync::Mutex::new(super::ble::BleLink::default())),
         },
     );
     ctl_rx
+}
+
+/// data 认领后条目保留（设备完全在线期间管理面 hub_ctl/hub_data/hub_ble 仍可用），
+/// 且每会话只认领一次。
+#[test]
+fn hub_claim_keeps_entry_and_is_once() {
+    use super::{hub_ble, hub_claim_data, hub_ctl, hub_data};
+    let _g = HUB_LOCK.lock().unwrap();
+    let ctl_rx = insert_online("dev-claim-1");
+    // 首次认领成功；条目仍在：ctl/data 出站口与 ble 链路可继续访问。
+    let claim = hub_claim_data("dev-claim-1").expect("首次认领应成功");
+    drop(claim.data_rx);
+    assert!(hub_ctl("dev-claim-1").is_some());
+    assert!(hub_data("dev-claim-1").is_some());
+    assert!(hub_ble("dev-claim-1", |l| l.alloc_req()).is_some());
+    // 二次认领失败（每会话恰一次）。
+    assert!(hub_claim_data("dev-claim-1").is_none());
+    // 不存在的设备认领失败。
+    assert!(hub_claim_data("dev-claim-ghost").is_none());
+    hub_remove("dev-claim-1");
+    assert!(hub_ctl("dev-claim-1").is_none());
+    assert!(hub_data("dev-claim-1").is_none());
+    drop(ctl_rx);
 }
 
 #[test]
@@ -475,6 +503,17 @@ fn filter_settings_allowlist_and_types() {
         .1
         .is_some());
     assert!(filter_settings(&serde_json::json!([1])).1.is_some());
+    // 蓝牙代理的每设备开关在白名单内（bool），类型错拒绝。
+    let (ok, err) = filter_settings(
+        &serde_json::json!({"bleProxyEnabled": true, "bleProxyConnections": false}),
+    );
+    assert!(err.is_none());
+    assert_eq!(ok.len(), 2);
+    assert!(
+        filter_settings(&serde_json::json!({"bleProxyEnabled": "on"}))
+            .1
+            .is_some()
+    );
 }
 
 #[test]

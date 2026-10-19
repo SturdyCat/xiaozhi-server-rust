@@ -154,6 +154,9 @@ class ConfigFormState(private val scope: PagerScope) {
     var llmMaxHistory by scope.observable("10")
     var llmTemperature by scope.observable("0.7")
     var llmStream by scope.observable("true")
+    /// 回声开关（f68cd99 `[llm].enabled`）：false = 技能未命中不走 LLM，ASR 原文直接回声。
+    /// 曾漏配 UI（对齐核对发现）：服务端+注册表齐全而管理台无字段，回声模式不可见不可切。
+    var llmEnabled by scope.observable("true")
 
     // ===== [aiui] =====（全链路极速超拟人：VAD 切段 → 讯飞 AIUI 云端 ASR+LLM+TTS 闭环）
     // ⚠️ 启用后设备流水线走云端闭环，**本地 ASR/LLM/TTS 全部闲置**（`[soul]`/`[memory]` 亦不生效）。
@@ -277,18 +280,36 @@ class ConfigFormState(private val scope: PagerScope) {
 
     /** 配置子导航当前选中的 section（替代 tabbedPanel 的 tabIndex；默认落到 Server）。 */
     private var _configSection by scope.observable("server")
-    /** 与 [_configSection] 同步的单元素 ObservableList，供右侧内容 `vfor` 响应式重建。 */
+
+    /**
+     * 与 [_configSection] + [revision] 同步的**单元素重建键**（`"<section>@<revision>"`），
+     * 供右侧内容 `vfor` 响应式整段重建：选中变化**或配置（重新）加载**都触发重渲染。
+     *
+     * ⚠️ 为什么重建键要含 revision：web 渲染器不会在异步 [fill] 后重 diff Input 的 props
+     * （textInputState 通道只在上报方向生效，显示侧不回填）——不重建的话输入框永远停留在
+     * build 时的初始值，用户会误读成「保存的值丢了，刷新后还是旧值」。fill 尾部调
+     * [notifyConfigReloaded] 整段重建，重建时按当前 observable 草稿取值，web/mac 行为一致。
+     */
     val configSectionList: ObservableList<String> by scope.observableList()
-    init { configSectionList.add(_configSection) }
+    init { configSectionList.add("$_configSection@$revision") }
     var configSection: String
         get() = _configSection
         set(v) {
             if (_configSection != v) {
                 _configSection = v
                 configSectionList.clear()
-                configSectionList.add(v)
+                configSectionList.add("$v@$revision")
             }
         }
+
+    /** 配置（重新）加载完成（[fill] 尾部调用）：刷新重建键，强制右侧内容整段重渲染。 */
+    internal fun notifyConfigReloaded() {
+        val key = "$_configSection@$revision"
+        if (configSectionList.isEmpty() || configSectionList[0] != key) {
+            configSectionList.clear()
+            configSectionList.add(key)
+        }
+    }
 
     /** 配置搜索框内容（为空 = 不筛选，按分组展示；非空 = 平铺命中项）。 */
     var configSearch by scope.observable("")
@@ -789,6 +810,7 @@ class ConfigFormState(private val scope: PagerScope) {
                 })
             })
             put("llm", JSONObject().apply {
+                put("enabled", llmEnabled.toBooleanStrictOrNull() ?: true)
                 put("api_base", llmApiBase)
                 // 打码后表单里没有明文：留空 = 不修改（不发送该字段）
                 putSecret("api_key", llmApiKey)

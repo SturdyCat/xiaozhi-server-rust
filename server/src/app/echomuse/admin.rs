@@ -38,8 +38,8 @@ pub(crate) fn admin_routes() -> axum::Router<Arc<Engines>> {
 
 // ---- 响应构造（纯函数，测试直驱） ----
 
-/// 统一 JSON 响应（`/api` 风格：application/json; charset=utf-8）。
-fn json(code: StatusCode, body: serde_json::Value) -> Response {
+/// 统一 JSON 响应（`/api` 风格：application/json; charset=utf-8）。ble 管理面共用。
+pub(super) fn json(code: StatusCode, body: serde_json::Value) -> Response {
     match serde_json::to_string(&body) {
         Ok(text) => (
             code,
@@ -117,6 +117,8 @@ fn command_out(body: &serde_json::Value) -> Result<String, &'static str> {
 
 /// settings 白名单：唤醒词相关且设备实际执行的 config 键（协议 camelCase，
 /// 部分"零值忽略"更新；其余设备键走默认，不需要管理面暴露）。
+/// `bleProxyEnabled`/`bleProxyConnections` 是蓝牙代理的每设备开关（接入时由
+/// `config_baseline` 打基线，单台可覆盖，例如关连接留扫描）。
 const SETTINGS_KEYS: &[(&str, &str)] = &[
     ("wakeWordEnabled", "bool"),
     ("owwOnDevice", "bool"),
@@ -125,6 +127,8 @@ const SETTINGS_KEYS: &[(&str, &str)] = &[
     ("wakeSound", "bool"),
     ("wakeSoundLevel", "number"),
     ("wakeMic", "number"),
+    ("bleProxyEnabled", "bool"),
+    ("bleProxyConnections", "bool"),
 ];
 
 /// 过滤并校验 settings body：只留白名单键且类型匹配（`number` 接受整/浮）。
@@ -242,7 +246,8 @@ pub(crate) fn command_plan(
 
 // ---- axum handlers（鉴权 → enabled 闸门 → 纯函数决策 → 发送） ----
 
-fn gate(
+/// 管理面共用前置：鉴权 + `[echomuse].enabled` 闸门；Some = 已定型的错误响应。
+pub(super) fn gate(
     engines: &Engines,
     headers: &HeaderMap,
     query: &HashMap<String, String>,

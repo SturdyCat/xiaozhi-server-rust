@@ -24,6 +24,17 @@ import com.tencent.kuikly.core.pager.Pager
 expect val IS_MACOS: Boolean
 
 /**
+ * 文本输入是否需要**额外绑定 `text()`** 才能显示已存值（仅 web 为 true）。
+ *
+ * web（h5）渲染器的 `setProp` 不处理 `textInputState` attr（只认 `text` prop），
+ * 只绑 textInputState 时输入框永远显示 placeholder——用户会误读成「保存的值丢了」；
+ * 原生渲染器（Catalyst/Android/iOS）由 textInputState 通道负责显示，
+ * 再绑 `text()` 会打断 IME 组词形成受控回写循环（见 [AdminFormControls.labeledField] 注释），
+ * 故仅 web 需要。
+ */
+expect val INPUT_NEEDS_TEXT_PROP: Boolean
+
+/**
  * Pager 额外注册的平台模块：macOS 返回 [XiaoZhiModule]（测试台依赖），
  * 其他平台返回空 map（测试代码只存在于 macosArm64Main）。
  */
