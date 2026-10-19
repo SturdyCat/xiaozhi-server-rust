@@ -73,3 +73,16 @@ expect fun ViewContainer<*, *>.macServerSwitchEntry(
  * macOS 返回用户记忆的服务器地址（SP key "xz.server.baseUrl"，空则回退本地默认）。
  */
 expect fun pagerBaseUrl(pager: Pager): String
+
+/**
+ * unix 秒 → 本地时区 `"yyyy-MM-dd HH:mm:ss"`（EchoMuse 设备的 first_seen/last_seen
+ * 等时间戳展示统一走这里；commonMain 无日期库，由平台 API 换算本地时区）。
+ */
+expect fun formatEpochSeconds(secs: Long): String
+
+/**
+ * 复制文本到系统剪贴板，返回是否成功。
+ * web 管理台常以 `http://LAN-IP` 访问（非 secure context，无 async Clipboard API），
+ * actual 内回落 `execCommand('copy')`；不支持剪贴板的平台返回 false（调用方 toast 提示）。
+ */
+expect fun copyToClipboard(text: String): Boolean

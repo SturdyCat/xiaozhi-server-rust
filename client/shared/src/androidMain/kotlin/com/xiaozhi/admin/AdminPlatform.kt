@@ -31,3 +31,12 @@ actual fun ViewContainer<*, *>.macServerSwitchEntry(
 }
 
 actual fun pagerBaseUrl(pager: Pager): String = ""
+
+actual fun formatEpochSeconds(secs: Long): String {
+    if (secs <= 0) return ""
+    return java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault())
+        .format(java.util.Date(secs * 1000L))
+}
+
+/** Android 宿主未接 Context 桥，暂不支持一键复制（调用方 toast 提示）。 */
+actual fun copyToClipboard(text: String): Boolean = false

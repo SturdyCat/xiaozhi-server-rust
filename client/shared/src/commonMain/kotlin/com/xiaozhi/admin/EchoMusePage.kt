@@ -13,8 +13,9 @@ import com.tencent.kuikly.core.views.View
  *
  * 呈现规则与运维页同一口径（见 `OpsPages.kt` 文件头）：
  * - `enabled=false` 优先于一切：显示"未启用"提示并说明怎么开，不渲染空列表；
- * - 只在偏离时打标：在线不打标，离线/未批准才占视觉；
- * - 重启走**行内二次确认**（同 OTA 删除的 confirmKey 范式——重启是打断设备服务的动作）；
+ * - 只在偏离时打标：在线不打标，离线/未批准才占视觉；停留本页时经服务端事件
+ *   保持（/devices/wait 长挂，变化才回包）实时刷新（[isActive] 为假时链停摆）；
+ * - 重启/删除记录走**行内二次确认**（同 OTA 删除的 confirmKey 范式——都是不可逆动作）；
  * - WiFi 配置 202 只说明"指令已下发"，执行结果在设备灯环上，页面不假装知道结果。
  *
  * ⚠️ 渲染函数必须是 `ViewContainer` 扩展，并在目标容器闭包内**非限定**调用（见
@@ -24,7 +25,9 @@ fun ViewContainer<*, *>.renderEchoMuse(
     state: EchoMuseState,
     toast: ToastState,
     ctx: Pager,
+    isActive: () -> Boolean,
 ) {
+    state.ensureLiveUpdates(ctx, isActive)
     opsHeader(
         { if (state.loading && !state.loaded) "加载中…" else state.summaryText() },
         { state.loading },
@@ -64,7 +67,7 @@ fun ViewContainer<*, *>.renderEchoMuse(
     }
 }
 
-/** 一台 EchoMuse 设备卡片：状态 + 元信息 + 批准 / 重启 / WiFi 配置。 */
+/** 一台 EchoMuse 设备卡片：状态 + 元信息 + 复制 / 删除记录 + 批准 / 重启 / WiFi 配置。 */
 private fun ViewContainer<*, *>.echoMuseDeviceCard(
     row: EchoMuseDeviceRow,
     state: EchoMuseState,
@@ -78,12 +81,15 @@ private fun ViewContainer<*, *>.echoMuseDeviceCard(
                 alignItemsCenter()
                 paddingBottom(AdminSpace.xs)
             }
+            // 改过名才在标题行露原始 device_id；未改名时标题就是设备号，此处渲染空文本
+            // 只留 flex 占位（徽标靠右对齐）——subtitle 不在这里重复渲染，
+            // 渲染两遍就是页面上那对重复的「版本…系统…」行。
             Text {
                 attr {
                     flex(1f)
                     fontSize(AdminType.caption)
                     color(AdminColors.textSecondary)
-                    text(if (row.label.isNotEmpty() && row.label != row.deviceId) row.deviceId else row.subtitle)
+                    text(if (row.renamed) row.deviceId else "")
                 }
             }
             // 只在偏离时打标：在线是正常态不打标；离线/未批准才提示
@@ -104,6 +110,42 @@ private fun ViewContainer<*, *>.echoMuseDeviceCard(
         }
         if (row.metaText.isNotEmpty()) {
             textNote(row.metaText, micro = true)
+        }
+
+        // ===== 复制信息 + 删除记录（Kuikly 渲染的文本不支持长按选中复制，一键复制兜底）=====
+        actionRow {
+            secondaryButton("复制信息") {
+                if (copyToClipboard(row.copyText)) {
+                    toast.show("设备信息已复制到剪贴板", "ok")
+                } else {
+                    toast.show("复制失败：当前平台剪贴板不可用", "error")
+                }
+            }
+            View { attr { width(AdminSpace.sm) } }
+            vif({ state.confirmDeleteId == row.deviceId }) {
+                primaryButton(
+                    "确认删除",
+                    danger = { true },
+                    loading = { state.actionBusy },
+                    loadingText = "删除中…",
+                ) {
+                    state.delete(ctx, row.deviceId) { ok, msg ->
+                        toast.show(msg, if (ok) "ok" else "error")
+                        if (ok) state.refresh(ctx)
+                    }
+                }
+                View { attr { width(AdminSpace.sm) } }
+                secondaryButton("取消") { state.confirmDeleteId = "" }
+            }
+            vif({ state.confirmDeleteId != row.deviceId }) {
+                secondaryButton("删除记录") { state.confirmDeleteId = row.deviceId }
+            }
+        }
+        vif({ state.confirmDeleteId == row.deviceId }) {
+            textNote(
+                "删除只清服务端登记（含批准/唤醒词设置），不影响设备本身；设备下次接入会重新登记。",
+                micro = true,
+            )
         }
 
         // ===== 未批准：批准表单（可填 label）=====

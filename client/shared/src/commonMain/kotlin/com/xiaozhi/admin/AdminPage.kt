@@ -1,6 +1,7 @@
 package com.xiaozhi.admin
 
 import com.tencent.kuikly.core.annotations.Page
+import com.tencent.kuikly.core.base.CursorType
 import com.tencent.kuikly.core.base.ViewBuilder
 import com.tencent.kuikly.core.base.ViewContainer
 import com.tencent.kuikly.core.directives.vif
@@ -283,7 +284,14 @@ class AdminPage : Pager() {
                         }
                     }
                     vif({ ctx.selectedSection == "echomuse" }) {
-                        opsScroller { renderEchoMuse(ctx.echomuse, ctx.toast, ctx) }
+                        opsScroller {
+                            renderEchoMuse(
+                                ctx.echomuse,
+                                ctx.toast,
+                                ctx,
+                                isActive = { ctx.selectedSection == "echomuse" },
+                            )
+                        }
                     }
                     vif({ ctx.selectedSection == "sessions" }) {
                         opsScroller { renderOpsSessions(ctx.sessions, ctx) }
@@ -424,6 +432,8 @@ private fun ViewContainer<*, *>.hamburgerButton(onClick: () -> Unit) {
             alignItemsCenter()
             justifyContentCenter()
             marginRight(AdminSpace.sm)
+            // 点击目标：悬停指针
+            cursor(CursorType.POINTER)
         }
         event { click { onClick() } }
         for (i in 0 until 3) {

@@ -3,6 +3,7 @@ package com.xiaozhi.admin
 import com.tencent.kuikly.core.base.ViewContainer
 import com.tencent.kuikly.core.module.Module
 import com.tencent.kuikly.core.pager.Pager
+import kotlinx.browser.window
 
 /** Web：无 macOS 专属能力（测试台菜单已隐藏，服务器地址走同域相对路径）。 */
 actual val IS_MACOS: Boolean = false
@@ -32,3 +33,39 @@ actual fun ViewContainer<*, *>.macServerSwitchEntry(
 }
 
 actual fun pagerBaseUrl(pager: Pager): String = ""
+
+/** 浏览器本地时区换算（Date 各 getter 即本地值），补零成固定列宽便于扫读。 */
+actual fun formatEpochSeconds(secs: Long): String {
+    if (secs <= 0) return ""
+    val d = kotlin.js.Date(secs.toDouble() * 1000.0)
+    fun p(n: Int): String = n.toString().padStart(2, '0')
+    return "${d.getFullYear().toInt()}-${p(d.getMonth().toInt() + 1)}-${p(d.getDate().toInt())} " +
+        "${p(d.getHours().toInt())}:${p(d.getMinutes().toInt())}:${p(d.getSeconds().toInt())}"
+}
+
+/**
+ * 优先 async Clipboard API（https/localhost）；管理台常以 `http://LAN-IP` 访问，
+ * 非 secure context 下 API 不存在，回落隐藏 textarea + `execCommand('copy')`。
+ */
+actual fun copyToClipboard(text: String): Boolean = try {
+    val clip = window.navigator.asDynamic().clipboard
+    if (window.asDynamic().isSecureContext == true && clip != null) {
+        clip.writeText(text) // Promise 不等待：写失败极罕见且无更优兜底
+        true
+    } else {
+        // http://LAN-IP 部署不是 secure context：隐藏 textarea + execCommand 兜底
+        val doc = window.document
+        val body = doc.body ?: return false
+        val ta = doc.createElement("textarea").asDynamic()
+        ta.value = text
+        ta.style.position = "fixed"
+        ta.style.opacity = "0"
+        body.appendChild(ta)
+        ta.select()
+        val ok = doc.asDynamic().execCommand("copy")
+        body.removeChild(ta)
+        ok == true
+    }
+} catch (_: Throwable) {
+    false
+}

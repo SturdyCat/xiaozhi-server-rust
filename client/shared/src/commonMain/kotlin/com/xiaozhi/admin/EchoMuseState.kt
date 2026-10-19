@@ -6,21 +6,29 @@ import com.tencent.kuikly.core.pager.Pager
 import com.tencent.kuikly.core.reactive.collection.ObservableList
 import com.tencent.kuikly.core.reactive.handler.observable
 import com.tencent.kuikly.core.reactive.handler.observableList
+import com.tencent.kuikly.core.timer.setTimeout
 
 /**
- * 「EchoMuse 设备」页的数据源（`GET /api/echomuse/devices` + 批准/下发指令两个写动作）。
+ * 「EchoMuse 设备」页的数据源（`GET /api/echomuse/devices` + 批准/下发指令/删除记录三个写动作）。
  *
  * 与小智协议设备（[DevicesState]，进程内注册表）不同：EchoMuse 设备由服务端 `[echomuse]`
  * 能力持久登记（批准制），走独立的 `/api/echomuse/` 端点。`enabled=false` 表示服务端
  * 未开启该能力，页面据此显示"未启用"提示而不是空列表。
  *
+ * 列表是**请求时刻的快照**，但页面不需要轮询：服务端设备面有变化（上线/离线/
+ * 批准/设置/删除）会经 `GET /api/echomuse/devices/wait`（事件保持：有变化才回包，
+ * 无变化服务端挂 25s 超时）立即唤醒本页刷新——见 [ensureLiveUpdates]。
+ *
  * 设计口径与 [DevicesState] 一致：
  * - 加载失败就地显示（`loadError` + 「刷新」），不弹 toast；
- * - 写动作（批准/重启/WiFi）结果走顶部 toast（调用方回调）；
+ * - 写动作（批准/重启/WiFi/删除）结果走顶部 toast（调用方回调）；
  * - 409（设备离线）单独给"设备离线"提示——指令不会下发，需要先把设备唤醒。
  *
  * ⚠️ 本类不渲染：渲染见 `EchoMusePage.kt`，页面壳体见 `AdminPage.kt`。
  */
+
+/** 长挂失败后的重试间隔：服务端不可达时退避，不打爆网络。 */
+private const val ECHOMUSE_WAIT_RETRY_MS = 5_000
 
 /** 一台 EchoMuse 设备（`GET /api/echomuse/devices` 的一行）。字段不可变——刷新时整表重建。 */
 class EchoMuseDeviceRow(
@@ -30,8 +38,10 @@ class EchoMuseDeviceRow(
     val version: String,
     val board: String,
     val baseOs: String,
-    val firstSeen: String,
-    val lastSeen: String,
+    /** 首次接入（unix 秒；服务端未给为 -1）。展示经 [formatEpochSeconds] 换成本地时间。 */
+    val firstSeen: Long,
+    /** 最近一次接入（unix 秒；服务端未给为 -1）。 */
+    val lastSeen: Long,
     val online: Boolean,
     /** 已连接时长（秒；服务端未给为 null → -1）。 */
     val connectedSecs: Long,
@@ -41,6 +51,9 @@ class EchoMuseDeviceRow(
     /** 标题：label 优先，未命名时回退设备号。 */
     val title: String get() = label.ifEmpty { deviceId }
 
+    /** 是否改过名：改名后标题是 label，副标题行露出原始 device_id 供核对。 */
+    val renamed: Boolean get() = label.isNotEmpty() && label != deviceId
+
     /** 副标题：版本 · 板型 · base_os。缺失项自动省略。 */
     val subtitle: String
         get() = listOfNotNull(
@@ -49,20 +62,39 @@ class EchoMuseDeviceRow(
             baseOs.takeIf { it.isNotEmpty() }?.let { "系统 $it" },
         ).joinToString(" · ")
 
-    /** 元信息行：最近在线 / 首次接入 / 已连接时长。 */
+    /** 元信息行：最近在线 / 首次接入 / 已连接时长（时间戳一律本地格式化，不出原始 epoch）。 */
     val metaText: String
         get() = listOfNotNull(
-            lastSeen.takeIf { it.isNotEmpty() }?.let { "最近在线 $it" },
-            firstSeen.takeIf { it.isNotEmpty() }?.let { "首次接入 $it" },
+            lastSeenText.takeIf { it.isNotEmpty() }?.let { "最近在线 $it" },
+            firstSeenText.takeIf { it.isNotEmpty() }?.let { "首次接入 $it" },
             if (connectedSecs >= 0) "已连接 ${humanDuration(connectedSecs * 1000L)}" else null,
         ).joinToString(" · ")
+
+    private val lastSeenText: String get() = formatEpochSeconds(lastSeen)
+    private val firstSeenText: String get() = formatEpochSeconds(firstSeen)
+
+    /** 「复制信息」的纯文本全量快照（设备号/版本/时间/状态，粘到聊天或工单可直接读）。 */
+    val copyText: String
+        get() = buildList {
+            add("设备: $title")
+            if (renamed) add("device_id: $deviceId")
+            if (subtitle.isNotEmpty()) add(subtitle)
+            if (metaText.isNotEmpty()) add(metaText)
+            add("状态: ${if (online) "在线" else "离线"}${if (approved) "" else "（待批准）"}")
+        }.joinToString("\n")
 }
 
-/** `GET /api/echomuse/devices` 的数据源 + 批准 / 下发指令（reboot、wifi）。 */
+/** `GET /api/echomuse/devices` 的数据源 + 批准 / 下发指令（reboot、wifi）/ 删除记录。 */
 class EchoMuseState(scope: PagerScope) : LoadableState(scope) {
 
     /** 服务端 `[echomuse]` 能力开关（false 时页面显示"未启用"提示）。 */
     var enabled by scope.observable(true)
+
+    /**
+     * 服务端设备面变化版本号（`devices` 回包携带）：`/wait` 长挂的游标。
+     * -1 = 尚未拿到（服务端过旧没有该字段——此时不挂通知链，退回进页刷新一次）。
+     */
+    private var serverVersion = -1L
 
     val devices: ObservableList<EchoMuseDeviceRow> by scope.observableList()
 
@@ -72,6 +104,8 @@ class EchoMuseState(scope: PagerScope) : LoadableState(scope) {
 
     override fun apply(data: JSONObject) {
         enabled = data.optBoolean("enabled", true)
+        // 版本游标只在服务端给了才更新（老服务端没有该字段，保持 -1）。
+        data.optLong("version")?.let { serverVersion = it }
         devices.clear()
         val arr = data.array("devices")
         if (arr != null) {
@@ -85,8 +119,8 @@ class EchoMuseState(scope: PagerScope) : LoadableState(scope) {
                         version = d.text("version"),
                         board = d.text("board"),
                         baseOs = d.text("base_os"),
-                        firstSeen = d.text("first_seen"),
-                        lastSeen = d.text("last_seen"),
+                        firstSeen = d.optLong("first_seen") ?: -1L,
+                        lastSeen = d.optLong("last_seen") ?: -1L,
                         online = d.optBoolean("online", false),
                         connectedSecs = d.optLong("connected_secs") ?: -1L,
                         settings = d.optJSONObject("settings") ?: JSONObject(),
@@ -209,6 +243,34 @@ class EchoMuseState(scope: PagerScope) : LoadableState(scope) {
         }
     }
 
+    // ============================================================
+    // 删除记录（POST /api/echomuse/devices/{id}/delete）
+    // ============================================================
+
+    /** 删除行内二次确认的设备号（空串 = 无；同 [confirmRebootId] 范式）。 */
+    var confirmDeleteId by scope.observable("")
+
+    /**
+     * 删除登记记录（清理 mock/联调设备）。只清静态登记、不断开在线会话；
+     * 设备再次 register 会重新出现在列表里。
+     */
+    fun delete(ctx: Pager, deviceId: String, onDone: (ok: Boolean, msg: String) -> Unit) {
+        if (actionBusy) return
+        actionBusy = true
+        post(ctx, "/api/echomuse/devices/$deviceId/delete", JSONObject()) { ok, code, reason, _ ->
+            actionBusy = false
+            confirmDeleteId = ""
+            if (ok) {
+                onDone(true, "已删除记录 ${displayName(deviceId)}")
+            } else {
+                onDone(false, when (code) {
+                    404 -> "设备不存在（可能已被删除，刷新列表即可）"
+                    else -> "删除失败：${reason.ifEmpty { "HTTP $code" }}"
+                })
+            }
+        }
+    }
+
     /** 展开/收起某台设备的批准表单（切换目标时清空草稿）。 */
     fun toggleApprove(deviceId: String) {
         if (approveTarget == deviceId) {
@@ -306,6 +368,47 @@ class EchoMuseState(scope: PagerScope) : LoadableState(scope) {
                     else -> "设置保存失败：${reason.ifEmpty { "HTTP $code" }}"
                 })
             }
+        }
+    }
+
+    // ============================================================
+    // 实时更新：服务端事件保持（GET /devices/wait 长挂），变化才回包
+    // ============================================================
+
+    /** 长挂链只起一次（[ensureLiveUpdates] 会在每次重组时被调用）。 */
+    private var liveStarted = false
+
+    /**
+     * 页面停留（[isActive]）期间挂住 `GET /api/echomuse/devices/wait?after=<版本>`：
+     * 服务端设备面有变化（设备上线/离线、批准、设置、删除）立刻回包，本页随即
+     * 刷新列表再挂下一轮；无变化由服务端 25s 超时回 `changed:false`。**没有固定
+     * 轮询间隔**——无事件时不产生任何请求流量。链在页面切走后停摆，回到本页时
+     * 渲染层再调 [ensureLiveUpdates] 重新起链（挂起期间发生的变化会在第一个回包
+     * 立即对齐）。服务端过旧（无版本字段）则不起链，退回"进页刷新一次"的口径。
+     */
+    fun ensureLiveUpdates(ctx: Pager, isActive: () -> Boolean) {
+        if (liveStarted || serverVersion < 0) return
+        liveStarted = true
+        waitTick(ctx, isActive)
+    }
+
+    private fun waitTick(ctx: Pager, isActive: () -> Boolean) {
+        getJson(ctx, "$base/api/echomuse/devices/wait?after=$serverVersion") { ok, data, _ ->
+            if (!isActive()) {
+                liveStarted = false
+                return@getJson
+            }
+            if (!ok) {
+                // 网络/服务端暂不可达：退避后重挂，链不断。
+                ctx.setTimeout(ECHOMUSE_WAIT_RETRY_MS) {
+                    if (isActive()) waitTick(ctx, isActive) else liveStarted = false
+                }
+                return@getJson
+            }
+            // 版本以回包为准（refresh 的列表回包还会再对齐一次，值相同）。
+            data.optLong("version")?.let { serverVersion = it }
+            if (data.optBoolean("changed", false)) refresh(ctx)
+            waitTick(ctx, isActive)
         }
     }
 
