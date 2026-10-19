@@ -272,6 +272,10 @@ pub struct DeviceRegister {
     pub board: Option<String>,
     #[serde(default)]
     pub base_os: Option<String>,
+    /// 配对请求（上游固件：装过 CA 的设备在无 tls_port 时按住 action 键降级
+    /// plain 拨号并置位；该拨号**不带 token**，见 routes.rs 的鉴权豁免）。
+    #[serde(default)]
+    pub pairing: bool,
 }
 
 /// 服务器 → 设备 的 `ack`（能力协商：`features` 是**服务器**的能力表，

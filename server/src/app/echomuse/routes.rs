@@ -43,6 +43,10 @@ const CLAIM_FAIL: &str = "[echomuse] /em/data 无待认领设备（control 未�
 pub fn em_routes() -> axum::Router<Arc<Engines>> {
     use axum::routing::get;
     axum::Router::new()
+        // 上游固件（现版）拨的是根路径 `/control`、`/data`；`/em/*` 是本项目
+        // 旧版接口文档的挂载名，保留作别名（mock 脚本与文档走它）。
+        .route("/control", get(em_control))
+        .route("/data", get(em_data))
         .route("/em/control", get(em_control))
         .route("/em/data", get(em_data))
         // 只读状态查询（排查"设备是否连上服务器"）：关闭时也返回 200 + enabled=false，
@@ -73,18 +77,23 @@ async fn em_control(
     if !cfg.enabled {
         return (StatusCode::NOT_FOUND, "echomuse disabled").into_response();
     }
-    if !token_ok(&headers, &cfg.token) {
-        return (StatusCode::UNAUTHORIZED, "bad token").into_response();
-    }
+    // token 不匹配时不立即 401：上游固件的配对流程（装过 CA 的设备长按 action 键
+    // 降级 plain 拨号）**不带 token**，是否放行要等 register 里的 `pairing:true`
+    // ——升级后由 control_session 首帧裁决，token 错误的普通连接照样拒绝。
+    let authenticated = token_ok(&headers, &cfg.token);
     ws.on_upgrade(move |socket| async move {
-        if let Err(e) = control_session(socket, engines).await {
+        if let Err(e) = control_session(socket, engines, authenticated).await {
             tracing::warn!("[echomuse] control 会话异常: {e}");
         }
     })
 }
 
 /// control 主体：register → ack → 起 control 任务 → 进会话主循环。
-async fn control_session(socket: WebSocket, engines: Arc<Engines>) -> anyhow::Result<()> {
+async fn control_session(
+    socket: WebSocket,
+    engines: Arc<Engines>,
+    authenticated: bool,
+) -> anyhow::Result<()> {
     let (mut sink, mut stream) = socket.split();
     // 第一条消息必须是 register（协议规定"连接后立刻发送"）。
     let register: DeviceRegister = match stream.next().await {
@@ -96,6 +105,17 @@ async fn control_session(socket: WebSocket, engines: Arc<Engines>) -> anyhow::Re
     };
     if register.device_id.is_empty() {
         anyhow::bail!("register 缺 device_id");
+    }
+    // 鉴权裁决（见 em_control）：无 token 且不是配对请求 → 拒绝；配对请求放行
+    // 但明确告警，设备是否可用仍由管理面审批（registry.approved）决定。
+    if !authenticated {
+        if !register.pairing {
+            anyhow::bail!("token 缺失/错误，拒绝接入");
+        }
+        tracing::warn!(
+            "[echomuse] 配对请求：device={}（无 token，请到管理台认领/审批）",
+            register.device_id
+        );
     }
     let device_id = register.device_id.clone();
     tracing::info!(
