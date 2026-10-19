@@ -237,9 +237,9 @@ fun ViewContainer<*, *>.serverConfigCard(form: ConfigFormState) {
         vif({ form.schema.sectionNote("server").isNotEmpty() }) {
             textNote(form.schema.sectionNote("server"), micro = true)
         }
-        labeledField("port", { form.port }, { form.port = it; form.markDirty() }, "8000")
+        labeledIntField("port", { form.port }, { form.port = it; form.markDirty() }, "8000")
         labeledField("expected_token", { form.expectedToken }, { form.expectedToken = it; form.markDirty() })
-        labeledField("worker_threads", { form.workerThreads }, { form.workerThreads = it; form.markDirty() })
+        labeledIntField("worker_threads", { form.workerThreads }, { form.workerThreads = it; form.markDirty() })
         labeledField("admin_dir", { form.adminDir }, { form.adminDir = it; form.markDirty() })
     }
 }
@@ -250,14 +250,14 @@ fun ViewContainer<*, *>.audioConfigCard(form: ConfigFormState) {
         vif({ form.schema.sectionNote("audio").isNotEmpty() }) {
             textNote(form.schema.sectionNote("audio"), micro = true)
         }
-        labeledField("downlink_sample_rate", { form.downlinkSampleRate }, { form.downlinkSampleRate = it; form.markDirty() })
-        labeledField("downlink_frame_duration_ms", { form.downlinkFrameMs }, { form.downlinkFrameMs = it; form.markDirty() })
-        labeledField("channels", { form.channels }, { form.channels = it; form.markDirty() })
-        labeledField("binary_protocol_version", { form.binaryProtocolVersion }, { form.binaryProtocolVersion = it; form.markDirty() })
+        labeledIntField("downlink_sample_rate", { form.downlinkSampleRate }, { form.downlinkSampleRate = it; form.markDirty() })
+        labeledIntField("downlink_frame_duration_ms", { form.downlinkFrameMs }, { form.downlinkFrameMs = it; form.markDirty() })
+        labeledIntField("channels", { form.channels }, { form.channels = it; form.markDirty() })
+        labeledIntField("binary_protocol_version", { form.binaryProtocolVersion }, { form.binaryProtocolVersion = it; form.markDirty() })
         // 抖动缓冲提前量：下发时间表比实时提前该时长，使设备解码队列常备音频存货，
         // 吸收网络抖动 + 上游 LLM 出句/TTS 合成的停顿（长回复断音的主要来源）。
-        labeledField("downlink_lead_ms", { form.downlinkLeadMs }, { form.downlinkLeadMs = it; form.markDirty() }, "1000")
-        labeledField("downlink_queue_packets", { form.downlinkQueuePackets }, { form.downlinkQueuePackets = it; form.markDirty() }, "20")
+        labeledIntField("downlink_lead_ms", { form.downlinkLeadMs }, { form.downlinkLeadMs = it; form.markDirty() }, "1000")
+        labeledIntField("downlink_queue_packets", { form.downlinkQueuePackets }, { form.downlinkQueuePackets = it; form.markDirty() }, "20")
         Text {
             attr {
                 fontSize(AdminType.caption)
@@ -267,9 +267,9 @@ fun ViewContainer<*, *>.audioConfigCard(form: ConfigFormState) {
         }
         // 服务器侧缓冲：设备队列只有 ~1.2s，上游慢于实时（LLM 逐句吐字 / 在线合成首片）
         // 时唯一还能加深缓冲的地方——用服务器内存换下行连续性。
-        labeledField("downlink_buffer_ms", { form.downlinkBufferMs }, { form.downlinkBufferMs = it; form.markDirty() }, "30000")
-        labeledField("downlink_buffer_start_ms", { form.downlinkBufferStartMs }, { form.downlinkBufferStartMs = it; form.markDirty() }, "1500")
-        labeledField("downlink_buffer_start_max_ms", { form.downlinkBufferStartMaxMs }, { form.downlinkBufferStartMaxMs = it; form.markDirty() }, "4000")
+        labeledIntField("downlink_buffer_ms", { form.downlinkBufferMs }, { form.downlinkBufferMs = it; form.markDirty() }, "30000")
+        labeledIntField("downlink_buffer_start_ms", { form.downlinkBufferStartMs }, { form.downlinkBufferStartMs = it; form.markDirty() }, "1500")
+        labeledIntField("downlink_buffer_start_max_ms", { form.downlinkBufferStartMaxMs }, { form.downlinkBufferStartMaxMs = it; form.markDirty() }, "4000")
         Text {
             attr {
                 fontSize(AdminType.caption)
@@ -293,7 +293,7 @@ fun ViewContainer<*, *>.asrConfigCard(form: ConfigFormState) {
             switchRow("use_itn", form.asrUseItn == "true") {
                 form.toggleStringBool(form::asrUseItn)
             }
-            labeledField("num_threads", { form.asrNumThreads }, { form.asrNumThreads = it; form.markDirty() })
+            labeledIntField("num_threads", { form.asrNumThreads }, { form.asrNumThreads = it; form.markDirty() })
         }
     }
 }
@@ -301,12 +301,12 @@ fun ViewContainer<*, *>.asrConfigCard(form: ConfigFormState) {
 fun ViewContainer<*, *>.vadConfigCard(form: ConfigFormState, ctx: Pager) {
     groupedCard("VAD") {
         labeledField("model", { form.vadModel }, { form.vadModel = it; form.markDirty() })
-        labeledField("threshold", { form.vadThreshold }, { form.vadThreshold = it; form.markDirty() })
+        labeledDecimalField("threshold", { form.vadThreshold }, { form.vadThreshold = it; form.markDirty() })
         // ===== 高级（切句时序微调，默认折叠；P0-1）=====
         advancedToggleRow(form)
         vif({ form.showAdvanced }) {
-            labeledField("min_silence_duration", { form.vadMinSilence }, { form.vadMinSilence = it; form.markDirty() })
-            labeledField("min_speech_duration", { form.vadMinSpeech }, { form.vadMinSpeech = it; form.markDirty() })
+            labeledDecimalField("min_silence_duration", { form.vadMinSilence }, { form.vadMinSilence = it; form.markDirty() })
+            labeledDecimalField("min_speech_duration", { form.vadMinSpeech }, { form.vadMinSpeech = it; form.markDirty() })
         }
         dividerH()
         // ===== 内联测试（P0-2）：构建引擎 + 首次检测延迟（真实 Silero 冷启动可达数秒）=====
@@ -346,7 +346,7 @@ fun ViewContainer<*, *>.ttsConfigCard(form: ConfigFormState, ctx: Pager) {
         // 高级（缓存容量调优，默认折叠；P0-1）
         advancedToggleRow(form)
         vif({ form.showAdvanced }) {
-            labeledField(
+            labeledIntField(
                 "cache_entries",
                 { form.ttsCacheEntries },
                 { form.ttsCacheEntries = it; form.markDirty() },
@@ -389,9 +389,9 @@ fun ViewContainer<*, *>.ttsConfigCard(form: ConfigFormState, ctx: Pager) {
             labeledField("dict_dir", { form.ttsDictDir }, { form.ttsDictDir = it; form.markDirty() })
             labeledField("lexicon", { form.ttsLexicon }, { form.ttsLexicon = it; form.markDirty() })
             labeledField("lang", { form.ttsLang }, { form.ttsLang = it; form.markDirty() })
-            labeledField("speaker", { form.ttsSpeaker }, { form.ttsSpeaker = it; form.markDirty() })
-            labeledField("speed", { form.ttsSpeed }, { form.ttsSpeed = it; form.markDirty() })
-            labeledField("num_threads", { form.ttsNumThreads }, { form.ttsNumThreads = it; form.markDirty() })
+            labeledIntField("speaker", { form.ttsSpeaker }, { form.ttsSpeaker = it; form.markDirty() })
+            labeledDecimalField("speed", { form.ttsSpeed }, { form.ttsSpeed = it; form.markDirty() })
+            labeledIntField("num_threads", { form.ttsNumThreads }, { form.ttsNumThreads = it; form.markDirty() })
         }
         vif({ form.ttsMode == "remote" }) {
             dropdownField(
@@ -566,7 +566,7 @@ fun ViewContainer<*, *>.llmConfigCard(form: ConfigFormState, ctx: Pager) {
         }
         // 系统提示词是散文输入：官方 TextArea 多行（此前用单行 Input 输不了换行）
         labeledTextArea("system_prompt", { form.llmSystemPrompt }, { form.llmSystemPrompt = it; form.markDirty() }, height = 100f)
-        labeledField("temperature", { form.llmTemperature }, { form.llmTemperature = it; form.markDirty() })
+        labeledDecimalField("temperature", { form.llmTemperature }, { form.llmTemperature = it; form.markDirty() })
         switchRow("enabled（LLM 回声开关；关闭后技能未命中原文回声，不走 LLM）", form.llmEnabled == "true") {
             form.toggleStringBool(form::llmEnabled)
         }
@@ -576,7 +576,7 @@ fun ViewContainer<*, *>.llmConfigCard(form: ConfigFormState, ctx: Pager) {
         // ===== 高级（上下文长度调优，默认折叠；P0-1）=====
         advancedToggleRow(form)
         vif({ form.showAdvanced }) {
-            labeledField("max_history", { form.llmMaxHistory }, { form.llmMaxHistory = it; form.markDirty() })
+            labeledIntField("max_history", { form.llmMaxHistory }, { form.llmMaxHistory = it; form.markDirty() })
         }
         dividerH()
         // ===== 内联测试（P0-2）：按磁盘最新配置测连通性 + 首 token 延迟（测的是已保存值）=====
@@ -625,11 +625,11 @@ fun ViewContainer<*, *>.aiuiConfigCard(form: ConfigFormState) {
             labeledField("scene", { form.aiuiScene }, { form.aiuiScene = it; form.markDirty() }, "main_box（测试）/ main（生产）")
             labeledField("sn_prefix", { form.aiuiSnPrefix }, { form.aiuiSnPrefix = it; form.markDirty() })
             labeledField("voice", { form.aiuiVoice }, { form.aiuiVoice = it; form.markDirty() }, "x6_dongmanshaonv_pro")
-            labeledField("speed（0~100）", { form.aiuiSpeed }, { form.aiuiSpeed = it; form.markDirty() }, "50")
-            labeledField("volume（0~100）", { form.aiuiVolume }, { form.aiuiVolume = it; form.markDirty() }, "50")
-            labeledField("pitch（0~100）", { form.aiuiPitch }, { form.aiuiPitch = it; form.markDirty() }, "50")
+            labeledIntField("speed（0~100）", { form.aiuiSpeed }, { form.aiuiSpeed = it; form.markDirty() }, "50")
+            labeledIntField("volume（0~100）", { form.aiuiVolume }, { form.aiuiVolume = it; form.markDirty() }, "50")
+            labeledIntField("pitch（0~100）", { form.aiuiPitch }, { form.aiuiPitch = it; form.markDirty() }, "50")
             labeledTextArea("prompt（人设）", { form.aiuiPrompt }, { form.aiuiPrompt = it; form.markDirty() }, height = 80f)
-            labeledField("pace_ms", { form.aiuiPaceMs }, { form.aiuiPaceMs = it; form.markDirty() }, "10")
+            labeledIntField("pace_ms", { form.aiuiPaceMs }, { form.aiuiPaceMs = it; form.markDirty() }, "10")
             Text {
                 attr {
                     fontSize(AdminType.caption)

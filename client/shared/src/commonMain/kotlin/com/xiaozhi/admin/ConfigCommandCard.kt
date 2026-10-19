@@ -55,7 +55,7 @@ fun ViewContainer<*, *>.commandConfigCard(form: ConfigFormState) {
                     form.openDropdown = ""
                 },
             )
-            labeledField(
+            labeledIntField(
                 "max_chars（最长字数，超过就不做指令判断）",
                 { cmd.maxChars },
                 { cmd.maxChars = it; form.markDirty() },

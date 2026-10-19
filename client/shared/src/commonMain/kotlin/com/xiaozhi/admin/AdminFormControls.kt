@@ -1,7 +1,9 @@
 package com.xiaozhi.admin
 
+import com.tencent.kuikly.core.base.Attr
 import com.tencent.kuikly.core.base.Border
 import com.tencent.kuikly.core.base.BorderStyle
+import com.tencent.kuikly.core.base.CursorType
 import com.tencent.kuikly.core.base.ViewBuilder
 import com.tencent.kuikly.core.base.ViewContainer
 import com.tencent.kuikly.core.directives.vif
@@ -16,6 +18,29 @@ import com.tencent.kuikly.core.views.compose.Button
 
 
 // ===================== 输入 =====================
+
+/**
+ * 整数输入过滤：只保留 ASCII 数字。整数字段（端口/线程数/条数等）禁止小数点、
+ * 负号、字母——否则保存路径 `toIntOrNull() ?: 默认值` 会把脏输入**静默回落成默认值**
+ *（比如把 "80." 存成 8000），比报错更隐蔽。
+ */
+internal val INT_INPUT_FILTER: (String) -> String = { raw -> raw.filter { it.isDigit() } }
+
+/** 小数输入过滤：数字 + 至多一个小数点（temperature/speed/threshold 等浮点字段防脏输入）。 */
+internal val DECIMAL_INPUT_FILTER: (String) -> String = { raw ->
+    buildString {
+        var dotSeen = false
+        for (ch in raw) {
+            when {
+                ch.isDigit() -> append(ch)
+                ch == '.' && !dotSeen -> {
+                    dotSeen = true
+                    append(ch)
+                }
+            }
+        }
+    }
+}
 
 /** 字段标签（只读）：顶部 fieldGap 与上一字段拉开间距。 */
 fun ViewContainer<*, *>.fieldLabel(label: String) {
@@ -51,6 +76,8 @@ fun ViewContainer<*, *>.labeledField(
     height: Float = 48f,
     /** 字段级提示（如"需重启 server 生效"）；传 lambda，见 [com.xiaozhi.admin.FormSchemaState.hotNote]。 */
     note: () -> String = { "" },
+    /** 输入过滤（进状态前剥离非法字符）：[INT_INPUT_FILTER] / [DECIMAL_INPUT_FILTER]，null = 不过滤。 */
+    inputFilter: ((String) -> String)? = null,
 ) {
     fieldLabel(label)
     View {
@@ -81,20 +108,26 @@ fun ViewContainer<*, *>.labeledField(
                 placeholder(placeholder)
             }
             event {
-                // 组词中（compositionStart != NO_COMPOSITION）不上报，避免应用态与拼音组词互相踩
+                // 组词中（compositionStart != NO_COMPOSITION）不上报，避免应用态与拼音组词互相踩；
+                // 过滤在去重判定**之前**：剥离后与现值相同就不落 onChange（不打无谓的 dirty 标）。
                 textInputStateChange { state ->
-                    if (state.compositionStart == TextInputState.NO_COMPOSITION && state.text != getValue()) {
-                        onChange(state.text)
+                    if (state.compositionStart == TextInputState.NO_COMPOSITION) {
+                        val next = inputFilter?.invoke(state.text) ?: state.text
+                        if (next != getValue()) {
+                            onChange(next)
+                        }
                     }
                 }
                 // web 渲染器用户键入只走 textDidChange（input 事件→To 回调），
                 // textInputStateChange 仅在框架回写文本时触发——不补挂则 web 上用户
                 // 输入永远进不了表单状态，「保存」回传的是 fill 的旧值（保存无效的根因）。
-                // 与 textInputStateChange 双挂安全：onChange 由 `state.text != getValue()` 幂等去重。
+                // 与 textInputStateChange 双挂安全：过滤后 `next != getValue()` 幂等去重；
+                // web 的 text prop 回显通道会把过滤后的干净值写回输入框（圆点等被剥离字符即时消失）。
                 if (INPUT_NEEDS_TEXT_PROP) {
                     textDidChange { params ->
-                        if (params.text != getValue()) {
-                            onChange(params.text)
+                        val next = inputFilter?.invoke(params.text) ?: params.text
+                        if (next != getValue()) {
+                            onChange(next)
                         }
                     }
                 }
@@ -113,6 +146,32 @@ fun ViewContainer<*, *>.labeledField(
         }
     }
 }
+
+/**
+ * 标签 + **整数**输入框：[labeledField] + [INT_INPUT_FILTER]——键入实时剥离小数点/负号/字母，
+ * 状态里永远是纯数字串。整型配置字段（端口/线程/条数）必须用它，不要用裸 [labeledField]。
+ */
+fun ViewContainer<*, *>.labeledIntField(
+    label: String,
+    getValue: () -> String,
+    onChange: (String) -> Unit,
+    placeholder: String = "",
+    height: Float = 48f,
+    note: () -> String = { "" },
+) = labeledField(label, getValue, onChange, placeholder, height, note, inputFilter = INT_INPUT_FILTER)
+
+/**
+ * 标签 + **小数**输入框：[labeledField] + [DECIMAL_INPUT_FILTER]——放行数字与至多一个小数点
+ * （temperature/speed/threshold 等浮点字段）。
+ */
+fun ViewContainer<*, *>.labeledDecimalField(
+    label: String,
+    getValue: () -> String,
+    onChange: (String) -> Unit,
+    placeholder: String = "",
+    height: Float = 48f,
+    note: () -> String = { "" },
+) = labeledField(label, getValue, onChange, placeholder, height, note, inputFilter = DECIMAL_INPUT_FILTER)
 
 /**
  * 标签 + 多行输入框（官方 TextArea 基座）：散文/提示词/系统提示等多行文本。
@@ -222,6 +281,8 @@ fun ViewContainer<*, *>.appButton(
             paddingLeft(AdminSpace.md)
             paddingRight(AdminSpace.md)
             borderRadius(AdminShape.radiusSm)
+            // 桌面端悬停可点击语义（web 经 h5App 的 cursor prop 处理器落 CSS，macOS 原生直读）
+            cursor(CursorType.POINTER)
             backgroundColor(
                 when {
                     !isActive() -> AdminColors.disabledBg // 禁用与处理中统一中性灰底（动作不可用语义）

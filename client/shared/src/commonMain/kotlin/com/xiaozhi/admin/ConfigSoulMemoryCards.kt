@@ -177,8 +177,8 @@ fun ViewContainer<*, *>.soulConfigCard(form: ConfigFormState, ctx: Pager) {
             )
             dividerH()
             // 语音第一性原则：短。这两个数字会作为**硬约束**写进提示词。
-            labeledField("max_sentences（最多句数 1~8）", { sm.soulMaxSentences }, { sm.soulMaxSentences = it; form.markDirty() }, "2")
-            labeledField("max_chars（最多字数 10~500）", { sm.soulMaxChars }, { sm.soulMaxChars = it; form.markDirty() }, "40")
+            labeledIntField("max_sentences（最多句数 1~8）", { sm.soulMaxSentences }, { sm.soulMaxSentences = it; form.markDirty() }, "2")
+            labeledIntField("max_chars（最多字数 10~500）", { sm.soulMaxChars }, { sm.soulMaxChars = it; form.markDirty() }, "40")
             switchRow("colloquial（说人话：短句、可省略主语）", sm.soulColloquial == "true") {
                 form.toggleStringBool(sm::soulColloquial)
             }
@@ -267,15 +267,15 @@ fun ViewContainer<*, *>.memoryConfigCard(form: ConfigFormState, ctx: Pager) {
             // ===== 召回参数 =====
             labeledField("db_path（库文件，须在挂载卷内）", { sm.memoryDbPath }, { sm.memoryDbPath = it; form.markDirty() }, "/data/data.db")
             labeledField("scope_prefix（作用域前缀）", { sm.memoryScopePrefix }, { sm.memoryScopePrefix = it; form.markDirty() }, "xiaozhi")
-            labeledField("fresh_turn_count（近况轮数）", { sm.memoryFreshTurnCount }, { sm.memoryFreshTurnCount = it; form.markDirty() }, "5")
+            labeledIntField("fresh_turn_count（近况轮数）", { sm.memoryFreshTurnCount }, { sm.memoryFreshTurnCount = it; form.markDirty() }, "5")
             // ===== 高级（检索预算与库运维调优，默认折叠；P0-1）=====
             advancedToggleRow(form)
             vif({ form.showAdvanced }) {
-                labeledField("recall_max_nodes（最多召回条数）", { sm.memoryRecallMaxNodes }, { sm.memoryRecallMaxNodes = it; form.markDirty() }, "6")
-                labeledField("recall_max_tokens（注入 token 预算）", { sm.memoryRecallMaxTokens }, { sm.memoryRecallMaxTokens = it; form.markDirty() }, "400")
-                labeledField("recall_budget_ms（召回耗时预算）", { sm.memoryRecallBudgetMs }, { sm.memoryRecallBudgetMs = it; form.markDirty() }, "300")
-                labeledField("maintenance_interval（维护间隔/轮）", { sm.memoryMaintenanceInterval }, { sm.memoryMaintenanceInterval = it; form.markDirty() }, "6")
-                labeledField("quarantine_max_attempts（抽取最大尝试）", { sm.memoryQuarantineMaxAttempts }, { sm.memoryQuarantineMaxAttempts = it; form.markDirty() }, "3")
+                labeledIntField("recall_max_nodes（最多召回条数）", { sm.memoryRecallMaxNodes }, { sm.memoryRecallMaxNodes = it; form.markDirty() }, "6")
+                labeledIntField("recall_max_tokens（注入 token 预算）", { sm.memoryRecallMaxTokens }, { sm.memoryRecallMaxTokens = it; form.markDirty() }, "400")
+                labeledIntField("recall_budget_ms（召回耗时预算）", { sm.memoryRecallBudgetMs }, { sm.memoryRecallBudgetMs = it; form.markDirty() }, "300")
+                labeledIntField("maintenance_interval（维护间隔/轮）", { sm.memoryMaintenanceInterval }, { sm.memoryMaintenanceInterval = it; form.markDirty() }, "6")
+                labeledIntField("quarantine_max_attempts（抽取最大尝试）", { sm.memoryQuarantineMaxAttempts }, { sm.memoryQuarantineMaxAttempts = it; form.markDirty() }, "3")
             }
             dropdownField(
                 label = "engine（引擎）",
@@ -311,9 +311,9 @@ fun ViewContainer<*, *>.memoryConfigCard(form: ConfigFormState, ctx: Pager) {
                 }
                 // ===== rag 参数组（P1-9，仅 rag 选中时展示）=====
                 labeledField("rag.docs_dir（文档目录，放 txt/md）", { sm.memoryRagDocsDir }, { sm.memoryRagDocsDir = it; form.markDirty() }, "/data/rag-docs")
-                labeledField("rag.chunk_size（分块长度）", { sm.memoryRagChunkSize }, { sm.memoryRagChunkSize = it; form.markDirty() }, "512")
-                labeledField("rag.chunk_overlap（分块重叠）", { sm.memoryRagChunkOverlap }, { sm.memoryRagChunkOverlap = it; form.markDirty() }, "64")
-                labeledField("rag.top_k（每次召回条数）", { sm.memoryRagTopK }, { sm.memoryRagTopK = it; form.markDirty() }, "4")
+                labeledIntField("rag.chunk_size（分块长度）", { sm.memoryRagChunkSize }, { sm.memoryRagChunkSize = it; form.markDirty() }, "512")
+                labeledIntField("rag.chunk_overlap（分块重叠）", { sm.memoryRagChunkOverlap }, { sm.memoryRagChunkOverlap = it; form.markDirty() }, "64")
+                labeledIntField("rag.top_k（每次召回条数）", { sm.memoryRagTopK }, { sm.memoryRagTopK = it; form.markDirty() }, "4")
                 // ===== 文档索引操作（后台重建，对话零阻塞）=====
                 actionRow {
                     secondaryButton("重建索引") { sm.reindexRag(ctx, form.serverBase) }
@@ -368,7 +368,7 @@ fun ViewContainer<*, *>.memoryConfigCard(form: ConfigFormState, ctx: Pager) {
                 if (sm.memoryExtractorApiKeyConfigured) "已配置（留空则不修改）" else "未配置",
             )
             labeledField("extractor.model", { sm.memoryExtractorModel }, { sm.memoryExtractorModel = it; form.markDirty() })
-            labeledField("extractor.temperature", { sm.memoryExtractorTemperature }, { sm.memoryExtractorTemperature = it; form.markDirty() }, "0.1")
+            labeledDecimalField("extractor.temperature", { sm.memoryExtractorTemperature }, { sm.memoryExtractorTemperature = it; form.markDirty() }, "0.1")
             dividerH()
             // ===== 保留策略 =====
             dropdownField(
@@ -394,8 +394,8 @@ fun ViewContainer<*, *>.memoryConfigCard(form: ConfigFormState, ctx: Pager) {
                     text("被轮次记忆引用的原文**永不删除**（仅清理未被引用的原文）；先点「演练保留策略」看清会处理多少条。")
                 }
             }
-            labeledField("retention.recent_turns", { sm.memoryRetentionRecentTurns }, { sm.memoryRetentionRecentTurns = it; form.markDirty() }, "0")
-            labeledField("retention.retention_days", { sm.memoryRetentionDays }, { sm.memoryRetentionDays = it; form.markDirty() }, "0")
+            labeledIntField("retention.recent_turns", { sm.memoryRetentionRecentTurns }, { sm.memoryRetentionRecentTurns = it; form.markDirty() }, "0")
+            labeledIntField("retention.retention_days", { sm.memoryRetentionDays }, { sm.memoryRetentionDays = it; form.markDirty() }, "0")
             switchRow("retention.dry_run（只演练不删除）", sm.memoryRetentionDryRun == "true") {
                 form.toggleStringBool(sm::memoryRetentionDryRun)
             }

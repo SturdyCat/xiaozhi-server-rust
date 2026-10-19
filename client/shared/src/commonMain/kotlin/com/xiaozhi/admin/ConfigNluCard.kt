@@ -37,13 +37,13 @@ fun ViewContainer<*, *>.nluConfigCard(form: ConfigFormState, ctx: Pager) {
             }
         }
         vif({ nlu.enabled == "true" }) {
-            labeledField(
+            labeledDecimalField(
                 "model_threshold（轻量模型执行阈值，0~1）",
                 { nlu.modelThreshold },
                 { nlu.modelThreshold = it; form.markDirty() },
                 "0.9",
             )
-            labeledField(
+            labeledDecimalField(
                 "model_margin（领先次高分的最小差值，0~1）",
                 { nlu.modelMargin },
                 { nlu.modelMargin = it; form.markDirty() },
