@@ -40,6 +40,10 @@ use super::{
 /// data 面入站消息认领失败时的日志前缀（诊断"只连了 data 没 control"类配置错误）。
 const CLAIM_FAIL: &str = "[echomuse] /em/data 无待认领设备（control 未就绪、已认领或多台设备并存）";
 
+/// 等首帧 identify 的上限：真机固件拨通立即发；无 identify 的客户端（旧 mock）
+/// 超时后按"唯一待认领设备"的旧规则兜底，不无限挂住连接。
+const IDENTIFY_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// 挂载 EchoMuse 路由（`[echomuse].enabled=true` 时由 [`crate::app::ws::router`] 调）。
 pub fn em_routes() -> axum::Router<Arc<Engines>> {
     use axum::routing::get;
@@ -314,10 +318,24 @@ async fn em_data(
         return (StatusCode::UNAUTHORIZED, "bad token").into_response();
     }
     ws.on_upgrade(move |socket| async move {
-        // 认领：显式 ?device_id=（测试/同 IP 多设备）优先；否则仅当恰好一台未认领时
-        // 取它（单设备家庭场景的默认路径）。协议允许按对端地址匹配，真机多设备联调
-        // 时再按地址消歧。
-        let claimed = match query.get("device_id") {
+        // 首帧认领：真机固件拨 /data 后**先发一条 Text identify**
+        // `{"type":"identify","device_id":…}`（上游 device/internal/client/data.go
+        // WriteMessage(TextMessage, …)——data 面唯一约定的文本帧），凭它精确认领，
+        // 多台设备并存也能对号入座；mock/测试路径没有 identify，沿用 ?device_id=
+        // 显式或"唯一待认领设备"的旧规则。首帧若是二进制（旧客户端开麦即推），
+        // 原样作为 prelude 交给 data_loop，不丢首包。
+        let explicit = query.get("device_id").cloned();
+        let mut socket = socket;
+        let mut identify: Option<String> = explicit;
+        let mut prelude: Option<Message> = None;
+        if identify.is_none() {
+            match tokio::time::timeout(IDENTIFY_WAIT, socket.recv()).await {
+                Ok(Some(Ok(Message::Text(t)))) => identify = parse_identify(&t),
+                Ok(Some(Ok(frame))) => prelude = Some(frame),
+                _ => {}
+            }
+        }
+        let claimed = match identify.as_deref() {
             Some(id) => hub_claim_data(id),
             None => hub_claim_only(),
         };
@@ -327,18 +345,32 @@ async fn em_data(
         };
         let ble_on = engines.config.echomuse.ble_proxy;
         // data 任务退出时归还认领：链路闪断重拨立即可再认领，不必等下次 register。
-        if let Some(claim) = data_loop(socket, claim, ble_on).await {
+        if let Some(claim) = data_loop(socket, claim, ble_on, prelude).await {
             hub_restore_data(&claim.device_id, claim.data_rx, &claim.data_tx);
         }
     })
 }
 
+/// 解析 data 面首帧的 Text identify（真机固件拨通后立即发送；mock/测试可省略）。
+/// 返回 device_id；形状不符（非 identify、缺/空 device_id、非法 JSON）返回 None，
+/// 由调用方按旧规则（唯一待认领设备）兜底。`pub(super)` 供外置测试直驱。
+pub(super) fn parse_identify(text: &str) -> Option<String> {
+    let v = serde_json::from_str::<serde_json::Value>(text).ok()?;
+    if v.get("type").and_then(|t| t.as_str()) != Some("identify") {
+        return None;
+    }
+    let id = v.get("device_id").and_then(|d| d.as_str())?;
+    (!id.is_empty()).then(|| id.to_string())
+}
+
 /// data 任务：上行帧翻译（PCM→Opus、哨兵→listen stop、蓝牙代理 0x06/0x08 采集）
-/// + 下行帧直发。返回 `Some(claim)` 表示应把认领归还 hub（所有退出路径都归还）。
+/// + 下行帧直发。`prelude` 是认领前替读到的首帧（无 identify 客户端的先行二进制），
+/// 认领后补处理。返回 `Some(claim)` 表示应把认领归还 hub（所有退出路径都归还）。
 async fn data_loop(
     socket: WebSocket,
     claim: super::DataClaim,
     ble_on: bool,
+    prelude: Option<Message>,
 ) -> Option<super::DataClaim> {
     let super::DataClaim {
         device_id,
@@ -363,55 +395,23 @@ async fn data_loop(
     };
     // 上行 PCM 暂存：攒满一个 60ms 帧（960 样本）编一包 Opus。
     let mut up_pcm: Vec<i16> = Vec::with_capacity(frames::MIC_FRAME_SAMPLES * 2);
+    // 认领前替读的首帧（若有）按正常上行处理，不丢首包。
+    if let Some(Message::Binary(raw)) = prelude {
+        on_uplink_binary(&raw, &mut up_enc, &mut up_pcm, &up_tx, &ble, ble_on);
+    }
     loop {
         tokio::select! {
             inbound = stream.next() => {
-                let Some(Ok(Message::Binary(raw))) = inbound else { break };
-                match frames::parse_uplink(&raw) {
-                    UplinkFrame::MicPcm(pcm) => {
-                        push_pcm(&mut up_pcm, pcm);
-                        while up_pcm.len() >= frames::MIC_FRAME_SAMPLES {
-                            let frame: Vec<f32> = up_pcm
-                                .drain(..frames::MIC_FRAME_SAMPLES)
-                                .map(|s| s as f32 / 32768.0)
-                                .collect();
-                            match up_enc.encode_frame(&frame) {
-                                Ok(opus) => {
-                                    let _ = up_tx.send(IncomingFrame::Binary(opus));
-                                }
-                                Err(e) => tracing::debug!("[echomuse] 上行编码失败（丢帧）: {e}"),
-                            }
-                        }
+                match inbound {
+                    // 协议：/data 设备方向除首帧 Text identify 外恒为二进制；此后再收到
+                    // Text（identify 重发等固件行为差异）一律忽略——绝不能断链，此前在
+                    // 此把 Text 当致命帧 break，真机固件的 identify 直接把 data 链踢掉
+                    // （设备侧表现为 close 1006 每 5s 重连）。
+                    Some(Ok(Message::Binary(raw))) => {
+                        on_uplink_binary(&raw, &mut up_enc, &mut up_pcm, &up_tx, &ble, ble_on);
                     }
-                    UplinkFrame::VadEnd | UplinkFrame::NoSpeech => {
-                        // 一轮收口：残段补零成整帧发最后一包，然后会话侧 listen stop。
-                        if !up_pcm.is_empty() {
-                            up_pcm.resize(frames::MIC_FRAME_SAMPLES, 0);
-                            let frame: Vec<f32> =
-                                up_pcm.drain(..).map(|s| s as f32 / 32768.0).collect();
-                            if let Ok(opus) = up_enc.encode_frame(&frame) {
-                                let _ = up_tx.send(IncomingFrame::Binary(opus));
-                            }
-                        }
-                        let _ = up_tx.send(IncomingFrame::Text(
-                            r#"{"type":"listen","state":"stop"}"#.into(),
-                        ));
-                    }
-                    UplinkFrame::BleAdverts(payload) if ble_on => {
-                        if let Ok(v) = serde_json::from_slice::<serde_json::Value>(payload) {
-                            if let Some(list) = v.get("adverts").and_then(|a| a.as_array()) {
-                                ble.lock()
-                                    .expect("echomuse ble link 锁中毒")
-                                    .merge_adverts(list, super::registry::now_secs());
-                            }
-                        }
-                    }
-                    UplinkFrame::BleGatt(payload) if ble_on => {
-                        ble.lock().expect("echomuse ble link 锁中毒").on_gatt(payload);
-                    }
-                    // ble_proxy 关闭时按未知帧忽略（与能力未声明一致，行为零变化）。
-                    UplinkFrame::BleAdverts(_) | UplinkFrame::BleGatt(_) => {}
-                    UplinkFrame::Unknown(_) => {}
+                    Some(Ok(Message::Text(_))) => {}
+                    _ => break,
                 }
             }
             out = data_rx.recv() => {
@@ -434,6 +434,65 @@ async fn data_loop(
         data_tx,
         ble,
     })
+}
+
+/// 处理一个上行二进制帧：PCM 累积编码（攒满 60ms 一包）/ 哨兵收口（残段补零 +
+/// listen stop）/ BLE 广播与 GATT 采集（仅 ble_proxy 开启时翻译）。
+fn on_uplink_binary(
+    raw: &[u8],
+    up_enc: &mut OpusFrameEncoder,
+    up_pcm: &mut Vec<i16>,
+    up_tx: &mpsc::UnboundedSender<IncomingFrame>,
+    ble: &Arc<std::sync::Mutex<BleLink>>,
+    ble_on: bool,
+) {
+    match frames::parse_uplink(raw) {
+        UplinkFrame::MicPcm(pcm) => {
+            push_pcm(up_pcm, pcm);
+            while up_pcm.len() >= frames::MIC_FRAME_SAMPLES {
+                let frame: Vec<f32> = up_pcm
+                    .drain(..frames::MIC_FRAME_SAMPLES)
+                    .map(|s| s as f32 / 32768.0)
+                    .collect();
+                match up_enc.encode_frame(&frame) {
+                    Ok(opus) => {
+                        let _ = up_tx.send(IncomingFrame::Binary(opus));
+                    }
+                    Err(e) => tracing::debug!("[echomuse] 上行编码失败（丢帧）: {e}"),
+                }
+            }
+        }
+        UplinkFrame::VadEnd | UplinkFrame::NoSpeech => {
+            // 一轮收口：残段补零成整帧发最后一包，然后会话侧 listen stop。
+            if !up_pcm.is_empty() {
+                up_pcm.resize(frames::MIC_FRAME_SAMPLES, 0);
+                let frame: Vec<f32> = up_pcm.drain(..).map(|s| s as f32 / 32768.0).collect();
+                if let Ok(opus) = up_enc.encode_frame(&frame) {
+                    let _ = up_tx.send(IncomingFrame::Binary(opus));
+                }
+            }
+            let _ = up_tx.send(IncomingFrame::Text(
+                r#"{"type":"listen","state":"stop"}"#.into(),
+            ));
+        }
+        UplinkFrame::BleAdverts(payload) if ble_on => {
+            if let Ok(v) = serde_json::from_slice::<serde_json::Value>(payload) {
+                if let Some(list) = v.get("adverts").and_then(|a| a.as_array()) {
+                    ble.lock()
+                        .expect("echomuse ble link 锁中毒")
+                        .merge_adverts(list, super::registry::now_secs());
+                }
+            }
+        }
+        UplinkFrame::BleGatt(payload) if ble_on => {
+            ble.lock()
+                .expect("echomuse ble link 锁中毒")
+                .on_gatt(payload);
+        }
+        // ble_proxy 关闭时按未知帧忽略（与能力未声明一致，行为零变化）。
+        UplinkFrame::BleAdverts(_) | UplinkFrame::BleGatt(_) => {}
+        UplinkFrame::Unknown(_) => {}
+    }
 }
 
 /// 把 S16_LE 字节推入 i16 缓冲（截掉奇数尾巴）。

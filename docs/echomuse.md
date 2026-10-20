@@ -37,6 +37,7 @@ mDNS 广播地址**无配置项**：启动时动态探测部署机默认出口�
 
 | EchoMuse 事件 | 会话语义 | 说明 |
 |---|---|---|
+| data 面 Text identify（拨通后首帧） | 按 `device_id` 精确认领 data 出站口 | data 面唯一文本帧；此后恒为二进制，再收 Text 忽略不断链 |
 | `oww_wake`（设备本地唤醒词命中） | `listen state=start` + 下发 `mic_start{lock_mic:true}` | bounded turn：设备自己做 VAD，结束发哨兵 |
 | `button`（动作键） | 同上 | 无唤醒词模型时的兜底入口 |
 | `0x01`/`0x07` mic PCM（16k S16LE） | 上行 Opus 二进制帧 | 服务端用同一 `OpusFrameEncoder` 编码，攒满 60ms 一包；`0x07` 会话头（session u32 + seq u16 BE）已剥离 |
@@ -138,6 +139,6 @@ BLE 回归包括真实 loopback HTTP 路由的鉴权/配置/批准门禁、六�
 ## 维护约束
 
 - 帧型按**方向**分命名空间（`0x04/0x05` 下行是音乐帧、上行是哨兵），解析只走 `frames::parse_uplink`；`0x06`/`0x08` 是蓝牙代理帧（`ble_proxy` 开启才翻译，`ble.rs` 消费）。
-- `/em/data` 认领：显式 `?device_id=` 优先，否则仅当恰好一台未认领时取它；多台设备并存必须带 device_id（协议允许按对端地址收紧，真机多设备联调时再做）。认领取走 `data_rx`，data 任务退出经 `hub_restore_data` 归还（探针校验同会话，防旧认领顶掉新 register 的条目）——链路闪断后设备重拨立即再认领，不必等下次 register；hub 条目存活到会话结束（管理面在线判定/GATT 下发依赖这一点）。
+- `/em/data` 认领：真机固件拨通后**先发一条 Text identify** `{"type":"identify","device_id":…}`（data 面唯一约定的文本帧，上游 `device/internal/client/data.go` 同款），服务端读首帧按其 device_id 精确认领（多台设备并存也对号入座）；mock/测试路径可省 identify，此时显式 `?device_id=` 优先，否则仅当恰好一台未认领时取它。identify 之后 data 面恒为二进制，再收到的 Text 一律忽略不断链。认领取走 `data_rx`，data 任务退出经 `hub_restore_data` 归还（探针校验同会话，防旧认领顶掉新 register 的条目）——链路闪断后设备重拨立即再认领，不必等下次 register；hub 条目存活到会话结束（管理面在线判定/GATT 下发依赖这一点）。
 - `GET /em/status` 只读状态查询：`{"enabled":bool,"devices":[{"device_id","connected_secs"}]}`，devices 取 hub 当前 key（= 处于会话中的在线设备）；关闭时也返回 200 + `enabled:false`（排查用，不 404、无鉴权）。
 - 帧编解码、能力协商形状、transport 翻译、hub 认领/归还、蓝牙代理状态机与 GATT 请求构造的回归在 `server/src/app/echomuse/tests.rs`、`hub_tests.rs` 与 `ble_tests.rs`（channel 直驱不起真实 WS）；真机联调用 `tools/echomuse_mock_device.py`。注册表 `APP_SECTION_HOT` 已登记 `echomuse: RestartOnly`（护栏测试会抓遗漏）。

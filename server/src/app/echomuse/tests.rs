@@ -256,6 +256,33 @@ fn status_enabled_reflects_hub_keys() {
     assert!(!ids.contains(&"dev-status-1") && !ids.contains(&"dev-status-2"));
 }
 
+// ---- /em/data 首帧 identify 认领 ----
+
+#[test]
+fn identify_frame_parses_device_id() {
+    // 真机固件拨 /data 后立即发的唯一文本帧（上游 data.go TextMessage identify）。
+    assert_eq!(
+        super::routes::parse_identify(r#"{"type":"identify","device_id":"G090L910723409TB"}"#),
+        Some("G090L910723409TB".to_string())
+    );
+}
+
+#[test]
+fn identify_frame_wrong_shape_falls_back_to_claim_only() {
+    // 非 identify 类型 / 缺 device_id / 空 device_id / 非法 JSON → None，
+    // 由 em_data 按"唯一待认领设备"旧规则兜底（mock/测试路径）。
+    assert_eq!(super::routes::parse_identify(r#"{"type":"ping"}"#), None);
+    assert_eq!(
+        super::routes::parse_identify(r#"{"type":"identify"}"#),
+        None
+    );
+    assert_eq!(
+        super::routes::parse_identify(r#"{"type":"identify","device_id":""}"#),
+        None
+    );
+    assert_eq!(super::routes::parse_identify("not json"), None);
+}
+
 // ---- 设备登记持久化（registry） ----
 
 use super::registry::Registry;

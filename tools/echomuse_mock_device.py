@@ -171,6 +171,9 @@ def main() -> int:
 
     # 2) data 面：与 control 同源接入（协议要求同地址；本机场景相同 IP）
     data = WsClient(args.host, args.port, f"/em/data?device_id={args.device_id}", args.token)
+    # 真机固件拨通后先发一条 Text identify（data 面唯一约定的文本帧），服务端凭它
+    # 精确认领；mock 保留显式 ?device_id= 与该帧，两条认领路径都覆盖。
+    data.send_text(json.dumps({"type": "identify", "device_id": args.device_id}))
 
     # 3) 模拟唤醒 → mic_start → PCM → 0x04
     ctl.send_text(json.dumps({"type": "oww_wake", "score": 0.97, "threshold": 0.5}))
