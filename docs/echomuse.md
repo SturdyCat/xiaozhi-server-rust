@@ -28,8 +28,11 @@ emOS Web 管理的额外参考锚点是上游 [`858987c272329a41d385835439bd3e2d
 | `enabled` | `false` | 挂载 `/em/control`、`/em/data` 路由并广播 mDNS `_emcontroller._tcp`；关闭时零行为变化 |
 | `token` | 空 | 校验设备 `X-Em-Token` 头；留空不校验。生产建议设置（同网段任何设备都能按此协议连进来） |
 | `ble_proxy` | `false` | 开启蓝牙代理：ack 向声明了 `ble_connect` 的设备回声明 `ble_connect` + `ble_adverts_data`，接入时推送 `bleProxyEnabled`/`bleProxyConnections`（每设备 settings 可覆盖）；关闭时 ack 不声明、`0x06`/`0x08` 按未知帧忽略、管理面 BLE 端点 404——零行为变化 |
+| `plain_port` | `8767` | 控制器专用端口（官方接口对齐）：enabled 且 >0 时**额外**监听设备面路由（`/em/*` + `/shell`），mDNS `plain_port` 也广播它；0 = 关闭（仅主端口）。绑定失败只告警、mDNS 回退广播主端口；主端口始终继续服务 `/em/*` |
 
 mDNS 广播地址**无配置项**：启动时动态探测部署机默认出口的局域网 IPv4，部署在哪台机器、是什么 IP 就广播什么。docker 容器部署会探测到容器内网 IP（设备连不上），请改用 host 网络部署。
+
+**官方端口对齐（`plain_port` 的来由）**：上游 emOS 固件（`emos/init/init.c` 的 `tcp_peer()`）只把「ESTABLISHED 且远端端口 8767/8770」的连接识别为 controller——这是设备串口 banner `controller` 字段的唯一判据，2026-10-20 对 v2.18.1 源码核对为**全固件唯一**按端口判连接的位置（其余逻辑不依赖该状态，纯显示）。自建服务器若只听主端口（如 80/8000），banner 恒显 `not connected`；服务端默认在 8767 额外监听并把 mDNS `plain_port` 指向它，设备经发现自动迁移到官方端口，banner 如实显示 `192.168.x.x:8767`。host 网络部署下 8767 即宿主端口，无需额外映射。
 
 会话侧固定参数：上行 16kHz/二进制协议 v1、下行 16kHz/60ms/v1（mic 是 16k PCM 协议常量；TTS 解码后直接出 16k PCM，无重采样）。
 

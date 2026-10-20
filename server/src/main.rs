@@ -121,7 +121,8 @@ async fn run(config: Config, config_store: Arc<dyn ConfigStore>) -> Result<()> {
             }
         }
     }
-    let app = router(engines);
+    // clone 而非 move：专用端口监听（下方 echomuse 段）还需要同一份 Engines。
+    let app = router(engines.clone());
 
     // 监听：永远 0.0.0.0，唯一可配的是端口（[server].port，默认 8000）——
     // 容器/局域网可达性由端口映射或防火墙决定，不存在"绑错地址"一类的问题。
@@ -150,8 +151,17 @@ async fn run(config: Config, config_store: Arc<dyn ConfigStore>) -> Result<()> {
     }
     // EchoMuse 设备发现（`[echomuse].enabled=true` 时）：广播 `_emcontroller._tcp`，
     // emOS 设备在同网段即可发现本服务器。失败只告警（设备也可凭 endpoint 文件直连）。
+    // 广播端口跟随实际监听：`[echomuse].plain_port`（默认 8767，官方明文 controller
+    // 端口——上游固件 tcp_peer() 只认远端 8767/8770 的连接为 controller）额外监听
+    // 成功则指向专用端口；绑定失败或 plain_port=0 时回退主端口（/em/* 两边都在）。
     if config.echomuse.enabled {
-        crate::app::echomuse::spawn_mdns(config.server.port);
+        let mdns_port = match crate::app::echomuse::listen::dedicated_port(&config.echomuse) {
+            Some(p) => crate::app::echomuse::listen::spawn_dedicated(engines.clone(), p)
+                .await
+                .unwrap_or(config.server.port),
+            None => config.server.port,
+        };
+        crate::app::echomuse::spawn_mdns(mdns_port);
     }
     // 设备主动拨回的受限 shell 面必须绑定当前 control 的真实对端地址；
     // ConnectInfo 来自 TCP 连接，不信任可伪造的转发头。

@@ -177,7 +177,9 @@ ENV XIAOZHI_CONFIG_DB=/data/data.db \
     XIAOZHI_ADMIN_DIR=/app/web \
     XIAOZHI_AUTO_DOWNLOAD_MODELS=missing \
     ORT_DYLIB_PATH=/usr/local/lib/libonnxruntime.so
-EXPOSE 8000
+# 8000 = 主端口（[server].port）；8767 = EchoMuse 控制器专用端口（[echomuse].plain_port）。
+# host 网络部署（docker-compose 默认）下 EXPOSE 仅作文档，监听端口即宿主端口。
+EXPOSE 8000 8767
 
 # 健康检查：curl 已随运行层安装；/api/health 不依赖模型就绪，start-period 20s 足够。
 # 端口读服务启动时落盘的 /data/.runtime_port（见 main.rs），改 [server].port 无需同步这里；

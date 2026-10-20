@@ -57,6 +57,9 @@ mod admin_tests;
 mod ble_tests;
 #[cfg(test)]
 mod hub_tests;
+pub(crate) mod listen;
+#[cfg(test)]
+mod listen_tests;
 pub(crate) mod registry;
 pub(crate) mod routes;
 pub(crate) mod runtime;
@@ -91,6 +94,21 @@ pub struct EchomuseConfig {
     /// settings 可覆盖），仅对 register 声明 `ble_connect` 的固件实际生效。
     #[serde(default)]
     pub ble_proxy: bool,
+    /// 控制器专用端口（官方接口对齐）：>0 时**额外**在此端口监听设备面路由
+    /// （`/em/*` + `/shell`），mDNS `plain_port` 也广播它——上游固件
+    /// （`emos/init/init.c` 的 `tcp_peer()`）只把远端 8767/8770 的 ESTABLISHED
+    /// 连接识别为 controller（串口 banner 的连接状态判据，全固件仅此一处按端口
+    /// 判连接），设备拨官方端口才能被如实识别。默认 **8767**（官方明文
+    /// controller 端口）；0 = 关闭（仅主端口）。主端口始终继续服务 `/em/*`
+    /// （旧 endpoint 文件与联调脚本不受影响）；绑定失败只告警，mDNS 回退广播
+    /// 主端口。见 [`listen`]。
+    #[serde(default = "default_plain_port")]
+    pub plain_port: u16,
+}
+
+/// `[echomuse].plain_port` 默认值：官方 controller 明文端口。
+fn default_plain_port() -> u16 {
+    8767
 }
 
 impl Default for EchomuseConfig {
@@ -99,6 +117,7 @@ impl Default for EchomuseConfig {
             enabled: false,
             token: String::new(),
             ble_proxy: false,
+            plain_port: default_plain_port(),
         }
     }
 }
