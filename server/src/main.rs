@@ -19,6 +19,9 @@ mod config;
 mod engine;
 mod plugins;
 
+#[cfg(test)]
+mod tests;
+
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -50,15 +53,19 @@ fn main() -> Result<()> {
 async fn run(config: Config, config_store: Arc<dyn ConfigStore>) -> Result<()> {
     // registry + 各层手工组装：日志采集层（/api/logs WS）需要插在 fmt 之前，
     // SubscriberBuilder 的 `.with` 只接受格式层，无法直接挂自定义 Layer。
-    // 默认 info，但压掉 ort::logging（ONNX 会话初始化的分配明细等 INFO 噪声，
-    // 只留 WARN+）；RUST_LOG 显式设置时完全尊重用户配置。
+    // 默认 info，但压掉 ort::logging（ONNX Runtime C 库转发的会话初始化明细，
+    // 每次加载模型上百行 INFO）；ort 本体的 dylib 加载提示保留 INFO。
+    // RUST_LOG 显式设置时完全尊重用户配置——所以镜像/compose 不能内置 RUST_LOG，
+    // 否则这个兜底永不生效（2026-10 ort::logging 刷屏事故根因，见 default_log_filter）。
     let filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,ort=warn"));
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_log_filter()));
     let subscriber = tracing_subscriber::registry()
         .with(filter) // 全局日志采集层：每条 INFO+ 事件进入环形缓冲 + 广播，
         // 供 `GET /api/logs` WS 客户端（macApp / AI 调试）实时读取。
         .with(crate::app::ws::log_stream::layer())
-        .with(tracing_subscriber::fmt::layer());
+        // 时间戳统一本地 `YYYY-MM-DD HH:MM:SS`（app::logtime 是唯一时间出口，
+        // /api/logs 日志流与控制台两处同格式；Docker 镜像默认 TZ=Asia/Shanghai）
+        .with(tracing_subscriber::fmt::layer().with_timer(crate::app::logtime::LocalDatetime));
     tracing::subscriber::set_global_default(subscriber)?;
 
     tracing::info!(
@@ -154,6 +161,17 @@ async fn run(config: Config, config_store: Arc<dyn ConfigStore>) -> Result<()> {
     )
     .await?;
     Ok(())
+}
+
+/// 默认日志过滤（`RUST_LOG` 未设置时生效）。
+///
+/// `ort::logging` 是 ONNX Runtime C 库经 ort crate 转发的内部日志：会话初始化时的
+/// Session Options / GraphTransformer / 内存分配明细，每次加载模型刷上百行 INFO。
+/// 压到 WARN 等效于"明细改成 DEBUG"：默认不刷屏，排障时 `RUST_LOG=debug` 全量可见；
+/// `ort` 本体（dylib 加载一行）与业务日志保持默认 info 档。
+/// 部署文件不得内置 `RUST_LOG=info` 之类的默认值，否则本兜底永不生效。
+fn default_log_filter() -> String {
+    "info,ort::logging=warn".to_string()
 }
 
 /// 配置加载（SQLite 配置库为**唯一**真源，无外置文件配置）：

@@ -11,6 +11,7 @@ pub mod firmware;
 pub mod hot_audio;
 pub mod inference;
 pub mod inject;
+pub mod logtime;
 pub mod mcp;
 pub mod metrics;
 pub mod prefetch;

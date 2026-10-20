@@ -125,6 +125,11 @@ RUN find src -type f -exec touch {} + \
 # ---- 运行阶段 ----
 FROM debian:bookworm-slim AS runtime
 
+# 日志时间戳本地化：tzdata 提供时区库，TZ 缺省 Asia/Shanghai
+#   （chrono Local 按 TZ → /usr/share/zoneinfo 解析，app::logtime 统一出口；
+#   部署在其他时区时用 compose 的 environment: TZ=… 覆盖即可，不必改镜像）。
+ENV TZ=Asia/Shanghai
+
 # libopus0：运行期动态链接（audiopus）；curl/bzip2：entrypoint 缺模型时按需下载解包。
 # docker CLI：NLU 模型训练走宿主 docker（/var/run/docker.sock 由 compose 挂入），
 #   只 run 专用训练镜像（依赖在镜像构建期装好，见 tools/nlu-trainer/Dockerfile）；
@@ -136,7 +141,7 @@ FROM debian:bookworm-slim AS runtime
 #   runtimes/linux-x64/native/，未带版本号文件名恰可直接作 ORT_DYLIB_PATH）；
 #   nupkg 含全平台（~128MB）但只解出 Linux 两件，镜像实际只增 ~21MB。
 RUN apt-get update \
- && apt-get install -y --no-install-recommends libopus0 ca-certificates curl bzip2 unzip \
+ && apt-get install -y --no-install-recommends libopus0 ca-certificates curl bzip2 unzip tzdata \
  && rm -rf /var/lib/apt/lists/* \
  && curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-27.3.1.tgz \
       | tar xz --strip-components=1 -C /usr/local/bin docker/docker \
@@ -160,15 +165,17 @@ RUN chmod +x /app/docker-entrypoint.sh
 RUN mkdir -p /data
 VOLUME ["/data"]
 
-# 运行镜像内置默认值——只放「容器路径」与「生产日志策略」两类必须项，避免与代码默认值漂移：
+# 运行镜像内置默认值——只放「容器路径」类必须项，避免与代码默认值漂移：
 #   XIAOZHI_CONFIG_DB：配置库文件（/data 内；空库首启以内置默认启动并落库）
 #   XIAOZHI_ADMIN_DIR：管理页静态目录覆盖（见 main.rs load_config），指向上方 /app/web
 #   XIAOZHI_AUTO_DOWNLOAD_MODELS：missing(默认,缺失才下) | force | off
 #   （模型统一从 HuggingFace 直连下载，无需代理；SENSEVOICE_URL/KOKORO_URL/SILERO_VAD_URL 可覆盖为内网镜像仓库 ID）
+# 注意：不得内置 RUST_LOG 默认值——RUST_LOG 显式存在时 main.rs 的日志过滤兜底
+#   （info + ort::logging 压 warn，见 default_log_filter）永不生效，ort 明细会刷屏。
+#   需要调级别时在 compose 的 environment 里按需设置 RUST_LOG。
 ENV XIAOZHI_CONFIG_DB=/data/data.db \
     XIAOZHI_ADMIN_DIR=/app/web \
     XIAOZHI_AUTO_DOWNLOAD_MODELS=missing \
-    RUST_LOG=info \
     ORT_DYLIB_PATH=/usr/local/lib/libonnxruntime.so
 EXPOSE 8000
 

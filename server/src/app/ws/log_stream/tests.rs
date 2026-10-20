@@ -1,4 +1,4 @@
-//! [`log_stream`] 单元测试：层级采集、环形缓冲与时间戳纯逻辑。
+//! [`log_stream`] 单元测试：层级采集与环形缓冲（时间戳格式见 `app::logtime`）。
 //!
 //! WS 帧循环本身极薄（subscribe → 逐行 Text 帧），端到端以联调验证。
 
@@ -11,27 +11,16 @@ fn test_subscriber() -> impl tracing::Subscriber + Send + Sync + 'static {
 }
 
 #[test]
-fn hhmmss_formats_utc_time_of_day() {
-    // 0s = 00:00:00；86399 = 23:59:59（纯算术，无时区库）。
-    assert_eq!(hhmmss_from(0), "00:00:00");
-    assert_eq!(hhmmss_from(86_399), "23:59:59");
-    assert_eq!(hhmmss_from(3_600 + 61), "01:01:01");
-}
-
-fn hhmmss_from(secs: u64) -> String {
-    let tod = secs % 86_400;
-    format!("{:02}:{:02}:{:02}", tod / 3600, (tod % 3600) / 60, tod % 60)
-}
-
-#[test]
 fn layer_formats_level_target_message_into_ring_and_broadcast() {
     let _guard = set_default(test_subscriber());
     let mut rx = hub().tx.subscribe();
     tracing::info!(target: "test_mod", "你好 {}", 7);
-    let line = rx.try_recv().expect("事件应进入 broadcast");
+    // hub 是进程级单例：并发测试的行可能先挤进 broadcast，逐条找自己的那行。
+    let line = std::iter::from_fn(|| rx.try_recv().ok())
+        .find(|l| l.contains("你好 7"))
+        .expect("事件应进入 broadcast");
     assert!(line.contains("INFO "), "级别: {line}");
     assert!(line.contains("[test_mod]"), "目标: {line}");
-    assert!(line.contains("你好 7"), "消息: {line}");
 }
 
 #[test]

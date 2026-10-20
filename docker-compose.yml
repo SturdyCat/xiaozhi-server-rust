@@ -47,8 +47,10 @@ services:
     environment:
       # 配置库文件（与 memory 同卷；空库首启以内置默认启动并落库）。
       XIAOZHI_CONFIG_DB: /data/data.db
-      # 可选：调整日志级别（默认 info）；如 debug / warn
-      RUST_LOG: info
+      # 可选：日志过滤（EnvFilter 语法，如 debug）。默认不设，用 main.rs 内置过滤
+      # （info，ort::logging 会话初始化明细压到 warn 不刷屏）——这里写死 info 会
+      # 覆盖内置降噪默认，导致 ort 明细刷屏（见 main.rs default_log_filter）。
+      # RUST_LOG: debug
       # 自动下载模型：missing(默认，缺失才下) | force(强制重下) | off(不下载)
       # 模型从 k2-fsa/sherpa-onnx 官方 GitHub Release 下载整包 tar.bz2 并解压覆盖。
       XIAOZHI_AUTO_DOWNLOAD_MODELS: "missing"

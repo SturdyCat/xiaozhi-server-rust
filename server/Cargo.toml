@@ -27,6 +27,8 @@ anyhow = "1.0.98"
 thiserror = "1.0.69"
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
+# 日志时间戳本地化（app::logtime）：控制台 fmt 层与 /api/logs 日志流共用的唯一时间出口
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 uuid = { version = "1.11.0", features = ["v4"] }
 futures-util = "0.3.31"
 tower-http = { version = "0.6", features = ["fs"] }

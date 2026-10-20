@@ -7,7 +7,8 @@
 //!
 //! ## 实现
 //! - [`LogHubLayer`] 是一个 `tracing_subscriber::Layer`：每条 tracing 事件被
-//!   格式化成一行 `HH:MM:SS LEVEL [target] message`，同时写入
+//!   格式化成一行 `YYYY-MM-DD HH:MM:SS LEVEL [target] message`（本地时间戳，
+//!   与控制台 fmt 层共用 [`crate::app::logtime`]），同时写入
 //!   **环形缓冲**（最近 [`BACKLOG`] 行，供新连接补历史）与 **broadcast 通道**
 //!   （推给所有在线订阅者）。`main.rs` 里 `.with(log_stream::layer())` 挂载。
 //! - WS 帧协议（全部 JSON 文本帧）：连接后先收一帧
@@ -17,7 +18,6 @@
 
 use std::collections::VecDeque;
 use std::sync::OnceLock;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::response::Response;
@@ -81,7 +81,7 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for LogHubLayer {
         event.record(&mut visitor);
         let line = format!(
             "{} {:<5} [{}] {}",
-            hhmmss(),
+            crate::app::logtime::now_text(),
             event.metadata().level(),
             event.metadata().target(),
             visitor.message
@@ -99,15 +99,6 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for LogHubLayer {
     }
 }
 
-/// `UTC HH:MM:SS`（epoch 秒做纯算术换算，不引第三方时间库）。
-fn hhmmss() -> String {
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let tod = secs % 86_400;
-    format!("{:02}:{:02}:{:02}", tod / 3600, (tod % 3600) / 60, tod % 60)
-}
 /// `GET /api/logs` 的 WebSocket 升级入口。
 pub(super) async fn logs_ws(ws: WebSocketUpgrade) -> Response {
     ws.on_upgrade(stream_logs)
