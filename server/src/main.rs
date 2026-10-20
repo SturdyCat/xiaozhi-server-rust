@@ -146,7 +146,13 @@ async fn run(config: Config, config_store: Arc<dyn ConfigStore>) -> Result<()> {
     if config.echomuse.enabled {
         crate::app::echomuse::spawn_mdns(config.server.port);
     }
-    serve(listener, app).await?;
+    // 设备主动拨回的受限 shell 面必须绑定当前 control 的真实对端地址；
+    // ConnectInfo 来自 TCP 连接，不信任可伪造的转发头。
+    serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }
 

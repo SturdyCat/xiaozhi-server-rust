@@ -32,7 +32,15 @@ fun ViewContainer<*, *>.renderEchoMuse(
         { if (state.loading && !state.loaded) "加载中…" else state.summaryText() },
         { state.loading },
     ) { state.refresh(ctx) }
-    opsError(state.loadError)
+    vif({ state.loadError.isNotEmpty() }) {
+        Text {
+            attr {
+                fontSize(AdminType.micro)
+                color(AdminColors.dangerTintText)
+                text("${state.loadError}（确认管理令牌与服务端地址后点“刷新”）")
+            }
+        }
+    }
     vif({ state.loading && !state.loaded }) { opsSkeleton() }
 
     // ===== 服务端未开启 [echomuse]：给出可行动的开启指引，不渲染空列表 =====
@@ -179,34 +187,19 @@ private fun ViewContainer<*, *>.echoMuseDeviceCard(
 
         // ===== 已批准：重启（行内二次确认）+ WiFi 配置 =====
         if (row.approved) {
+            echoMuseManagement(row, state, toast, ctx)
+            echoMuseBleCard(row, state, ctx)
             actionRow {
-                vif({ state.confirmRebootId == row.deviceId }) {
-                    primaryButton(
-                        "确认重启",
-                        danger = { true },
-                        enabled = { row.online },
-                        loading = { state.actionBusy },
-                        loadingText = "下发中…",
-                    ) {
-                        state.reboot(ctx, row.deviceId) { ok, msg ->
-                            toast.show(msg, if (ok) "ok" else "error")
-                        }
-                    }
-                    View { attr { width(AdminSpace.sm) } }
-                    secondaryButton("取消") { state.confirmRebootId = "" }
-                }
-                vif({ state.confirmRebootId != row.deviceId }) {
-                    secondaryButton("重启", enabled = { row.online }) { state.confirmRebootId = row.deviceId }
-                    View { attr { width(AdminSpace.sm) } }
-                    secondaryButton(
-                        if (state.wifiTarget == row.deviceId) "收起" else "WiFi 配置",
-                        enabled = { row.online },
-                    ) { state.toggleWifi(row.deviceId) }
-                    View { attr { width(AdminSpace.sm) } }
-                    secondaryButton(
-                        if (state.settingsTarget == row.deviceId) "收起设置" else "唤醒词设置",
-                    ) { state.toggleSettings(row.deviceId) }
-                }
+                secondaryButton(
+                    "WiFi 配置",
+                    dynamicText = { if (state.wifiTarget == row.deviceId) "收起 WiFi 配置" else "WiFi 配置" },
+                    enabled = { row.online && !state.actionBusy },
+                ) { state.toggleWifi(row.deviceId) }
+                View { attr { width(AdminSpace.sm) } }
+                secondaryButton(
+                    "唤醒词设置",
+                    dynamicText = { if (state.settingsTarget == row.deviceId) "收起设置" else "唤醒词设置" },
+                ) { state.toggleSettings(row.deviceId) }
             }
             vif({ !row.online }) {
                 textNote("设备离线：重启 / WiFi 配置指令需要设备在线才能接收，唤醒设备后可用。", micro = true)
@@ -217,6 +210,7 @@ private fun ViewContainer<*, *>.echoMuseDeviceCard(
                 actionRow {
                     primaryButton(
                         "下发 WiFi 配置",
+                        enabled = { row.online },
                         loading = { state.actionBusy },
                         loadingText = "下发中…",
                     ) {
@@ -247,11 +241,16 @@ private fun ViewContainer<*, *>.echoMuseWakeSettings(
     ctx: Pager,
 ) {
     switchRow("响应唤醒词（关闭后按键仍可用）", state.wakeWordEnabled) { state.wakeWordEnabled = !state.wakeWordEnabled }
-    switchRow("设备本地唤醒识别", state.owwOnDevice) { state.owwOnDevice = !state.owwOnDevice }
+    dropdownField(
+        "设备本地唤醒识别模式",
+        { state.owwModes.firstOrNull { it.first == state.owwOnDevice }?.second ?: "未知" },
+        { state.owwModes }, { state.owwOnDevice }, { state.owwModeOpen },
+        { state.owwModeOpen = !state.owwModeOpen }, { state.owwOnDevice = it },
+    )
     labeledField("唤醒词模型", { state.owwModel }, { state.owwModel = it }, "如 alexa")
 
     // 灵敏度滑杆：0~1，步进 0.05（官方 Slider 无 step，拖动时量化）
-    fieldLabel("唤醒灵敏度阈值（越大越不易误触）")
+    fieldLabel("唤醒灵敏度阈值（0.05～1，越大越不易误触）")
     View {
         attr {
             flexDirectionRow()
@@ -269,7 +268,7 @@ private fun ViewContainer<*, *>.echoMuseWakeSettings(
             }
             event {
                 progressDidChanged { p ->
-                    state.owwThreshold = (p * 20).let { kotlin.math.round(it) / 20.0 }
+                    state.owwThreshold = (p * 20).let { kotlin.math.round(it) / 20.0 }.coerceIn(0.05, 1.0)
                 }
             }
         }
@@ -285,8 +284,13 @@ private fun ViewContainer<*, *>.echoMuseWakeSettings(
     }
 
     switchRow("唤醒提示音", state.wakeSound) { state.wakeSound = !state.wakeSound }
-    labeledField("提示音音量", { state.wakeSoundLevel }, { state.wakeSoundLevel = it }, "0.5")
-    labeledField("麦克风编号（0=中心，0~6）", { state.wakeMic }, { state.wakeMic = it }, "0")
+    dropdownField(
+        "提示音档位",
+        { state.wakeLevels.firstOrNull { it.first == state.wakeSoundLevel }?.second ?: "未知" },
+        { state.wakeLevels }, { state.wakeSoundLevel }, { state.wakeLevelOpen },
+        { state.wakeLevelOpen = !state.wakeLevelOpen }, { state.wakeSoundLevel = it },
+    )
+    labeledIntField("麦克风编号（0=中心，0~6）", { state.wakeMic }, { state.wakeMic = it }, "0")
 
     actionRow {
         primaryButton(

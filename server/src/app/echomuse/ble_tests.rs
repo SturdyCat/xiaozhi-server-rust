@@ -86,12 +86,12 @@ async fn result_resolves_matching_request() {
     let mut link = BleLink::default();
     let req = link.alloc_req();
     let (tx, mut rx) = oneshot::channel();
-    link.register(req, tx);
+    link.register(req, false, tx).unwrap();
     // 错误号不唤醒；同号唤醒并带原 result。
     link.on_gatt(&result_ok(req + 1));
     assert!(rx.try_recv().is_err());
     link.on_gatt(&result_ok(req));
-    let v = rx.await.expect("登记的请求应被唤醒");
+    let v = rx.await.expect("登记的请求应被唤醒").unwrap();
     assert_eq!(v["ok"], true);
     assert_eq!(v["mtu"], 247);
     // 重复结果无人等待：静默忽略（协议未知/迟到一律不报错）。
@@ -103,7 +103,7 @@ async fn slots_event_answers_query_and_records_state() {
     let mut link = BleLink::default();
     let req = link.alloc_req();
     let (tx, mut rx) = oneshot::channel();
-    link.register(req, tx);
+    link.register(req, true, tx).unwrap();
     // 自发 slots（无 req）：只记录不唤醒。
     link.on_gatt(br#"{"t":"slots","free":3,"limit":3,"addrs":[]}"#);
     assert!(rx.try_recv().is_err());
@@ -117,9 +117,11 @@ async fn slots_event_answers_query_and_records_state() {
     assert_eq!(slots.expect("应刷新槽位")["free"], 2);
     let req2 = link.alloc_req();
     let (tx2, rx2) = oneshot::channel();
-    link.register(req2, tx2);
-    link.on_gatt(&format!(r#"{{"t":"slots","req":{req2},"free":1,"limit":3}}"#).into_bytes());
-    let v = rx2.await.expect("slots 查询应由带 req 的事件应答");
+    link.register(req2, true, tx2).unwrap();
+    link.on_gatt(
+        &format!(r#"{{"t":"slots","req":{req2},"free":1,"limit":3,"addrs":[]}}"#).into_bytes(),
+    );
+    let v = rx2.await.expect("slots 查询应由带 req 的事件应答").unwrap();
     assert_eq!(v["free"], 1);
 }
 
@@ -164,7 +166,7 @@ async fn reset_drops_pending_requests() {
     let mut link = BleLink::default();
     let (tx, rx) = oneshot::channel();
     let req = link.alloc_req();
-    link.register(req, tx);
+    link.register(req, false, tx).unwrap();
     link.merge_adverts(
         &[serde_json::json!({"addr":"aa:bb:cc:dd:ee:ff","rssi":-60})],
         1,
@@ -320,4 +322,124 @@ fn gatt_request_json_is_framed_with_type_byte() {
     assert_eq!(v["t"], "write");
     assert_eq!(v["req"], 42);
     assert_eq!(v["response"], false);
+}
+
+#[test]
+fn strict_types_handles_session_and_write_budget() {
+    use base64::Engine as _;
+    let address = "aa:bb:cc:dd:ee:ff";
+    for value in [
+        serde_json::json!(null),
+        serde_json::json!("1"),
+        serde_json::json!(true),
+        serde_json::json!(-1),
+        serde_json::json!(1.5),
+    ] {
+        assert!(build_gatt_request(
+            &serde_json::json!({"t":"connect","addr":address,"addr_type":value})
+        )
+        .is_err());
+    }
+    for value in [
+        serde_json::json!(null),
+        serde_json::json!("1"),
+        serde_json::json!(-1),
+        serde_json::json!(1.5),
+    ] {
+        assert!(build_gatt_request(
+            &serde_json::json!({"t":"write","addr":address,"handle":1,"value":"","response":value})
+        )
+        .is_err());
+    }
+    for response in [false, true] {
+        let request = build_gatt_request(
+            &serde_json::json!({"t":"write","addr":address,"handle":1,"value":"","response":response})
+        )
+        .unwrap();
+        assert_eq!(request["response"], response);
+    }
+    for handle in [
+        serde_json::json!(0),
+        serde_json::json!(65536),
+        serde_json::json!("3"),
+        serde_json::json!(3.0),
+    ] {
+        assert!(build_gatt_request(
+            &serde_json::json!({"t":"read","addr":address,"handle":handle})
+        )
+        .is_err());
+    }
+    let sid = uuid::Uuid::new_v4();
+    let request =
+        build_gatt_request(&serde_json::json!({"t":"slots","session_id":sid.to_string()})).unwrap();
+    assert!(request.get("session_id").is_none());
+    for body in [
+        serde_json::json!({"t":"slots","session_id":null}),
+        serde_json::json!({"t":"slots","session_id":""}),
+        serde_json::json!({"t":"slots","req":1}),
+    ] {
+        assert!(build_gatt_request(&body).is_err());
+    }
+    for (size, valid) in [(0, true), (512, true), (513, false)] {
+        let encoded = base64::engine::general_purpose::STANDARD.encode(vec![1; size]);
+        assert_eq!(
+            build_gatt_request(
+                &serde_json::json!({"t":"write","addr":address,"handle":65535,"value":encoded})
+            )
+            .is_ok(),
+            valid
+        );
+    }
+}
+
+#[tokio::test]
+async fn request_numbers_do_not_truncate_and_invalid_results_fail() {
+    let mut link = BleLink::default();
+    let (tx, mut rx) = oneshot::channel();
+    link.register(1, false, tx).unwrap();
+    for req in [
+        serde_json::json!(4294967297u64),
+        serde_json::json!(1.0),
+        serde_json::json!("1"),
+        serde_json::json!(-1),
+    ] {
+        link.on_gatt(
+            &serde_json::to_vec(&serde_json::json!({"t":"result","req":req,"ok":true})).unwrap(),
+        );
+        assert!(rx.try_recv().is_err());
+    }
+    link.on_gatt(br#"{"t":"result","req":1,"ok":"true"}"#);
+    assert_eq!(rx.await.unwrap(), Err(super::ble::BleError::Protocol));
+}
+
+#[tokio::test]
+async fn oversized_output_fails_pending_instead_of_retaining_or_succeeding() {
+    let mut link = BleLink::default();
+    let (tx, rx) = oneshot::channel();
+    link.register(1, false, tx).unwrap();
+    link.on_gatt(&vec![b' '; 65537]);
+    assert_eq!(rx.await.unwrap(), Err(super::ble::BleError::OutputLimit));
+    assert!(link.state_snapshot().0.is_none());
+}
+
+#[test]
+fn adverts_and_events_have_byte_and_count_budgets() {
+    let mut link = BleLink::default();
+    link.merge_adverts(
+        &[
+            serde_json::json!({"addr":"aa:bb:cc:dd:ee:ff","data":"x".repeat(4097)}),
+            serde_json::json!({"addr":"x".repeat(5000)}),
+        ],
+        1,
+    );
+    assert!(link.adverts_snapshot().1.is_empty());
+    for event in [
+        serde_json::json!({"t":"slots","free":3,"limit":3,"addrs":[],"huge":"x".repeat(4097)}),
+        serde_json::json!({"t":"notify","addr":"aa:bb:cc:dd:ee:ff","handle":1,"value":"AQ==","ind":false,"huge":"x".repeat(4097)}),
+        serde_json::json!({"t":"notify","addr":"aa:bb:cc:dd:ee:ff","handle":0,"value":"AQ==","ind":false}),
+    ] {
+        link.on_gatt(&serde_json::to_vec(&event).unwrap());
+    }
+    assert!(link.state_snapshot().0.is_none());
+    assert!(link.state_snapshot().1.is_empty());
 }

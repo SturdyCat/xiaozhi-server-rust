@@ -17,6 +17,7 @@
 
 - [ConfigFormState](<ConfigFormState.kt>)保存草稿，[fill](<ConfigFormFill.kt>)映射读取；密钥只读 presence、写入 putSecret，空草稿不发送。新增密钥与服务端 SECRET_PATHS 同批改。
 - 整型字段用 labeledIntField、浮点字段用 labeledDecimalField（[AdminFormControls](<AdminFormControls.kt>)，输入侧实时剥离非法字符）：裸 labeledField 留给文本/密钥——整数字段混入脏输入会让 `toIntOrNull() ?: 默认值` 把错误静默存成默认值。
+- BLE 的危险目标 handle 是严格校验例外：使用 `labeledField` 保留原始输入并由 [EchoMuseBleCodec](<EchoMuseBleCodec.kt>) 的纯函数拒绝非法十进制/范围；不得把 -1 或 1.2 清洗成别的真实外设 handle，也不允许解析服务树数字时截断小数。
 - hot/字段提示由[FormSchemaState](<FormSchemaState.kt>)消费服务端 schema，不手写另一套档位。schema 不是自动布局，engine/preset 可选项仍需两端同步。
 - 409 保留草稿，显式“重新加载”，不静默覆盖。preset 应用复用服务端配置管线；overlay 编辑只提交设备增量，不能混成全局整份配置。
 - NetworkModule 只支持 GET/POST，使用服务端 POST 别名；curl 的 PUT/DELETE 能用不等于页面可用。
@@ -43,7 +44,7 @@
 | 概览 | `GET /api/stats` + `/api/plugins` | 设备在线数、活会话、11 个能力健康（degraded/failed 可点击跳配置） |
 | 测试台 | —（仅 macOS 客户端） | 依赖原生麦克风/音频链路，`NavDescriptor.macOnly`：web 不显示该菜单；端到端语音测试用 macOS 客户端 |
 | 设备 | `GET /api/devices` | 连过的设备、协商参数、上次会话为什么断；消息注入、个性化配置入口 |
-| EchoMuse | `GET /api/echomuse/devices` + `/devices/wait` | EchoMuse 设备批准制登记（在线/离线、版本、base_os）；批准、重启、下发 WiFi 配置、唤醒词设置（离线可保存，上线自动推送）、删除记录（清理 mock 设备）；时间戳本地格式化；页面停留期间经 `/wait` 事件保持长挂（有变化才回包）实时刷新，无固定轮询 |
+| EchoMuse | `GET /api/echomuse/devices` + `/devices/wait` | 批准制设备登记、WiFi、唤醒词设置（离线可保存）、删除记录；设备管理提供手动 runtime 快照、受限音量与 emOS 系统信息/固定源日志/确认重启；列表事件长挂，无管理数据自动轮询 |
 | 会话 | `GET /api/sessions` | 此刻活着的连接与阶段（聆听/思考/说话） |
 | 对话记录 | `GET /api/conversations` | 最近聊了什么（内存环形，非持久化） |
 | 用量 | `GET /api/usage` | 令牌去向、记忆/人格把上下文撑大了多少 |
@@ -66,8 +67,24 @@
 | `GET /api/memory/status`、`POST /api/memory/{recall,maintain,clear,rag/reindex}` | 记忆状态 / 手动试召回 / 立即维护 / 清空 / RAG 索引重建 |
 | `GET /api/soul/presets`、`POST /api/soul/preview` | 人格预设清单 / 最终提示词预览 |
 | `POST /api/devices/{id}/inject` | 设备消息注入（文本作为用户话语走完整管线） |
-| `GET /api/echomuse/devices`、`GET /api/echomuse/devices/wait?after=<n>`、`POST /api/echomuse/devices/{id}/{approve,command,settings,delete}` | EchoMuse 设备：列表（含 `version` 游标）/ 变更长挂（事件保持，变化立即回、无变化 25s 超时，管理台实时刷新用）/ 批准（body `label`）/ 下发指令（`reboot`、`wifi`，202 已排队、409 设备离线）/ 唤醒词设置（白名单部分更新，在线 202 `delivered:true`、离线 200 已保存）/ 删除登记记录（`delete`，仅 GET/POST 故走 POST 别名） |
+| `GET /api/echomuse/devices`、`GET .../devices/wait?after=<n>`、`POST .../devices/{id}/{approve,command,settings,delete}` | EchoMuse 列表/事件长挂/批准/WiFi 指令/唤醒词部分更新/删除；GET token 编码进查询串，POST 走 Bearer；旧 reboot command 不再使用 |
+| `GET .../devices/{id}/runtime`、`POST .../volume` | 手动运行状态快照；缺测显示未知、离线显示历史；音量仅 approved + emos + online + speaker，level 整数 0～127，202 仅排队、刷新 runtime 核对实际上报 |
+| `GET .../devices/{id}/system/{info,logs}`、`POST .../system/reboot` | 仅 approved + emos + online；固定日志源 messages/messages_last/last_kmsg_prev/supervisor，重启必须 confirm:true；响应仅确认发送，不能断言重启完成；不提供任意 shell/OTA |
+| `GET .../devices/{id}/ble/{adverts,state}`、`POST .../ble/gatt` | 独立通用 BLE 面板：广播快照/槽位/连接/发现/读/确认写/手动事件；GET 带 session_id 查询、GATT 带 session_id 元数据，三类成功回包严格核对 device_id/session_id；都走 Bearer，客户端超时45s |
 | `GET /api/metrics`、`GET /api/usage` | 延迟大盘 / 令牌用量（内存态） |
+
+EchoMuse 实现按职责分为 [列表与配置状态](<EchoMuseState.kt>)、[设备卡](<EchoMusePage.kt>)、[管理状态](<EchoMuseManagementState.kt>)、[管理面板](<EchoMuseManagementCard.kt>)、[鉴权与编码](<EchoMuseAccess.kt>)：
+- 进入管理区不自动读设备；加载/失败/操作结果就地呈现，日志与系统输出可滚动及复制诊断内容。断线标历史；列表/详情/runtime 的 `session_id` 是当前 control 的观测身份，变化时清旧请求代际、busy、重启确认并标旧诊断为历史；runtime 仅设备号与会话都匹配时视为当前快照，双空兼容旧服务端、不将空当通配符。
+- `configureAccess(token, base)` 在加载前传入；切 base 或 token 清管理目标和输出，列表/长挂/写操作通过代际丢弃旧连接回包。
+- 系统操作要求服务端同时配置非空 `server.expected_token` 和 `echomuse.token`；web 用 `?token=URL编码后的管理令牌` 进入，不附裸查询参数，不在诊断内容中复制 token；macOS 原生宿主目前无管理 token 输入入口，本次仅验证公共源码编译，不承诺受保护连接可用。
+- 唤醒设置以固件类型发送：`owwOnDevice=off|shadow|on`、`wakeSoundLevel=quiet|medium|loud`，旧 bool/number 只在读取时迁移（旧数字统一 medium）；阈值 UI 为 0.05～1，保存拒绝非正数；只发送本表单字段，服务端按部分更新合并，保留 BLE 等其他设置。
+
+BLE 独立分为 [纯校验/codec/确认指纹](<EchoMuseBleCodec.kt>)、[请求与状态](<EchoMuseBleState.kt>)、[面板](<EchoMuseBleCard.kt>)：
+- 已批准设备可展开单设备面板；在线、`ble_connect` 和非空当前会话才可请求，GATT 还要求每设备扫描/连接都开启；服务端 `ble_proxy` 与双 token 是额外门控，不能由页面开启。无 session 的旧服务端失败关闭，不复用 emOS runtime 双空兼容策略。
+- 广播快照可选择 public/random MAC 或手填；服务树展示 UUID/声明 handle/value_handle/props 与描述符。特征读写必须使用 value_handle，描述符只用其 handle；HTTP200 中 result.ok=false 仍是失败，slots 按 t=slots 判断；read 必须显式字符串 value 且合法 base64，缺测不能假空值。
+- hex 非空、最多512字节、只允许ASCII空白分隔的完整hex字节；转换标准base64。写入二次确认捕获设备、session、外设MAC/地址类型、handle、字节与response。任何草稿变化清确认；外设选择变更丢旧回包但不解除在途busy，编辑不可能撤销已发送操作；bridge设备/base/token/session/在线变化使旧代际失效。独立请求序号仅释放自己的busy。
+- response=true成功只代表ATT接受，response=false仅代表设备发送，都不是IoT业务动作完成证明；CCCD UUID 0x2902由用户显式选择描述符handle，普通写0100/0200/0000，不猜handle、不新增subscribe协议。GET state仅手动读取有界notify/disconnected窗口，无后台高频轮询，也不承诺实时或完整历史。
+- BLE设置仅POST部分更新bleProxyEnabled/bleProxyConnections，沿用旧settings接口不附session元数据（前端代际仍检查）；结果只说明已保存/在线推送排队，不假定固件已应用。广播、服务树、原始输出均有界滚动。纯函数由普通测试模块 `:bleProtocolTests:jvmTest` 直接引用同一生产 codec 验证，无 Kuikly/原生宿主依赖，且不进入生产 bundle；跨端编译不等于真实外设联调。
 
 ```bash
 ## 构建 web 管理页（产物含 index.html 与 nativevue2.js，由 [server].admin_dir 指向）

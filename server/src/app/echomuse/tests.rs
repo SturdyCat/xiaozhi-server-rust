@@ -83,14 +83,14 @@ fn config_push_enables_on_device_wake() {
     assert_eq!(msgs.len(), 1);
     let v: serde_json::Value = serde_json::from_str(&msgs[0]).unwrap();
     assert_eq!(v["type"], "config");
-    assert_eq!(v["owwOnDevice"], true);
+    assert_eq!(v["owwOnDevice"], "on");
     // 设置合并覆盖基线；wakeWordEnabled 单独成条。
     let msgs = config_push_with(
         &serde_json::json!({"owwOnDevice": false, "wakeSound": true, "wakeWordEnabled": false}),
     );
     assert_eq!(msgs.len(), 2);
     let v: serde_json::Value = serde_json::from_str(&msgs[0]).unwrap();
-    assert_eq!(v["owwOnDevice"], false);
+    assert_eq!(v["owwOnDevice"], "off");
     assert_eq!(v["wakeSound"], true);
     assert!(v.get("wakeWordEnabled").is_none());
     let v: serde_json::Value = serde_json::from_str(&msgs[1]).unwrap();
@@ -210,6 +210,7 @@ pub(super) fn insert_probe(device_id: &str) {
             ctl_tx: None,
             data_tx: None,
             ble: std::sync::Arc::new(std::sync::Mutex::new(super::ble::BleLink::default())),
+            management: std::sync::Arc::new(super::runtime::LiveControl::new(None, false)),
         },
     );
 }

@@ -39,6 +39,10 @@ rootProject.name = "client"
 // 跨端业务逻辑（Kotlin Multiplatform）：android / ios / js(web) 共用
 include(":shared")
 
+// Pure BLE protocol tests reuse the production codec source without linking a
+// Kuikly renderer, native host exports, or introducing tests into shipped bundles.
+include(":bleProtocolTests")
+
 // 各平台宿主 App 统一汇聚在 apps/ 下
 // —— 以下两个是 Gradle 模块（带 build.gradle.kts）
 include(":apps:androidApp")   // Android 宿主（com.android.application）

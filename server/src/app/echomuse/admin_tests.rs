@@ -48,6 +48,59 @@ fn devices_payload_merges_hub_online() {
     let _ = std::fs::remove_file(&path);
 }
 
+#[test]
+fn session_identity_changes_without_an_observed_offline_transition() {
+    let _g = HUB_LOCK.lock().unwrap();
+    let (reg, path) = temp_registry("session-identity");
+    let id = "session-identity";
+    reg.upsert(&reg_load(id, "same-firmware"), 100);
+    let old_rx = insert_online(id);
+    let (old_ctl, old_live) = super::hub_live(id).unwrap();
+    old_live.update(&serde_json::json!({"type":"volume_state","level":20}));
+    let before = device_payload(&reg, id).unwrap();
+    assert_eq!(before["session_id"], old_live.payload(id)["session_id"]);
+    let new_rx = insert_online(id); // Replaced directly, no offline snapshot.
+    let (_, new_live) = super::hub_live(id).unwrap();
+    super::hub_remove_session(id, &old_ctl); // Old cleanup must spare new state.
+    let after = device_payload(&reg, id).unwrap();
+    assert_eq!(before["online"], true);
+    assert_eq!(after["online"], true);
+    assert_ne!(before["session_id"], after["session_id"]);
+    assert_eq!(after["session_id"], new_live.payload(id)["session_id"]);
+    assert!(new_live.payload(id)["volume_state"].is_null());
+    assert_eq!(
+        devices_payload(true, &reg)["devices"][0]["session_id"],
+        after["session_id"]
+    );
+    assert!(serde_json::to_value(reg.get(id).unwrap())
+        .unwrap()
+        .get("session_id")
+        .is_none());
+    hub_remove(id);
+    assert!(device_payload(&reg, id).unwrap()["session_id"].is_null());
+    drop((old_rx, new_rx));
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn concurrent_device_events_never_lose_version_increments() {
+    let _g = HUB_LOCK.lock().unwrap();
+    let before = super::devices_version();
+    let barrier = std::sync::Barrier::new(8);
+    std::thread::scope(|scope| {
+        for _ in 0..8 {
+            let barrier = &barrier;
+            scope.spawn(move || {
+                barrier.wait();
+                for _ in 0..100 {
+                    super::bump_devices_version();
+                }
+            });
+        }
+    });
+    assert_eq!(super::devices_version(), before.wrapping_add(800));
+}
+
 // ---- /wait 事件保持（纯逻辑：自建 watch 通道，不碰进程级版本号） ----
 
 #[test]
@@ -139,15 +192,12 @@ fn command_plan_offline_is_409() {
 #[test]
 fn command_plan_reboot_and_wifi_shapes() {
     let (code, body, out) = command_plan(true, true, &serde_json::json!({"action":"reboot"}));
-    assert_eq!(code, axum::http::StatusCode::ACCEPTED);
-    assert_eq!(body["queued"], true);
-    match out {
-        Some(ControlOut::Json(s)) => {
-            let v: serde_json::Value = serde_json::from_str(&s).unwrap();
-            assert_eq!(v["type"], "reboot");
-        }
-        other => panic!("reboot 应产出 Json 下发，实际 {other:?}"),
-    }
+    assert_eq!(code, axum::http::StatusCode::BAD_REQUEST);
+    assert!(body["error"].as_str().unwrap().contains("confirm=true"));
+    assert!(
+        out.is_none(),
+        "unsupported reboot message must never be queued"
+    );
     let (code, _, out) = command_plan(
         true,
         true,
@@ -228,7 +278,7 @@ fn settings_plan_online_queues_config_with_wakewordenabled_separate() {
         true,
         true,
         true,
-        &serde_json::json!({"owwOnDevice": false, "wakeWordEnabled": false}),
+        &serde_json::json!({"owwOnDevice": "off", "wakeWordEnabled": false}),
     );
     assert_eq!(code, StatusCode::ACCEPTED);
     assert_eq!(body["delivered"], true);
@@ -242,7 +292,7 @@ fn settings_plan_online_queues_config_with_wakewordenabled_separate() {
         .collect();
     let first: serde_json::Value = serde_json::from_str(&texts[0]).unwrap();
     assert_eq!(first["type"], "config");
-    assert_eq!(first["owwOnDevice"], false);
+    assert_eq!(first["owwOnDevice"], "off");
     // 基线键仍在（streamReply），wakeWordEnabled 不混入存储配置条。
     assert_eq!(first["streamReply"], true);
     assert!(first.get("wakeWordEnabled").is_none());

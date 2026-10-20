@@ -17,10 +17,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Query, State};
+use axum::extract::{ConnectInfo, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use futures_util::{SinkExt, StreamExt};
+use std::net::{IpAddr, SocketAddr};
 use tokio::sync::mpsc;
 
 use crate::app::audio::opus::OpusFrameEncoder;
@@ -33,7 +34,7 @@ use super::frames::{self, UplinkFrame};
 use super::transport::EchomuseTransport;
 use super::{
     ack_message, config_baseline, config_push_with, hub_claim_data, hub_claim_only, hub_insert,
-    hub_remove, hub_restore_data, session_params, ControlOut, DataOut, DeviceRegister,
+    hub_restore_data, session_params, ControlOut, DataOut, DeviceRegister,
 };
 
 /// data 面入站消息认领失败时的日志前缀（诊断"只连了 data 没 control"类配置错误）。
@@ -49,6 +50,7 @@ pub fn em_routes() -> axum::Router<Arc<Engines>> {
         .route("/data", get(em_data))
         .route("/em/control", get(em_control))
         .route("/em/data", get(em_data))
+        .route("/shell/{id}", get(super::shell::upgrade))
         // 只读状态查询（排查"设备是否连上服务器"）：关闭时也返回 200 + enabled=false，
         // 不像 WS 路由那样 404——该接口本身就是用来区分这两种情况的。
         .route("/em/status", get(em_status))
@@ -72,6 +74,7 @@ async fn em_control(
     ws: WebSocketUpgrade,
     headers: HeaderMap,
     State(engines): State<Arc<Engines>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
 ) -> Response {
     let cfg = &engines.config.echomuse;
     if !cfg.enabled {
@@ -82,7 +85,7 @@ async fn em_control(
     // ——升级后由 control_session 首帧裁决，token 错误的普通连接照样拒绝。
     let authenticated = token_ok(&headers, &cfg.token);
     ws.on_upgrade(move |socket| async move {
-        if let Err(e) = control_session(socket, engines, authenticated).await {
+        if let Err(e) = control_session(socket, engines, authenticated, Some(peer.ip())).await {
             tracing::warn!("[echomuse] control 会话异常: {e}");
         }
     })
@@ -93,6 +96,7 @@ async fn control_session(
     socket: WebSocket,
     engines: Arc<Engines>,
     authenticated: bool,
+    peer: Option<IpAddr>,
 ) -> anyhow::Result<()> {
     let (mut sink, mut stream) = socket.split();
     // 第一条消息必须是 register（协议规定"连接后立刻发送"）。
@@ -153,22 +157,31 @@ async fn control_session(
     super::registry::global(&engines.config).upsert(&register, super::registry::now_secs());
 
     let ble = Arc::new(std::sync::Mutex::new(BleLink::default()));
+    let live = Arc::new(super::runtime::LiveControl::new(peer, authenticated));
     hub_insert(
         &device_id,
         super::PendingDevice {
             up_tx: up_tx.clone(),
             data_rx: Some(data_rx),
             since: std::time::Instant::now(),
-            // 管理面下发 reboot/wifi_change 的通道；control 会话自己持原件。
+            // 管理面下发 volume_set/shell_open/wifi_change；control 会话自己持原件。
             ctl_tx: Some(ctl_tx.clone()),
             // 蓝牙代理 GATT 请求（0x08）的管理面下发口；control 会话自己持原件。
             data_tx: Some(data_tx.clone()),
             ble: ble.clone(),
+            management: live.clone(),
         },
     );
 
     // control 任务：收设备事件（唤醒/按钮/旧固件 ble_adverts）+ 发 mic_start 等出站。
-    let ctl_task = tokio::spawn(control_loop(sink, stream, ctl_rx, up_tx, ble, ble_on));
+    let lease = super::runtime::ControlLease {
+        id: device_id.clone(),
+        ctl: ctl_tx.clone(),
+        live,
+    };
+    let ctl_task = tokio::spawn(control_loop(
+        sink, stream, ctl_rx, up_tx, ble, ble_on, lease,
+    ));
 
     // 进入会话主循环（无 hello：参数固定，设备不做 xiaozhi 协商）。
     let params = session_params(&engines.config);
@@ -187,7 +200,8 @@ async fn control_session(
 
     // 收尾：停 control 任务、清登记（会话 close 已发 Shutdown，这里是兜底）。
     ctl_task.abort();
-    hub_remove(&device_id);
+    // Wait for lease Drop; an old session cannot delete a replacement register.
+    let _ = ctl_task.await;
     result
 }
 
@@ -199,6 +213,7 @@ async fn control_loop(
     up_tx: mpsc::UnboundedSender<IncomingFrame>,
     ble: Arc<std::sync::Mutex<BleLink>>,
     ble_on: bool,
+    lease: super::runtime::ControlLease,
 ) {
     // 当前是否处于一轮聆听（唤醒后到哨兵/停止之间）。
     let mut listening = false;
@@ -207,6 +222,9 @@ async fn control_loop(
             inbound = stream.next() => {
                 let Some(Ok(msg)) = inbound else { break };
                 if let Message::Text(t) = msg {
+                    if t.len() <= super::runtime::MAX_TELEMETRY_BYTES {
+                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&t) { lease.live.update(&v); }
+                    }
                     if handle_control_text(&t, &mut listening, &mut sink, &up_tx, &ble, ble_on)
                         .await
                         .is_err()
@@ -228,7 +246,8 @@ async fn control_loop(
 }
 
 /// 解析 control 面的一条设备 JSON。只关心能开启一轮聆听的事件，其余忽略
-/// （协议规定未知类型双向忽略；listen_state/stats/log/pong 等当前不消费）。
+/// （未知类型双向忽略；listen_state/stats/volume_state/mute_state 已由 control_loop
+/// 先写入有界 runtime，其余 log/pong 等仍忽略）。
 /// `ble_adverts` 是旧固件的广播回退路径（`0x06` 未被 ack 声明时设备改走 control 面）。
 async fn handle_control_text(
     text: &str,
@@ -405,8 +424,9 @@ async fn data_loop(
             }
         }
     }
-    // 链路收尾：丢弃全部待应答 GATT 请求（等待方立即得到"离线"）并清空采集数据。
-    ble.lock().expect("echomuse ble link 锁中毒").reset();
+    // The caller returns this claim through hub_restore_data. That function
+    // atomically resets BLE, drains old outbound frames, and makes data claimable;
+    // resetting separately here would race a new GATT request or data claimant.
     Some(super::DataClaim {
         device_id,
         up_tx,

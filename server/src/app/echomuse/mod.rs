@@ -36,8 +36,10 @@
 //!
 //! ## 刻意不做的范围（靠能力协商静默关闭）
 //!
-//! `/shell` 面、音乐面（`audio_mix`）、Sendspin、WiFi 配置推送、TLS/wss 一概不
-//! 实现：`ack.features` 只声明我们支持的能力子集，设备按协议"未声明即降级"处理；
+//! `/shell/{device_id}` 仅承载已批准 emOS 的固定系统诊断/确认重启，不提供交互
+//! shell、任意命令或 OTA。音乐面（`audio_mix`）、Sendspin、TLS/wss 不实现；
+//! WiFi 保留既有 control 命令下发（排队不等于设备已应用）。
+//! `ack.features` 只声明我们支持的能力子集，设备按协议"未声明即降级"处理；
 //! 未知帧型/未知 JSON 消息双向忽略，不产生错误。蓝牙代理只做**直驱 GATT + 广播
 //! 采集**，不做 HA/ESPHome 转发面，也不做配对/加密（协议规定 Security Request 答
 //! Pairing Not Supported，加密属性以 `att:5` 失败）。
@@ -57,6 +59,10 @@ mod ble_tests;
 mod hub_tests;
 pub(crate) mod registry;
 pub(crate) mod routes;
+pub(crate) mod runtime;
+mod settings;
+pub(crate) mod shell;
+pub(crate) mod system;
 #[cfg(test)]
 mod tests;
 
@@ -130,7 +136,7 @@ pub struct PendingDevice {
     pub data_rx: Option<UnboundedReceiver<DataOut>>,
     /// 登记时刻（`/em/status` 用它算 `connected_secs`）。
     pub since: Instant,
-    /// control 出站发送端的克隆：管理面下发 `reboot`/`wifi_change` 走它
+    /// control 出站发送端的克隆：管理面下发 `volume_set`/`shell_open`/`wifi_change` 走它
     /// （`ControlOut::Json` → control_loop → 设备）。control 会话自己持原件。
     pub ctl_tx: Option<UnboundedSender<ControlOut>>,
     /// data 面出站发送端的克隆：蓝牙代理 GATT 请求（`0x08`）经它下发
@@ -138,6 +144,8 @@ pub struct PendingDevice {
     pub data_tx: Option<UnboundedSender<DataOut>>,
     /// 蓝牙代理链路状态（请求关联 + 广播/事件采集）；会话结束随条目消失。
     pub ble: Arc<Mutex<ble::BleLink>>,
+    /// Current control TCP identity and bounded telemetry (not persisted).
+    pub(crate) management: Arc<runtime::LiveControl>,
 }
 
 /// data 路由认领 `data_rx` 后 data 任务需要的全部交接件；任务退出时整包经
@@ -188,13 +196,10 @@ pub(crate) fn devices_version() -> u64 {
 }
 
 /// 通知"设备面已变化"（hub 登记/移除、批准/设置/删除登记后调用）。
-/// 两步走，两处都有坑：`send` 在无订阅者时返回 Err 且不更新值（丢更新）；
-/// `send_replace(borrow()+1)` 会自死锁——参数里的读锁 `Ref` 要到调用返回才释放，
-/// 写锁等读者、读者等表达式结束。先取出值再替换。
+/// `send_modify` 在写锁内递增，无订阅者也更新；不能拆成 borrow +
+/// send_replace，否则并发事件可能丢增量，旧快照会拿到已消费的新游标。
 pub(crate) fn bump_devices_version() {
-    let tx = devices_version_tx();
-    let next = tx.borrow().wrapping_add(1);
-    tx.send_replace(next);
+    devices_version_tx().send_modify(|version| *version = version.wrapping_add(1));
 }
 
 /// 订阅变化通知（管理面 `/wait` 长挂用；watch 惰性初始化，订阅前已发生的
@@ -259,12 +264,13 @@ pub(crate) fn hub_claim_only() -> Option<DataClaim> {
     })
 }
 
-/// data 任务退出时归还认领：条目还在（会话未结束）、`data_rx` 未被再次取走、且
-/// 条目仍是本会话的（`data_tx` 同 channel，未被新 register 替换）才放回，供设备
-/// 重拨 `/em/data` 立即再认领；任一不满足则丢弃（新会话自有全新交接件）。
+/// Return only the owning data claim. Reset BLE and discard frames queued before
+/// disconnect under the same hub lock used by GATT dispatch, before making the
+/// receiver claimable again: old writes must never replay on a replacement WS.
+/// Lock order is hub -> BLE, never BLE -> hub; there is no await in this section.
 pub(crate) fn hub_restore_data(
     device_id: &str,
-    data_rx: UnboundedReceiver<DataOut>,
+    mut data_rx: UnboundedReceiver<DataOut>,
     probe: &UnboundedSender<DataOut>,
 ) {
     let mut guard = hub_iter();
@@ -274,6 +280,13 @@ pub(crate) fn hub_restore_data(
             .as_ref()
             .is_some_and(|tx| tx.same_channel(probe));
         if same_session && entry.data_rx.is_none() {
+            entry.ble.lock().expect("echomuse ble link 锁中毒").reset();
+            // Snapshot the length so concurrent audio producers cannot keep this
+            // bounded cleanup running forever. GATT producers require hub lock.
+            let queued = data_rx.len();
+            for _ in 0..queued {
+                let _ = data_rx.try_recv();
+            }
             entry.data_rx = Some(data_rx);
         }
     }
@@ -299,13 +312,45 @@ pub(crate) fn hub_ctl(device_id: &str) -> Option<UnboundedSender<ControlOut>> {
     hub_iter().get(device_id).and_then(|p| p.ctl_tx.clone())
 }
 
-/// 某设备 data 出站口的克隆（蓝牙代理 GATT 请求下发用）；不在线返回 None。
+/// Atomically capture control channel identity and its telemetry/peer metadata.
+pub(crate) fn hub_live(
+    device_id: &str,
+) -> Option<(UnboundedSender<ControlOut>, Arc<runtime::LiveControl>)> {
+    let guard = hub_iter();
+    let entry = guard.get(device_id)?;
+    Some((entry.ctl_tx.clone()?, entry.management.clone()))
+}
+
+/// Only the owning control task may remove a hub entry (reconnect-safe).
+pub(crate) fn hub_remove_session(device_id: &str, ctl: &UnboundedSender<ControlOut>) {
+    let removed = {
+        let mut guard = hub_iter();
+        if guard
+            .get(device_id)
+            .and_then(|p| p.ctl_tx.as_ref())
+            .is_some_and(|c| c.same_channel(ctl))
+        {
+            guard.remove(device_id);
+            true
+        } else {
+            false
+        }
+    };
+    if removed {
+        bump_devices_version();
+    }
+}
+
+/// Fixture-only observation of the data sender. Production BLE dispatch captures
+/// control/session/data/link together; a separate lookup by id is reconnect-unsafe.
+#[cfg(test)]
 pub(crate) fn hub_data(device_id: &str) -> Option<UnboundedSender<DataOut>> {
     hub_iter().get(device_id).and_then(|p| p.data_tx.clone())
 }
 
-/// 借某设备的蓝牙代理链路执行 `f`（不在线返回 None）。外层 hub 锁先放再取内层
-/// 锁，避免两把锁嵌套。
+/// Fixture-only BLE observation. Production dispatch uses its atomic capture;
+/// lifecycle sections acquire hub -> BLE, never the reverse order.
+#[cfg(test)]
 pub(crate) fn hub_ble<T>(device_id: &str, f: impl FnOnce(&mut ble::BleLink) -> T) -> Option<T> {
     let link = {
         let guard = hub_iter();
@@ -326,7 +371,8 @@ pub(crate) fn status_json(enabled: bool) -> serde_json::Value {
     serde_json::json!({ "enabled": enabled, "devices": devices })
 }
 
-/// 会话结束后的清理（control 任务退出时调用；不存在则忽略）。
+/// 测试 fixture 清理；生产路径必须使用带会话探针的 hub_remove_session。
+#[cfg(test)]
 fn hub_remove(device_id: &str) {
     let removed = hub()
         .pending
@@ -405,7 +451,7 @@ pub(crate) fn config_baseline(ble_proxy: bool, settings: &serde_json::Value) -> 
 }
 
 /// 服务器 → 设备 的极简 `config` 推送：只写行为开关，不碰设备音频链路参数
-/// （EQ/AEC/波束等保持设备存储值）。`owwOnDevice=true` 让唤醒词在设备本地识别，
+/// （EQ/AEC/波束等保持设备存储值）。`owwOnDevice="on"` 让唤醒词在设备本地识别，
 /// 服务端零持续音频负载。
 ///
 /// `settings` 是管理面保存的每设备部分更新（协议 camelCase 字段，已在 admin 层
@@ -415,7 +461,7 @@ pub(crate) fn config_baseline(ble_proxy: bool, settings: &serde_json::Value) -> 
 pub fn config_push_with(settings: &serde_json::Value) -> Vec<String> {
     let mut base = serde_json::json!({
         "type": "config",
-        "owwOnDevice": true,
+        "owwOnDevice": "on",
         "streamReply": true,
     });
     if let (Some(obj), Some(base_obj)) = (settings.as_object(), base.as_object_mut()) {
@@ -423,7 +469,9 @@ pub fn config_push_with(settings: &serde_json::Value) -> Vec<String> {
             if k == "wakeWordEnabled" {
                 continue;
             }
-            base_obj.insert(k.clone(), v.clone());
+            if let Some(value) = settings::wire_value(k, v) {
+                base_obj.insert(k.clone(), value);
+            }
         }
     }
     let mut out = vec![base.to_string()];

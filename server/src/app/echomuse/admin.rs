@@ -10,9 +10,10 @@
 //!   设备上线/离线/批准/设置/删除后挂着的请求立刻醒来，客户端刷新列表再挂下一轮。
 //! - `GET  /api/echomuse/devices/{id}`：单台详情（404 不存在）。
 //! - `POST /api/echomuse/devices/{id}/approve`：`{"label"?}` 认领/改名（404 不存在）。
-//! - `POST /api/echomuse/devices/{id}/command`：`{"action":"reboot"}` 或
-//!   `{"action":"wifi","ssid":..,"psk":..}`——在线（hub 有 ctl_tx）经 `ControlOut::Json`
-//!   下发并返回 202；离线 409；`[echomuse].enabled=false` 时全部 404（与 /em/control 一致）。
+//! - `POST /api/echomuse/devices/{id}/command`：`{"action":"wifi","ssid":..,"psk":..}`
+//!   在线经 `ControlOut::Json` 排队并返回 202（非设备应用确认）；离线 409。
+//!   旧 action=reboot 明确拒绝；确认重启、系统诊断、runtime/volume 见 system.rs。
+//!   `[echomuse].enabled=false` 时全部 404（与 /em/control 一致）。
 //! - `DELETE /api/echomuse/devices/{id}` 与等价别名 `POST .../delete`（客户端
 //!   NetworkModule 只有 GET/POST）：删除登记记录（清理 mock/联调设备），只删静态
 //!   登记、不断开在线会话，设备再 register 会重新登记。
@@ -32,7 +33,7 @@ use axum::response::{IntoResponse, Response};
 use crate::engine::Engines;
 
 use super::registry::{self, Registry};
-use super::{hub_ctl, hub_status, ControlOut};
+use super::{hub_ctl, ControlOut};
 
 /// 挂载管理面路由（由 [`crate::app::ws::router`] merge，与 em_routes 并列）。
 pub(crate) fn admin_routes() -> axum::Router<Arc<Engines>> {
@@ -48,6 +49,7 @@ pub(crate) fn admin_routes() -> axum::Router<Arc<Engines>> {
         .route("/api/echomuse/devices/{id}/approve", post(device_approve))
         .route("/api/echomuse/devices/{id}/command", post(device_command))
         .route("/api/echomuse/devices/{id}/settings", post(device_settings))
+        .merge(super::system::routes())
 }
 
 // ---- 响应构造（纯函数，测试直驱） ----
@@ -80,15 +82,13 @@ fn disabled_404() -> Response {
 /// devices 列表体：registry 全表（按 device_id 排序）left join hub 在线状态；
 /// `version` 是设备面变化号（客户端 `/wait` 长挂的游标）。
 pub(crate) fn devices_payload(enabled: bool, reg: &Registry) -> serde_json::Value {
-    let online: HashMap<String, u64> = hub_status().into_iter().collect();
-    let devices: Vec<serde_json::Value> = reg
-        .list()
-        .iter()
-        .map(|r| r.payload(online.get(&r.device_id).copied()))
-        .collect();
+    // Read the cursor BEFORE snapshots: a concurrent change must leave an older
+    // cursor (and trigger the next /wait), never old rows with a newer cursor.
+    let version = super::devices_version();
+    let devices: Vec<serde_json::Value> = reg.list().iter().map(record_payload).collect();
     serde_json::json!({
         "enabled": enabled,
-        "version": super::devices_version(),
+        "version": version,
         "devices": devices,
     })
 }
@@ -117,8 +117,19 @@ pub(crate) async fn wait_version(
 
 /// 单台详情体；registry 无记录返回 None（handler 转 404）。
 pub(crate) fn device_payload(reg: &Registry, id: &str) -> Option<serde_json::Value> {
-    let online: HashMap<String, u64> = hub_status().into_iter().collect();
-    reg.get(id).map(|r| r.payload(online.get(id).copied()))
+    reg.get(id).as_ref().map(record_payload)
+}
+
+/// Online duration and identity are read under ONE hub lock, so a fast
+/// replacement cannot combine the old connection age with the new session id.
+fn record_payload(record: &registry::DeviceRecord) -> serde_json::Value {
+    let hub = super::hub_iter();
+    let live = hub.get(&record.device_id);
+    let mut body = record.payload(live.map(|p| p.since.elapsed().as_secs()));
+    body["session_id"] = live
+        .map(|p| serde_json::json!(p.management.session_id.to_string()))
+        .unwrap_or(serde_json::Value::Null);
+    body
 }
 
 /// approve 决策：Some = 更新后的记录体；None = 404。
@@ -128,18 +139,14 @@ pub(crate) fn approve(
     body: &serde_json::Value,
 ) -> Option<serde_json::Value> {
     let label = body.get("label").and_then(|l| l.as_str());
-    let secs = hub_status()
-        .into_iter()
-        .find(|(id2, _)| id2.as_str() == id)
-        .map(|(_, s)| s);
-    reg.approve(id, label).map(|r| r.payload(secs))
+    reg.approve(id, label).as_ref().map(record_payload)
 }
 
 /// command 消息体：按 action 构造下发 JSON（命名遵循 EchoMuse
 /// `device-controller-interface.md`；设备不认识的 type 会忽略，真机支持待验证）。
 fn command_out(body: &serde_json::Value) -> Result<String, &'static str> {
     match body.get("action").and_then(|a| a.as_str()) {
-        Some("reboot") => Ok(serde_json::json!({ "type": "reboot" }).to_string()),
+        Some("reboot") => Err("reboot requires POST system/reboot with confirm=true"),
         Some("wifi") => {
             let ssid = body
                 .get("ssid")
@@ -152,7 +159,7 @@ fn command_out(body: &serde_json::Value) -> Result<String, &'static str> {
             let psk = body.get("psk").and_then(|s| s.as_str()).unwrap_or("");
             Ok(serde_json::json!({ "type": "wifi_change", "ssid": ssid, "psk": psk }).to_string())
         }
-        _ => Err("action 只支持 reboot / wifi"),
+        _ => Err("action 只支持 wifi；重启请使用确认 system/reboot 接口"),
     }
 }
 
@@ -162,12 +169,12 @@ fn command_out(body: &serde_json::Value) -> Result<String, &'static str> {
 /// `config_baseline` 打基线，单台可覆盖，例如关连接留扫描）。
 const SETTINGS_KEYS: &[(&str, &str)] = &[
     ("wakeWordEnabled", "bool"),
-    ("owwOnDevice", "bool"),
+    ("owwOnDevice", "off|shadow|on"),
     ("owwModel", "string"),
-    ("owwThreshold", "number"),
+    ("owwThreshold", "(0,1]"),
     ("wakeSound", "bool"),
-    ("wakeSoundLevel", "number"),
-    ("wakeMic", "number"),
+    ("wakeSoundLevel", "quiet|medium|loud"),
+    ("wakeMic", "integer 0..6"),
     ("bleProxyEnabled", "bool"),
     ("bleProxyConnections", "bool"),
 ];
@@ -191,6 +198,10 @@ pub(crate) fn filter_settings(
         let ok = match *kind {
             "bool" => v.is_boolean(),
             "string" => v.is_string(),
+            "off|shadow|on" => matches!(v.as_str(), Some("off" | "shadow" | "on")),
+            "quiet|medium|loud" => matches!(v.as_str(), Some("quiet" | "medium" | "loud")),
+            "integer 0..6" => v.as_u64().is_some_and(|n| n <= 6),
+            "(0,1]" => v.as_f64().is_some_and(|n| n > 0.0 && n <= 1.0),
             _ => v.is_number(),
         };
         if !ok {
@@ -414,18 +425,30 @@ async fn device_settings(
     let reg = registry::global(&engines.config);
     let known = reg.get(&id).is_some();
     let online = hub_ctl(&id).is_some();
-    let (code, reply, outs) = settings_plan(true, online, known, &payload);
+    let (code, reply, _) = settings_plan(true, online, known, &payload);
     if code == StatusCode::BAD_REQUEST || code == StatusCode::NOT_FOUND {
         return json(code, reply);
     }
     // 合法性已验证：持久化（离线也保存，设备下次接入时由 control_session 推送）。
     let (settings, _) = filter_settings(&payload);
-    if reg.set_settings(&id, settings).is_none() {
+    let Some(record) = reg.set_settings(&id, settings) else {
         return json(
             StatusCode::NOT_FOUND,
             serde_json::json!({ "error": "device not found" }),
         );
-    }
+    };
+    // Push the merged snapshot: pushing only a delta would reapply baseline
+    // owwOnDevice=on and silently undo a previously stored off/shadow mode.
+    let outs: Vec<ControlOut> = if online {
+        super::config_push_with(&serde_json::Value::Object(
+            record.settings.into_iter().collect(),
+        ))
+        .into_iter()
+        .map(ControlOut::Json)
+        .collect()
+    } else {
+        Vec::new()
+    };
     // 设置对列表可见（settings 快照随行）。
     super::bump_devices_version();
     // 在线才可能有 outs；发送失败（control 会话刚退出）按离线口径回已持久化。

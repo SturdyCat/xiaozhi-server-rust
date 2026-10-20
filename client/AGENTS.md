@@ -11,9 +11,12 @@
 在 client 目录验证：
 
 ```bash
+./gradlew :bleProtocolTests:jvmTest
 ./gradlew :apps:h5App:publishWeb -PwebSourceMap=false
 ./gradlew :shared:compileKotlinMacosArm64
 ```
+
+`bleProtocolTests` 是无页面、无 Kuikly/KSP 的普通 KMP 测试模块，只引用生产 `EchoMuseBleCodec.kt` 源文件并运行纯协议/校验回归，不复制实现，也不参与生产 bundle。共享模块的 native 测试依赖宿主导出 `com_tencent_kuikly_IsCurrentOnContextThread`，不能将只编译成功称为测试通过，或为测试伪造渲染宿主符号。
 
 publishWeb 不覆盖 macOS 源集；原生运行另重建框架。[macOS 构建指引](<apps/macosApp/AGENTS.md>) · [部署内存限制](<../docs/deployment.md>)
 

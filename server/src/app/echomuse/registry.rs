@@ -87,7 +87,18 @@ impl Registry {
         let mut devices = HashMap::new();
         if let Ok(text) = std::fs::read_to_string(&path) {
             match serde_json::from_str::<HashMap<String, DeviceRecord>>(&text) {
-                Ok(map) => devices = map,
+                Ok(mut map) => {
+                    for record in map.values_mut() {
+                        record.settings = record
+                            .settings
+                            .iter()
+                            .filter_map(|(k, v)| {
+                                super::settings::wire_value(k, v).map(|v| (k.clone(), v))
+                            })
+                            .collect();
+                    }
+                    devices = map;
+                }
                 Err(e) => {
                     tracing::warn!("[echomuse] 登记文件解析失败，按空表起步 {path:?}: {e}");
                 }
@@ -121,7 +132,7 @@ impl Registry {
         self.save();
     }
 
-    /// 保存每设备配置（整体替换 body 白名单过滤后的键集；返回更新后记录，None=不存在）。
+    /// 保存每设备部分配置（合并已校验键，不清除未提交设置；None=不存在）。
     pub fn set_settings(
         &self,
         device_id: &str,
@@ -129,7 +140,7 @@ impl Registry {
     ) -> Option<DeviceRecord> {
         let mut guard = self.devices.lock().expect("echomuse registry 锁中毒");
         let record = guard.get_mut(device_id)?;
-        record.settings = settings;
+        record.settings.extend(settings);
         let snapshot = record.clone();
         drop(guard);
         self.save();

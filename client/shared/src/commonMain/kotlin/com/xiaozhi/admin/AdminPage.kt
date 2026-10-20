@@ -139,6 +139,7 @@ class AdminPage : Pager() {
         // 运维面多路数据：并行发出，各自的 loading/loadError 独立（一个端点挂了不影响其他页面）
         stats.load(this, base)
         devices.load(this, base)
+        echomuse.configureAccess(token, base)
         echomuse.load(this, base)
         sessions.load(this, base)
         conversations.load(this, base)

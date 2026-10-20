@@ -27,6 +27,7 @@ pub(super) fn insert_online(device_id: &str) -> mpsc::UnboundedReceiver<ControlO
             ctl_tx: Some(ctl_tx),
             data_tx: Some(data_tx),
             ble: Arc::new(Mutex::new(BleLink::default())),
+            management: Arc::new(super::runtime::LiveControl::new(None, false)),
         },
     );
     ctl_rx
@@ -79,4 +80,26 @@ fn hub_restore_data_reclaims_same_session_only() {
     hub_remove("dev-restore-1");
     drop(ctl_rx);
     drop(ctl_rx2);
+}
+
+#[test]
+fn hub_restore_discards_queued_frames_before_reclaim() {
+    let _g = HUB_LOCK.lock().unwrap();
+    let id = "dev-data-no-replay";
+    let ctl_rx = insert_online(id);
+    let claim = hub_claim_data(id).unwrap();
+    claim.data_tx.send(super::frames::frame_ble_gatt(
+        r#"{"t":"write","req":1,"addr":"aa:bb:cc:dd:ee:ff","handle":3,"value":"AQ==","response":true}"#,
+    )).unwrap();
+    claim.data_tx.send(b"stale audio".to_vec()).unwrap();
+    hub_restore_data(id, claim.data_rx, &claim.data_tx);
+    let mut fresh = hub_claim_data(id).unwrap();
+    assert!(
+        fresh.data_rx.try_recv().is_err(),
+        "old frames must not replay on a new data socket"
+    );
+    fresh.data_tx.send(b"new audio".to_vec()).unwrap();
+    assert_eq!(fresh.data_rx.try_recv().unwrap(), b"new audio");
+    hub_remove(id);
+    drop(ctl_rx);
 }

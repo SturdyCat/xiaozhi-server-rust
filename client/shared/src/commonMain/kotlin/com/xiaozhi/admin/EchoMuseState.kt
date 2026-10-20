@@ -47,6 +47,9 @@ class EchoMuseDeviceRow(
     val connectedSecs: Long,
     /** 服务端保存的唤醒词设置（可能为空对象；缺省键以页面默认值兜底）。 */
     val settings: JSONObject,
+    val capabilities: List<String> = emptyList(),
+    /** 当前 control 会话标识，不持久化；旧服务端缺省为空。 */
+    val sessionId: String = "",
 ) {
     /** 标题：label 优先，未命名时回退设备号。 */
     val title: String get() = label.ifEmpty { deviceId }
@@ -84,8 +87,16 @@ class EchoMuseDeviceRow(
         }.joinToString("\n")
 }
 
-/** `GET /api/echomuse/devices` 的数据源 + 批准 / 下发指令（reboot、wifi）/ 删除记录。 */
-class EchoMuseState(scope: PagerScope) : LoadableState(scope) {
+/** 设备列表/审批/WiFi/唤醒设置；emOS 系统管理见 [EchoMuseManagementState]。 */
+class EchoMuseState(scope: PagerScope) {
+    var loading by scope.observable(false)
+        private set
+    var loaded by scope.observable(false)
+        private set
+    var loadError by scope.observable("")
+        private set
+    private var base = ""
+    private var connectionGeneration = 0
 
     /** 服务端 `[echomuse]` 能力开关（false 时页面显示"未启用"提示）。 */
     var enabled by scope.observable(true)
@@ -97,15 +108,59 @@ class EchoMuseState(scope: PagerScope) : LoadableState(scope) {
     private var serverVersion = -1L
 
     val devices: ObservableList<EchoMuseDeviceRow> by scope.observableList()
+    val management = EchoMuseManagementState(scope)
+    val ble = EchoMuseBleState(scope)
+    private var accessToken = ""
 
-    override fun endpoint(baseUrl: String): String = "$baseUrl/api/echomuse/devices"
+    /** 连接参数是一个整体；同 token 跨服务器也必须使旧请求失效。 */
+    fun configureAccess(token: String, baseUrl: String = "") {
+        if (accessToken != token || base != baseUrl) {
+            connectionGeneration++
+            loading = false
+            loaded = false
+            loadError = ""
+            devices.clear()
+            serverVersion = -1L
+            liveStarted = false
+            actionBusy = false
+            approveTarget = ""
+            wifiTarget = ""
+            settingsTarget = ""
+            confirmDeleteId = ""
+            approveDraft = ""
+            wifiSsid = ""
+            wifiPsk = ""
+        }
+        accessToken = token
+        base = baseUrl
+        management.configureConnection(baseUrl, token)
+        ble.configureConnection(baseUrl, token)
+    }
 
-    override val errorLabel: String = "EchoMuse 设备列表加载失败"
+    fun toggleManagement(row: EchoMuseDeviceRow) = management.toggle(row, base)
 
-    override fun apply(data: JSONObject) {
+    fun load(ctx: Pager, baseUrl: String = "") {
+        if (base != baseUrl) configureAccess(accessToken, baseUrl)
+        if (loading) return
+        val generation = connectionGeneration
+        loading = true
+        loadError = ""
+        getJson(ctx, echoMuseAuthenticatedUrl("$base/api/echomuse/devices", accessToken)) { ok, data, reason ->
+            if (generation != connectionGeneration) return@getJson
+            loading = false
+            if (ok) {
+                apply(data)
+                liveIsActive?.let { ensureLiveUpdates(ctx, it) }
+            } else loadError = "EchoMuse 设备列表加载失败：$reason"
+        }
+    }
+
+    fun refresh(ctx: Pager) = load(ctx, base)
+
+    private fun apply(data: JSONObject) {
         enabled = data.optBoolean("enabled", true)
         // 版本游标只在服务端给了才更新（老服务端没有该字段，保持 -1）。
-        data.optLong("version")?.let { serverVersion = it }
+        (data.opt("version") as? Number)?.let { serverVersion = it.toLong() }
         devices.clear()
         val arr = data.array("devices")
         if (arr != null) {
@@ -119,15 +174,21 @@ class EchoMuseState(scope: PagerScope) : LoadableState(scope) {
                         version = d.text("version"),
                         board = d.text("board"),
                         baseOs = d.text("base_os"),
-                        firstSeen = d.optLong("first_seen") ?: -1L,
-                        lastSeen = d.optLong("last_seen") ?: -1L,
+                        firstSeen = (d.opt("first_seen") as? Number)?.toLong() ?: -1L,
+                        lastSeen = (d.opt("last_seen") as? Number)?.toLong() ?: -1L,
                         online = d.optBoolean("online", false),
-                        connectedSecs = d.optLong("connected_secs") ?: -1L,
+                        connectedSecs = (d.opt("connected_secs") as? Number)?.toLong() ?: -1L,
                         settings = d.optJSONObject("settings") ?: JSONObject(),
+                        sessionId = d.text("session_id"),
+                        capabilities = d.array("capabilities")?.let { values ->
+                            (0 until values.length()).mapNotNull { values.optString(it)?.takeIf { value -> value.isNotEmpty() } }
+                        } ?: emptyList(),
                     ),
                 )
             }
         }
+        management.sync(devices)
+        ble.sync(devices)
         loaded = true
         loadError = ""
     }
@@ -159,7 +220,7 @@ class EchoMuseState(scope: PagerScope) : LoadableState(scope) {
         if (actionBusy) return
         actionBusy = true
         val body = JSONObject().apply { put("label", approveDraft.trim()) }
-        post(ctx, "/api/echomuse/devices/$deviceId/approve", body) { ok, code, reason, _ ->
+        post(ctx, "/api/echomuse/devices/${echoMuseUrlComponent(deviceId)}/approve", body) { ok, code, reason, _ ->
             actionBusy = false
             if (ok) {
                 approveTarget = ""
@@ -177,9 +238,6 @@ class EchoMuseState(scope: PagerScope) : LoadableState(scope) {
     // ============================================================
     // 下发指令（POST /api/echomuse/devices/{id}/command）
     // ============================================================
-
-    /** 重启行内二次确认的设备号（空串 = 无；同 OtaState 的 confirmKey 范式）。 */
-    var confirmRebootId by scope.observable("")
 
     /** 当前展开 WiFi 配置表单的设备号（空串 = 全部收起）。 */
     var wifiTarget by scope.observable("")
@@ -202,11 +260,10 @@ class EchoMuseState(scope: PagerScope) : LoadableState(scope) {
     ) {
         if (actionBusy) return
         actionBusy = true
-        post(ctx, "/api/echomuse/devices/$deviceId/command", body) { ok, code, reason, _ ->
+        post(ctx, "/api/echomuse/devices/${echoMuseUrlComponent(deviceId)}/command", body) { ok, code, reason, _ ->
             actionBusy = false
             if (ok) {
-                confirmRebootId = ""
-                onDone(true, "指令已下发，结果看设备灯环")
+                onDone(true, "WiFi 指令已排队下发，执行结果请在设备上核对")
             } else {
                 onDone(false, when (code) {
                     409 -> "设备离线，指令未下发：请先唤醒设备再试"
@@ -215,11 +272,6 @@ class EchoMuseState(scope: PagerScope) : LoadableState(scope) {
                 })
             }
         }
-    }
-
-    /** 重启（确认后调用）。 */
-    fun reboot(ctx: Pager, deviceId: String, onDone: (ok: Boolean, msg: String) -> Unit) {
-        command(ctx, deviceId, JSONObject().apply { put("action", "reboot") }, onDone)
     }
 
     /** 下发 WiFi 配置（ssid + psk）。 */
@@ -247,7 +299,7 @@ class EchoMuseState(scope: PagerScope) : LoadableState(scope) {
     // 删除记录（POST /api/echomuse/devices/{id}/delete）
     // ============================================================
 
-    /** 删除行内二次确认的设备号（空串 = 无；同 [confirmRebootId] 范式）。 */
+    /** 删除行内二次确认的设备号（空串 = 无）；重启确认由 management 独立持有。 */
     var confirmDeleteId by scope.observable("")
 
     /**
@@ -257,7 +309,7 @@ class EchoMuseState(scope: PagerScope) : LoadableState(scope) {
     fun delete(ctx: Pager, deviceId: String, onDone: (ok: Boolean, msg: String) -> Unit) {
         if (actionBusy) return
         actionBusy = true
-        post(ctx, "/api/echomuse/devices/$deviceId/delete", JSONObject()) { ok, code, reason, _ ->
+        post(ctx, "/api/echomuse/devices/${echoMuseUrlComponent(deviceId)}/delete", JSONObject()) { ok, code, reason, _ ->
             actionBusy = false
             confirmDeleteId = ""
             if (ok) {
@@ -301,13 +353,28 @@ class EchoMuseState(scope: PagerScope) : LoadableState(scope) {
 
     // —— 表单草稿：展开时从设备 settings 快照填充，缺省走默认值 ——
     var wakeWordEnabled by scope.observable(true)
-    var owwOnDevice by scope.observable(true)
+    var owwOnDevice by scope.observable("on")
+    var owwModeOpen by scope.observable(false)
+    val owwModes by scope.observableList<Pair<String, String>>()
+    var wakeLevelOpen by scope.observable(false)
+    val wakeLevels by scope.observableList<Pair<String, String>>()
+
+    init {
+        owwModes.addAll(listOf(
+            "off" to "关闭（off）",
+            "shadow" to "影子识别（shadow，仅观察）",
+            "on" to "启用识别（on）",
+        ))
+        wakeLevels.addAll(listOf(
+            "quiet" to "轻柔（quiet）", "medium" to "适中（medium）", "loud" to "响亮（loud）",
+        ))
+    }
     var owwModel by scope.observable("")
     /** 唤醒灵敏度阈值 0~1（越大越不易误触）。 */
     var owwThreshold by scope.observable(0.5)
     var wakeSound by scope.observable(true)
-    /** 提示音音量（数字输入草稿，保存时解析校验）。 */
-    var wakeSoundLevel by scope.observable("0.5")
+    /** 固件提示音档位（不是输出音量 0～127）。 */
+    var wakeSoundLevel by scope.observable("medium")
     /** 0=中心麦克风，范围 0~6。 */
     var wakeMic by scope.observable("0")
 
@@ -320,11 +387,22 @@ class EchoMuseState(scope: PagerScope) : LoadableState(scope) {
         settingsTarget = deviceId
         val s = devices.firstOrNull { it.deviceId == deviceId }?.settings ?: JSONObject()
         wakeWordEnabled = s.optBoolean("wakeWordEnabled", true)
-        owwOnDevice = s.optBoolean("owwOnDevice", true)
+        owwOnDevice = when (val raw = s.opt("owwOnDevice")) {
+            true -> "on"
+            false -> "off"
+            "off", "shadow", "on" -> raw.toString()
+            else -> "on"
+        }
+        owwModeOpen = false
+        wakeLevelOpen = false
         owwModel = s.optString("owwModel", "")
-        owwThreshold = s.optDouble("owwThreshold", 0.5).coerceIn(0.0, 1.0)
+        owwThreshold = s.optDouble("owwThreshold", 0.5).coerceIn(0.05, 1.0)
         wakeSound = s.optBoolean("wakeSound", true)
-        wakeSoundLevel = doubleText(s.opt("wakeSoundLevel"), "0.5")
+        wakeSoundLevel = when (val raw = s.opt("wakeSoundLevel")) {
+            "quiet", "medium", "loud" -> raw.toString()
+            is Number -> "medium" // 旧数字从未被固件接受，不能猜测有效档位。
+            else -> "medium"
+        }
         wakeMic = intText(s.opt("wakeMic"), "0")
     }
 
@@ -333,9 +411,12 @@ class EchoMuseState(scope: PagerScope) : LoadableState(scope) {
      * 数值字段解析失败/越界就不发请求（不发半截更新）。
      */
     fun saveSettings(ctx: Pager, deviceId: String, onDone: (ok: Boolean, msg: String) -> Unit) {
-        val level = wakeSoundLevel.trim().toDoubleOrNull()
-        if (level == null) {
-            onDone(false, "提示音音量需要是数字（当前：${wakeSoundLevel}）")
+        if (owwOnDevice !in setOf("off", "shadow", "on") || wakeSoundLevel !in setOf("quiet", "medium", "loud")) {
+            onDone(false, "请选择有效的本地唤醒模式和提示音档位")
+            return
+        }
+        if (!owwThreshold.isFinite() || owwThreshold <= 0.0 || owwThreshold > 1.0) {
+            onDone(false, "唤醒阈值必须大于 0 且不超过 1")
             return
         }
         val mic = wakeMic.trim().toIntOrNull()
@@ -351,15 +432,15 @@ class EchoMuseState(scope: PagerScope) : LoadableState(scope) {
             put("owwModel", owwModel.trim())
             put("owwThreshold", owwThreshold)
             put("wakeSound", wakeSound)
-            put("wakeSoundLevel", level)
+            put("wakeSoundLevel", wakeSoundLevel)
             put("wakeMic", mic)
         }
-        post(ctx, "/api/echomuse/devices/$deviceId/settings", body) { ok, code, reason, data ->
+        post(ctx, "/api/echomuse/devices/${echoMuseUrlComponent(deviceId)}/settings", body) { ok, code, reason, data ->
             actionBusy = false
             if (ok) {
                 val delivered = data?.optBoolean("delivered", false) == true ||
                     data?.optBoolean("queued", false) == true
-                val msg = if (delivered) "设置已即时下发到设备" else "设置已保存，设备下次接入时自动生效"
+                val msg = if (delivered) "设置已保存并排队下发，实际生效请在设备上核对" else "设置已保存，设备下次接入时自动推送"
                 onDone(true, msg)
             } else {
                 onDone(false, when (code) {
@@ -377,6 +458,7 @@ class EchoMuseState(scope: PagerScope) : LoadableState(scope) {
 
     /** 长挂链只起一次（[ensureLiveUpdates] 会在每次重组时被调用）。 */
     private var liveStarted = false
+    private var liveIsActive: (() -> Boolean)? = null
 
     /**
      * 页面停留（[isActive]）期间挂住 `GET /api/echomuse/devices/wait?after=<版本>`：
@@ -387,13 +469,16 @@ class EchoMuseState(scope: PagerScope) : LoadableState(scope) {
      * 立即对齐）。服务端过旧（无版本字段）则不起链，退回"进页刷新一次"的口径。
      */
     fun ensureLiveUpdates(ctx: Pager, isActive: () -> Boolean) {
-        if (liveStarted || serverVersion < 0) return
+        liveIsActive = isActive
+        if (liveStarted || serverVersion < 0 || !isActive()) return
         liveStarted = true
         waitTick(ctx, isActive)
     }
 
     private fun waitTick(ctx: Pager, isActive: () -> Boolean) {
-        getJson(ctx, "$base/api/echomuse/devices/wait?after=$serverVersion") { ok, data, _ ->
+        val generation = connectionGeneration
+        getJson(ctx, echoMuseAuthenticatedUrl("$base/api/echomuse/devices/wait?after=$serverVersion", accessToken)) { ok, data, _ ->
+            if (generation != connectionGeneration) return@getJson
             if (!isActive()) {
                 liveStarted = false
                 return@getJson
@@ -401,29 +486,21 @@ class EchoMuseState(scope: PagerScope) : LoadableState(scope) {
             if (!ok) {
                 // 网络/服务端暂不可达：退避后重挂，链不断。
                 ctx.setTimeout(ECHOMUSE_WAIT_RETRY_MS) {
+                    if (generation != connectionGeneration) return@setTimeout
                     if (isActive()) waitTick(ctx, isActive) else liveStarted = false
                 }
                 return@getJson
             }
             // 版本以回包为准（refresh 的列表回包还会再对齐一次，值相同）。
-            data.optLong("version")?.let { serverVersion = it }
+            (data.opt("version") as? Number)?.let { serverVersion = it.toLong() }
             if (data.optBoolean("changed", false)) refresh(ctx)
             waitTick(ctx, isActive)
         }
     }
 
-    /** 服务端数值转输入框草稿：有值原样展示，缺省用 [fallback]。 */
-    private fun doubleText(raw: Any?, fallback: String): String =
-        (raw as? Number)?.let { formatNum(it.toDouble()) } ?: fallback
-
+    /** 服务端麦克风编号转草稿；未设置时采用设备默认值。 */
     private fun intText(raw: Any?, fallback: String): String =
         (raw as? Number)?.let { it.toInt().toString() } ?: fallback
-
-    /** 整数去掉小数尾零（1.0 → "1"，0.5 → "0.5"）。 */
-    private fun formatNum(v: Double): String {
-        val r = (v * 100).let { kotlin.math.round(it) / 100 }
-        return if (r == r.toLong().toDouble()) r.toLong().toString() else r.toString()
-    }
 
     /** 展示名：列表里找得到用 label，否则设备号（动作结果提示用）。 */
     private fun displayName(deviceId: String): String =
@@ -436,13 +513,15 @@ class EchoMuseState(scope: PagerScope) : LoadableState(scope) {
         body: JSONObject,
         onDone: (ok: Boolean, code: Int?, reason: String, data: JSONObject?) -> Unit,
     ) {
-        val headers = JSONObject().apply { put("Content-Type", "application/json") }
+        val generation = connectionGeneration
+        val headers = echoMuseHeaders(accessToken)
         network(ctx).httpRequest("$base$path", true, body, headers) { data, success, errorMsg, resp ->
+            if (generation != connectionGeneration) return@httpRequest
             val code = resp.statusCode
             val ok = success && (code == null || code in 200..299)
-            val reason = data?.text("error")?.takeIf { it.isNotEmpty() }
-                ?: data?.text("message")?.takeIf { it.isNotEmpty() }
-                ?: (errorMsg ?: "")
+            val reason = data.text("error").takeIf { it.isNotEmpty() }
+                ?: data.text("message").takeIf { it.isNotEmpty() }
+                ?: errorMsg
             onDone(ok, code, reason, data)
         }
     }
