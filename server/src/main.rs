@@ -163,6 +163,9 @@ async fn run(config: Config, config_store: Arc<dyn ConfigStore>) -> Result<()> {
         };
         crate::app::echomuse::spawn_mdns(mdns_port);
     }
+    // 管理客户端发现（常驻、无配置项）：广播 `_xiaozhi-admin._tcp`，macApp 等
+    // 非 web 客户端经 Bonjour 浏览后自动连接，免手填 IP（见 app/discovery.rs）。
+    crate::app::discovery::spawn_admin_mdns(config.server.port);
     // 设备主动拨回的受限 shell 面必须绑定当前 control 的真实对端地址；
     // ConnectInfo 来自 TCP 连接，不信任可伪造的转发头。
     serve(

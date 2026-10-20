@@ -4,6 +4,7 @@
 
 pub mod audio;
 pub mod bench_api;
+pub mod discovery;
 pub mod downlink;
 pub mod echomuse;
 pub mod events;

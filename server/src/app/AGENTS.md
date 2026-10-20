@@ -7,6 +7,7 @@
 - 改会话先读[会话说明](<session/AGENTS.md>)；推理许可、abort、MCP 抽帧与缓存路径均有独立边界。
 - 改 HTTP 先读[网关说明](<ws/AGENTS.md>)；配置更新继续走唯一合并/打码/持久化管线，热生效规则来自注册表。
 - 固件托管见[OTA 说明](<firmware/AGENTS.md>)，发音人目录见[音色说明](<voices/AGENTS.md>)，EchoMuse 设备直连见[EchoMuse 说明](<echomuse/AGENTS.md>)（协议映射见[根文档](<../../../docs/echomuse.md>)）。
+- 管理客户端局域网自动发现（常驻 mDNS `_xiaozhi-admin._tcp` 广播，macApp 免手填 IP）见 [discovery.rs](<discovery.rs>)；发现是辅助，失败只告警。
 
 跨层结构见[架构概览](<../../../docs/architecture.md>)；历史三项缺口设计、接线清单与实施护栏见[三项缺口设计](<../../../docs/gap-implementation-design.md>)，不作为现状规范。
 
