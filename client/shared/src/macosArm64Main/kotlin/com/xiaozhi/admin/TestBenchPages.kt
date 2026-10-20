@@ -57,12 +57,12 @@ private fun ViewContainer<*, *>.benchConnectPage(
         wide = wide,
         left = {
             groupedCard("连接") {
-                // server 地址只读展示：与 API 同一来源（侧边栏「切换服务器」），改一处 WS/API 一起变。
+                // server 地址只读展示：与 API 同一来源（侧边栏「服务器设置」），改一处 WS/API 一起变。
                 Text {
                     attr {
                         fontSize(AdminType.caption)
                         color(AdminColors.textSecondary)
-                        text("服务器：${bench.serverUrl}（与 API 同一地址，经侧边栏「切换服务器」修改）")
+                        text("服务器：${bench.serverUrl}（与 API 同一地址，经侧边栏「服务器设置」修改）")
                     }
                 }
                 View { attr { height(AdminSpace.xs) } }

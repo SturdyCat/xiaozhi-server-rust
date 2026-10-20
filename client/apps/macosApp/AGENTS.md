@@ -10,7 +10,9 @@
 - shared 框架路径从 apps/macosApp 上两级，用 PROJECT_DIR 绝对化搜索路径；releaseFramework 不是 releaseShared。
 - Kotlin/Native macabi 平台补丁已由[shared 构建任务](<../../shared/build.gradle.kts>)自动 finalizedBy；使用[补丁脚本](<../../scripts/patch_framework_macabi.py>)，不要手动 vtool 重写一套。
 - WS/采音/播放/Opus 桥在[XiaoZhiModule](<XiaoZhiModule.m>)及其 Audio/Opus 分类；协议改动同时检查原生桥与服务端。
-- 宿主启动即打开 shared 的统一管理台 `@Page("admin")`（[SceneDelegate](<SceneDelegate.m>)，pageName 已从旧 `router` 切换）；macOS 与 web 同壳，平台差异（测试台 / 切换服务器 / 服务器基址）由 shared 的 AdminPlatform expect/actual 承载，原 AdminShell 双壳已删除。
+- 宿主启动即打开 shared 的统一管理台 `@Page("admin")`（[SceneDelegate](<SceneDelegate.m>)，pageName 已从旧 `router` 切换）；macOS 与 web 同壳，平台差异（测试台 / 服务器设置 / 服务器基址）由 shared 的 AdminPlatform expect/actual 承载，原 AdminShell 双壳已删除。
+- **服务器设置与自动连接**：侧边栏「服务器设置」内联表单（[AdminPlatform mac actual](<../../shared/src/macosArm64Main/kotlin/com/xiaozhi/admin/AdminPlatform.kt>)）展示局域网自动发现列表 + 手填地址；首次运行（从未保存地址）发现到服务器即自动接管 = 开箱自动连接。发现经 [XiaoZhiModule+Discovery.m](<XiaoZhiModule+Discovery.m>) 浏览服务端常驻广播的 `_xiaozhi-admin._tcp`（Info.plist/project.yml 的 `NSBonjourServices` 必须声明该类型，缺失时系统静默拦截浏览）。
+- **⚠️ 线程铁律**：Kuikly Kotlin 侧跑在独立 context 线程，observable/setTimeout 等只允许在该线程调用。一切异步事件（WS 帧、发现结果）必须经 XiaoZhiModule 的 `invoke:` 回调上行——框架把回调 block 包裹为 `performOnContextQueue`，任意原生线程调用都会被切回 context 线程。禁止在 Kotlin 侧自建 NSURLSession/GCD 直调共享层（2026-10 管理台 WS 断线重连触发 `assertContextQueue` 卡死事故即此根因，AdminWs 就是那次整改的产物）。
 
 本级说明 · [协议联调（从上级入口导航）](<../../AGENTS.md>)
 
@@ -26,8 +28,8 @@
 `web` 受浏览器麦克风 / WebSocket 二进制等限制，不适合语音链路测试。macOS App（`apps/macosApp`，Mac Catalyst，复用 iOS 渲染器 `OpenKuiklyIOSRender`）承载端到端语音测试：
 
 - **测试代码只在 `client/shared/src/macosArm64Main`**：web/Android/iOS/OHOS 的包不含测试代码；web 管理台不显示「测试台」菜单（`NavDescriptor.macOnly`），仅 macOS 客户端可见。
-- **四个 tab**：连接 / ASR 识别（录音试听 → 识别解耦 + 波形回放）/ TTS 合成（音色下拉 + 语速，可临时覆盖当前配置）/ LLM 对话；每个 tab 右侧内嵌对应配置卡，配合顶栏「保存配置」写回。
-- 原生桥接 `apps/macosApp/XiaoZhiModule*.m`：WS 建连、麦克风采集、音频播放、**Opus 编解码**（`XiaoZhiModule+Opus.m`，libopus）均已实现。
+- **五个 tab**：连接 / ASR 识别（录音试听 → 识别解耦 + 波形回放）/ TTS 合成（音色下拉 + 语速，可临时覆盖当前配置）/ LLM 对话 / NLU 意图（意图 + 置信度 + tokenize/infer 延迟拆解）；每个 tab 右侧内嵌对应配置卡，配合顶栏「保存配置」写回。
+- 原生桥接 `apps/macosApp/XiaoZhiModule*.m`：WS 建连（测试台 [XiaoZhiModule.m](<XiaoZhiModule.m>)、管理台实时通道 [XiaoZhiModule+AdminWs.m](<XiaoZhiModule+AdminWs.m>)、服务器发现 [XiaoZhiModule+Discovery.m](<XiaoZhiModule+Discovery.m>)）、麦克风采集、音频播放、**Opus 编解码**（`XiaoZhiModule+Opus.m`，libopus）均已实现。
 
 ```bash
 ## ① 编出 KMP 业务框架（仅 Apple Silicon）

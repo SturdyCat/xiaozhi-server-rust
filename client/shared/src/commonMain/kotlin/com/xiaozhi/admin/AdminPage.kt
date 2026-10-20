@@ -107,7 +107,7 @@ class AdminPage : Pager() {
     var drawerOpen by observable(false)
 
     /**
-     * macOS「切换服务器」表单开关（web 恒 false）：入口与表单渲染在 mac actual 的
+     * macOS「服务器设置」表单开关（web 恒 false）：入口与表单渲染在 mac actual 的
      * [macServerSwitchEntry]（侧边栏内联展开），保存后经 [refreshAll] 重拉数据。
      */
     var serverSwitchOpen by observable(false)
@@ -387,10 +387,11 @@ private fun ViewContainer<*, *>.adminSidebar(ctx: AdminPage, topInset: Float) {
                 ctx.drawerOpen = false
             }
         }
-        // macOS 专属：「切换服务器」入口 + 内联地址表单（js/其他平台 actual 空实现）
+        // macOS 专属：「服务器设置」入口 + 内联地址表单（js/其他平台 actual 空实现）
         macServerSwitchEntry(
             ctx,
             { ctx.serverSwitchOpen },
+            { ctx.serverSwitchOpen = true },
             { ctx.serverSwitchOpen = false },
         ) {
             ctx.refreshAll(pagerBaseUrl(ctx))

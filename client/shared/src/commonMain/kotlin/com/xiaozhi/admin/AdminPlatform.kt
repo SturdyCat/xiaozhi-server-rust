@@ -16,7 +16,7 @@ import com.tencent.kuikly.core.pager.Pager
  * - [IS_MACOS]：平台判定（导航过滤、测试台分支）；
  * - [platformExternalModules]：macOS 注入 [XiaoZhiModule]（测试台的 WS/麦克风/Opus 原生桥）；
  * - [renderTestbenchSection]：测试台渲染（mac-only，web 菜单已隐藏，此处是防御分支）；
- * - [macServerSwitchEntry]：macOS 的「切换服务器」入口与表单（web 由 server 同域托管，无此概念）；
+ * - [macServerSwitchEntry]：macOS 的「服务器设置」入口与表单（web 由 server 同域托管，无此概念）；
  * - [pagerBaseUrl]：API 基址（web 相对路径 = ""，macOS 读 SP 记忆地址）。
  *
  * actual 落点：macosArm64Main（真实现）与 jsMain / androidMain / iosMain（空实现/默认值）。
@@ -56,14 +56,17 @@ expect fun ViewContainer<*, *>.renderTestbenchSection(
 )
 
 /**
- * macOS「切换服务器」hook（web 空实现）：
- * - 在调用处（侧边栏内）渲染「切换服务器」入口项；
- * - 展开时在侧边栏内联显示地址输入表单，保存后写回平台存储并回调 [onApplied]
- *   （壳层据此重跑数据加载），[onClosed] 收起表单。
+ * macOS「服务器设置」hook（web 空实现）：
+ * - 在调用处（侧边栏内）渲染「服务器设置」入口项（内联展示当前生效地址）；
+ * - 点击入口经 [onOpened] 展开、表单收起经 [onClosed]（open 状态由壳层持有，
+ *   入口自己不持状态——统一壳后状态机收口到 [AdminPage.serverSwitchOpen]）；
+ * - 展开时在侧边栏内联显示局域网自动发现列表 + 地址输入表单，保存后写回平台存储
+ *   并回调 [onApplied]（壳层据此重跑数据加载）。
  */
 expect fun ViewContainer<*, *>.macServerSwitchEntry(
     pager: Pager,
     open: () -> Boolean,
+    onOpened: () -> Unit,
     onClosed: () -> Unit,
     onApplied: () -> Unit,
 )

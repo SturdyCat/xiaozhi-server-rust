@@ -31,6 +31,7 @@ actual fun ViewContainer<*, *>.renderTestbenchSection(
 actual fun ViewContainer<*, *>.macServerSwitchEntry(
     pager: Pager,
     open: () -> Boolean,
+    onOpened: () -> Unit,
     onClosed: () -> Unit,
     onApplied: () -> Unit,
 ) {

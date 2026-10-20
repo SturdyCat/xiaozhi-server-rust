@@ -2,13 +2,18 @@ package com.xiaozhi.admin
 
 import com.tencent.kuikly.core.base.Border
 import com.tencent.kuikly.core.base.BorderStyle
+import com.tencent.kuikly.core.base.CursorType
 import com.tencent.kuikly.core.base.PagerScope
 import com.tencent.kuikly.core.base.ViewContainer
+import com.tencent.kuikly.core.directives.vfor
 import com.tencent.kuikly.core.directives.vif
 import com.tencent.kuikly.core.module.Module
 import com.tencent.kuikly.core.module.SharedPreferencesModule
+import com.tencent.kuikly.core.nvi.serialization.json.JSONArray
+import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.pager.Pager
 import com.tencent.kuikly.core.reactive.handler.observable
+import com.tencent.kuikly.core.reactive.handler.observableList
 import com.tencent.kuikly.core.views.Text
 import com.tencent.kuikly.core.views.View
 import platform.AppKit.NSPasteboard
@@ -19,7 +24,7 @@ import platform.Foundation.NSLocale
 import platform.Foundation.dateWithTimeIntervalSince1970
 import platform.Foundation.localeWithLocaleIdentifier
 
-/** macOS 客户端：测试台、XiaoZhiModule 原生桥与「切换服务器」仅此平台启用。 */
+/** macOS 客户端：测试台、XiaoZhiModule 原生桥与「服务器设置」仅此平台启用。 */
 actual val IS_MACOS: Boolean = true
 
 /** 原生渲染器由 textInputState 通道显示；再绑 text() 会打断 IME 组词（见 AdminFormControls）。 */
@@ -27,7 +32,9 @@ actual val INPUT_NEEDS_TEXT_PROP: Boolean = false
 
 /** 测试台依赖的原生桥（WS 建连 / 麦克风采集 / 播放 / Opus 编解码，实现在 apps/macosApp）。 */
 actual fun Pager.platformExternalModules(): Map<String, Module> =
-    mapOf(XiaoZhiModule.MODULE_NAME to XiaoZhiModule())
+    XiaoZhiModule()
+        .also { registerSharedBridge(it) } // AdminRealtime 的 PlatformWsSocket 无 Pager，经弱引用取桥
+        .let { mapOf(XiaoZhiModule.MODULE_NAME to it) }
 
 /**
  * 测试台状态缓存：AdminShell 时代 bench 是壳的字段（跨 section 切换存活）；
@@ -55,7 +62,7 @@ actual fun ViewContainer<*, *>.renderTestbenchSection(
 }
 
 // ============================================================
-// 「切换服务器」（原 AdminShell 启动连接页的收编版）
+// 「服务器设置」（侧边栏入口 + 内联表单 + 局域网自动发现）
 // ============================================================
 
 private const val KEY_SERVER_URL = "xz.server.baseUrl"
@@ -75,29 +82,68 @@ fun unifiedWsEndpoint(pager: Pager): String {
     return "$scheme://${base.substringAfter("://")}/api/ws"
 }
 
-/** 表单态（输入框内容 / 保存中），按 Pager 缓存，重开表单保留上次输入。 */
+/** 局域网自动发现的一个服务器（服务端常驻广播 `_xiaozhi-admin._tcp`，原生桥解析回传）。 */
+private data class DiscoveredServer(val name: String, val base: String)
+
+/**
+ * 表单/发现态（按 Pager 缓存，重开表单保留上次输入）。
+ * ⚠️ observable 只允许在 Kuikly 线程写：发现回调经框架模块回调通道已切回 context 线程。
+ */
 private class ServerSwitchState(scope: PagerScope) {
     var input by scope.observable(DEFAULT_SERVER)
     var busy by scope.observable(false)
+
+    /** 当前生效基址（侧边栏入口小字实时展示；observable 在 attr 闭包内读取才被跟踪）。 */
+    var current by scope.observable("")
+
+    /** 自动接管只发生一次：首次运行（从未保存过地址）发现到服务器即自动连接。 */
+    var autoApplied = false
+
+    /** 原生 mDNS 浏览是否在跑（observable：面板提示文案随它响应式切换；防重复 start）。 */
+    var discoveryOn by scope.observable(false)
+
+    /** vfor 数据源：当前局域网内发现的服务器（每次发现变化整体替换）。 */
+    val discovered by scope.observableList<DiscoveredServer>()
 }
 
 private val switchStates = mutableMapOf<Pager, ServerSwitchState>()
 
 /**
- * 侧边栏内联「切换服务器」：入口项 + vif 展开的地址表单（不做浮层，避免跨端点击命中问题）。
- * 保存 = 归一化地址写回 SP → 收起表单 → [onApplied]（壳层用新基址重跑全部数据加载）。
+ * 侧边栏「服务器设置」：入口项（下方小字实时显示当前地址）+ vif 展开的内联表单。
+ * 表单 = 自动发现列表（点击即接入）+ 手填地址（保存归一化写回 SP → 收起表单 →
+ * [onApplied]（壳层用新基址重跑全部数据加载））。不做浮层，避免跨端点击命中问题。
  */
 actual fun ViewContainer<*, *>.macServerSwitchEntry(
     pager: Pager,
     open: () -> Boolean,
+    onOpened: () -> Unit,
     onClosed: () -> Unit,
     onApplied: () -> Unit,
 ) {
     val state = switchStates.getOrPut(pager) { ServerSwitchState(pager) }
-    sidebarItem("切换服务器", { false }) {
-        state.input = prefs(pager).getItem(KEY_SERVER_URL).ifEmpty { DEFAULT_SERVER }
-        state.busy = false
-        onClosed()
+    if (state.current.isEmpty()) state.current = pagerBaseUrl(pager)
+    // 首次运行（用户从未配置过地址）：启动常驻发现，命中即自动接管 —— 开箱自动连接。
+    if (prefs(pager).getItem(KEY_SERVER_URL).isEmpty() && !state.autoApplied) {
+        startDiscovery(pager, state, onApplied)
+    }
+    View {
+        attr { flexDirectionColumn() }
+        sidebarItem("服务器设置", { false }) {
+            state.input = prefs(pager).getItem(KEY_SERVER_URL).ifEmpty { DEFAULT_SERVER }
+            state.busy = false
+            onOpened()
+            // 面板展开期间保持发现（列表实时刷新）；已在跑则复用。
+            startDiscovery(pager, state, onApplied)
+        }
+        Text {
+            attr {
+                fontSize(AdminType.micro)
+                color(AdminColors.textTertiary)
+                marginLeft(AdminSpace.md + AdminSpace.sm)
+                marginBottom(AdminSpace.xs)
+                text("当前：${state.current}")
+            }
+        }
     }
     vif({ open() }) {
         View {
@@ -116,10 +162,58 @@ actual fun ViewContainer<*, *>.macServerSwitchEntry(
                     fontSize(AdminType.caption)
                     fontWeightMedium()
                     color(AdminColors.textPrimary)
-                    text("切换服务器")
+                    text("局域网自动发现")
                 }
             }
-            View { attr { height(AdminSpace.xs) } }
+            Text {
+                attr {
+                    fontSize(AdminType.micro)
+                    color(AdminColors.textTertiary)
+                    marginTop(2f)
+                    text(
+                        if (state.discovered.isEmpty()) {
+                            if (state.discoveryOn) "正在搜索同网段的小智服务端…" else "未发现（服务端需已启动）"
+                        } else {
+                            "点击即连接"
+                        },
+                    )
+                }
+            }
+            // ⚠️ Kuikly 2.29.1：vfor 项闭包必须有且仅有一个孩子节点（本行 View 即唯一孩子）。
+            vfor({ state.discovered }) { server ->
+                View {
+                    attr {
+                        flexDirectionRow()
+                        alignItemsCenter()
+                        marginTop(AdminSpace.xs)
+                        paddingTop(AdminSpace.xs)
+                        paddingBottom(AdminSpace.xs)
+                        paddingLeft(AdminSpace.sm)
+                        paddingRight(AdminSpace.sm)
+                        borderRadius(AdminShape.radiusSm)
+                        backgroundColor(AdminColors.insetBg)
+                        cursor(CursorType.POINTER)
+                    }
+                    event { click { applyBase(pager, state, server.base, onClosed, onApplied) } }
+                    Text {
+                        attr {
+                            flex(1f)
+                            fontSize(AdminType.caption)
+                            color(AdminColors.textPrimary)
+                            text(server.name)
+                        }
+                    }
+                    Text {
+                        attr {
+                            fontSize(AdminType.micro)
+                            color(AdminColors.textSecondary)
+                            text(server.base)
+                        }
+                    }
+                }
+            }
+            View { attr { height(AdminSpace.sm) } }
+            fieldDivider()
             labeledField(
                 "服务器地址",
                 { state.input },
@@ -138,16 +232,90 @@ actual fun ViewContainer<*, *>.macServerSwitchEntry(
                         return@primaryButton
                     }
                     state.busy = true
-                    prefs(pager).setItem(KEY_SERVER_URL, base)
-                    state.input = base
-                    onClosed()
-                    onApplied()
+                    // 手动选择是最高优先级：写回 SP 后自动接管永久退场（尊重用户选择）。
+                    state.autoApplied = true
+                    stopDiscovery(pager, state)
+                    applyBase(pager, state, base, onClosed, onApplied)
                 }
                 View { attr { width(AdminSpace.sm) } }
-                secondaryButton("取消") { onClosed() }
+                secondaryButton("取消") {
+                    onClosed()
+                    // 自动接管不再可能（有手填记忆）或用户主动收起且已接管 → 停止常驻浏览。
+                    if (!autoDiscoveryNeeded(pager, state)) stopDiscovery(pager, state)
+                }
             }
         }
     }
+}
+
+/** 表单内分组细分割线（发现列表与手填区之间）。 */
+private fun ViewContainer<*, *>.fieldDivider() {
+    View {
+        attr {
+            height(1f)
+            backgroundColor(AdminColors.divider)
+            marginBottom(AdminSpace.sm)
+        }
+    }
+}
+
+// ------------------------------------------------------------
+// 发现与地址应用
+// ------------------------------------------------------------
+
+/** 是否还需要常驻发现：仅在「用户从未保存过地址且尚未自动接管」时为真。 */
+private fun autoDiscoveryNeeded(pager: Pager, state: ServerSwitchState): Boolean =
+    !state.autoApplied && prefs(pager).getItem(KEY_SERVER_URL).isEmpty()
+
+/** 启动 mDNS 发现（幂等）；回调（已在 Kuikly 线程）整体替换列表并尝试自动接管。 */
+private fun startDiscovery(pager: Pager, state: ServerSwitchState, onApplied: () -> Unit) {
+    if (state.discoveryOn) return
+    state.discoveryOn = true
+    pager.acquireModule<XiaoZhiModule>(XiaoZhiModule.MODULE_NAME).startServerDiscovery { result ->
+        val servers = parseServers(result)
+        state.discovered.clear()
+        state.discovered.addAll(servers)
+        if (autoDiscoveryNeeded(pager, state)) {
+            servers.firstOrNull()?.let { first ->
+                state.autoApplied = true
+                stopDiscovery(pager, state)
+                applyBase(pager, state, first.base, onClosed = {}, onApplied = onApplied)
+            }
+        }
+    }
+}
+
+private fun stopDiscovery(pager: Pager, state: ServerSwitchState) {
+    if (!state.discoveryOn) return
+    state.discoveryOn = false
+    pager.acquireModule<XiaoZhiModule>(XiaoZhiModule.MODULE_NAME).stopServerDiscovery()
+}
+
+/** 解析原生回包 {servers:[{name, base}]}；结构异常返回已解析部分（不抛）。 */
+private fun parseServers(result: JSONObject?): List<DiscoveredServer> {
+    val arr: JSONArray = result?.optJSONArray("servers") ?: return emptyList()
+    val out = mutableListOf<DiscoveredServer>()
+    for (i in 0 until arr.length()) {
+        val o = arr.optJSONObject(i) ?: continue
+        val base = o.optString("base", "")
+        if (base.isNotEmpty()) out.add(DiscoveredServer(o.optString("name", "小智服务端"), base))
+    }
+    return out
+}
+
+/** 写回地址 → 收起表单 → 通知壳层用新基址重载全部数据（自动接管与手动保存共用）。 */
+private fun applyBase(
+    pager: Pager,
+    state: ServerSwitchState,
+    base: String,
+    onClosed: () -> Unit,
+    onApplied: () -> Unit,
+) {
+    prefs(pager).setItem(KEY_SERVER_URL, base)
+    state.current = base
+    state.input = base
+    onClosed()
+    onApplied()
 }
 
 /** 地址归一化（收编自原 ConnectState）：容忍无 scheme / ws(s):// 前缀 / 误带路径，只保留 authority。 */

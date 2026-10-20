@@ -209,6 +209,81 @@ class XiaoZhiModule : Module() {
         )
     }
 
+    // ============================================================
+    // 管理台实时通道（AdminRealtime）与服务器发现共用这两类桥：
+    // 回调一律走框架的模块回调通道 —— 原生任意线程 invoke，框架内部
+    // performOnContextQueue 切回 Kuikly context 线程再进 Kotlin（这正是
+    // AdminRealtime 不再自建 NSURLSession 的原因，见 AdminRealtime actual）。
+    // ============================================================
+
+    /**
+     * 建立管理台实时 WS（独立于测试台 [connect] 的连接，按 [key] 归属）。
+     * keepCallbackAlive=true：原生把生命周期事件推经同一回调：
+     * {event: "open"} / {event: "text", data: 帧} / {event: "closed"}。
+     */
+    fun adminWsConnect(key: String, url: String, callback: CallbackFn? = null) {
+        toNative(
+            keepCallbackAlive = true,
+            methodName = "adminWsConnect",
+            param = JSONObject().apply {
+                put("key", key)
+                put("url", url)
+            },
+            callback = callback,
+            syncCall = false,
+        )
+    }
+
+    /** 管理台实时 WS 发一帧文本（心跳用；未连接时原生静默丢弃）。 */
+    fun adminWsSend(key: String, text: String) {
+        toNative(
+            keepCallbackAlive = false,
+            methodName = "adminWsSend",
+            param = JSONObject().apply {
+                put("key", key)
+                put("text", text)
+            },
+            callback = null,
+            syncCall = false,
+        )
+    }
+
+    /** 关闭管理台实时 WS（closed 事件随后经原 connect 回调送达一次）。 */
+    fun adminWsClose(key: String) {
+        toNative(
+            keepCallbackAlive = false,
+            methodName = "adminWsClose",
+            param = JSONObject().apply { put("key", key) },
+            callback = null,
+            syncCall = false,
+        )
+    }
+
+    /**
+     * 开始局域网服务器发现（服务端常驻广播 mDNS `_xiaozhi-admin._tcp`）。
+     * keepCallbackAlive=true：每次发现列表变化回调 {servers:[{name, base}]}（base 即 API 基址）。
+     */
+    fun startServerDiscovery(callback: CallbackFn? = null) {
+        toNative(
+            keepCallbackAlive = true,
+            methodName = "startServerDiscovery",
+            param = null,
+            callback = callback,
+            syncCall = false,
+        )
+    }
+
+    /** 停止局域网服务器发现（回调不再触发）。 */
+    fun stopServerDiscovery() {
+        toNative(
+            keepCallbackAlive = false,
+            methodName = "stopServerDiscovery",
+            param = null,
+            callback = null,
+            syncCall = false,
+        )
+    }
+
     companion object {
         const val MODULE_NAME = "XiaoZhiModule"
     }

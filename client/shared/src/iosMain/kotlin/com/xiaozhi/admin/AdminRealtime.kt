@@ -13,8 +13,15 @@ import platform.darwin.NSObject
 import platform.darwin.dispatch_async
 import platform.darwin.dispatch_get_main_queue
 
-/** iOS 客户端：与 macosArm64Main 同一套 NSURLSessionWebSocketTask 互操作（该源集无共享 appleMain）。 */
-actual val PLATFORM_WS_SUPPORTED: Boolean = true
+/**
+ * iOS 宿主**关闭**实时通道：Kuikly Kotlin 侧只允许在 context 线程碰 observable/`setTimeout`，
+ * 而 iOS 宿主（iosApp 模板）没有 XiaoZhiModule 原生桥，无法像 mac 那样借模块回调通道
+ * （框架 `performOnContextQueue` 兜底切线程）把 WS 事件送回 context 线程——自建
+ * NSURLSession 无论回调投到哪个队列都违反线程契约（mac 侧 2026-10 `assertContextQueue`
+ * 卡死事故同根因，见 macosArm64Main/AdminRealtime.kt）。关闭后退化为「进页刷新一次」，
+ * 不再让带病实现上线；iOS 宿主接入原生桥后可按 mac 的 AdminWs 方案重开。
+ */
+actual val PLATFORM_WS_SUPPORTED: Boolean = false
 
 /**
  * WS 端点：`base` 换 ws(s) scheme 拼 /api/admin/ws。iOS 当前无宿主接管理台

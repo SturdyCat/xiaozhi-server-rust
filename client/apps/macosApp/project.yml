@@ -68,6 +68,11 @@ targets:
         # ⚠️ 麦克风用途描述：缺失时 TCC 直接拒绝授权（不弹窗），inputNode 报 0 声道 →
         #    AUIOBase "no channels in channel map" + AudioConverter -50 刷屏、录音无声。
         NSMicrophoneUsageDescription: 用于 ASR 语音识别测试（录音上传到本机或局域网服务器做识别）。
+        # ⚠️ 局域网自动发现（服务器设置面板）：浏览服务端常驻广播的 `_xiaozhi-admin._tcp`。
+        #    不声明该 key 时 Bonjour 浏览被系统静默拦截，发现列表永远为空。
+        #    与 Info.plist 同步维护（xcodegen 每次重写该文件）。
+        NSBonjourServices:
+          - "_xiaozhi-admin._tcp"
         # Finder / Dock 读取编译后的 AppIcon.icns；图标名与资源目录保持一致。
         # 声明本身不会打包图片，仍须保留上面的 Assets.xcassets 资源输入。
         CFBundleIconFile: AppIcon

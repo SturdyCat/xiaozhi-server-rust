@@ -82,6 +82,11 @@ static inline void XZPlayerPlay(AVAudioPlayerNode *player) {
 @property (nonatomic, assign) NSUInteger ttsFailCount;           // 本次合成解码失败的包数（tts stop 汇总）
 
 // ===== 跨文件方法声明（实现分布在类别文件；主实现调用时不产生 "no visible @interface" 告警）=====
+// 主实现（XiaoZhiModule.m）
+// 回调上行统一出口：invoke 的回调 block 由框架包裹（performOnContextQueue），
+// 类别在任意线程调用都会被切回 Kuikly context 线程再进 Kotlin（AdminWs/Discovery 依赖此语义）。
+- (void)invoke:(nullable id)callback result:(nullable NSDictionary *)result success:(BOOL)success error:(nullable NSString *)error;
+- (NSDictionary *)parseParams:(id)raw;
 // XiaoZhiModule+Audio.m
 - (void)setupAudio;
 - (void)ensureAudioEngine;
