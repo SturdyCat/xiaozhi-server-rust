@@ -283,21 +283,32 @@ async fn handle_control_text(
     Ok(())
 }
 
-/// 开一轮聆听：`mic_start{lock_mic:true}`（设备做 VAD 的 bounded turn，结束发
-/// `0x04`/`0x05` 哨兵）+ 会话侧 `listen state=start`。
-async fn start_turn(
+/// 开一轮聆听：先投 `listen state=detect`（唤醒信号——`[wakeup]` 唤醒问候语的唯一
+/// 触发点，与 ESP 固件唤醒后上报 `detect` 同义；问候语关闭时它只多一行会话日志），
+/// 再 `mic_start{lock_mic:true}`（设备做 VAD 的 bounded turn，结束发 `0x04`/`0x05`
+/// 哨兵），最后会话侧 `listen state=start`。
+/// `S` 抽象只为测试可驱动（生产传 control 的 SplitSink，测试传丢弃 sink）。
+pub(super) async fn start_turn<S>(
     listening: &mut bool,
-    sink: &mut futures_util::stream::SplitSink<WebSocket, Message>,
+    sink: &mut S,
     up_tx: &mpsc::UnboundedSender<IncomingFrame>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<()>
+where
+    S: futures_util::Sink<Message> + Unpin,
+{
     if *listening {
         return Ok(()); // 一轮已在进行，忽略重复唤醒
     }
     *listening = true;
-    sink.send(Message::Text(
-        r#"{"type":"mic_start","lock_mic":true}"#.into(),
-    ))
-    .await?;
+    let _ = up_tx.send(IncomingFrame::Text(
+        r#"{"type":"listen","state":"detect"}"#.into(),
+    ));
+    futures_util::SinkExt::send(
+        sink,
+        Message::Text(r#"{"type":"mic_start","lock_mic":true}"#.into()),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("mic_start 下发失败（control 面已断）"))?;
     let _ = up_tx.send(IncomingFrame::Text(
         r#"{"type":"listen","state":"start"}"#.into(),
     ));

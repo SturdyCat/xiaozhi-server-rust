@@ -29,6 +29,7 @@ emOS Web 管理的额外参考锚点是上游 [`858987c272329a41d385835439bd3e2d
 | `token` | 空 | 校验设备 `X-Em-Token` 头；留空不校验。生产建议设置（同网段任何设备都能按此协议连进来） |
 | `ble_proxy` | `false` | 开启蓝牙代理：ack 向声明了 `ble_connect` 的设备回声明 `ble_connect` + `ble_adverts_data`，接入时推送 `bleProxyEnabled`/`bleProxyConnections`（每设备 settings 可覆盖）；关闭时 ack 不声明、`0x06`/`0x08` 按未知帧忽略、管理面 BLE 端点 404——零行为变化 |
 | `plain_port` | `8767` | 控制器专用端口（官方接口对齐）：enabled 且 >0 时**额外**监听设备面路由（`/em/*` + `/shell`），mDNS `plain_port` 也广播它；0 = 关闭（仅主端口）。绑定失败只告警、mDNS 回退广播主端口；主端口始终继续服务 `/em/*` |
+| `welcome` | 含使用提示 | 连接欢迎语：register + data 认领、会话建立后**立刻**说一次（`client_id="echomuse"` 的会话专属，走唤醒问候同一预制话术链路，合成一次即落盘 `hot-audio/` 免复合成；成品登记 `managed.json`，启动按内容哈希校验、文案改了自动清旧）；留空 = 不说；每次会话建立（含断线重连）都会说一遍。管理台「配置 → EchoMuse」可编辑 |
 
 mDNS 广播地址**无配置项**：启动时动态探测部署机默认出口的局域网 IPv4，部署在哪台机器、是什么 IP 就广播什么。docker 容器部署会探测到容器内网 IP（设备连不上），请改用 host 网络部署。
 
@@ -41,7 +42,7 @@ mDNS 广播地址**无配置项**：启动时动态探测部署机默认出口�
 | EchoMuse 事件 | 会话语义 | 说明 |
 |---|---|---|
 | data 面 Text identify（拨通后首帧） | 按 `device_id` 精确认领 data 出站口 | data 面唯一文本帧；此后恒为二进制，再收 Text 忽略不断链 |
-| `oww_wake`（设备本地唤醒词命中） | `listen state=start` + 下发 `mic_start{lock_mic:true}` | bounded turn：设备自己做 VAD，结束发哨兵 |
+| `oww_wake`（设备本地唤醒词命中） | `listen state=detect` → `listen state=start` + 下发 `mic_start{lock_mic:true}` | bounded turn：设备自己做 VAD，结束发哨兵；`detect` 先投（`[wakeup]` 唤醒问候语的触发点，问候关闭时仅多一行会话日志） |
 | `button`（动作键） | 同上 | 无唤醒词模型时的兜底入口 |
 | `0x01`/`0x07` mic PCM（16k S16LE） | 上行 Opus 二进制帧 | 服务端用同一 `OpusFrameEncoder` 编码，攒满 60ms 一包；`0x07` 会话头（session u32 + seq u16 BE）已剥离 |
 | `0x04` / `0x05`（VAD 结束/无语音哨兵） | 残段补零成整帧后 `listen state=stop` | `0x05` 与 `0x04` 同路径（服务器 VAD 兜底切段不受影响） |
@@ -50,6 +51,8 @@ mDNS 广播地址**无配置项**：启动时动态探测部署机默认出口�
 | 会话 `close` | `Shutdown` → control 任务退出、连接关闭 | 与 WsTransport 的粘滞 `Closed` 同语义 |
 
 能力协商：`ack.features` 只声明 `mic/speaker/leds/buttons/oww_trigger/oww_local_only`。**不声明** `listen_session`（不走 `0x07` 私听会话）、`audio_mix`（不做音乐面）——按协议"未声明即降级"静默关闭；未知帧型/未知 JSON 双向忽略。`ble_connect` + `ble_adverts_data` 仅在 `[echomuse].ble_proxy=true` **且**设备 register 声明 `ble_connect` 时条件追加（协议要求双向声明才启用）。
+
+**唤醒声音的分工**：设备唤醒时本地先播一声自带提示音（`wake_cue`，音量/开关走管理台「EchoMuse → 唤醒词设置」的 `wakeSoundLevel`）；服务器侧问候语由全局 `[wakeup]` 控制（默认「我在」，支持换行多句随机，EchoMuse 唤醒经 `detect` 代发触发）——两者可并存，嫌设备提示音刺耳就把它调 quiet/关掉，留服务器问候。
 
 ## 蓝牙代理（`ble_proxy=true`，EchoMuse `ble_connect` / `ble_adverts_data`）
 

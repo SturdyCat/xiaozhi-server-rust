@@ -10,6 +10,11 @@
 //! 写临时文件后原子 rename；失败降级不影响下行。磁盘同时限制文件数、总字节、
 //! 单句字节与帧数，超限按写入时间淘汰（不是永久归档，重复文本可能再次合成）。
 //! 测试台强制真合成不复用缓存；AIUI 云闭环已在云端合成，不能靠本地缓存撤销。
+//!
+//! **配置固定话术的管理槽位**（[`Self::put_managed`] / [`Self::sync_managed`]，实现与
+//! 槽位常量见 [`managed`]）：欢迎语 / 问候语池 / 技能应答在落盘时登记 `managed.json`，
+//! 启动时按当前配置文本做内容哈希校验——文案改了/清空的旧音频直接删除，损坏成品删待
+//! 重合成。普通生产文本不经登记，仍走通用缓存与溢出淘汰。
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -394,6 +399,10 @@ fn evict_overflow(dir: &Path) {
         }
     }
 }
+
+mod managed;
+
+pub use managed::{ManagedText, SLOT_ECHOMUSE_WELCOME, SLOT_SKILL_REPLY, SLOT_WAKEUP_GREETING};
 
 #[cfg(test)]
 mod tests;

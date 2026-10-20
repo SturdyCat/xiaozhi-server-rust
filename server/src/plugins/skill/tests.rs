@@ -262,3 +262,45 @@ fn validate_blocks_bad_threshold_names_and_kinds() {
     nlu.intents[0].name = "  ".into();
     assert!(validate(&command, &nlu).is_err(), "空技能名必须被拦");
 }
+
+/// ⑥ `replies`：启动校验清单与运行时应答同源——含告别语与技能应答，trim、去重、去空。
+#[test]
+fn replies_enumerates_compiled_directory() {
+    let (mut command, mut nlu) = fixture();
+    command.reply = "  再见啦 ".into();
+    nlu.intents[0].action.reply = "好的".into(); // 与 fixture 原值相同 → 去重后只一条
+    nlu.intents[1].action.reply = "   ".into(); // 纯空白 → 排除
+    let replies = SkillRegistry::new(&command, &nlu, None).replies();
+    assert!(
+        replies.contains(&"再见啦".to_string()),
+        "end_session 告别语必须在清单里: {replies:?}"
+    );
+    assert!(
+        replies.contains(&"好的".to_string()),
+        "技能应答必须在清单里: {replies:?}"
+    );
+    assert_eq!(
+        replies.iter().filter(|r| *r == "好的").count(),
+        1,
+        "相同应答文本必须去重: {replies:?}"
+    );
+    assert!(
+        !replies.iter().any(|r| r.trim() != r),
+        "必须已 trim: {replies:?}"
+    );
+    // 启用的 command：目录含 end_session（默认告别语）→ replies 含它；
+    // 全关（默认 [nlu].enabled=false + enabled=false）→ 目录空 → 空清单。
+    let mut enabled_command = CommandConfig::default();
+    enabled_command.enabled = true;
+    let farewell = CommandConfig::default().reply;
+    if !farewell.trim().is_empty() {
+        let registry = SkillRegistry::new(&enabled_command, &NluConfig::default(), None);
+        assert!(registry.replies().contains(&farewell.trim().to_string()));
+        let disabled = SkillRegistry::new(&CommandConfig::default(), &NluConfig::default(), None);
+        assert!(
+            disabled.replies().is_empty(),
+            "全关时目录为空: {:?}",
+            disabled.replies()
+        );
+    }
+}

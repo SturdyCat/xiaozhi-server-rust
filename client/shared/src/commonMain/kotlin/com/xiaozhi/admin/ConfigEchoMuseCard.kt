@@ -33,6 +33,18 @@ fun ViewContainer<*, *>.echomuseConfigCard(form: ConfigFormState) {
                 text("同网段设备接入凭据（X-Em-Token），留空则不校验；留空保存不覆盖已设值。")
             }
         }
+        labeledField(
+            "连接欢迎语",
+            { form.em.welcome },
+            { form.em.welcome = it; form.markDirty() },
+        )
+        Text {
+            attr {
+                fontSize(AdminType.caption)
+                color(AdminColors.textTertiary)
+                text("设备接入后立刻说一次（默认含使用提示）；留空 = 不说。改后需重启生效。")
+            }
+        }
         vif({ form.em.enabled != "true" }) {
             Text {
                 attr {

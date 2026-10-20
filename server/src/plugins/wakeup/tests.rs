@@ -136,3 +136,65 @@ fn 会话快照与配置一致且去空白() {
     c2.greeting = "换一句".to_string();
     assert_eq!(g.text(), "在呢");
 }
+
+#[test]
+fn 多句问候_池拆分与normalize收敛() {
+    let mut c = WakeConfig {
+        greeting: " 我在 \n\n  在呢  \n\n你好呀\n".to_string(),
+        ..Default::default()
+    };
+    assert_eq!(
+        c.pool(),
+        vec!["我在".to_string(), "在呢".to_string(), "你好呀".to_string()],
+        "换行拆分、逐行去空白、丢空行"
+    );
+    c.normalize();
+    assert_eq!(c.greeting, "我在\n在呢\n你好呀", "normalize 收敛为规范形态");
+    let once = c.greeting.clone();
+    c.normalize();
+    assert_eq!(c.greeting, once, "多句 normalize 必须幂等");
+}
+
+#[test]
+fn 全空白行_等同没填() {
+    let c = WakeConfig {
+        enabled: true,
+        greeting: "  \n\n\t\n".to_string(),
+        ..Default::default()
+    };
+    assert!(!c.active(), "纯空白行不能变成「问候一个空字符串」");
+    assert!(c.validate().is_err(), "启用但池空必须拦下");
+}
+
+#[test]
+fn 多句中任何一句过长_报错并指出该句() {
+    let long = "哇".repeat(GREETING_SOFT_LIMIT + 1);
+    let c = WakeConfig {
+        enabled: true,
+        greeting: format!("我在\n{long}"),
+        ..Default::default()
+    };
+    let e = c.validate().expect_err("超限句必须拦下");
+    assert!(
+        format!("{e}").contains(&long),
+        "文案要能定位到具体哪句：{e}"
+    );
+}
+
+#[test]
+fn 多句快照_随机选句且必属池() {
+    let c = WakeConfig {
+        enabled: true,
+        greeting: "甲\n乙\n丙".to_string(),
+        ..Default::default()
+    };
+    let g = WakeGreeting::new(&c);
+    let pool = ["甲", "乙", "丙"];
+    let mut seen = std::collections::HashSet::new();
+    for _ in 0..100 {
+        let t = g.text();
+        assert!(pool.contains(&t), "随机结果必须来自池内: {t:?}");
+        seen.insert(t.to_string());
+    }
+    assert!(seen.len() >= 2, "100 次取样只有 {seen:?} 一种，随机失效");
+}

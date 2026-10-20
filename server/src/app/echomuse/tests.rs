@@ -387,3 +387,40 @@ fn advertise_ipv4_fallback_is_routable_or_loopback() {
         "探测结果应为局域网地址或 loopback 回落，实际 {ip}"
     );
 }
+
+// ---- start_turn 唤醒入口（routes.rs）----
+
+#[tokio::test]
+async fn 开轮聆听先detect再listen_start且重复唤醒零副作用() {
+    let (up_tx, mut up_rx) = mpsc::unbounded_channel();
+    // 丢弃 sink：mic_start 走 control 面不进 up_tx，这里只验证会话侧投帧顺序。
+    let mut sink = futures_util::sink::drain::<axum::extract::ws::Message>();
+    let mut listening = false;
+    super::routes::start_turn(&mut listening, &mut sink, &up_tx)
+        .await
+        .expect("开轮不应失败");
+    match up_rx.recv().await {
+        Some(IncomingFrame::Text(t)) => {
+            assert!(
+                t.contains(r#""state":"detect""#),
+                "首帧必须是 detect（唤醒问候语入口）: {t}"
+            )
+        }
+        other => panic!("首帧应是文本帧: {other:?}"),
+    }
+    match up_rx.recv().await {
+        Some(IncomingFrame::Text(t)) => {
+            assert!(
+                t.contains(r#""state":"start""#),
+                "次帧必须是 listen start: {t}"
+            )
+        }
+        other => panic!("次帧应是文本帧: {other:?}"),
+    }
+    assert!(listening, "开轮后必须置位聆听标志");
+    // 已在聆听：重复唤醒零副作用（不重复 mic_start、不再投帧）。
+    super::routes::start_turn(&mut listening, &mut sink, &up_tx)
+        .await
+        .expect("重复开轮也不应失败");
+    assert!(up_rx.try_recv().is_err(), "重复唤醒不得再投帧");
+}

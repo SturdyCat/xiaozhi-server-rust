@@ -55,6 +55,7 @@ pub(crate) mod admin;
 mod admin_tests;
 #[cfg(test)]
 mod ble_tests;
+mod config;
 #[cfg(test)]
 mod hub_tests;
 pub(crate) mod listen;
@@ -69,65 +70,16 @@ pub(crate) mod system;
 #[cfg(test)]
 mod tests;
 
+pub use config::{connect_welcome, EchomuseConfig};
+
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::watch;
-
-/// `[echomuse]` 配置段：EchoMuse 设备入口开关与凭据。
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct EchomuseConfig {
-    /// 总开关。默认 **false**：不启用时不挂路由、不广播 mDNS，行为与今天完全一致。
-    #[serde(default)]
-    pub enabled: bool,
-    /// 期望的设备 token（`X-Em-Token` 头）；为空字符串表示不校验。
-    /// 对应 EchoMuse 设备凭据文件里的 token（配对时由 controller 下发）。
-    #[serde(default)]
-    pub token: String,
-    /// 蓝牙代理总开关。默认 **false**：ack 不声明 `ble_connect`/`ble_adverts_data`、
-    /// `0x06`/`0x08` 帧按未知忽略、管理面 BLE 端点 404——行为与关闭前完全一致。
-    /// 开启后接入时向设备推送 `bleProxyEnabled`/`bleProxyConnections`（每设备
-    /// settings 可覆盖），仅对 register 声明 `ble_connect` 的固件实际生效。
-    #[serde(default)]
-    pub ble_proxy: bool,
-    /// 控制器专用端口（官方接口对齐）：>0 时**额外**在此端口监听设备面路由
-    /// （`/em/*` + `/shell`），mDNS `plain_port` 也广播它——上游固件
-    /// （`emos/init/init.c` 的 `tcp_peer()`）只把远端 8767/8770 的 ESTABLISHED
-    /// 连接识别为 controller（串口 banner 的连接状态判据，全固件仅此一处按端口
-    /// 判连接），设备拨官方端口才能被如实识别。默认 **8767**（官方明文
-    /// controller 端口）；0 = 关闭（仅主端口）。主端口始终继续服务 `/em/*`
-    /// （旧 endpoint 文件与联调脚本不受影响）；绑定失败只告警，mDNS 回退广播
-    /// 主端口。见 [`listen`]。
-    #[serde(default = "default_plain_port")]
-    pub plain_port: u16,
-}
-
-/// `[echomuse].plain_port` 默认值：官方 controller 明文端口。
-fn default_plain_port() -> u16 {
-    8767
-}
-
-impl Default for EchomuseConfig {
-    fn default() -> Self {
-        EchomuseConfig {
-            enabled: false,
-            token: String::new(),
-            ble_proxy: false,
-            plain_port: default_plain_port(),
-        }
-    }
-}
-
-impl EchomuseConfig {
-    /// 规范化（幂等；与各能力配置同口径：trim 一次）。
-    pub fn normalize(&mut self) {
-        self.token = self.token.trim().to_string();
-    }
-}
 
 /// control 面出站消息：要么是 JSON 文本，要么是"断开"指令。
 // `Json` 的生产路径：会话层 mic_start（control 任务内直发）与管理面 command 下发

@@ -4,7 +4,7 @@
 //! miss），坏文件必须被安全丢弃，凭据绝不落盘，容量有界。这些错了不会报错，只会"播出
 //! 别的音色的声音"或"磁盘慢慢涨"，所以每条都有独立断言。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::*;
 
@@ -305,4 +305,146 @@ fn 总字节上限也会回收() {
         .sum();
     assert!(bytes <= MAX_TOTAL_BYTES);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ---- 管理槽位（managed.json）：启动校验与陈旧清理 ----
+
+fn managed(slot: &str, text: &str) -> ManagedText {
+    ManagedText {
+        slot: slot.to_string(),
+        text: text.to_string(),
+    }
+}
+
+fn hot_path(dir: &Path, k: &HotAudioKey) -> PathBuf {
+    dir.join(format!("{:016x}.hot", k.file_id()))
+}
+
+#[test]
+fn put_managed_登记且跨实例存续() {
+    let dir = tmp_dir();
+    let store = HotAudioStore::new(Some(dir.clone()));
+    let k = key_of("我在");
+    assert!(store.put_managed(SLOT_WAKEUP_GREETING, &k, &frames(2)));
+
+    // 登记表：含文件 id；不含文本明文（凭据口径一致）
+    let raw = std::fs::read(dir.join("managed.json")).unwrap();
+    let hay = String::from_utf8_lossy(&raw);
+    assert!(hay.contains(&format!("{:016x}", k.file_id())));
+    assert!(!hay.contains("我在"), "登记表不得含文本明文");
+
+    // 重复登记幂等
+    assert!(store.put_managed(SLOT_WAKEUP_GREETING, &k, &frames(2)));
+    let reg: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.join("managed.json")).unwrap()).unwrap();
+    assert_eq!(
+        reg["slots"][SLOT_WAKEUP_GREETING].as_array().unwrap().len(),
+        1,
+        "同一条目不得重复登记"
+    );
+
+    // 新实例（= 重启）按同一清单校验：有效保留，文件不动
+    let summary = HotAudioStore::new(Some(dir.clone()))
+        .sync_managed(&[managed(SLOT_WAKEUP_GREETING, "我在")]);
+    assert!(summary.contains("1 条有效"), "{summary}");
+    assert!(hot_path(&dir, &k).exists());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn 文案改动_启动清理旧音频() {
+    let dir = tmp_dir();
+    let store = HotAudioStore::new(Some(dir.clone()));
+    let old = key_of("我已连接，喊我的唤醒词就能开始对话。");
+    let new = key_of("我上线啦，喊我就能聊天。");
+    assert!(store.put_managed(SLOT_ECHOMUSE_WELCOME, &old, &frames(2)));
+
+    // 文案已改、新音频尚未合成：旧文件在启动校验时删除
+    let summary = store.sync_managed(&[managed(SLOT_ECHOMUSE_WELCOME, "我上线啦，喊我就能聊天。")]);
+    assert!(summary.contains("1 条过时"), "{summary}");
+    assert!(!hot_path(&dir, &old).exists(), "旧文案音频必须删除");
+    // 新文案随后首次使用 → 重新合成落盘并重新登记
+    assert!(store.put_managed(SLOT_ECHOMUSE_WELCOME, &new, &frames(2)));
+    assert!(hot_path(&dir, &new).exists());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn 槽位移除_整槽清理() {
+    let dir = tmp_dir();
+    let store = HotAudioStore::new(Some(dir.clone()));
+    let k = key_of("我在");
+    assert!(store.put_managed(SLOT_WAKEUP_GREETING, &k, &frames(2)));
+    // 问候语清空 → 清单中无该槽位 → 旧音频删除
+    let summary = store.sync_managed(&[]);
+    assert!(summary.contains("1 条过时"), "{summary}");
+    assert!(!hot_path(&dir, &k).exists());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn 多句池_只清改掉的那句() {
+    let dir = tmp_dir();
+    let store = HotAudioStore::new(Some(dir.clone()));
+    let a = key_of("我在");
+    let b = key_of("在呢");
+    let c = key_of("来啦");
+    assert!(store.put_managed(SLOT_WAKEUP_GREETING, &a, &frames(1)));
+    assert!(store.put_managed(SLOT_WAKEUP_GREETING, &b, &frames(1)));
+    // 池子改成「在呢 / 来啦」：「我在」过时；「来啦」尚未合成、不该有文件
+    let summary = store.sync_managed(&[
+        managed(SLOT_WAKEUP_GREETING, "在呢"),
+        managed(SLOT_WAKEUP_GREETING, "来啦"),
+    ]);
+    assert!(summary.contains("1 条有效"), "{summary}");
+    assert!(summary.contains("1 条过时"), "{summary}");
+    assert!(!hot_path(&dir, &a).exists());
+    assert!(hot_path(&dir, &b).exists());
+    assert!(!hot_path(&dir, &c).exists());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn 损坏成品_启动删除待重合成() {
+    let dir = tmp_dir();
+    let store = HotAudioStore::new(Some(dir.clone()));
+    let k = key_of("好的");
+    assert!(store.put_managed(SLOT_SKILL_REPLY, &k, &frames(2)));
+    let path = hot_path(&dir, &k);
+    let mut raw = std::fs::read(&path).unwrap();
+    raw[52] ^= 1; // 破坏 v2 校验和
+    std::fs::write(&path, &raw).unwrap();
+
+    let summary = store.sync_managed(&[managed(SLOT_SKILL_REPLY, "好的")]);
+    assert!(summary.contains("1 条损坏"), "{summary}");
+    assert!(!path.exists(), "损坏成品必须删除，下次使用重新合成");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn 非管理文件_校验不碰() {
+    let dir = tmp_dir();
+    let store = HotAudioStore::new(Some(dir.clone()));
+    let k = key_of("一句普通的LLM回复");
+    assert!(store.put(&k, &frames(2))); // 普通生产路径：无登记
+    store.sync_managed(&[managed(SLOT_ECHOMUSE_WELCOME, "欢迎")]);
+    assert!(
+        hot_path(&dir, &k).exists(),
+        "未登记文件不归启动校验管（仍由溢出淘汰）"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn 未持久化时管理路径为无操作() {
+    let store = HotAudioStore::new(None);
+    assert!(!store.put_managed(SLOT_ECHOMUSE_WELCOME, &key_of("我在"), &frames(1)));
+    let summary = store.sync_managed(&[managed(SLOT_ECHOMUSE_WELCOME, "我在")]);
+    assert!(summary.contains("跳过"), "{summary}");
 }

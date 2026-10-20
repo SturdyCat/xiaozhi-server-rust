@@ -58,6 +58,9 @@ pub async fn run_session<T: Transport>(
     // 每设备生效配置：全局 live_config ⊕ 本设备 overlay（白名单字段）。
     // 会话开始算一次，供命令/唤醒快照与请求时现读类共用（overlay 仅会话级生效）。
     let eff_config = engines.effective_config(&device_id);
+    // 连接欢迎语（仅 EchoMuse 承载，见 `echomuse::connect_welcome`）：client_id 会被
+    // 下面的 begin_session 按值消费，决策必须在其之前完成。
+    let welcome = crate::app::echomuse::connect_welcome(&client_id, &eff_config.echomuse);
     // AIUI 全链路会话：sn = 前缀 + 会话短 id（云端个性化/上下文绑定，≤32 字符）
     // ⚠️ AIUI 全链路刻意用**启动快照**（注册表里是 RestartOnly）：它决定整条流水线的
     // 走向，且启用时凭据缺失是致命错误（boot 即失败）；热启用会带来"半配置切换链路"的风险。
@@ -125,7 +128,7 @@ pub async fn run_session<T: Transport>(
     } else {
         None
     };
-    let session = Session {
+    let mut session = Session {
         transport,
         engines,
         params,
@@ -154,5 +157,20 @@ pub async fn run_session<T: Transport>(
             None
         },
     };
+    // 连接欢迎语（`[echomuse].welcome`，RestartOnly）：设备接入即说一次，走唤醒问候
+    // 同一预制话术链路（`speak_canned`）——固定文本合成一次即经 hot-audio 落盘，
+    // 稳态零合成；失败只记日志，绝不影响会话本身。成功后把成品**登记**进管理槽位
+    // （`managed.json`）：下次启动按当前文案做内容哈希校验，文案改了自动清理旧音频。
+    if let Some(text) = welcome {
+        match session.speak_canned(&text).await {
+            Ok(()) => {
+                session.persist_canned_audio(crate::app::hot_audio::SLOT_ECHOMUSE_WELCOME, &text)
+            }
+            Err(e) => tracing::warn!(
+                "session {} 连接欢迎语下发失败（不影响会话）: {e}",
+                session.session_id
+            ),
+        }
+    }
     session.run().await
 }

@@ -111,6 +111,37 @@ pub(super) fn resolve_greeting_audio(
 }
 
 impl<'a, T: Transport> Session<'a, T> {
+    /// 预制话术的**落盘登记**（连接欢迎语 / 技能应答共用；唤醒问候在
+    /// [`Self::handle_wake_greeting`] 内自带同款逻辑并带更细的日志）。
+    ///
+    /// 把刚合成出的成品帧写盘并登记进管理槽位（`put_managed` → `managed.json`），
+    /// 供下次启动按配置文本做内容哈希校验、清理文案改了/清空的陈旧音频（见
+    /// [`crate::app::hot_audio::managed`]）。取不到成品帧（`[tts].cache_entries == 0`
+    /// 或本句被中断）时 debug 静默跳过——落盘是复用优化，绝不影响会话。
+    pub(super) fn persist_canned_audio(&self, slot: &str, text: &str) {
+        // 键口径与合成路径共用同一构造入口（见 `HotAudioKey::from_session` 文档）。
+        let key = HotAudioKey::from_session(
+            &self.eff_config,
+            self.params.downlink_sr,
+            self.params.downlink_frame_ms,
+            text,
+        );
+        let Some(audio) = self.engines.tts_cache.get(key.mem_key()) else {
+            tracing::debug!(
+                "session {} 话术无成品帧可落盘（缓存关闭或被中断，slot={slot}）",
+                self.session_id
+            );
+            return;
+        };
+        if self
+            .engines
+            .hot_audio
+            .put_managed(slot, &key, &audio.opus_frames)
+        {
+            tracing::info!("session {} 话术已落盘登记（slot={slot}）", self.session_id);
+        }
+    }
+
     /// 唤醒问候：命中内存/磁盘缓存则零合成下发，否则合成一次并落盘。
     ///
     /// 返回 `()` 而不是 `Result` 是刻意的：问候语是**锦上添花**，它的任何失败都不该被
@@ -178,9 +209,13 @@ impl<'a, T: Transport> Session<'a, T> {
         if !reused && persist {
             match self.engines.tts_cache.get(mem_key) {
                 Some(audio) => {
-                    if self.engines.hot_audio.put(&key, &audio.opus_frames) {
+                    if self
+                        .engines
+                        .hot_audio
+                        .put_managed(crate::app::hot_audio::SLOT_WAKEUP_GREETING, &key, &audio.opus_frames)
+                    {
                         tracing::info!(
-                            "session {} 唤醒问候已落盘（重启/下次唤醒免合成）: {text:?}",
+                            "session {} 唤醒问候已落盘登记（重启/下次唤醒免合成，文案变更启动自动清旧）: {text:?}",
                             self.session_id
                         );
                     } else {

@@ -55,7 +55,9 @@ pub struct WakeConfig {
     /// 总开关。默认 **false**：不启用时行为与加本插件之前完全一致（唤醒后静默等待）。
     #[serde(default)]
     pub enabled: bool,
-    /// 唤醒后立刻说的这句话（跳过 LLM 与正常回复）。
+    /// 唤醒后立刻说的话（跳过 LLM 与正常回复）。支持**多句**：换行分隔，
+    /// 每次唤醒随机选一句说（「我在 / 在呢 / 你好呀」轮着来，不像录音）；单行 = 单句，
+    /// 与旧行为完全一致。留空（或全是空白行）= 不问候。
     #[serde(default = "default_greeting")]
     pub greeting: String,
     /// 是否把合成结果**持久化**到磁盘（跨进程重启复用）。
@@ -87,19 +89,24 @@ impl Default for WakeConfig {
 impl WakeConfig {
     /// 规范化（幂等；`Config::load` / `default` / `merge_client_patch` 三条路径都会调）。
     pub fn normalize(&mut self) {
-        self.greeting = self.greeting.trim().to_string();
+        self.greeting = normalize_pool(&self.greeting);
     }
 
-    /// 是否真的会问候：启用 **且** 问候语非空。
+    /// 问候语池：按换行拆分、逐行去首尾空白、丢空行。单行 = 单句（与旧行为一致）。
+    pub fn pool(&self) -> Vec<String> {
+        split_pool(&self.greeting)
+    }
+
+    /// 是否真的会问候：启用 **且** 池里至少有一句。
     ///
-    /// 空问候语不问候（而不是"问候一个空字符串"）——留空是"我要静默"的合法表达，
+    /// 空池不问候（而不是"问候一个空字符串"）——留空是"我要静默"的合法表达，
     /// 配置矛盾另由 [`Self::validate`] 上报为 `Degraded`。
     ///
-    /// 判定用 `trim()`：配置可能来自任意入口（`merge_client_patch` / 手改文件），
+    /// 判定用逐行 `trim()`：配置可能来自任意入口（`merge_client_patch` / 手改文件），
     /// 不能假定 [`Self::normalize`] 一定先跑过；纯空白必须与空串同义，
     /// 否则"填了几个空格"会变成"问候一个空字符串"这种静默怪象。
     pub fn active(&self) -> bool {
-        self.enabled && !self.greeting.trim().is_empty()
+        self.enabled && !self.pool().is_empty()
     }
 
     /// 热切换签名（仅内存比较）。三项都改变行为，必须全在。
@@ -112,38 +119,56 @@ impl WakeConfig {
     /// 这里只做**本段内**的自洽检查；跨段矛盾（`persist` 依赖 `[tts].cache_entries`）
     /// 由注册表的 `validate_wake` 统一判定——它能看到整份配置。
     pub fn validate(&self) -> Result<()> {
-        if self.enabled && self.greeting.trim().is_empty() {
+        let lines = self.pool();
+        if self.enabled && lines.is_empty() {
             anyhow::bail!(
-                "[wakeup].greeting 为空：启用唤醒问候语时请填一句问候语（如 \"我在\"），\
+                "[wakeup].greeting 为空：启用唤醒问候语时请填至少一句问候语（如 \"我在\"），\
                  或把 [wakeup].enabled 改回 false（唤醒后静默等待，与没有这个插件一致）。"
             );
         }
-        let n = self.greeting.trim().chars().count();
-        if self.enabled && n > GREETING_SOFT_LIMIT {
-            anyhow::bail!(
-                "[wakeup].greeting 有 {n} 个字（建议 ≤ {GREETING_SOFT_LIMIT}）：问候语播放期间\
-                 上行音频会在缓冲区排队，太长会推迟用户第一句话的处理。建议改成「我在」这类短句。"
-            );
+        // 软上限**逐行**检查：多句时任何一句过长都会拖住同一处下行排队。
+        for line in &lines {
+            let n = line.chars().count();
+            if self.enabled && n > GREETING_SOFT_LIMIT {
+                anyhow::bail!(
+                    "[wakeup].greeting 有一句 {n} 个字（建议 ≤ {GREETING_SOFT_LIMIT}）：\
+                     {line:?}。问候语播放期间上行音频会在缓冲区排队，太长会推迟用户第一句话的\
+                     处理。建议改成「我在」这类短句。"
+                );
+            }
         }
         Ok(())
     }
+}
+
+/// 拆问候语池：换行分隔、逐行 trim、丢空行。
+fn split_pool(s: &str) -> Vec<String> {
+    s.split('\n')
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(String::from)
+        .collect()
+}
+
+/// 收敛为规范存储形态：池子逐行 join（幂等的唯一形态，配置对比/签名都稳定）。
+fn normalize_pool(s: &str) -> String {
+    split_pool(s).join("\n")
 }
 
 /// 会话级唤醒问候快照（会话开始时构造一次 = `HotReload::NextSession` 语义）。
 #[derive(Debug, Clone)]
 pub struct WakeGreeting {
     active: bool,
-    text: String,
+    lines: Vec<String>,
     persist: bool,
 }
 
 impl WakeGreeting {
     /// 按配置快照构造。**不启用时 `active() == false`**，调用方无需自己判断开关。
     pub fn new(cfg: &WakeConfig) -> Self {
-        let text = cfg.greeting.trim().to_string();
         WakeGreeting {
-            active: cfg.enabled && !text.is_empty(),
-            text,
+            active: cfg.active(),
+            lines: cfg.pool(),
             persist: cfg.persist,
         }
     }
@@ -152,9 +177,23 @@ impl WakeGreeting {
         self.active
     }
 
-    /// 要说的话（仅在 [`Self::active`] 为真时有意义）。
+    /// 本轮要说的一句：多句池中**随机**选一（每次唤醒各选各的，不固定顺序）；
+    /// 单句池恒返回它。仅在 [`Self::active`] 为真时有意义，空池返回空串（防御）。
     pub fn text(&self) -> &str {
-        &self.text
+        let Some(first) = self.lines.first() else {
+            return "";
+        };
+        if self.lines.len() == 1 {
+            return first;
+        }
+        // 进程内伪随机：`RandomState` 每次新实例都换种子（OS 熵 + 计数器），
+        // 对"多句问候换着说"足够，刻意不为此引入 rand 依赖。
+        use std::hash::{BuildHasher, Hasher};
+        let idx = (std::collections::hash_map::RandomState::new()
+            .build_hasher()
+            .finish()
+            % self.lines.len() as u64) as usize;
+        &self.lines[idx]
     }
 
     /// 是否允许把成品音频落盘复用。

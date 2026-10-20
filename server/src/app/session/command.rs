@@ -87,12 +87,17 @@ impl<'a, T: Transport> Session<'a, T> {
         self.abort.store(false, Ordering::Relaxed);
         // 命中后要说的话（告别语 / 应答）：非空才下发，否则直接执行副作用。
         if !inv.reply.trim().is_empty() {
-            if let Err(e) = self.speak_canned(&inv.reply).await {
-                tracing::warn!(
+            match self.speak_canned(&inv.reply).await {
+                Ok(()) => {
+                    // 成品落盘并登记（内容哈希进 managed.json）：技能文案改动在下次
+                    // 启动自动清理旧音频（清单与运行时同源，见 `SkillRegistry::replies`）。
+                    self.persist_canned_audio(crate::app::hot_audio::SLOT_SKILL_REPLY, &inv.reply);
+                }
+                Err(e) => tracing::warn!(
                     "session {} 技能「{}」（{source}）应答下发失败（仍按技能处置）: {e}",
                     self.session_id,
                     inv.name
-                );
+                ),
             }
         }
         match &inv.action {

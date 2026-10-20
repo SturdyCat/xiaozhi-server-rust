@@ -17,7 +17,7 @@
 - 告别语前清 stale abort；顺序是告别音频 → `tts stop` → MCP stop-listening。失败降级置 close_requested，由主循环跳过 VAD flush、排空后 close；不要分支直接 drop socket。
 - MCP 主循环内调用必须同任务抽帧，否则等自己投递响应会死锁。能力发现保留上行音频，退下等待则丢弃残留音频；其他文本帧按序补派发。详细契约见[MCP 说明](<../mcp/AGENTS.md>)。
 - [唤醒问候](<wakeup.rs>)挂 `listen detect`，不是 listen start 或 ASR；每次 detect 均问候，不能设“每会话一次”。复用 `speak_canned` 和原下行路径，跳过 LLM。
-- 热音频内存→磁盘→真合成三级复用，共用[HotAudioKey](<../hot_audio.rs>)；生产预取路径逐句登记完整身份（`SentenceSource.hot_audio_key`），完整句合成成功经 `insert_async` 落盘，磁盘命中经 `get_async` 暖入内存。键含引擎签名/音色/语速/音频参数/文本，含凭据的签名绝不写日志；磁盘用稳定 file_id 和参数头校验；测试台等不可复现路径填 `None`。
+- 热音频内存→磁盘→真合成三级复用，共用[HotAudioKey](<../hot_audio.rs>)；生产预取路径逐句登记完整身份（`SentenceSource.hot_audio_key`），完整句合成成功经 `insert_async` 落盘，磁盘命中经 `get_async` 暖入内存。键含引擎签名/音色/语速/音频参数/文本，含凭据的签名绝不写日志；磁盘用稳定 file_id 和参数头校验；测试台等不可复现路径填 `None`。配置固定话术（欢迎语/问候语池/技能应答含告别语）另经 `persist_canned_audio`（wakeup.rs，`put_managed`）登记 `managed.json`，启动 `sync_managed` 按内容哈希校验、文案改了自动清旧。
 - persist 要求 TTS 缓存开启且配置来源有路径；问候语应短，避免主循环等待播放期间拖住用户第一句话。
 
 [下行维护](<../downlink/AGENTS.md>) · [推理设计记录](<../inference/AGENTS.md>) · [延迟设计记录](<../metrics/AGENTS.md>) · [残句设计记录](<#3-缺口③sentencesplitter-定时-flush>)

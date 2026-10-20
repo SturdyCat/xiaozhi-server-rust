@@ -26,6 +26,9 @@ class EchoMuseSectionState(private val scope: PagerScope) {
     var token by scope.observable("")
     /// 密钥 presence（服务端打码，只回 `has_token`）；为 true 时提示「已配置」。
     var tokenConfigured by scope.observable(false)
+    /// 连接欢迎语（服务端 `[echomuse].welcome`，默认带使用提示；留空 = 不说）。
+    /// RestartOnly：保存后需重启服务端生效（档位提示由 sectionNote 下发）。
+    var welcome by scope.observable("")
 
     /**
      * 写入保存请求体（`[echomuse]` 整段回传）。
@@ -39,6 +42,7 @@ class EchoMuseSectionState(private val scope: PagerScope) {
             JSONObject().apply {
                 put("enabled", enabled.toBooleanStrictOrNull() ?: false)
                 putSecret("token", token)
+                put("welcome", welcome)
             },
         )
     }
@@ -49,6 +53,7 @@ class EchoMuseSectionState(private val scope: PagerScope) {
             enabled = e.optBoolean("enabled", enabled.toBooleanStrictOrNull() ?: false).toString()
             token = e.optString("token", token)
             tokenConfigured = e.optBoolean("has_token", token.isNotBlank())
+            welcome = e.optString("welcome", welcome)
         }
     }
 }
