@@ -194,17 +194,20 @@ mod engine {
             let mut ids: Vec<u32> = enc.get_ids().to_vec();
             ids.truncate(self.max_len);
             let len = ids.len();
-            let ids: Vec<i32> = ids.iter().map(|&i| i as i32).collect();
-            let mask: Vec<i32> = enc
+            let ids: Vec<i64> = ids.into_iter().map(i64::from).collect();
+            let mask: Vec<i64> = enc
                 .get_attention_mask()
                 .iter()
                 .take(len)
-                .map(|&m| m as i32)
+                .map(|&m| i64::from(m))
                 .collect();
             let tokenize_ms = t0.elapsed().as_millis() as u64;
 
             let t1 = std::time::Instant::now();
-            // 形状 [1, len]（batch=1 的动态维度）；from_array 接受 i64 形状 + i32 数据。
+            // HF transformers 导出的 BERT 输入图固定声明 int64（input_ids / attention_mask /
+            // token_type_ids 都是 tensor(int64)）；喂 i32 会报
+            // "Unexpected input data type. Actual: tensor(int32), expected: tensor(int64)"。
+            // 形状 [1, len]（batch=1 的动态维度），数据必须与图声明同型。
             let shape = [1i64, len as i64];
             let ids = ort::value::Tensor::from_array((shape, ids))?;
             let mask = ort::value::Tensor::from_array((shape, mask))?;
@@ -213,7 +216,7 @@ mod engine {
                 ("attention_mask".into(), mask.into()),
             ];
             if self.has_token_type_ids {
-                let types = ort::value::Tensor::from_array((shape, vec![0i32; len]))?;
+                let types = ort::value::Tensor::from_array((shape, vec![0i64; len]))?;
                 inputs.push(("token_type_ids".into(), types.into()));
             }
             let mut session_guard = self.session.lock().unwrap_or_else(|e| e.into_inner());
