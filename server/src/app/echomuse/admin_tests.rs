@@ -4,7 +4,7 @@
 
 use super::admin::{
     approve as admin_approve, command_plan, device_payload, devices_payload, filter_settings,
-    settings_plan, wait_version,
+    settings_plan,
 };
 use super::hub_tests::{insert_online, HUB_LOCK};
 use super::registry::Registry;
@@ -21,7 +21,7 @@ fn devices_payload_merges_hub_online() {
     let ctl_rx = insert_online("dev-on-1");
     let v = devices_payload(true, &reg);
     assert_eq!(v["enabled"], true);
-    // 设备面版本号随行（/wait 长挂的游标）：payload 与全局计数同源。
+    // 设备面版本号随行（管理台 WS hello/事件帧携带的版本号）：payload 与全局计数同源。
     assert_eq!(v["version"].as_u64(), Some(super::devices_version()));
     let devices = v["devices"].as_array().unwrap();
     let a = devices
@@ -101,62 +101,19 @@ fn concurrent_device_events_never_lose_version_increments() {
     assert_eq!(super::devices_version(), before.wrapping_add(800));
 }
 
-// ---- /wait 事件保持（纯逻辑：自建 watch 通道，不碰进程级版本号） ----
+// ---- 设备面版本号（管理台 `GET /api/admin/ws` 推送的事件源；自建 watch 的
+// 循环语义测试在 ws/admin_ws_tests.rs） ----
 
 #[test]
 fn hub_lifecycle_bumps_devices_version() {
     let _g = HUB_LOCK.lock().unwrap();
-    // hub 登记/移除（上线/下线）都要唤醒挂着的 /wait。
+    // hub 登记/移除（上线/下线）都要让管理台 WS 推事件（版本自增）。
     let before = super::devices_version();
     insert_probe("dev-ver-1");
     assert_ne!(super::devices_version(), before);
     let after_insert = super::devices_version();
     hub_remove("dev-ver-1");
     assert_ne!(super::devices_version(), after_insert);
-}
-
-#[tokio::test]
-async fn wait_version_returns_immediately_when_after_differs() {
-    let (tx, mut rx) = tokio::sync::watch::channel(7u64);
-    // after 落后（客户端漏掉一次通知）→ 立即回 changed。
-    assert_eq!(
-        wait_version(&mut rx, Some(6), std::time::Duration::from_secs(1)).await,
-        (7, true)
-    );
-    // 服务端重启版本回绕（after > current）同样立即回，不空挂。
-    assert_eq!(
-        wait_version(&mut rx, Some(99), std::time::Duration::from_secs(1)).await,
-        (7, true)
-    );
-    // 缺省 after（客户端首次没拿到版本）→ 立即回当前快照。
-    assert_eq!(
-        wait_version(&mut rx, None, std::time::Duration::from_secs(1)).await,
-        (7, true)
-    );
-    drop(tx);
-}
-
-#[tokio::test]
-async fn wait_version_wakes_on_bump_with_new_version() {
-    let (tx, mut rx) = tokio::sync::watch::channel(3u64);
-    let pusher = tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        let _ = tx.send(4);
-    });
-    assert_eq!(
-        wait_version(&mut rx, Some(3), std::time::Duration::from_secs(2)).await,
-        (4, true)
-    );
-    pusher.await.unwrap();
-}
-
-#[tokio::test]
-async fn wait_version_times_out_without_change() {
-    let (_tx, mut rx) = tokio::sync::watch::channel(3u64);
-    assert_eq!(
-        wait_version(&mut rx, Some(3), std::time::Duration::from_millis(20)).await,
-        (3, false)
-    );
 }
 
 // ---- 认领 / 指令下发决策 ----

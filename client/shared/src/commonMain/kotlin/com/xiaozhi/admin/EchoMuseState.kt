@@ -6,7 +6,6 @@ import com.tencent.kuikly.core.pager.Pager
 import com.tencent.kuikly.core.reactive.collection.ObservableList
 import com.tencent.kuikly.core.reactive.handler.observable
 import com.tencent.kuikly.core.reactive.handler.observableList
-import com.tencent.kuikly.core.timer.setTimeout
 
 /**
  * 「EchoMuse 设备」页的数据源（`GET /api/echomuse/devices` + 批准/下发指令/删除记录三个写动作）。
@@ -16,8 +15,9 @@ import com.tencent.kuikly.core.timer.setTimeout
  * 未开启该能力，页面据此显示"未启用"提示而不是空列表。
  *
  * 列表是**请求时刻的快照**，但页面不需要轮询：服务端设备面有变化（上线/离线/
- * 批准/设置/删除）会经 `GET /api/echomuse/devices/wait`（事件保持：有变化才回包，
- * 无变化服务端挂 25s 超时）立即唤醒本页刷新——见 [ensureLiveUpdates]。
+ * 批准/设置/删除）会经管理台 WS（`GET /api/admin/ws`，各平台自实现 WebSocket 接入
+ * 共享层 [AdminRealtime]）推送 `echomuse_devices_changed` 事件，本页随即刷新——
+ * 见 [ensureLiveUpdates]。
  *
  * 设计口径与 [DevicesState] 一致：
  * - 加载失败就地显示（`loadError` + 「刷新」），不弹 toast；
@@ -27,8 +27,16 @@ import com.tencent.kuikly.core.timer.setTimeout
  * ⚠️ 本类不渲染：渲染见 `EchoMusePage.kt`，页面壳体见 `AdminPage.kt`。
  */
 
-/** 长挂失败后的重试间隔：服务端不可达时退避，不打爆网络。 */
-private const val ECHOMUSE_WAIT_RETRY_MS = 5_000
+/**
+ * EchoMuse 卡片内菜单项 id（[EchoMuseState.menuItem] 的取值域，渲染见 `EchoMuseDeviceCard.kt`）。
+ * 未批准设备只有 概览/批准 两项；已批准为 概览/WiFi 配置/唤醒词设置/设备管理/蓝牙代理。
+ */
+const val ECHOMUSE_MENU_OVERVIEW = "overview"
+const val ECHOMUSE_MENU_APPROVE = "approve"
+const val ECHOMUSE_MENU_WIFI = "wifi"
+const val ECHOMUSE_MENU_WAKE = "wake"
+const val ECHOMUSE_MENU_MANAGE = "manage"
+const val ECHOMUSE_MENU_BLE = "ble"
 
 /** 一台 EchoMuse 设备（`GET /api/echomuse/devices` 的一行）。字段不可变——刷新时整表重建。 */
 class EchoMuseDeviceRow(
@@ -101,12 +109,6 @@ class EchoMuseState(scope: PagerScope) {
     /** 服务端 `[echomuse]` 能力开关（false 时页面显示"未启用"提示）。 */
     var enabled by scope.observable(true)
 
-    /**
-     * 服务端设备面变化版本号（`devices` 回包携带）：`/wait` 长挂的游标。
-     * -1 = 尚未拿到（服务端过旧没有该字段——此时不挂通知链，退回进页刷新一次）。
-     */
-    private var serverVersion = -1L
-
     val devices: ObservableList<EchoMuseDeviceRow> by scope.observableList()
     val management = EchoMuseManagementState(scope)
     val ble = EchoMuseBleState(scope)
@@ -120,24 +122,25 @@ class EchoMuseState(scope: PagerScope) {
             loaded = false
             loadError = ""
             devices.clear()
-            serverVersion = -1L
-            liveStarted = false
+            menuDevice = ""
+            menuItem = ECHOMUSE_MENU_OVERVIEW
             actionBusy = false
-            approveTarget = ""
-            wifiTarget = ""
-            settingsTarget = ""
             confirmDeleteId = ""
             approveDraft = ""
             wifiSsid = ""
             wifiPsk = ""
+            // 实时订阅断开：base/token 都变了，旧连接（旧凭据）立即退订，
+            // 下次渲染经 ensureLiveUpdates 以新参数重订（退订即退共享组引用）。
+            liveSub?.close()
+            liveSub = null
+            liveSubBase = null
+            liveActive = null
         }
         accessToken = token
         base = baseUrl
         management.configureConnection(baseUrl, token)
         ble.configureConnection(baseUrl, token)
     }
-
-    fun toggleManagement(row: EchoMuseDeviceRow) = management.toggle(row, base)
 
     fun load(ctx: Pager, baseUrl: String = "") {
         if (base != baseUrl) configureAccess(accessToken, baseUrl)
@@ -150,7 +153,6 @@ class EchoMuseState(scope: PagerScope) {
             loading = false
             if (ok) {
                 apply(data)
-                liveIsActive?.let { ensureLiveUpdates(ctx, it) }
             } else loadError = "EchoMuse 设备列表加载失败：$reason"
         }
     }
@@ -159,8 +161,6 @@ class EchoMuseState(scope: PagerScope) {
 
     private fun apply(data: JSONObject) {
         enabled = data.optBoolean("enabled", true)
-        // 版本游标只在服务端给了才更新（老服务端没有该字段，保持 -1）。
-        (data.opt("version") as? Number)?.let { serverVersion = it.toLong() }
         devices.clear()
         val arr = data.array("devices")
         if (arr != null) {
@@ -203,11 +203,56 @@ class EchoMuseState(scope: PagerScope) {
         }
 
     // ============================================================
-    // 批准（POST /api/echomuse/devices/{id}/approve）
+    // 卡片内菜单（全局单选：左列菜单 + 右侧内容面板，渲染见 EchoMuseDeviceCard.kt）
     // ============================================================
 
-    /** 当前展开批准表单的设备号（空串 = 全部收起）。 */
-    var approveTarget by scope.observable("")
+    /** 当前选中菜单的设备号（空串 = 无；不匹配当前行的卡片一律显示概览面板）。 */
+    var menuDevice by scope.observable("")
+
+    /** 当前选中的菜单项 id（全局单选：切换卡片或菜单项时更新）。 */
+    var menuItem by scope.observable(ECHOMUSE_MENU_OVERVIEW)
+
+    /**
+     * 选中某台设备的某个菜单项。切换目标时按需重置对应表单草稿（保持原 toggle*
+     * 的清空语义）：批准清 label 草稿、WiFi 清 ssid/psk、唤醒词按设备 settings 重填；
+     * 管理/蓝牙代理把对应子状态的 target 定到本设备（已选中则保留诊断输出不重置）。
+     */
+    fun selectMenu(row: EchoMuseDeviceRow, item: String) {
+        if (menuDevice == row.deviceId && menuItem == item) return
+        menuDevice = row.deviceId
+        menuItem = item
+        when (item) {
+            ECHOMUSE_MENU_APPROVE -> approveDraft = ""
+            ECHOMUSE_MENU_WIFI -> {
+                wifiSsid = ""
+                wifiPsk = ""
+            }
+            ECHOMUSE_MENU_WAKE -> fillSettingsDraft(row.deviceId)
+            ECHOMUSE_MENU_MANAGE -> management.select(row, base)
+            ECHOMUSE_MENU_BLE -> ble.select(row)
+        }
+    }
+
+    /**
+     * 当前卡片生效的菜单项：[menuDevice] 不匹配本卡、或菜单项不适用当前批准态
+     * （已批准没有「批准」、未批准没有 WiFi/唤醒词/管理/蓝牙）一律回落「概览」。
+     */
+    fun activeMenuItem(row: EchoMuseDeviceRow): String {
+        if (menuDevice != row.deviceId) return ECHOMUSE_MENU_OVERVIEW
+        val approvedOnly = menuItem == ECHOMUSE_MENU_WIFI ||
+            menuItem == ECHOMUSE_MENU_WAKE ||
+            menuItem == ECHOMUSE_MENU_MANAGE ||
+            menuItem == ECHOMUSE_MENU_BLE
+        return when {
+            approvedOnly && !row.approved -> ECHOMUSE_MENU_OVERVIEW
+            menuItem == ECHOMUSE_MENU_APPROVE && row.approved -> ECHOMUSE_MENU_OVERVIEW
+            else -> menuItem
+        }
+    }
+
+    // ============================================================
+    // 批准（POST /api/echomuse/devices/{id}/approve）
+    // ============================================================
 
     /** 批准表单的 label 草稿。 */
     var approveDraft by scope.observable("")
@@ -223,8 +268,9 @@ class EchoMuseState(scope: PagerScope) {
         post(ctx, "/api/echomuse/devices/${echoMuseUrlComponent(deviceId)}/approve", body) { ok, code, reason, _ ->
             actionBusy = false
             if (ok) {
-                approveTarget = ""
                 approveDraft = ""
+                // 批准后面板回落概览（刷新后该卡的菜单项已切为已批准集合，「批准」项消失）
+                menuItem = ECHOMUSE_MENU_OVERVIEW
                 onDone(true, "已批准 ${displayName(deviceId)}")
             } else {
                 onDone(false, when (code) {
@@ -238,9 +284,6 @@ class EchoMuseState(scope: PagerScope) {
     // ============================================================
     // 下发指令（POST /api/echomuse/devices/{id}/command）
     // ============================================================
-
-    /** 当前展开 WiFi 配置表单的设备号（空串 = 全部收起）。 */
-    var wifiTarget by scope.observable("")
 
     /** WiFi 表单草稿。 */
     var wifiSsid by scope.observable("")
@@ -287,7 +330,6 @@ class EchoMuseState(scope: PagerScope) {
             put("psk", wifiPsk)
         }) { ok, msg ->
             if (ok) {
-                wifiTarget = ""
                 wifiSsid = ""
                 wifiPsk = ""
             }
@@ -323,35 +365,11 @@ class EchoMuseState(scope: PagerScope) {
         }
     }
 
-    /** 展开/收起某台设备的批准表单（切换目标时清空草稿）。 */
-    fun toggleApprove(deviceId: String) {
-        if (approveTarget == deviceId) {
-            approveTarget = ""
-        } else {
-            approveTarget = deviceId
-            approveDraft = ""
-        }
-    }
-
-    /** 展开/收起某台设备的 WiFi 表单（切换目标时清空草稿）。 */
-    fun toggleWifi(deviceId: String) {
-        if (wifiTarget == deviceId) {
-            wifiTarget = ""
-        } else {
-            wifiTarget = deviceId
-            wifiSsid = ""
-            wifiPsk = ""
-        }
-    }
-
     // ============================================================
     // 唤醒词设置（POST /api/echomuse/devices/{id}/settings，部分更新）
     // ============================================================
 
-    /** 当前展开唤醒词设置的设备号（空串 = 全部收起）。 */
-    var settingsTarget by scope.observable("")
-
-    // —— 表单草稿：展开时从设备 settings 快照填充，缺省走默认值 ——
+    // —— 表单草稿：进入唤醒词面板时从设备 settings 快照填充，缺省走默认值 ——
     var wakeWordEnabled by scope.observable(true)
     var owwOnDevice by scope.observable("on")
     var owwModeOpen by scope.observable(false)
@@ -378,13 +396,8 @@ class EchoMuseState(scope: PagerScope) {
     /** 0=中心麦克风，范围 0~6。 */
     var wakeMic by scope.observable("0")
 
-    /** 展开/收起某台设备的唤醒词设置（切换目标时按该设备 settings 重填草稿）。 */
-    fun toggleSettings(deviceId: String) {
-        if (settingsTarget == deviceId) {
-            settingsTarget = ""
-            return
-        }
-        settingsTarget = deviceId
+    /** 进入「唤醒词设置」面板时按该设备 settings 快照重填草稿（缺省走默认值）。 */
+    private fun fillSettingsDraft(deviceId: String) {
         val s = devices.firstOrNull { it.deviceId == deviceId }?.settings ?: JSONObject()
         wakeWordEnabled = s.optBoolean("wakeWordEnabled", true)
         owwOnDevice = when (val raw = s.opt("owwOnDevice")) {
@@ -453,48 +466,44 @@ class EchoMuseState(scope: PagerScope) {
     }
 
     // ============================================================
-    // 实时更新：服务端事件保持（GET /devices/wait 长挂），变化才回包
+    // 实时更新：管理台 WS 事件（GET /api/admin/ws 推送），无轮询、无长挂
     // ============================================================
 
-    /** 长挂链只起一次（[ensureLiveUpdates] 会在每次重组时被调用）。 */
-    private var liveStarted = false
-    private var liveIsActive: (() -> Boolean)? = null
+    /** 管理台实时通道（本页一份；同 base 的订阅由共享层合流复用连接）。 */
+    private val realtime = AdminRealtime()
+
+    /** 当前事件订阅（页面停留期间持有）；null = 未订阅。 */
+    private var liveSub: AdminRealtime.Subscription? = null
+
+    /** 订阅所用的服务端基址（base 变了要断旧连新，如 mac「切换服务器」后）。 */
+    private var liveSubBase: String? = null
+
+    /** 上次 [ensureLiveUpdates] 看到的页面驻留态（只在变化沿动作，重组幂等）。 */
+    private var liveActive: Boolean? = null
 
     /**
-     * 页面停留（[isActive]）期间挂住 `GET /api/echomuse/devices/wait?after=<版本>`：
-     * 服务端设备面有变化（设备上线/离线、批准、设置、删除）立刻回包，本页随即
-     * 刷新列表再挂下一轮；无变化由服务端 25s 超时回 `changed:false`。**没有固定
-     * 轮询间隔**——无事件时不产生任何请求流量。链在页面切走后停摆，回到本页时
-     * 渲染层再调 [ensureLiveUpdates] 重新起链（挂起期间发生的变化会在第一个回包
-     * 立即对齐）。服务端过旧（无版本字段）则不起链，退回"进页刷新一次"的口径。
+     * 页面停留（[isActive]）期间订阅管理台 WS `GET /api/admin/ws`：服务端设备面有
+     * 变化（上线/离线/批准/设置/删除）推 `echomuse_devices_changed` 事件，本页随即
+     * 刷新列表。**无轮询、无长挂**——连接由 [AdminRealtime] 共享持有并自动重连
+     * （退避 3s→30s，连接期间每 25s 应用层心跳）。渲染层每次重组都会调用本方法：
+     * 仅在 isActive 变化沿动作（变 true 订阅、变 false 退订）；页面停留期间 base
+     * 变了则断旧连新。订阅失败/平台无 WS 能力自动退化为「进页刷新一次」。
      */
     fun ensureLiveUpdates(ctx: Pager, isActive: () -> Boolean) {
-        liveIsActive = isActive
-        if (liveStarted || serverVersion < 0 || !isActive()) return
-        liveStarted = true
-        waitTick(ctx, isActive)
-    }
-
-    private fun waitTick(ctx: Pager, isActive: () -> Boolean) {
-        val generation = connectionGeneration
-        getJson(ctx, echoMuseAuthenticatedUrl("$base/api/echomuse/devices/wait?after=$serverVersion", accessToken)) { ok, data, _ ->
-            if (generation != connectionGeneration) return@getJson
-            if (!isActive()) {
-                liveStarted = false
-                return@getJson
-            }
-            if (!ok) {
-                // 网络/服务端暂不可达：退避后重挂，链不断。
-                ctx.setTimeout(ECHOMUSE_WAIT_RETRY_MS) {
-                    if (generation != connectionGeneration) return@setTimeout
-                    if (isActive()) waitTick(ctx, isActive) else liveStarted = false
-                }
-                return@getJson
-            }
-            // 版本以回包为准（refresh 的列表回包还会再对齐一次，值相同）。
-            (data.opt("version") as? Number)?.let { serverVersion = it.toLong() }
-            if (data.optBoolean("changed", false)) refresh(ctx)
-            waitTick(ctx, isActive)
+        val active = isActive()
+        if (active == liveActive && liveSubBase == base) return
+        liveActive = active
+        if (!active) {
+            liveSub?.close()
+            liveSub = null
+            liveSubBase = null
+            return
+        }
+        if (liveSub != null && liveSubBase == base) return
+        liveSub?.close() // base 变了：断旧连新（旧组引用计数归零自动断开旧连接）
+        liveSubBase = base
+        liveSub = realtime.subscribe(ctx, base, accessToken) { type, _ ->
+            if (type == "echomuse_devices_changed") refresh(ctx)
         }
     }
 

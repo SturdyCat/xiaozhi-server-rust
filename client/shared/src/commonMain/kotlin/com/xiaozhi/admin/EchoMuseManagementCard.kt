@@ -7,23 +7,15 @@ import com.tencent.kuikly.core.views.Scroller
 import com.tencent.kuikly.core.views.Text
 import com.tencent.kuikly.core.views.View
 
-/** 设备卡的管理区：固定命令/固定日志源，不暴露 shell 或固件刷写功能。 */
-fun ViewContainer<*, *>.echoMuseManagement(
+/** 设备卡的「设备管理」菜单面板：固定命令/固定日志源，不暴露 shell 或固件刷写功能。 */
+fun ViewContainer<*, *>.echoMuseManagementPanel(
     row: EchoMuseDeviceRow,
     state: EchoMuseState,
     toast: ToastState,
     ctx: Pager,
 ) {
     val management = state.management
-    actionRow {
-        secondaryButton(
-            "设备管理",
-            dynamicText = { if (management.target == row.deviceId) "收起设备管理" else "设备管理" },
-        ) { state.toggleManagement(row) }
-    }
-    vif({ management.target == row.deviceId }) {
-        dividerH()
-        fieldLabel("运行状态与输出音量")
+    fieldLabel("运行状态与输出音量")
         echoMuseManagementNote {
             if (management.online) "在线仅表示控制连接存在，并非心跳或实时监测；以下状态需手动读取。"
             else "设备离线：运行状态只保留历史上报，不代表当前值；音量不可下发。"
@@ -143,7 +135,6 @@ fun ViewContainer<*, *>.echoMuseManagement(
             }
         }
         textNote("诊断内容可能包含设备和网络信息，仅向可信人员分享。", micro = true)
-    }
 }
 
 /** textNote 接收静态字符串；异步管理状态必须在 attr 闭包中读取以保持响应式。 */

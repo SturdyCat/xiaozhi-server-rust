@@ -2,12 +2,10 @@
 //!
 //! 端点：
 //! - `GET  /api/echomuse/devices`：registry 全表 + hub 实时合并（online/connected_secs），
-//!   回包携带设备面 `version`（客户端拿它当 `/wait` 的游标）。
-//! - `GET  /api/echomuse/devices/wait?after=<n>`：**事件保持式变更通知**——版本与
-//!   `after` 不一致立即返回 `{version, changed:true}`；一致则挂到版本变化或超时
-//!   （25s，小于客户端 NetworkModule 的 30s 默认超时）回 `changed:false`。管理台
-//!   没有常驻 WebSocket（Kuikly commonMain 只有 HTTP），此端点就是它的推送通道：
-//!   设备上线/离线/批准/设置/删除后挂着的请求立刻醒来，客户端刷新列表再挂下一轮。
+//!   回包携带设备面 `version`（与管理台 WS `GET /api/admin/ws` 的 hello/事件帧同源）。
+//! - 变更通知走管理台 WebSocket `GET /api/admin/ws`（见 [`crate::app::ws::admin_ws`]：
+//!   连接即发 hello 带当前版本、变化推 `echomuse_devices_changed`、ping/pong 应用层
+//!   心跳）；本面的 `/devices/wait` 长挂轮询端点已删除。
 //! - `GET  /api/echomuse/devices/{id}`：单台详情（404 不存在）。
 //! - `POST /api/echomuse/devices/{id}/approve`：`{"label"?}` 认领/改名（404 不存在）。
 //! - `POST /api/echomuse/devices/{id}/command`：`{"action":"wifi","ssid":..,"psk":..}`
@@ -40,7 +38,6 @@ pub(crate) fn admin_routes() -> axum::Router<Arc<Engines>> {
     use axum::routing::{get, post};
     axum::Router::new()
         .route("/api/echomuse/devices", get(devices_list))
-        .route("/api/echomuse/devices/wait", get(devices_wait))
         .route(
             "/api/echomuse/devices/{id}",
             get(device_get).delete(device_delete),
@@ -80,7 +77,7 @@ fn disabled_404() -> Response {
 }
 
 /// devices 列表体：registry 全表（按 device_id 排序）left join hub 在线状态；
-/// `version` 是设备面变化号（客户端 `/wait` 长挂的游标）。
+/// `version` 是设备面变化号（管理台 WS hello/事件帧携带的版本号，客户端凭它对齐）。
 pub(crate) fn devices_payload(enabled: bool, reg: &Registry) -> serde_json::Value {
     // Read the cursor BEFORE snapshots: a concurrent change must leave an older
     // cursor (and trigger the next /wait), never old rows with a newer cursor.
@@ -91,28 +88,6 @@ pub(crate) fn devices_payload(enabled: bool, reg: &Registry) -> serde_json::Valu
         "version": version,
         "devices": devices,
     })
-}
-
-/// 单次挂起时长：留足心跳余量，又必须小于 Kuikly NetworkModule 的 30s 默认超时。
-const WAIT_SECS: u64 = 25;
-
-/// `/wait` 决策核心（纯逻辑，外置测试直驱）：`after` 与当前版本不一致（含缺省、
-/// 含服务端重启后版本回绕）立即返回；一致则挂到版本变化或 `max_wait` 超时。
-/// 返回 (最新版本, 是否变化)。
-pub(crate) async fn wait_version(
-    rx: &mut tokio::sync::watch::Receiver<u64>,
-    after: Option<u64>,
-    max_wait: std::time::Duration,
-) -> (u64, bool) {
-    let current = *rx.borrow_and_update();
-    if after != Some(current) {
-        return (current, true);
-    }
-    match tokio::time::timeout(max_wait, rx.changed()).await {
-        Ok(Ok(())) => (*rx.borrow_and_update(), true),
-        // 通道关闭（不可能：发送端是进程级单例）按无变化口径回。
-        _ => (current, false),
-    }
 }
 
 /// 单台详情体；registry 无记录返回 None（handler 转 404）。
@@ -325,24 +300,6 @@ async fn devices_list(
     json(
         StatusCode::OK,
         devices_payload(enabled, registry::global(&engines.config)),
-    )
-}
-
-async fn devices_wait(
-    headers: HeaderMap,
-    Query(query): Query<HashMap<String, String>>,
-    State(engines): State<Arc<Engines>>,
-) -> Response {
-    if let Some(r) = gate(&engines, &headers, &query) {
-        return r;
-    }
-    let mut rx = super::subscribe_devices_version();
-    let after = query.get("after").and_then(|v| v.parse::<u64>().ok());
-    let (version, changed) =
-        wait_version(&mut rx, after, std::time::Duration::from_secs(WAIT_SECS)).await;
-    json(
-        StatusCode::OK,
-        serde_json::json!({ "version": version, "changed": changed }),
     )
 }
 

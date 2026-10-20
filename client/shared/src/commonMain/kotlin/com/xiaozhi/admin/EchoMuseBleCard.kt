@@ -9,17 +9,10 @@ import com.tencent.kuikly.core.views.Scroller
 import com.tencent.kuikly.core.views.Text
 import com.tencent.kuikly.core.views.View
 
-/** Generic GATT tools, not a device-specific switch protocol or a real-time notification dashboard. */
-fun ViewContainer<*, *>.echoMuseBleCard(row: EchoMuseDeviceRow, state: EchoMuseState, ctx: Pager) {
+/** 设备卡的「蓝牙代理」菜单面板：通用 GATT 工具，不是设备专属开关协议或实时通知面板。 */
+fun ViewContainer<*, *>.echoMuseBlePanel(row: EchoMuseDeviceRow, state: EchoMuseState, ctx: Pager) {
     val ble = state.ble
-    actionRow {
-        secondaryButton("蓝牙代理", dynamicText = { if (ble.target == row.deviceId) "收起蓝牙代理" else "蓝牙代理 / IoT" }) {
-            ble.toggle(row)
-        }
-    }
-    vif({ ble.target == row.deviceId }) {
-        dividerH()
-        fieldLabel("通用 BLE / GATT 管理")
+    fieldLabel("通用 BLE / GATT 管理")
         bleNote { ble.status }
         textNote("仅面向你拥有或获授权的 IoT 外设。无配对/加密，需要安全属性可能返回 att:5。通用字节不具备开关等业务语义，先查外设协议。", micro = true)
         bleSettings(ble, state, ctx)
@@ -135,7 +128,6 @@ fun ViewContainer<*, *>.echoMuseBleCard(row: EchoMuseDeviceRow, state: EchoMuseS
         vif({ ble.busy.isNotEmpty() }) { bleNote { "正在等待 ${ble.busy}；GATT最长35秒，客户端45秒超时。修改草稿/目标不会撤销已经发送的设备请求，也不能解除当前请求忙态" } }
         vif({ ble.error.isNotEmpty() }) { bleNote(true) { ble.error } }
         vif({ ble.result.isNotEmpty() }) { bleNote { ble.result } }
-    }
 }
 
 private fun ViewContainer<*, *>.bleSettings(ble: EchoMuseBleState, state: EchoMuseState, ctx: Pager) {

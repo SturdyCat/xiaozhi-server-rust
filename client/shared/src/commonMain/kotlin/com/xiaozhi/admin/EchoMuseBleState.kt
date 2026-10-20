@@ -83,6 +83,11 @@ class EchoMuseBleState(scope: PagerScope) {
         token = authToken
     }
 
+    /** 菜单选中语义：target 已是本设备则保留输出不重置，否则走 [toggle] 重置并登记目标。 */
+    fun select(row: EchoMuseDeviceRow) {
+        if (target != row.deviceId) toggle(row)
+    }
+
     fun toggle(row: EchoMuseDeviceRow) {
         invalidate()
         target = if (target == row.deviceId) "" else row.deviceId

@@ -181,16 +181,15 @@ fn hub() -> &'static EchomuseHub {
 }
 
 /// 设备面变化版本号（进程级 watch 通道）：hub 登记/移除与管理面登记变更时自增。
-/// 管理台没有常驻 WebSocket（Kuikly commonMain 只有 HTTP 能力），`GET
-/// /api/echomuse/devices/wait` 凭它在**有变化时**才回包——事件保持式推送，
-/// 而不是固定间隔轮询。
+/// 管理台经 WebSocket `GET /api/admin/ws` 实时订阅它（`app::ws::admin_ws`：hello
+/// 带当前版本、变化推 `echomuse_devices_changed`），`/devices/wait` 长挂轮询已删除。
 static DEVICES_VERSION: OnceLock<watch::Sender<u64>> = OnceLock::new();
 
 fn devices_version_tx() -> &'static watch::Sender<u64> {
     DEVICES_VERSION.get_or_init(|| watch::channel(0).0)
 }
 
-/// 当前设备面版本号（`devices` 列表回包携带，客户端拿它当 `/wait` 的游标）。
+/// 当前设备面版本号（`devices` 列表回包携带，与管理台 WS hello/事件帧同源）。
 pub(crate) fn devices_version() -> u64 {
     *devices_version_tx().borrow()
 }
@@ -202,8 +201,8 @@ pub(crate) fn bump_devices_version() {
     devices_version_tx().send_modify(|version| *version = version.wrapping_add(1));
 }
 
-/// 订阅变化通知（管理面 `/wait` 长挂用；watch 惰性初始化，订阅前已发生的
-/// 变化用版本号数值对齐，不依赖通道回放）。
+/// 订阅变化通知（管理台 WS `app::ws::admin_ws` 推送用；watch 惰性初始化，订阅前
+/// 已发生的变化用版本号数值对齐，不依赖通道回放）。
 pub(crate) fn subscribe_devices_version() -> watch::Receiver<u64> {
     devices_version_tx().subscribe()
 }

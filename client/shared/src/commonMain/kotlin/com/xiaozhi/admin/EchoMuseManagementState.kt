@@ -98,6 +98,14 @@ class EchoMuseManagementState(scope: PagerScope) {
     val canVolume: Boolean get() = approved && emos && online && speaker
     val idle: Boolean get() = busy.isEmpty()
 
+    /**
+     * 菜单选中语义（区别于 [toggle] 的翻转）：target 已是本设备则保留诊断输出不重置，
+     * 否则走 toggle 重置并登记目标。由 `EchoMuseState.selectMenu` 驱动。
+     */
+    fun select(row: EchoMuseDeviceRow, baseUrl: String) {
+        if (target != row.deviceId) toggle(row, baseUrl)
+    }
+
     fun toggle(row: EchoMuseDeviceRow, baseUrl: String) {
         generation++
         target = if (target == row.deviceId) "" else row.deviceId

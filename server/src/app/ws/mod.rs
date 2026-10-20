@@ -6,6 +6,8 @@
 //! - `GET /api/health/engines`：引擎健康自检（P1-6）——11 个 capability 的能力级
 //!   聚合 + 运行期本地探测（模型文件存在 / 记忆目录可写），与 `/api/plugins` 同源。
 //! - `GET /api/ws`：WebSocket 会话入口（先 [`auth_ok`] 鉴权，再 [`handle_handshake`] 协商）。
+//! - `GET /api/admin/ws`：管理台实时推送通道（双向 WS：hello + echomuse_devices_changed
+//!   + ping/pong/error，见 [`admin_ws`]）。
 //! - `GET/PUT/POST /api/config`：管理页面读写当前配置（语义见下）。
 //! - `GET /api/plugins`：能力清单 + 实际状态（`enabled`/`phase`/`last_error`）。
 //! - `GET /api/config/schema`：各能力/实现的字段元数据（类型/默认值提示/热生效语义/密钥标记）。
@@ -62,6 +64,11 @@ use crate::app::transport::{IncomingFrame, Transport, WsTransport};
 use crate::config::ServerConfig;
 use crate::engine::Engines;
 
+// 管理台实时推送通道（`GET /api/admin/ws`）：hello + echomuse_devices_changed +
+// ping/pong/error 的双向 WS，替代已删除的 /api/echomuse/devices/wait 长挂轮询。
+pub(crate) mod admin_ws;
+#[cfg(test)]
+mod admin_ws_tests;
 mod bench_api;
 mod config;
 mod health;
@@ -126,6 +133,8 @@ pub fn router(engines: Arc<Engines>) -> Router {
     let api = Router::new()
         .route("/api/health", get(health))
         .route("/api/ws", get(ws_handler))
+        // 管理台实时推送通道（`/api/ws` 已被小智设备协议占用，管理台走独立路径）
+        .route("/api/admin/ws", get(admin_ws::admin_ws_handler))
         .route(
             "/api/config",
             get(get_config).put(put_config).post(put_config),

@@ -1,0 +1,486 @@
+package com.xiaozhi.admin
+
+import com.tencent.kuikly.core.base.Border
+import com.tencent.kuikly.core.base.BorderStyle
+import com.tencent.kuikly.core.base.CursorType
+import com.tencent.kuikly.core.base.ViewContainer
+import com.tencent.kuikly.core.directives.vif
+import com.tencent.kuikly.core.pager.Pager
+import com.tencent.kuikly.core.views.Slider
+import com.tencent.kuikly.core.views.Text
+import com.tencent.kuikly.core.views.View
+
+/**
+ * 一台 EchoMuse 设备卡片的渲染（页面壳体见 `EchoMusePage.kt`，菜单状态见 [EchoMuseState]）。
+ *
+ * 布局（自绘容器，视觉与 [groupedCard] 一致——标题要自定义 header，不走 groupedCard(title)）：
+ *
+ * ```
+ * ┌────────────────────────────────────────────────┐
+ * │ 标题  ● 在线 [待批准]                 （🗑 删除） │ ← header：删除点击进行内二次确认
+ * ├────────────────────────────────────────────────┤
+ * │ 概览        │ 设备号  xx:xx…        [复制信息]    │
+ * │ WiFi 配置   │ 版本    1.2.3                      │ ← 卡内左菜单 + 右内容面板
+ * │ 唤醒词设置  │ …                                  │   （范式同 ConfigTabs 的
+ * │ 设备管理    │                                    │     configGroupPane，缩微版）
+ * │ 蓝牙代理    │                                    │
+ * └────────────────────────────────────────────────┘
+ * ```
+ *
+ * 菜单为**全局单选**（[EchoMuseState.menuDevice]/[menuItem]）：同一时刻只有一张卡展开
+ * 非概览面板，切卡/切菜单项都更新同一组 observable；未批准设备只有 概览/批准 两项。
+ * 「设备管理」「蓝牙代理」是把原独立卡片（[echoMuseManagementPanel]/[echoMuseBlePanel]）
+ * 折进卡内菜单——面板内容与原卡完全一致，只是入口从展开按钮变成菜单项。
+ *
+ * ⚠️ Kuikly 响应式铁律：菜单选中判断必须是 lambda 且只在 attr/vif 闭包内读 observable；
+ * 渲染函数须在目标容器闭包内**非限定**调用（经 `ctx.` 调用会布局逃逸）。
+ */
+
+/** 卡片内左列菜单宽度（紧凑菜单；右栏面板 flex(1) 占满剩余宽度）。 */
+private const val ECHOMUSE_MENU_WIDTH = 150f
+
+/** 一台 EchoMuse 设备卡片：header（标题+状态+删除）+ 卡内左菜单/右内容面板（EchoMusePage 调用）。 */
+internal fun ViewContainer<*, *>.echoMuseDeviceCard(
+    row: EchoMuseDeviceRow,
+    state: EchoMuseState,
+    toast: ToastState,
+    ctx: Pager,
+) {
+    // 自绘等价 groupedCard 的容器（cardBg/radiusLg/1px divider/cardPadding/marginBottom gutter）
+    View {
+        attr {
+            flexDirectionColumn()
+            backgroundColor(AdminColors.cardBg)
+            borderRadius(AdminShape.radiusLg)
+            border(Border(1f, BorderStyle.SOLID, AdminColors.divider))
+            padding(AdminSpace.cardPadding)
+            marginBottom(AdminSpace.gutter)
+        }
+        echoMuseCardHeader(row, state)
+        vif({ state.confirmDeleteId == row.deviceId }) { echoMuseDeleteConfirm(row, state, toast, ctx) }
+        dividerH()
+        View {
+            attr { flexDirectionRow() }
+            // —— 左列：卡内菜单（全局单选，见 EchoMuseState.menuDevice/menuItem）——
+            View {
+                attr {
+                    width(ECHOMUSE_MENU_WIDTH)
+                    flexDirectionColumn()
+                }
+                for ((itemId, itemLabel) in echoMuseMenuItems(row)) {
+                    echoMuseMenuItem(
+                        itemLabel,
+                        isSelected = { state.activeMenuItem(row) == itemId },
+                    ) { state.selectMenu(row, itemId) }
+                }
+            }
+            // 菜单与面板之间 1px 分隔
+            View {
+                attr {
+                    width(1f)
+                    backgroundColor(AdminColors.divider)
+                }
+            }
+            // —— 右栏：当前生效菜单项对应的内容面板 ——
+            View {
+                attr {
+                    flex(1f)
+                    flexDirectionColumn()
+                    paddingLeft(AdminSpace.md)
+                }
+                echoMusePanel(row, state, toast, ctx)
+            }
+        }
+    }
+}
+
+// ============================================================
+// header：标题 + 在线状态 + 删除（icon 按钮 + 行内二次确认）
+// ============================================================
+
+/** 卡片 header：左 = 标题 + 在线状态点（+ 待批准徽标）；右 = 删除记录 icon 按钮。 */
+private fun ViewContainer<*, *>.echoMuseCardHeader(row: EchoMuseDeviceRow, state: EchoMuseState) {
+    View {
+        attr {
+            flexDirectionRow()
+            alignItemsCenter()
+            paddingBottom(AdminSpace.sm)
+        }
+        Text {
+            attr {
+                fontSize(AdminType.section)
+                fontWeightMedium()
+                color(AdminColors.textPrimary)
+                text(row.title)
+            }
+        }
+        // 在线状态：绿点「在线」/ 灰点「离线」，文字色随状态
+        View {
+            attr {
+                flexDirectionRow()
+                alignItemsCenter()
+                marginLeft(AdminSpace.sm)
+            }
+            View {
+                attr {
+                    width(8f)
+                    height(8f)
+                    borderRadius(AdminShape.radiusPill)
+                    marginRight(AdminSpace.xs)
+                    backgroundColor(if (row.online) AdminColors.accent else AdminColors.textPlaceholder)
+                }
+            }
+            Text {
+                attr {
+                    fontSize(AdminType.caption)
+                    color(if (row.online) AdminColors.accentTintText else AdminColors.textTertiary)
+                    text(if (row.online) "在线" else "离线")
+                }
+            }
+        }
+        // 未批准：状态旁保留「待批准」徽标
+        if (!row.approved) {
+            View { attr { width(AdminSpace.sm) } }
+            statusBadge(state = { "busy" }, text = { "待批准" })
+        }
+        // 中间弹性撑开：删除按钮与标题左右两端对齐
+        View { attr { flex(1f) } }
+        echoMuseDeleteButton(state, row.deviceId)
+    }
+}
+
+/**
+ * 删除记录的圆形 icon 按钮（自绘：dangerTintBg 底 + danger 描边 + 🗑，Kuikly 无 icon 字体）。
+ * 点击只进入行内二次确认（[echoMuseDeleteConfirm]），不直接删除。
+ */
+private fun ViewContainer<*, *>.echoMuseDeleteButton(state: EchoMuseState, deviceId: String) {
+    View {
+        attr {
+            width(32f)
+            height(32f)
+            borderRadius(AdminShape.radiusPill)
+            allCenter()
+            backgroundColor(AdminColors.dangerTintBg)
+            border(Border(1f, BorderStyle.SOLID, AdminColors.danger))
+            // 可点击目标：悬停指针
+            cursor(CursorType.POINTER)
+        }
+        event { click { state.confirmDeleteId = deviceId } }
+        Text {
+            attr {
+                fontSize(AdminType.body)
+                color(AdminColors.dangerTintText)
+                text("🗑")
+            }
+        }
+    }
+}
+
+/** 删除记录的行内二次确认（header 下方）：确认/取消 + 口径说明（同原删除按钮文案）。 */
+private fun ViewContainer<*, *>.echoMuseDeleteConfirm(
+    row: EchoMuseDeviceRow,
+    state: EchoMuseState,
+    toast: ToastState,
+    ctx: Pager,
+) {
+    View {
+        attr {
+            flexDirectionColumn()
+            paddingBottom(AdminSpace.sm)
+        }
+        actionRow {
+            primaryButton(
+                "确认删除",
+                danger = { true },
+                loading = { state.actionBusy },
+                loadingText = "删除中…",
+            ) {
+                state.delete(ctx, row.deviceId) { ok, msg ->
+                    toast.show(msg, if (ok) "ok" else "error")
+                    if (ok) state.refresh(ctx)
+                }
+            }
+            View { attr { width(AdminSpace.sm) } }
+            secondaryButton("取消") { state.confirmDeleteId = "" }
+        }
+        textNote(
+            "删除只清服务端登记（含批准/唤醒词设置），不影响设备本身；设备下次接入会重新登记。",
+            micro = true,
+        )
+    }
+}
+
+// ============================================================
+// 卡内菜单（左列）
+// ============================================================
+
+/** 卡片内菜单项集合：未批准 = 概览/批准；已批准 = 概览/WiFi 配置/唤醒词设置/设备管理/蓝牙代理。 */
+private fun echoMuseMenuItems(row: EchoMuseDeviceRow): List<Pair<String, String>> =
+    if (row.approved) {
+        listOf(
+            ECHOMUSE_MENU_OVERVIEW to "概览",
+            ECHOMUSE_MENU_WIFI to "WiFi 配置",
+            ECHOMUSE_MENU_WAKE to "唤醒词设置",
+            ECHOMUSE_MENU_MANAGE to "设备管理",
+            ECHOMUSE_MENU_BLE to "蓝牙代理",
+        )
+    } else {
+        listOf(
+            ECHOMUSE_MENU_OVERVIEW to "概览",
+            ECHOMUSE_MENU_APPROVE to "批准",
+        )
+    }
+
+/**
+ * 卡片内紧凑菜单项：高 36、radiusSm，选中 = sidebarSelectedBg 底 + accentTintText 文字，
+ * 未选中 textSecondary。⚠️ isSelected 必须是 lambda 且只在 attr 闭包内求值
+ * （Kuikly 仅跟踪闭包内的 observable 读取，同 AdminNav.sidebarItem 的教训）。
+ */
+private fun ViewContainer<*, *>.echoMuseMenuItem(
+    label: String,
+    isSelected: () -> Boolean,
+    onClick: () -> Unit,
+) {
+    View {
+        attr {
+            height(36f)
+            flexDirectionRow()
+            alignItemsCenter()
+            paddingLeft(AdminSpace.sm)
+            paddingRight(AdminSpace.sm)
+            borderRadius(AdminShape.radiusSm)
+            backgroundColor(if (isSelected()) AdminColors.sidebarSelectedBg else AdminColors.transparent)
+            // 菜单是点击目标：悬停指针
+            cursor(CursorType.POINTER)
+        }
+        event { click { onClick() } }
+        Text {
+            attr {
+                fontSize(AdminType.body)
+                color(if (isSelected()) AdminColors.accentTintText else AdminColors.textSecondary)
+                text(label)
+            }
+        }
+    }
+}
+
+// ============================================================
+// 右栏内容面板
+// ============================================================
+
+/**
+ * 右栏面板分发：按当前生效菜单项渲染（[EchoMuseState.activeMenuItem]）。
+ * ⚠️ 必须用 vif 逐项判断而不是 when——observable 只在 vif 闭包内读取才被跟踪，
+ * 构建期 when 求值会让菜单切换后右栏不刷新。
+ */
+private fun ViewContainer<*, *>.echoMusePanel(
+    row: EchoMuseDeviceRow,
+    state: EchoMuseState,
+    toast: ToastState,
+    ctx: Pager,
+) {
+    vif({ state.activeMenuItem(row) == ECHOMUSE_MENU_OVERVIEW }) { echoMuseOverviewPanel(row, state, toast) }
+    vif({ state.activeMenuItem(row) == ECHOMUSE_MENU_APPROVE }) { echoMuseApprovePanel(row, state, toast, ctx) }
+    vif({ state.activeMenuItem(row) == ECHOMUSE_MENU_WIFI }) { echoMuseWifiPanel(row, state, toast, ctx) }
+    vif({ state.activeMenuItem(row) == ECHOMUSE_MENU_WAKE }) { echoMuseWakeSettings(row.deviceId, state, toast, ctx) }
+    vif({ state.activeMenuItem(row) == ECHOMUSE_MENU_MANAGE }) { echoMuseManagementPanel(row, state, toast, ctx) }
+    vif({ state.activeMenuItem(row) == ECHOMUSE_MENU_BLE }) { echoMuseBlePanel(row, state, ctx) }
+}
+
+/** 概览面板：设备信息键值行（设备号/设备名/状态/版本板型系统/时间）+「复制信息」。 */
+private fun ViewContainer<*, *>.echoMuseOverviewPanel(
+    row: EchoMuseDeviceRow,
+    state: EchoMuseState,
+    toast: ToastState,
+) {
+    echoMuseInfoRow("设备号", row.deviceId)
+    // 未改名时标题就是设备号，「设备名」行不重复渲染
+    if (row.renamed) {
+        echoMuseInfoRow("设备名", row.label)
+    }
+    echoMuseInfoRow("状态", if (row.online) "在线" else "离线")
+    if (row.version.isNotEmpty()) {
+        echoMuseInfoRow("版本", row.version)
+    }
+    if (row.board.isNotEmpty()) {
+        echoMuseInfoRow("板型", row.board)
+    }
+    if (row.baseOs.isNotEmpty()) {
+        echoMuseInfoRow("系统", row.baseOs)
+    }
+    if (row.metaText.isNotEmpty()) {
+        textNote(row.metaText, micro = true)
+    }
+    // Kuikly 渲染的文本不支持长按选中复制，一键复制兜底（粘到聊天/工单可直接读）
+    actionRow {
+        secondaryButton("复制信息") {
+            if (copyToClipboard(row.copyText)) {
+                toast.show("设备信息已复制到剪贴板", "ok")
+            } else {
+                toast.show("复制失败：当前平台剪贴板不可用", "error")
+            }
+        }
+    }
+}
+
+/** 概览面板的键值行：左键 caption textSecondary（定宽对齐），右值 caption textPrimary。 */
+private fun ViewContainer<*, *>.echoMuseInfoRow(label: String, value: String) {
+    View {
+        attr {
+            flexDirectionRow()
+            alignItemsCenter()
+            paddingTop(AdminSpace.xs)
+        }
+        Text {
+            attr {
+                width(72f)
+                fontSize(AdminType.caption)
+                color(AdminColors.textSecondary)
+                text(label)
+            }
+        }
+        Text {
+            attr {
+                flex(1f)
+                fontSize(AdminType.caption)
+                color(AdminColors.textPrimary)
+                text(value)
+            }
+        }
+    }
+}
+
+/** 批准面板：可填 label 后确认批准（POST approve，成功后刷新列表）。 */
+private fun ViewContainer<*, *>.echoMuseApprovePanel(
+    row: EchoMuseDeviceRow,
+    state: EchoMuseState,
+    toast: ToastState,
+    ctx: Pager,
+) {
+    labeledField(
+        "设备名称（label，可留空）",
+        { state.approveDraft },
+        { state.approveDraft = it },
+        "如 客厅音箱",
+    )
+    actionRow {
+        primaryButton(
+            "确认批准",
+            loading = { state.actionBusy },
+            loadingText = "批准中…",
+        ) {
+            state.approve(ctx, row.deviceId) { ok, msg ->
+                toast.show(msg, if (ok) "ok" else "error")
+                if (ok) state.refresh(ctx)
+            }
+        }
+    }
+}
+
+/** WiFi 配置面板：ssid/psk 表单 + 下发（enabled 随在线）；202 只代表已排队，结果看灯环。 */
+private fun ViewContainer<*, *>.echoMuseWifiPanel(
+    row: EchoMuseDeviceRow,
+    state: EchoMuseState,
+    toast: ToastState,
+    ctx: Pager,
+) {
+    labeledField("WiFi 名称（SSID）", { state.wifiSsid }, { state.wifiSsid = it }, "路由器名称")
+    labeledField("WiFi 密码（PSK）", { state.wifiPsk }, { state.wifiPsk = it }, "密码")
+    actionRow {
+        primaryButton(
+            "下发 WiFi 配置",
+            enabled = { row.online },
+            loading = { state.actionBusy },
+            loadingText = "下发中…",
+        ) {
+            state.sendWifi(ctx, row.deviceId) { ok, msg ->
+                toast.show(msg, if (ok) "ok" else "error")
+            }
+        }
+    }
+    vif({ !row.online }) {
+        textNote("设备离线：WiFi 配置指令需要设备在线才能接收，唤醒设备后可用。", micro = true)
+    }
+}
+
+/**
+ * 唤醒词设置面板（草稿在 [EchoMuseState]，进入面板时按设备快照重填）。
+ *
+ * 与 WiFi 不同：本表单**离线也可用**——服务端持久化后设备下次接入自动推送，
+ * 202 = 设备在线已即时下发，200 = 已保存待上线。枚举档位下拉（固件协议值），
+ * 阈值滑杆 0.05~1、步进 0.05（官方 Slider 无 step，拖动时量化）。
+ */
+private fun ViewContainer<*, *>.echoMuseWakeSettings(
+    deviceId: String,
+    state: EchoMuseState,
+    toast: ToastState,
+    ctx: Pager,
+) {
+    switchRow("响应唤醒词（关闭后按键仍可用）", state.wakeWordEnabled) { state.wakeWordEnabled = !state.wakeWordEnabled }
+    dropdownField(
+        "设备本地唤醒识别模式",
+        { state.owwModes.firstOrNull { it.first == state.owwOnDevice }?.second ?: "未知" },
+        { state.owwModes }, { state.owwOnDevice }, { state.owwModeOpen },
+        { state.owwModeOpen = !state.owwModeOpen }, { state.owwOnDevice = it },
+    )
+    labeledField("唤醒词模型", { state.owwModel }, { state.owwModel = it }, "如 alexa")
+
+    // 灵敏度滑杆：0.05~1，步进 0.05（官方 Slider 无 step，拖动时量化）
+    fieldLabel("唤醒灵敏度阈值（0.05～1，越大越不易误触）")
+    View {
+        attr {
+            flexDirectionRow()
+            alignItemsCenter()
+            marginTop(AdminSpace.xs)
+        }
+        Slider {
+            attr {
+                flex(1f)
+                height(28f)
+                currentProgress(state.owwThreshold.toFloat())
+                progressColor(AdminColors.accent)
+                trackColor(AdminColors.divider)
+                thumbColor(AdminColors.accent)
+            }
+            event {
+                progressDidChanged { p ->
+                    state.owwThreshold = (p * 20).let { kotlin.math.round(it) / 20.0 }.coerceIn(0.05, 1.0)
+                }
+            }
+        }
+        Text {
+            attr {
+                marginLeft(AdminSpace.sm)
+                width(48f)
+                fontSize(AdminType.caption)
+                color(AdminColors.textSecondary)
+                text((kotlin.math.round(state.owwThreshold * 100) / 100.0).toString())
+            }
+        }
+    }
+
+    switchRow("唤醒提示音", state.wakeSound) { state.wakeSound = !state.wakeSound }
+    dropdownField(
+        "提示音档位",
+        { state.wakeLevels.firstOrNull { it.first == state.wakeSoundLevel }?.second ?: "未知" },
+        { state.wakeLevels }, { state.wakeSoundLevel }, { state.wakeLevelOpen },
+        { state.wakeLevelOpen = !state.wakeLevelOpen }, { state.wakeSoundLevel = it },
+    )
+    labeledIntField("麦克风编号（0=中心，0~6）", { state.wakeMic }, { state.wakeMic = it }, "0")
+
+    actionRow {
+        primaryButton(
+            "保存唤醒词设置",
+            loading = { state.actionBusy },
+            loadingText = "保存中…",
+        ) {
+            state.saveSettings(ctx, deviceId) { ok, msg ->
+                toast.show(msg, if (ok) "ok" else "error")
+            }
+        }
+    }
+    textNote(
+        "设备在线时设置即时下发；离线时保存到服务端，设备下次接入自动生效（结果看设备灯环）。",
+        micro = true,
+    )
+}
