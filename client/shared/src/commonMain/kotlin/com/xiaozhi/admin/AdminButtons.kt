@@ -119,18 +119,12 @@ fun ViewContainer<*, *>.appButton(
             event { click { if (isActive()) onClick() } }
         }
         if (icon != null) {
-            Svg {
-                attr {
-                    absolutePosition(
-                        left = if (iconOnly) (height - 20f) / 2f else AdminSpace.md,
-                        top = (height - 20f) / 2f,
-                    )
-                    size(20f, 20f)
-                    src(icon.svgSource())
-                    tintColor(foreground())
-                    opacity(if (isLoading()) 0f else 1f)
-                    touchEnable(false)
-                }
+            appIcon({ icon }, size = 20f, tint = { foreground() }) {
+                absolutePosition(
+                    left = if (iconOnly) (height - 20f) / 2f else AdminSpace.md,
+                    top = (height - 20f) / 2f,
+                )
+                opacity(if (isLoading()) 0f else 1f)
             }
         }
         vif({ isLoading() }) {

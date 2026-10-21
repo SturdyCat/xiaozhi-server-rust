@@ -1,6 +1,4 @@
 import com.tencent.kuikly.gradle.config.KuiklyConfig
-import groovy.json.JsonSlurper
-import java.security.MessageDigest
 import org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import javax.inject.Inject
@@ -123,73 +121,37 @@ configure<KuiklyConfig> {
     }
 }
 
-// SVG-only resources. Drawing belongs to the dedicated vector view, never UIImage.
+// Admin icons are embedded vector pathData drawn by Canvas (AdminIcons.kt，方法对齐
+// xiaoya-player TvIcons)：无资源文件、无端宿主 SVG 渲染器。护栏锁定该契约。
 val verifyAdminIcons by tasks.registering {
     group = "verification"
-    description = "Verify SVG-only mapping, currentColor, hashes, licence and native vector contract"
-    val icons = layout.projectDirectory.dir("src/commonMain/assets/common/icons")
-    val contracts = layout.projectDirectory.file("src/commonMain/kotlin/com/xiaozhi/admin/UiContracts.kt")
-    val mappingFile = layout.projectDirectory.file("src/commonMain/kotlin/com/xiaozhi/admin/AdminIcons.kt")
-    val nativeSvg = rootProject.layout.projectDirectory.file("apps/macosApp/XzSvgView.m")
-    val appDelegate = rootProject.layout.projectDirectory.file("apps/macosApp/AppDelegate.m")
-    inputs.dir(icons)
-    inputs.files(contracts, mappingFile, nativeSvg, appDelegate)
+    description = "Verify embedded vector icon coverage: token-to-geometry 1:1, Canvas rendering, no bitmap/resource fallback"
+    val adminDir = layout.projectDirectory.dir("src/commonMain/kotlin/com/xiaozhi/admin")
+    val contracts = adminDir.file("UiContracts.kt")
+    val mappingFile = adminDir.file("AdminIcons.kt")
+    inputs.files(contracts, mappingFile)
     doLast {
         val enumBody = Regex("enum class IconToken\\s*\\{([^}]+)}")
             .find(contracts.asFile.readText())!!.groupValues[1]
         val tokenList = enumBody.split(',').map(String::trim).filter(String::isNotEmpty)
         val tokens = tokenList.toSet()
         val mappingText = mappingFile.asFile.readText()
-        val pairs = Regex("IconToken\\.(\\w+) -> \"([a-z-]+)\"").findAll(mappingText).toList()
+        val pairs = Regex("IconToken\\.(\\w+) -> AdminIconVectors\\.(\\w+)").findAll(mappingText).toList()
         val mappings = pairs.associate { it.groupValues[1] to it.groupValues[2] }
-        check(tokens.isNotEmpty() && tokenList.size == tokens.size && pairs.size == tokens.size && mappings.values.toSet().size == tokens.size && tokens == mappings.keys) {
-            "IconToken mapping must cover the nonempty canonical catalogue without duplicates"
-        }
-        check(mappingText.contains("\"assets://common/icons/source/\${assetName()}.svg\"")) { "Public icon URI must remain canonical SVG" }
-        val nativeText = nativeSvg.asFile.readText()
-        check(nativeText.contains("@implementation XzSvgView") && nativeText.contains("XzSvgDocument")) { "Dedicated native SVG vector view missing" }
-        check(nativeText.contains("assets://common/") && nativeText.contains("URLByResolvingSymlinksInPath")) { "Native bundled-common SVG root policy missing" }
-        check(!nativeText.contains("UIImage") && !nativeText.contains(".png", ignoreCase = true)) { "Native SVG must not use bitmap fallback" }
-        check(!appDelegate.asFile.readText().contains("AdminAssetAdapter")) { "Obsolete bitmap adapter still registered" }
+        check(tokens.isNotEmpty() && tokenList.size == tokens.size && pairs.size == tokens.size &&
+            mappings.values.toSet().size == tokens.size && tokens == mappings.keys
+        ) { "IconToken geometry mapping must cover the nonempty canonical catalogue without duplicates" }
+        check(mappingText.contains("Canvas(")) { "Icons must render through Kuikly Canvas with embedded vectors" }
+        check(!Regex("\\bSvg\\s*\\{").containsMatchIn(mappingText)) { "Icons must not go through the removed Svg view" }
         listOf("h", "m").forEach { ext ->
+            check(!rootProject.file("apps/macosApp/XzSvgView.$ext").exists()) { "Obsolete native SVG bridge source remains" }
             check(!rootProject.file("apps/macosApp/AdminAssetAdapter.$ext").exists()) { "Obsolete bitmap adapter source remains" }
         }
-        val root = icons.asFile
-        check(root.resolve("source").listFiles()!!.filter { it.extension == "svg" }.map { it.nameWithoutExtension }.toSet() == mappings.values.toSet())
-        check(root.walkTopDown().none { it.isFile && it.extension.equals("png", ignoreCase = true) }) { "PNG assets forbidden in SVG-only icon catalogue" }
-        check(!root.resolve("source/render.py").exists()) { "Obsolete bitmap generator remains" }
-        val manifest = JsonSlurper().parse(root.resolve("manifest.json")) as Map<*, *>
-        val entries = manifest["icons"] as List<*>
-        check(entries.size == tokens.size && entries.map { (it as Map<*, *>)["token"] }.toSet() == tokens)
-        check(manifest["license"] == "CC0-1.0" && manifest["format"] == "svg" && manifest["color"] == "currentColor")
-        val renderer = manifest["renderer"] as Map<*, *>
-        check(renderer["common"] == "XzSvgView" && renderer["web"] == "inline_svg" && renderer["native"] == "CAShapeLayer" && renderer["bitmapFallback"] == false)
-        val license = root.resolve("LICENSE.txt")
-        check(license.isFile && license.readText().contains("SPDX-License-Identifier: CC0-1.0"))
-        fun hash(file: java.io.File): String = MessageDigest.getInstance("SHA-256")
-            .digest(file.readBytes()).joinToString("") { "%02x".format(it) }
-        check(hash(license) == manifest["licenseSha256"]) { "Icon licence hash mismatch" }
-        entries.forEach { value ->
-            val entry = value as Map<*, *>
-            val name = entry["name"] as String
-            check(mappings[entry["token"]] == name && entry.keys == setOf("token", "name", "svgSha256"))
-            val svg = root.resolve("source/$name.svg")
-            val text = svg.readText()
-            check(text.contains("viewBox=\"0 0 24 24\"") && text.contains("currentColor"))
-            val svgRoot = Regex("<svg\\b[^>]*>").find(text)?.value ?: error("SVG root missing: $name")
-            check(!Regex("\\s(?:width|height)\\s*=").containsMatchIn(svgRoot)) { "SVG root dimensions must be container-driven: $name" }
-            check(Regex("(?:fill|stroke)=\"([^\"]*)\"").findAll(text).all { it.groupValues[1] in setOf("none", "currentColor") }) { "Non-theme-aware SVG paint: $name" }
-            check(svg.length() <= 65536 && hash(svg) == entry["svgSha256"]) { "SVG bounds/hash mismatch: $name" }
-        }
-        logger.lifecycle("Verified ${tokens.size} SVG-only icons: currentColor, SHA-256, licence and vector renderer")
+        logger.lifecycle("Verified ${tokens.size} embedded vector icons: Canvas rendering, no resource/bitmap fallback")
     }
 }
 tasks.matching { it.name == "check" || it.name.startsWith("packLocalJSBundle") }.configureEach {
     dependsOn(verifyAdminIcons)
-    if (name.startsWith("packLocalJSBundle")) {
-        // Removed bitmap sources must invalidate an otherwise up-to-date archive.
-        inputs.dir(layout.projectDirectory.dir("src/commonMain/assets/common/icons"))
-    }
 }
 
 // ===== macOS Catalyst 补丁 =====

@@ -20,7 +20,10 @@ fun ViewContainer<*, *>.pipelineWorkflowHeader(
     onSelect: () -> Unit = {},
     topInset: Float = 0f,
 ) {
-    val stageWidth = { ((ctx.pagerData.pageViewWidth - 32f - 6 * CONNECTION_WIDTH) / 5f).coerceAtLeast(112f) }
+    // 阶段宽按可见内容区自适应（adminContentWidth 扣常驻侧栏；独立配置页无侧栏取整窗）：
+    // 桌面视口 ≥1280 时整条轨道完整呈现、无横向滚动，且不设最大上限（更宽继续撑满）；
+    // 更窄回退 112f 最小阶段宽，由下方 Scroller 承接横向滚动（窄屏契约不变）。
+    val stageWidth = { ((adminContentWidth(ctx) - 32f - 6 * CONNECTION_WIDTH) / 5f).coerceAtLeast(112f) }
     View {
         attr {
             flexDirectionColumn()

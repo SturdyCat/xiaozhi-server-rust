@@ -106,6 +106,9 @@ RUN mkdir -p src \
 
 # 真实源码（bin-only crate：入口即 src/main.rs，无 lib.rs）
 COPY server/src ./src
+# 编译期内嵌资源：bench_api 样本经 include_bytes!（src/app/bench_api/../../../test_assets）
+# 在编译期读 /app/test_assets/，缺了 cargo 直接编译失败（ACR 2026-10-21 实测）。
+COPY server/test_assets ./test_assets
 
 # ⚠️ 强制重编译本 crate ——「容器零日志 exit 0」事故的根因所在，勿简化这条 RUN。
 #   ① 根因（mtime 陷阱）：COPY 保留构建上下文里文件的 mtime（ACR clone 代码的时刻），它早于

@@ -49,8 +49,10 @@ client/apps/h5App/web/*.js.map
 # gradle/, kotlin-js-store/, shared/, apps/h5App/} 都参与 web 阶段构建。
 
 # ---- server/ 内部与 Rust 构建无关的内容 ----
-# Rust 构建只需要 server/{Cargo.toml, Cargo.lock, src/}。
+# Rust 构建只需要 server/{Cargo.toml, Cargo.lock, src/, test_assets/}。
 # ⚠️ 不要排除 Cargo.lock —— Dockerfile 用 --locked 构建，依赖它做可复现解析（Cargo.lock 已入库）。
+# ⚠️ 不要排除 test_assets —— bench_api/samples.rs 用 include_bytes! 在编译期内嵌样本，
+#    排了镜像里 cargo 直接编译失败（ACR 2026-10-21 实测）。
 server/scripts
 server/tests
 server/target

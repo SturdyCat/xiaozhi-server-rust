@@ -10,7 +10,7 @@
 
 提供方实现、上下文增强、AIUI 托管全链路、终端适配和基础设施仍可分别配置，不把它们误称为第六个核心阶段。AIUI 的外部闭环不能被本地级联预览冒充。
 
-[路由草稿所有者](<../client/shared/src/commonMain/kotlin/com/xiaozhi/admin/ConfigFormState.kt>)只维护一个 `ConfigSelection(sectionId,nodeId?,workflowPositionId?)`。「语音流程与配置」内容区顶部及独立配置页共用[横向工作流](<../client/shared/src/commonMain/kotlin/com/xiaozhi/admin/PipelineWorkflowView.kt>)（不跨运维页面），五个模块间及头尾共六个可点击圆点；窄屏横向滚动，不变成纵向步骤或下拉选择。位置由[纯模型](<../client/shared/src/commonMain/kotlin/com/xiaozhi/admin/PipelineWorkflow.kt>)从现有 anchors 投影，12 个真实节点各归属一次：
+[路由草稿所有者](<../client/shared/src/commonMain/kotlin/com/xiaozhi/admin/ConfigFormState.kt>)只维护一个 `ConfigSelection(sectionId,nodeId?,workflowPositionId?)`。「语音流程与配置」内容区顶部及独立配置页共用[横向工作流](<../client/shared/src/commonMain/kotlin/com/xiaozhi/admin/PipelineWorkflowView.kt>)（不跨运维页面），五个模块间及头尾共六个可点击圆点；轨道宽度按可见内容区自适应（`adminContentWidth` 扣常驻侧栏，独立配置页取整窗），桌面视口 ≥1280 整条轨道完整呈现、无横向滚动且不设最大上限，更窄回退 112 最小阶段宽由 Scroller 横向滚动，不变成纵向步骤或下拉选择。位置由[纯模型](<../client/shared/src/commonMain/kotlin/com/xiaozhi/admin/PipelineWorkflow.kt>)从现有 anchors 投影，12 个真实节点各归属一次：
 
 | 圆点 | 下方扩展菜单 |
 |---|---|
@@ -54,17 +54,13 @@
 
 409 保留配置草稿与测试输入，需显式刷新/重载；测试刷新本身不提交配置。保存态测试区域遇到未保存草稿会显示提示。
 
-## 3. 公共控件与 SVG 图标
+## 3. 公共控件与图标
 
 [纯 UI 契约](<../client/shared/src/commonMain/kotlin/com/xiaozhi/admin/UiContracts.kt>)区分可用性、动作阶段/结果、选择、混合勾选及业务继承三态，不能用一个 loading/checked 字段混装。
 
-[按钮封装](<../client/shared/src/commonMain/kotlin/com/xiaozhi/admin/AdminButtons.kt>)保留官方 Button 的交互、标题与无障碍语义；SVG 是不可交互的兄弟视图，而不是图片属性或 Button 内任意子节点。加载指示器同样是兄弟 Canvas，使用声明式旋转动画并随生命周期移除，不用定时器旋转字符。静态图标和 spinner 共用一个位置，选择态与动作成功态独立。
+[按钮封装](<../client/shared/src/commonMain/kotlin/com/xiaozhi/admin/AdminButtons.kt>)保留官方 Button 的交互、标题与无障碍语义；图标 Canvas 与加载 Canvas 都是不可交互的兄弟视图，而不是图片属性或 Button 内任意子节点。加载指示器使用声明式旋转动画并随生命周期移除，不用定时器旋转字符。静态图标和 spinner 共用一个位置，选择态与动作成功态独立。
 
-19 个 `IconToken` 的[原创 SVG 源文件](<../client/shared/src/commonMain/assets/common/icons/source/>)**仅在 common 维护一份**，只用 24×24 viewBox 描述逻辑坐标，不设置根 `width`/`height`；显示尺寸完全由容器控制，内部矢量等比居中撑满。资源使用 `currentColor`，通过[图标入口](<../client/shared/src/commonMain/kotlin/com/xiaozhi/admin/AdminIcons.kt>)调用独立的[公共 SvgView](<../client/shared/src/commonMain/kotlin/com/xiaozhi/admin/SvgView.kt>)。Web 构建从同一 common 资源生成内联资源表并编入壳 bundle，不再复制第二套 `.svg` 到 Web 目录。普通位图继续使用官方 Image；SVG 不进入图片加载器，不派生 PNG，也不栅格化为 UIImage。来源、CC0 许可及 SVG 内容哈希在[清单](<../client/shared/src/commonMain/assets/common/icons/manifest.json>)。
-
-Apple 端的 [XzSvgView](<../client/apps/macosApp/XzSvgView.m>)实现固定版本渲染器的原生 View 协议：可信 Bundle SVG → [有界文档模型](<../client/apps/macosApp/XzSvgDocument.m>) → [CGPath](<../client/apps/macosApp/XzSvgPath.m>) → 每视图独占的 CAShapeLayer 树。只缓存不可变路径/样式文档，不缓存位图或跨视图共享可变 layer。viewBox 按 bounds 等比居中，缩放不重建位图；tint 只映射 `currentColor`，保留显式颜色。UIKit 实现可由 iOS 与 Mac Catalyst 宿主复用，不增加第三方 SVG 引擎。
-
-Web 的[同名扩展视图](<../client/apps/h5App/src/jsMain/kotlin/com/xiaozhi/admin/WebSvgView.kt>)使用受限 SVG DOM 与相同公共属性；[资源入口](<../client/apps/h5App/src/jsMain/kotlin/com/xiaozhi/admin/TrustedSvgDocuments.kt>)只读取构建时从 common 自动生成的内联资源表，不额外 fetch SVG，也不使用 img、canvas 或图像滤镜模拟图标。源限于 `assets://common/` 下安全路径的内置 SVG；不接受远程 URL、任意文件、路径穿越或可执行内容。首版覆盖 svg/g/path/rect/circle/ellipse/line/polyline/polygon、viewBox、基础填充/描边、透明度与变换；路径支持相对/绝对命令及弧转贝塞尔。渐变、clip/mask、filter、foreignObject、脚本、动画及复杂 CSS/文字布局未实现时明确拒绝，**不回退为位图**。完整 App 资源装包与页面显示仍需独立验收。
+19 个 `IconToken` 的几何是[内嵌 pathData](<../client/shared/src/commonMain/kotlin/com/xiaozhi/admin/AdminIcons.kt>)（viewBox 24、描边 1.8 round cap，仅 settings 含三个 fill 旋钮），经 `appIcon` 用 Kuikly Canvas 即时绘制；[AdminIconVectors.kt](<../client/shared/src/commonMain/kotlin/com/xiaozhi/admin/AdminIconVectors.kt>) 是最小 SVG path 解析器（M/L/H/V/C/S/Q/T/A/Z、隐式重复、S/T 反射、弧转贝塞尔），图层解析结果惰性缓存一次。方法对齐 xiaoya-player 的 TvIcons，2026-10 从 `assets/common/icons` 资产迁入代码——原三端宿主实现（Apple XzSvgView/CGPath、Web 内联 SVG DOM、构建期内联资源表）随 macApp 资源缺包图标全空白一并废除，现无任何图标资源文件与端宿主实现，`IconToken↔几何` 一一对应由 `:shared:verifyAdminIcons` 护栏锁定。普通位图继续使用官方 Image；图标不进入图片加载器，不派生 PNG，也不栅格化为 UIImage。图标几何为自研原创（CC0-1.0）。
 
 ## 4. 配置与音频不变量
 
@@ -95,7 +91,7 @@ SQLite 与注册表仍是配置和热生效元数据的唯一权威。草稿只�
 
 **未证明**：真实模型推理、受保护真实服务联调、macOS 完整 App 打包/运行、原生 IME、真实录音/播放、Echo/ESP 真机与网络抖动听感。默认 feature 的音频桩与 `DOCS_RS=1` 类型检查均不是这些能力的证明。Web 与 Apple 共用受限功能契约，但不宣称极端弧/控制点的底层数值边界完全一致，也未把 Web 路径负例的代码审查当作运行测试。
 
-验证命令沿用[服务端指引](<../server/AGENTS.md>)和[客户端指引](<../client/AGENTS.md>)；真实浏览器入口为[UI smoke harness](<../tools/admin_ui_browser_check.mjs>)，Apple 结构验证入口为[原生探针脚本](<../tools/check_svg_native.sh>)及[测试源](<../tools/svg_native_probe.m>)，资源/生成表/ZIP 的逐字节检查入口为[SVG 校验器](<../client/shared/src/commonMain/assets/common/icons/source/verify.py>)。这些检查不接触 DSH GUI。
+验证命令沿用[服务端指引](<../server/AGENTS.md>)和[客户端指引](<../client/AGENTS.md>)；真实浏览器入口为[UI smoke harness](<../tools/admin_ui_browser_check.mjs>)（图标断言为「Canvas 已绘制 + 零图标资源请求」）。图标契约的构建期护栏是 `:shared:verifyAdminIcons`。这些检查不接触 DSH GUI。上方 §5 表内 SVG 源/Apple 探针两行为 2026-10-21 之前旧资产方案的历史记录，对应工具已随方案废除删除。
 
 ## 6. 本次配置区工作流验收
 

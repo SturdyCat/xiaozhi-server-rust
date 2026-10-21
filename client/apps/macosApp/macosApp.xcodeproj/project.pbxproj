@@ -7,24 +7,21 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		0055FD536B4983D960594762 /* KuiklyRenderViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = TEMP_ECF40AFD-1567-4CD6-81A5-097105784440 /* KuiklyRenderViewController.m */; };
-		054D372B9092773A3CAFA361 /* main.m in Sources */ = {isa = PBXBuildFile; fileRef = TEMP_5637BA31-FFBF-45CD-8944-F0E77FFB5ECA /* main.m */; };
-		132B9FCD19DA1DE6D06A7E79 /* XiaoZhiModule.m in Sources */ = {isa = PBXBuildFile; fileRef = TEMP_80EB1744-4C16-480A-8305-2980154604AB /* XiaoZhiModule.m */; };
-		21F29156BCE51AF15F80AD75 /* AppDelegate.m in Sources */ = {isa = PBXBuildFile; fileRef = TEMP_20447F40-257C-4A17-B4AD-26733A4118ED /* AppDelegate.m */; };
-		6958DD5ED741CF0830305683 /* XiaoZhiModule+AdminWs.m in Sources */ = {isa = PBXBuildFile; fileRef = TEMP_A7E63868-2F3C-4D47-B9E8-6C7FCAB10022 /* XiaoZhiModule+AdminWs.m */; };
+		1728254144B5234A4C6E9683 /* XiaoZhiModule+Discovery.m in Sources */ = {isa = PBXBuildFile; fileRef = TEMP_237E7B12-7043-410E-B0DF-09A1D818B339 /* XiaoZhiModule+Discovery.m */; };
+		1771F164FC13F447F470724A /* XiaoZhiModule+AdminWs.m in Sources */ = {isa = PBXBuildFile; fileRef = TEMP_F7556648-F87C-4996-8796-C2A668C7AD49 /* XiaoZhiModule+AdminWs.m */; };
+		29525065B9543CB39B49DBB5 /* XzAudioView.m in Sources */ = {isa = PBXBuildFile; fileRef = TEMP_85FF2CBF-C801-4BB6-8593-E16FC41A8FB8 /* XzAudioView.m */; };
+		36F393A715F2080CDD0F946A /* AppDelegate.m in Sources */ = {isa = PBXBuildFile; fileRef = TEMP_91BA85B5-D44C-460D-9CB3-FAEDABB82A32 /* AppDelegate.m */; };
+		40875CC00E2B7A9D243F6E00 /* KuiklyRenderViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = TEMP_F18DDEAE-62E9-455E-8373-8CB3EF0A899B /* KuiklyRenderViewController.m */; };
+		5D3D850122709C1F21F73301 /* SceneDelegate.m in Sources */ = {isa = PBXBuildFile; fileRef = TEMP_718DA61C-15F5-48A8-85C8-ADB5A699EE17 /* SceneDelegate.m */; };
+		65AE1F81AB97B87B09D18177 /* XiaoZhiModule+Opus.m in Sources */ = {isa = PBXBuildFile; fileRef = TEMP_9DB42150-C4FF-4520-9E53-B54AEFFF7564 /* XiaoZhiModule+Opus.m */; };
+		67ED1995699E33CF4BF9DB50 /* main.m in Sources */ = {isa = PBXBuildFile; fileRef = TEMP_A3F22F0B-DA15-4EAB-AAEE-9DDB7EB16F55 /* main.m */; };
 		81454A21FC33C49B7B490359 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 21A65A091E316382E5730E83 /* Assets.xcassets */; };
 		82076E2947B82E2418CA3DB5 /* shared.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = C76C6AC69873090EB53328B9 /* shared.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
-		88C16A20BFB49433160ECDC4 /* XiaoZhiModule+Opus.m in Sources */ = {isa = PBXBuildFile; fileRef = TEMP_05703BD7-5F75-4132-93D3-6BC1511F876A /* XiaoZhiModule+Opus.m */; };
-		8F8072617390A0CE322DDBEF /* XiaoZhiModule+Audio.m in Sources */ = {isa = PBXBuildFile; fileRef = TEMP_277345CA-06F6-4BB3-8E27-4FC4C7FF37AC /* XiaoZhiModule+Audio.m */; };
-		9C8D4505F85110E728F32FDE /* XiaoZhiModule+Discovery.m in Sources */ = {isa = PBXBuildFile; fileRef = TEMP_0B4AD8C5-B29A-470E-9D91-9D3A1A23D96B /* XiaoZhiModule+Discovery.m */; };
-		A5B6ED3EDA9E33AEBA7D3BBD /* libPods-macosApp.a in Frameworks */ = {isa = PBXBuildFile; fileRef = D31CB0C36EBCA849CBAD4D0D /* libPods-macosApp.a */; };
+		8F7C7748A89ADD242BA1792C /* libPods-macosApp.a in Frameworks */ = {isa = PBXBuildFile; fileRef = DEBA3658516D8F852A42E487 /* libPods-macosApp.a */; };
 		B2FE56198131D80B2580FF2F /* shared.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C76C6AC69873090EB53328B9 /* shared.framework */; };
-		D6BCE7E779ACA240E7C0E0D9 /* KRRouterHandler.m in Sources */ = {isa = PBXBuildFile; fileRef = TEMP_A5F48228-D404-40B3-9AD1-D429506FF09F /* KRRouterHandler.m */; };
-		F1B213E318196D47FE09FB99 /* SceneDelegate.m in Sources */ = {isa = PBXBuildFile; fileRef = TEMP_17DB32D9-7705-46CF-AA16-670B9159740C /* SceneDelegate.m */; };
-		A1D0C0DE0000000000000021 /* XzSvgDocument.m in Sources */ = {isa = PBXBuildFile; fileRef = A1D0C0DE0000000000000011 /* XzSvgDocument.m */; };
-		A1D0C0DE0000000000000022 /* XzSvgPath.m in Sources */ = {isa = PBXBuildFile; fileRef = A1D0C0DE0000000000000012 /* XzSvgPath.m */; };
-		A1D0C0DE0000000000000023 /* XzSvgView.m in Sources */ = {isa = PBXBuildFile; fileRef = A1D0C0DE0000000000000013 /* XzSvgView.m */; };
-		A1D0C0DE0000000000000024 /* XzAudioView.m in Sources */ = {isa = PBXBuildFile; fileRef = A1D0C0DE0000000000000014 /* XzAudioView.m */; };
+		B3201FF082446360FC3C7293 /* XiaoZhiModule+Audio.m in Sources */ = {isa = PBXBuildFile; fileRef = TEMP_9A690A6F-6EF0-43DF-B2F3-84EF36D2878E /* XiaoZhiModule+Audio.m */; };
+		B8348788051A9E9DADD6E535 /* KRRouterHandler.m in Sources */ = {isa = PBXBuildFile; fileRef = TEMP_3E32E718-AC4C-40E1-977B-ACC4211CC9A1 /* KRRouterHandler.m */; };
+		C68F6DDF237F02BA580EB21E /* XiaoZhiModule.m in Sources */ = {isa = PBXBuildFile; fileRef = TEMP_981B41D9-E59F-429D-B2D2-B002D42879F3 /* XiaoZhiModule.m */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -42,27 +39,24 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		19A91FE7257121734DABBD4B /* Pods-macosApp.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-macosApp.release.xcconfig"; path = "Target Support Files/Pods-macosApp/Pods-macosApp.release.xcconfig"; sourceTree = "<group>"; };
 		21A65A091E316382E5730E83 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		2421D1DB0C53B7FAE9A7324B /* Pods-macosApp.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-macosApp.debug.xcconfig"; path = "Target Support Files/Pods-macosApp/Pods-macosApp.debug.xcconfig"; sourceTree = "<group>"; };
 		2863A489DBCF47E96F493A00 /* macosApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = macosApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		2DEC93E344ADA94BEF8A7E4F /* GeneratedAssetSymbols.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = GeneratedAssetSymbols.h; sourceTree = "<group>"; };
-		3153CB05762E941233CD0C4F /* Pods-macosApp.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-macosApp.release.xcconfig"; path = "Target Support Files/Pods-macosApp/Pods-macosApp.release.xcconfig"; sourceTree = "<group>"; };
-		592C8A724E49DDBF16CF67E6 /* Pods-macosApp.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-macosApp.debug.xcconfig"; path = "Target Support Files/Pods-macosApp/Pods-macosApp.debug.xcconfig"; sourceTree = "<group>"; };
 		C76C6AC69873090EB53328B9 /* shared.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = shared.framework; path = ../../shared/build/bin/macosArm64/releaseFramework/shared.framework; sourceTree = "<group>"; };
-		D31CB0C36EBCA849CBAD4D0D /* libPods-macosApp.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-macosApp.a"; sourceTree = BUILT_PRODUCTS_DIR; };
-		TEMP_05703BD7-5F75-4132-93D3-6BC1511F876A /* XiaoZhiModule+Opus.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "XiaoZhiModule+Opus.m"; sourceTree = "<group>"; };
-		TEMP_0B4AD8C5-B29A-470E-9D91-9D3A1A23D96B /* XiaoZhiModule+Discovery.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "XiaoZhiModule+Discovery.m"; sourceTree = "<group>"; };
-		TEMP_17DB32D9-7705-46CF-AA16-670B9159740C /* SceneDelegate.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = SceneDelegate.m; sourceTree = "<group>"; };
-		TEMP_20447F40-257C-4A17-B4AD-26733A4118ED /* AppDelegate.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = AppDelegate.m; sourceTree = "<group>"; };
-		TEMP_277345CA-06F6-4BB3-8E27-4FC4C7FF37AC /* XiaoZhiModule+Audio.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "XiaoZhiModule+Audio.m"; sourceTree = "<group>"; };
-		TEMP_5637BA31-FFBF-45CD-8944-F0E77FFB5ECA /* main.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = main.m; sourceTree = "<group>"; };
-		TEMP_80EB1744-4C16-480A-8305-2980154604AB /* XiaoZhiModule.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = XiaoZhiModule.m; sourceTree = "<group>"; };
-		TEMP_A5F48228-D404-40B3-9AD1-D429506FF09F /* KRRouterHandler.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = KRRouterHandler.m; sourceTree = "<group>"; };
-		TEMP_A7E63868-2F3C-4D47-B9E8-6C7FCAB10022 /* XiaoZhiModule+AdminWs.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "XiaoZhiModule+AdminWs.m"; sourceTree = "<group>"; };
-		TEMP_ECF40AFD-1567-4CD6-81A5-097105784440 /* KuiklyRenderViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = KuiklyRenderViewController.m; sourceTree = "<group>"; };
-		A1D0C0DE0000000000000011 /* XzSvgDocument.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = XzSvgDocument.m; sourceTree = "<group>"; };
-		A1D0C0DE0000000000000012 /* XzSvgPath.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = XzSvgPath.m; sourceTree = "<group>"; };
-		A1D0C0DE0000000000000013 /* XzSvgView.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = XzSvgView.m; sourceTree = "<group>"; };
-		A1D0C0DE0000000000000014 /* XzAudioView.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = XzAudioView.m; sourceTree = "<group>"; };
+		DEBA3658516D8F852A42E487 /* libPods-macosApp.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-macosApp.a"; sourceTree = BUILT_PRODUCTS_DIR; };
+		TEMP_237E7B12-7043-410E-B0DF-09A1D818B339 /* XiaoZhiModule+Discovery.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "XiaoZhiModule+Discovery.m"; sourceTree = "<group>"; };
+		TEMP_3E32E718-AC4C-40E1-977B-ACC4211CC9A1 /* KRRouterHandler.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = KRRouterHandler.m; sourceTree = "<group>"; };
+		TEMP_718DA61C-15F5-48A8-85C8-ADB5A699EE17 /* SceneDelegate.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = SceneDelegate.m; sourceTree = "<group>"; };
+		TEMP_85FF2CBF-C801-4BB6-8593-E16FC41A8FB8 /* XzAudioView.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = XzAudioView.m; sourceTree = "<group>"; };
+		TEMP_91BA85B5-D44C-460D-9CB3-FAEDABB82A32 /* AppDelegate.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = AppDelegate.m; sourceTree = "<group>"; };
+		TEMP_981B41D9-E59F-429D-B2D2-B002D42879F3 /* XiaoZhiModule.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = XiaoZhiModule.m; sourceTree = "<group>"; };
+		TEMP_9A690A6F-6EF0-43DF-B2F3-84EF36D2878E /* XiaoZhiModule+Audio.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "XiaoZhiModule+Audio.m"; sourceTree = "<group>"; };
+		TEMP_9DB42150-C4FF-4520-9E53-B54AEFFF7564 /* XiaoZhiModule+Opus.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "XiaoZhiModule+Opus.m"; sourceTree = "<group>"; };
+		TEMP_A3F22F0B-DA15-4EAB-AAEE-9DDB7EB16F55 /* main.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = main.m; sourceTree = "<group>"; };
+		TEMP_F18DDEAE-62E9-455E-8373-8CB3EF0A899B /* KuiklyRenderViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = KuiklyRenderViewController.m; sourceTree = "<group>"; };
+		TEMP_F7556648-F87C-4996-8796-C2A668C7AD49 /* XiaoZhiModule+AdminWs.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "XiaoZhiModule+AdminWs.m"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -71,7 +65,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				B2FE56198131D80B2580FF2F /* shared.framework in Frameworks */,
-				A5B6ED3EDA9E33AEBA7D3BBD /* libPods-macosApp.a in Frameworks */,
+				8F7C7748A89ADD242BA1792C /* libPods-macosApp.a in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -82,7 +76,7 @@
 			isa = PBXGroup;
 			children = (
 				C76C6AC69873090EB53328B9 /* shared.framework */,
-				D31CB0C36EBCA849CBAD4D0D /* libPods-macosApp.a */,
+				DEBA3658516D8F852A42E487 /* libPods-macosApp.a */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -119,11 +113,11 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
-		5F1A4B7EF69340E212C0A411 /* Pods */ = {
+		5EC708D35670B43CF3BEEF4E /* Pods */ = {
 			isa = PBXGroup;
 			children = (
-				592C8A724E49DDBF16CF67E6 /* Pods-macosApp.debug.xcconfig */,
-				3153CB05762E941233CD0C4F /* Pods-macosApp.release.xcconfig */,
+				2421D1DB0C53B7FAE9A7324B /* Pods-macosApp.debug.xcconfig */,
+				19A91FE7257121734DABBD4B /* Pods-macosApp.release.xcconfig */,
 			);
 			name = Pods;
 			path = Pods;
@@ -132,15 +126,11 @@
 		AAC9F062BCA099C25E3EA0C0 = {
 			isa = PBXGroup;
 			children = (
-				A1D0C0DE0000000000000011 /* XzSvgDocument.m */,
-				A1D0C0DE0000000000000012 /* XzSvgPath.m */,
-				A1D0C0DE0000000000000013 /* XzSvgView.m */,
-				A1D0C0DE0000000000000014 /* XzAudioView.m */,
 				21A65A091E316382E5730E83 /* Assets.xcassets */,
 				37CA18A20F8D336501580691 /* build */,
 				315E352E3C275F0534E1E571 /* Frameworks */,
 				572842642664AE95291FC9D0 /* Products */,
-				5F1A4B7EF69340E212C0A411 /* Pods */,
+				5EC708D35670B43CF3BEEF4E /* Pods */,
 			);
 			sourceTree = "<group>";
 		};
@@ -191,7 +181,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 317DD12EE6808A1F9C85D7CA /* Build configuration list for PBXNativeTarget "macosApp" */;
 			buildPhases = (
-				C4CC1163B0D7D8E8DA7561AB /* [CP] Check Pods Manifest.lock */,
+				E9AD31047424908424F50954 /* [CP] Check Pods Manifest.lock */,
 				90B6C29C3F0A90D21EEF004B /* Guardrail - 运行目标必须是 My Mac (Mac Catalyst) */,
 				A9A6C77F0235BA27FADF472C /* Sources */,
 				804F6D7FBC2406D4D9B43420 /* Resources */,
@@ -270,7 +260,7 @@
 			shellPath = /bin/sh;
 			shellScript = "if [ \"${EFFECTIVE_PLATFORM_NAME}\" != \"-maccatalyst\" ]; then\n  echo \"error: 运行目标选错了。请把顶部的运行目标从 'My Mac' 切换为 'My Mac (Mac Catalyst)'（本 App 用 UIKit 渲染器，只能跑 Catalyst），再 Cmd+R。\"\n  exit 1\nfi\n";
 		};
-		C4CC1163B0D7D8E8DA7561AB /* [CP] Check Pods Manifest.lock */ = {
+		E9AD31047424908424F50954 /* [CP] Check Pods Manifest.lock */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -299,20 +289,17 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				21F29156BCE51AF15F80AD75 /* AppDelegate.m in Sources */,
-				D6BCE7E779ACA240E7C0E0D9 /* KRRouterHandler.m in Sources */,
-				0055FD536B4983D960594762 /* KuiklyRenderViewController.m in Sources */,
-				F1B213E318196D47FE09FB99 /* SceneDelegate.m in Sources */,
-				6958DD5ED741CF0830305683 /* XiaoZhiModule+AdminWs.m in Sources */,
-				8F8072617390A0CE322DDBEF /* XiaoZhiModule+Audio.m in Sources */,
-				9C8D4505F85110E728F32FDE /* XiaoZhiModule+Discovery.m in Sources */,
-				88C16A20BFB49433160ECDC4 /* XiaoZhiModule+Opus.m in Sources */,
-				132B9FCD19DA1DE6D06A7E79 /* XiaoZhiModule.m in Sources */,
-				054D372B9092773A3CAFA361 /* main.m in Sources */,
-				A1D0C0DE0000000000000021 /* XzSvgDocument.m in Sources */,
-				A1D0C0DE0000000000000022 /* XzSvgPath.m in Sources */,
-				A1D0C0DE0000000000000023 /* XzSvgView.m in Sources */,
-				A1D0C0DE0000000000000024 /* XzAudioView.m in Sources */,
+				36F393A715F2080CDD0F946A /* AppDelegate.m in Sources */,
+				B8348788051A9E9DADD6E535 /* KRRouterHandler.m in Sources */,
+				40875CC00E2B7A9D243F6E00 /* KuiklyRenderViewController.m in Sources */,
+				5D3D850122709C1F21F73301 /* SceneDelegate.m in Sources */,
+				1771F164FC13F447F470724A /* XiaoZhiModule+AdminWs.m in Sources */,
+				B3201FF082446360FC3C7293 /* XiaoZhiModule+Audio.m in Sources */,
+				1728254144B5234A4C6E9683 /* XiaoZhiModule+Discovery.m in Sources */,
+				65AE1F81AB97B87B09D18177 /* XiaoZhiModule+Opus.m in Sources */,
+				C68F6DDF237F02BA580EB21E /* XiaoZhiModule.m in Sources */,
+				29525065B9543CB39B49DBB5 /* XzAudioView.m in Sources */,
+				67ED1995699E33CF4BF9DB50 /* main.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -321,7 +308,7 @@
 /* Begin XCBuildConfiguration section */
 		31C5665DEAD4A34768866A1C /* Release */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = 3153CB05762E941233CD0C4F /* Pods-macosApp.release.xcconfig */;
+			baseConfigurationReference = 19A91FE7257121734DABBD4B /* Pods-macosApp.release.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				COMBINE_HIDPI_IMAGES = YES;
@@ -481,7 +468,7 @@
 		};
 		D3855CB0315CF81CA0CC941D /* Debug */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = 592C8A724E49DDBF16CF67E6 /* Pods-macosApp.debug.xcconfig */;
+			baseConfigurationReference = 2421D1DB0C53B7FAE9A7324B /* Pods-macosApp.debug.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				COMBINE_HIDPI_IMAGES = YES;

@@ -1,5 +1,4 @@
 #import "AppDelegate.h"
-#import "XzSvgView.h"
 #import "XzAudioView.h"
 #import <AVFoundation/AVFoundation.h>
 
@@ -7,10 +6,6 @@
 
 // UIScene 生命周期下 AppDelegate 只保留应用级初始化；窗口创建已迁至 SceneDelegate。
 - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
-    // Pinned Kuikly factory discovers XzSvgView by its exact Objective-C class name.
-    // Do not replace componentExpandHandler: existing image/color handlers remain intact.
-    [XzSvgView setResourceRootURL:NSBundle.mainBundle.resourceURL];
-
     // Kuikly 2.29.2 AudioView：注册宿主播放器（AVPlayer），供测试台 TTS/录音试听以 src URL 播放。
     [XzAudioView registerWithKuikly];
 

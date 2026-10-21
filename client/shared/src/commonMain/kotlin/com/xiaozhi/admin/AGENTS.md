@@ -12,7 +12,7 @@
 - 紧凑断点取 `adminContentWidth`：AdminPage 常驻侧栏时扣 240+1，其余页取整窗，不能直接拿整窗判工作区宽。H5 官方 Scroller 的 `showScrollerIndicator(false)` 对应 `isList list-no-scrollbar`；宿主 [index](<../../../../../../../apps/h5App/web/index.html>)须保留该 class 的 scoped CSS，不能用 overflow:hidden 或 DOM 轮询伪修滚动条裁切。
 - 嵌套 DSL 先 `val ctx=this` 再显式访问 Pager；复用渲染为文件级 ViewContainer 扩展，ViewBuilder 显式传接收者。observable 在 attr/vif 闭包内读取才被跟踪。
 - 可点击目标（侧边栏项/标签页/按钮/下拉与选项行/健康跳转行）一律 `attr { cursor(CursorType.POINTER) }`；core 的 cursor prop 仅 macOS 原生直读，web 端靠 h5App 的 `WebCursorPropHandler` 外部处理器落 `style.cursor`，别在业务里散写 CSS。
-- 官方传统 DSL Button 保留标题、交互与无障碍语义；加载 Canvas 和独立 SvgView 都是不可交互的兄弟覆盖层，不塞任意子节点、不把 SVG 交给图片槽。SVG 源文件仅保留在 common，根不写固定 width/height，只保留 viewBox，由容器决定尺寸；Web 从同一源自动生成内联资源表，不另存一套 SVG 文件。资源经 [SvgView](<SvgView.kt>) 到 Apple CGPath/CAShapeLayer 或 Web SVG DOM，不允许 PNG/UIImage/位图回退。NMAllResponse.data 非空，不复制恒假的 data==null 判断。
+- 官方传统 DSL Button 保留标题、交互与无障碍语义；加载 Canvas 与图标 Canvas 都是不可交互的兄弟覆盖层，不塞任意子节点、不交给图片槽。图标 = [AdminIcons.kt](<AdminIcons.kt>) 内嵌 SVG pathData（viewBox 0 0 24 24）经 Kuikly Canvas 即时绘制（方法对齐 xiaoya-player 的 TvIcons，2026-10 从 assets 资产迁入代码：原三端宿主实现随 macApp 资源缺包全空白而废除）；新增/改图标直接写 pathData（[AdminIconVectors.kt](<AdminIconVectors.kt>) 解析器支持 M/L/H/V/C/S/Q/T/A/Z），IconToken↔几何一一对应由 `:shared:verifyAdminIcons` 护栏锁定，禁止回退资源文件/PNG/UIImage/位图。NMAllResponse.data 非空，不复制恒假的 data==null 判断。
 
 ## 表单与网络契约
 
@@ -39,7 +39,7 @@
 
 管理台是 **Kuikly 多端工程**（`client/`），逻辑在 `client/shared/commonMain` 跨端复用；web 构建产物由 server 在 `/` 静态托管。
 
-默认落地页是 **语音流程与配置**（`@Page("admin")`）：该内容区顶部为[横向工作流](<PipelineWorkflowView.kt>)（仅配置区渲染，不跨运维页面），VAD → ASR → NLU → LLM → TTS 为模块，头尾及衔接共六个可点击圆点；独立配置页复用同一组件。窄屏横向滚动，不能退回纵向节点轨道/下拉。点击模块/圆点进入「配置 / 测试」两个官方 Tabs（官方 `indicatorInTabItem` 文字下滑块样式），各自固定左菜单、右内容；测试左菜单选择单个动作。无配置搜索框，分区只能经工作流、全局设置或侧边栏到达。工作区小于 700 宽保留 92 宽左菜单，操作行靠右并可换行。布局见 [ConfigTabs](<ConfigTabs.kt>)及[工作区菜单](<ConfigWorkspaceViews.kt>)，位置投影见 [PipelineWorkflow](<PipelineWorkflow.kt>)，功能仍由 [PipelineFlow](<PipelineFlow.kt>)声明。只持有一个 `ConfigSelection(sectionId,nodeId?,workflowPositionId?)`，top/left 选择均由它派生；tab/status/action 是局部展示维度。空圆点只说明暂无扩展，不创建伪配置或测试。全局设置、草稿、保存冲突和独立请求凭据保持原契约，不得恢复第二份 active 状态：
+默认落地页是 **语音流程与配置**（`@Page("admin")`）：该内容区顶部为[横向工作流](<PipelineWorkflowView.kt>)（仅配置区渲染，不跨运维页面），VAD → ASR → NLU → LLM → TTS 为模块，头尾及衔接共六个可点击圆点；独立配置页复用同一组件。轨道宽按 `adminContentWidth` 自适应（桌面 ≥1280 无横向滚动，不设最大上限），窄屏横向滚动，不能退回纵向节点轨道/下拉。点击模块/圆点进入「配置 / 测试」两个官方 Tabs（官方 `indicatorInTabItem` 文字下滑块样式），各自固定左菜单、右内容；测试左菜单选择单个动作。无配置搜索框，分区只能经工作流、全局设置或侧边栏到达。工作区小于 700 宽保留 92 宽左菜单，操作行靠右并可换行。布局见 [ConfigTabs](<ConfigTabs.kt>)及[工作区菜单](<ConfigWorkspaceViews.kt>)，位置投影见 [PipelineWorkflow](<PipelineWorkflow.kt>)，功能仍由 [PipelineFlow](<PipelineFlow.kt>)声明。只持有一个 `ConfigSelection(sectionId,nodeId?,workflowPositionId?)`，top/left 选择均由它派生；tab/status/action 是局部展示维度。空圆点只说明暂无扩展，不创建伪配置或测试。全局设置、草稿、保存冲突和独立请求凭据保持原契约，不得恢复第二份 active 状态：
 
 | Section | 数据源 | 回答什么问题 |
 |---|---|---|
