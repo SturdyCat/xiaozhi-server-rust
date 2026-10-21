@@ -57,6 +57,13 @@ class TestBenchState(private val scope: PagerScope) {
     var ttsPlaying by scope.observable(false)
     var ttsDuration by scope.observable(0.0)
 
+    // Kuikly 2.29.2 原生 AudioView（TTS/录音试听）：KRAudioView 的 src 只绑定一次、播放器不复用，
+    // 因此每个来源各一个稳定 WAV 路径 + 一个独立 AudioView；命令值 0=不动作、1=PLAY、2=PAUSE、3=STOP。
+    var recAudioSrc by scope.observable("")
+    var ttsAudioSrc by scope.observable("")
+    var recPlayCommand by scope.observable(0)
+    var ttsPlayCommand by scope.observable(0)
+
     /** 合成中（发 tts_test → 收到 tts stop）：按钮菊花 + 禁止再次合成 */
     var ttsBusy by scope.observable(false)
     var speaking by scope.observable(false)
@@ -447,54 +454,67 @@ class TestBenchState(private val scope: PagerScope) {
     }
 
     // ============================================================
-    // 播放器控制（录音 / TTS 共用；100ms 轮询驱动进度）
+    // 播放器控制（录音 / TTS 共用；进度由 AudioView 的 playTimeDidChanged 事件推送）
     // ============================================================
 
     fun togglePlayback(ctx: Pager, source: String) {
         val playing = if (source == "tts") ttsPlaying else recPlaying
         if (playing) {
-            xz(ctx).stopPlayback()
             if (source == "tts") {
+                ttsPlayCommand = 3 // STOP
                 ttsPlaying = false
                 ttsProgress = 0f
             } else {
+                recPlayCommand = 3
                 recPlaying = false
                 recProgress = 0f
             }
             return
         }
-        // 从头播
-        if (source == "tts") {
-            ttsPlaying = true
-            xz(ctx).playTts(null)
-        } else {
-            recPlaying = true
-            xz(ctx).playRecording(null)
+        // 原生把 PCM 缓冲导出为稳定 WAV 路径，再交给 AudioView 以 src 播放；
+        // 之后重复试听只覆盖文件 + 重新下发 PLAY（src 不变，原生 play 时重载同一 URL）。
+        xz(ctx).audioFileUrl(source) { st ->
+            val url = st?.optString("url", "") ?: ""
+            if (url.isEmpty()) {
+                statusMsg = "试听失败：音频缓冲为空或导出失败"
+                return@audioFileUrl
+            }
+            if (source == "tts") {
+                ttsAudioSrc = url
+                ttsPlayCommand = 1 // PLAY
+                ttsPlaying = true
+                ttsProgress = 0f
+            } else {
+                recAudioSrc = url
+                recPlayCommand = 1
+                recPlaying = true
+                recProgress = 0f
+            }
         }
-        startPolling(ctx, source)
     }
 
-    /** 轮询原生播放状态（100ms）刷新进度；播完自动停轮询并复位。 */
-    private fun startPolling(ctx: Pager, source: String) {
-        xz(ctx).getAudioState(source) { st ->
-            val playing = st?.optBoolean("playing", false) ?: false
-            val position = st?.optDouble("position") ?: 0.0
-            val duration = st?.optDouble("duration") ?: 0.0
-            val p = if (duration > 0) (position / duration).toFloat().coerceIn(0f, 1f) else 0f
-            if (source == "tts") {
-                ttsPlaying = playing
-                ttsProgress = p
-            } else {
-                recPlaying = playing
-                recProgress = p
+    /** AudioView 播放状态回写（页面按来源把 PlayState 映射成这两个布尔）。 */
+    fun onAudioPlayState(source: String, playing: Boolean, ended: Boolean) {
+        if (source == "tts") {
+            ttsPlaying = playing
+            if (ended) {
+                ttsProgress = 0f
+                ttsPlayCommand = 3 // 复位，保证下次 PLAY 是有效变更
             }
-            if (playing) {
-                ctx.setTimeout(100) { startPolling(ctx, source) }
-            } else {
-                // 播完/停止：进度复位由 stopPlayback/下一次播放处理
-                if (source == "tts") ttsProgress = 0f else recProgress = 0f
+        } else {
+            recPlaying = playing
+            if (ended) {
+                recProgress = 0f
+                recPlayCommand = 3
             }
         }
+    }
+
+    /** AudioView 进度回写（毫秒）：替代原先 100ms 轮询原生播放器。 */
+    fun onAudioTime(source: String, currentMs: Int, totalMs: Int) {
+        if (totalMs <= 0) return
+        val p = (currentMs.toFloat() / totalMs.toFloat()).coerceIn(0f, 1f)
+        if (source == "tts") ttsProgress = p else recProgress = p
     }
 
     /** 拉一次波形（录音/合成完成后各拉一次；波形静态，播放只推进度）。 */

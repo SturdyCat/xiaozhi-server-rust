@@ -1,5 +1,6 @@
 #import "AppDelegate.h"
 #import "XzSvgView.h"
+#import "XzAudioView.h"
 #import <AVFoundation/AVFoundation.h>
 
 @implementation AppDelegate
@@ -9,6 +10,9 @@
     // Pinned Kuikly factory discovers XzSvgView by its exact Objective-C class name.
     // Do not replace componentExpandHandler: existing image/color handlers remain intact.
     [XzSvgView setResourceRootURL:NSBundle.mainBundle.resourceURL];
+
+    // Kuikly 2.29.2 AudioView：注册宿主播放器（AVPlayer），供测试台 TTS/录音试听以 src URL 播放。
+    [XzAudioView registerWithKuikly];
 
     // Mac Catalyst 下音频会话用于麦克风采集 + TTS 播放。
     NSError *err = nil;

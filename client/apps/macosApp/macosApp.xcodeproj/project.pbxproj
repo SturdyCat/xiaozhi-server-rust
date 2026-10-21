@@ -21,6 +21,10 @@
 		B2FE56198131D80B2580FF2F /* shared.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C76C6AC69873090EB53328B9 /* shared.framework */; };
 		D6BCE7E779ACA240E7C0E0D9 /* KRRouterHandler.m in Sources */ = {isa = PBXBuildFile; fileRef = TEMP_A5F48228-D404-40B3-9AD1-D429506FF09F /* KRRouterHandler.m */; };
 		F1B213E318196D47FE09FB99 /* SceneDelegate.m in Sources */ = {isa = PBXBuildFile; fileRef = TEMP_17DB32D9-7705-46CF-AA16-670B9159740C /* SceneDelegate.m */; };
+		A1D0C0DE0000000000000021 /* XzSvgDocument.m in Sources */ = {isa = PBXBuildFile; fileRef = A1D0C0DE0000000000000011 /* XzSvgDocument.m */; };
+		A1D0C0DE0000000000000022 /* XzSvgPath.m in Sources */ = {isa = PBXBuildFile; fileRef = A1D0C0DE0000000000000012 /* XzSvgPath.m */; };
+		A1D0C0DE0000000000000023 /* XzSvgView.m in Sources */ = {isa = PBXBuildFile; fileRef = A1D0C0DE0000000000000013 /* XzSvgView.m */; };
+		A1D0C0DE0000000000000024 /* XzAudioView.m in Sources */ = {isa = PBXBuildFile; fileRef = A1D0C0DE0000000000000014 /* XzAudioView.m */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -55,6 +59,10 @@
 		TEMP_A5F48228-D404-40B3-9AD1-D429506FF09F /* KRRouterHandler.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = KRRouterHandler.m; sourceTree = "<group>"; };
 		TEMP_A7E63868-2F3C-4D47-B9E8-6C7FCAB10022 /* XiaoZhiModule+AdminWs.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "XiaoZhiModule+AdminWs.m"; sourceTree = "<group>"; };
 		TEMP_ECF40AFD-1567-4CD6-81A5-097105784440 /* KuiklyRenderViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = KuiklyRenderViewController.m; sourceTree = "<group>"; };
+		A1D0C0DE0000000000000011 /* XzSvgDocument.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = XzSvgDocument.m; sourceTree = "<group>"; };
+		A1D0C0DE0000000000000012 /* XzSvgPath.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = XzSvgPath.m; sourceTree = "<group>"; };
+		A1D0C0DE0000000000000013 /* XzSvgView.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = XzSvgView.m; sourceTree = "<group>"; };
+		A1D0C0DE0000000000000014 /* XzAudioView.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = XzAudioView.m; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -124,6 +132,10 @@
 		AAC9F062BCA099C25E3EA0C0 = {
 			isa = PBXGroup;
 			children = (
+				A1D0C0DE0000000000000011 /* XzSvgDocument.m */,
+				A1D0C0DE0000000000000012 /* XzSvgPath.m */,
+				A1D0C0DE0000000000000013 /* XzSvgView.m */,
+				A1D0C0DE0000000000000014 /* XzAudioView.m */,
 				21A65A091E316382E5730E83 /* Assets.xcassets */,
 				37CA18A20F8D336501580691 /* build */,
 				315E352E3C275F0534E1E571 /* Frameworks */,
@@ -297,6 +309,10 @@
 				88C16A20BFB49433160ECDC4 /* XiaoZhiModule+Opus.m in Sources */,
 				132B9FCD19DA1DE6D06A7E79 /* XiaoZhiModule.m in Sources */,
 				054D372B9092773A3CAFA361 /* main.m in Sources */,
+				A1D0C0DE0000000000000021 /* XzSvgDocument.m in Sources */,
+				A1D0C0DE0000000000000022 /* XzSvgPath.m in Sources */,
+				A1D0C0DE0000000000000023 /* XzSvgView.m in Sources */,
+				A1D0C0DE0000000000000024 /* XzAudioView.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

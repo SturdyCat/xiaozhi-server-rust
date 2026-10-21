@@ -101,6 +101,21 @@ class XiaoZhiModule : Module() {
         )
     }
 
+    /**
+     * 把录音/TTS 缓冲导出为临时 WAV，回调 {url}（file:// 绝对路径）。
+     * 供 Kuikly 2.29.2 的原生 AudioView 以 src 播放（AudioView 只接受 URL，不能直接喂 PCM）。
+     * @param source "recording" | "tts"
+     */
+    fun audioFileUrl(source: String, callback: CallbackFn? = null) {
+        toNative(
+            keepCallbackAlive = false,
+            methodName = "audioFileUrl",
+            param = JSONObject().apply { put("source", source) },
+            callback = callback,
+            syncCall = false,
+        )
+    }
+
     /** 停止试听播放。 */
     fun stopPlayback() {
         toNative(

@@ -4,7 +4,10 @@ import com.tencent.kuikly.core.base.ViewContainer
 import com.tencent.kuikly.core.directives.velse
 import com.tencent.kuikly.core.directives.vif
 import com.tencent.kuikly.core.pager.Pager
+import com.tencent.kuikly.core.views.Audio
+import com.tencent.kuikly.core.views.AudioPlayControl
 import com.tencent.kuikly.core.views.DivView
+import com.tencent.kuikly.core.views.PlayState
 import com.tencent.kuikly.core.views.SelectableOption
 import com.tencent.kuikly.core.views.SelectionType
 import com.tencent.kuikly.core.views.Text
@@ -32,6 +35,57 @@ fun ViewContainer<*, *>.renderBench(
     pageWidth: () -> Float,
     pageHeight: () -> Float,
 ) {
+    // Kuikly 2.29.2 原生 AudioView（TTS/录音试听）：KRAudioView 的 src 只绑定一次、播放器不复用，
+    // 故录音/TTS 各挂一个独立视图 + 各自稳定 WAV 路径；用 1x1 是因为 0 尺寸不会创建播放器。
+    // 仅 macosArm64Main（iOS 渲染器/Catalyst）编译，不进 H5；宿主已在 AppDelegate 注册 AVPlayer 适配器。
+    Audio {
+        attr {
+            width(1f)
+            height(1f)
+            src(bench.recAudioSrc)
+            when (bench.recPlayCommand) {
+                1 -> playControl(AudioPlayControl.PLAY)
+                2 -> playControl(AudioPlayControl.PAUSE)
+                3 -> playControl(AudioPlayControl.STOP)
+            }
+        }
+        event {
+            playStateDidChanged { state, _ ->
+                bench.onAudioPlayState(
+                    source = "recording",
+                    playing = state == PlayState.PLAYING,
+                    ended = state == PlayState.PLAY_END,
+                )
+            }
+            playTimeDidChanged { cur, total ->
+                bench.onAudioTime("recording", cur, total)
+            }
+        }
+    }
+    Audio {
+        attr {
+            width(1f)
+            height(1f)
+            src(bench.ttsAudioSrc)
+            when (bench.ttsPlayCommand) {
+                1 -> playControl(AudioPlayControl.PLAY)
+                2 -> playControl(AudioPlayControl.PAUSE)
+                3 -> playControl(AudioPlayControl.STOP)
+            }
+        }
+        event {
+            playStateDidChanged { state, _ ->
+                bench.onAudioPlayState(
+                    source = "tts",
+                    playing = state == PlayState.PLAYING,
+                    ended = state == PlayState.PLAY_END,
+                )
+            }
+            playTimeDidChanged { cur, total ->
+                bench.onAudioTime("tts", cur, total)
+            }
+        }
+    }
     tabbedPanel(
         ui = bench.tabUi,
         pageWidth = pageWidth,

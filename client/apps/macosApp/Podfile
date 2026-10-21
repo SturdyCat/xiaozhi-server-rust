@@ -15,7 +15,7 @@ target 'macosApp' do
   inhibit_all_warnings!
 
   # Kuikly macOS/iOS 渲染器（提供 UIKit for Mac 的页面渲染能力）
-  pod 'OpenKuiklyIOSRender', '2.29.1'
+  pod 'OpenKuiklyIOSRender', '2.29.2'
 
   # 注：业务框架 shared.framework 不通过 CocoaPods 引入（KMP 模块未接 cocoapods 插件，
   # 无 podspec）。改为由 xcodegen 的 project.yml 直接 embed 到 App（见 project.yml 说明）。

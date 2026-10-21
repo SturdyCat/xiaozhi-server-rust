@@ -260,6 +260,73 @@ static XZFilePickerDelegate *gFilePickerDelegate = nil;
     [self playSource:self.ttsPcm callback:args[KR_CALLBACK_KEY]];
 }
 
+// audioFileUrl(source) → 把录音/TTS 缓冲导出为临时 WAV（16-bit PCM，与缓冲同采样率/单声道），
+// 回调 {url: "file:///..."}，供 Kuikly 2.29.2 的 AudioView 以 src 播放（AudioView 只吃 URL）。
+- (void)audioFileUrl:(NSDictionary *)args {
+    NSDictionary *params = [self parseParams:args[KR_PARAM_KEY]];
+    id callback = args[KR_CALLBACK_KEY];
+    NSString *source = params[@"source"] ?: @"tts";
+    NSData *pcm = [source isEqualToString:@"tts"] ? self.ttsPcm : self.recordingPcm;
+    if (pcm.length < sizeof(float)) {
+        [self invoke:callback result:@{@"url": @""} success:NO error:@"audio buffer is empty"];
+        return;
+    }
+    uint32_t sampleRate = self.downlinkSampleRate ?: kDownlinkSampleRate;
+    // 稳定路径（同来源复用同一文件）：KRAudioView 的 src 只绑定一次、播放器不复用；
+    // 每次试听覆盖写该文件，由 XzAudioView 在 kra_play 时用新 AVPlayerItem 重载同一 URL。
+    NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:
+        [NSString stringWithFormat:@"xz-audio-%@.wav", source]];
+    if (![self writeWavFromPcm:pcm sampleRate:sampleRate toPath:path]) {
+        [self invoke:callback result:@{@"url": @""} success:NO error:@"failed to write wav"];
+        return;
+    }
+    [self invoke:callback result:@{@"url": [@"file://" stringByAppendingString:path]} success:YES error:nil];
+}
+
+// float32(单声道) → 16-bit PCM WAV 写入指定路径；成功返回 YES。
+- (BOOL)writeWavFromPcm:(NSData *)pcm sampleRate:(uint32_t)sampleRate toPath:(NSString *)path {
+    NSUInteger frames = pcm.length / sizeof(float);
+    if (frames == 0 || sampleRate == 0 || path.length == 0) return NO;
+
+    uint32_t dataBytes = (uint32_t)(frames * sizeof(int16_t));
+    uint32_t riffSize = 36 + dataBytes;
+    uint16_t audioFormat = 1; // PCM
+    uint16_t channels = 1;
+    uint16_t bitsPerSample = 16;
+    uint32_t byteRate = sampleRate * channels * bitsPerSample / 8;
+    uint16_t blockAlign = (uint16_t)(channels * bitsPerSample / 8);
+
+    NSMutableData *wav = [NSMutableData dataWithCapacity:44 + dataBytes];
+    [wav appendBytes:"RIFF" length:4];
+    [wav appendBytes:&riffSize length:4];
+    [wav appendBytes:"WAVE" length:4];
+    [wav appendBytes:"fmt " length:4];
+    uint32_t fmtSize = 16;
+    [wav appendBytes:&fmtSize length:4];
+    [wav appendBytes:&audioFormat length:2];
+    [wav appendBytes:&channels length:2];
+    [wav appendBytes:&sampleRate length:4];
+    [wav appendBytes:&byteRate length:4];
+    [wav appendBytes:&blockAlign length:2];
+    [wav appendBytes:&bitsPerSample length:2];
+    [wav appendBytes:"data" length:4];
+    [wav appendBytes:&dataBytes length:4];
+
+    // float → int16：先 clamp 再线性缩放，避免溢出回绕成噪声。
+    const float *src = pcm.bytes;
+    NSMutableData *samples = [NSMutableData dataWithLength:frames * sizeof(int16_t)];
+    int16_t *dst = samples.mutableBytes;
+    for (NSUInteger i = 0; i < frames; i++) {
+        float v = src[i];
+        if (v > 1.0f) v = 1.0f;
+        else if (v < -1.0f) v = -1.0f;
+        dst[i] = (int16_t)(v * 32767.0f);
+    }
+    [wav appendData:samples];
+
+    return [wav writeToFile:path atomically:YES];
+}
+
 - (void)playSource:(NSData *)pcm callback:(id)callback {
     if (pcm.length < sizeof(float)) {
         [self invoke:callback result:@{@"duration": @(0)} success:YES error:nil];
