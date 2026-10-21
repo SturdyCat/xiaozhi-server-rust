@@ -17,10 +17,10 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
+use crate::app::audio::media::{AudioChunk, AudioWrite};
 use crate::app::downlink::reservoir::{DownlinkItem, ReservoirSource, ReservoirStats};
 use crate::app::downlink::{poll_abort, send_sentence_start, start_tts_guarded, DownlinkPacer};
-use crate::app::protocol::wrap_downlink;
-use crate::app::session::{send_binary, SessionParams};
+use crate::app::session::SessionParams;
 use crate::app::transport::Transport;
 
 /// 一轮下行的发送观测（与 [`crate::app::downlink::PacerStats`] 一起打印）。
@@ -101,9 +101,17 @@ pub(crate) async fn drain_reservoir<T: Transport>(
             DownlinkItem::Frame(opus) => {
                 // 防御：正常路径 `SentenceStart` 必先到达；异常时也要先 `tts start`
                 ensure_tts_started(transport, session_id, frame_ms, &mut out).await?;
-                let framed = wrap_downlink(params.downlink_bin_ver, &opus, *downlink_ts);
-                *downlink_ts += params.downlink_frame_ms;
+                let profile = transport.terminal_profile(params);
+                let audio = AudioChunk::new(params.output_format(), opus);
                 pacer.pace(frame_ms).await;
+                if transport.send_audio(audio, profile, *downlink_ts).await?
+                    == AudioWrite::Cancelled
+                {
+                    out.interrupted = true;
+                    break;
+                }
+                pacer.mark_sent(Instant::now());
+                *downlink_ts = downlink_ts.wrapping_add(params.downlink_frame_ms);
                 if first_frame_at.is_none() {
                     let now = Instant::now();
                     *first_frame_at = Some(now);
@@ -116,7 +124,6 @@ pub(crate) async fn drain_reservoir<T: Transport>(
                     );
                 }
                 out.frames += 1;
-                send_binary(transport, framed).await?;
                 if poll_abort(transport, session_id, abort) {
                     out.interrupted = true;
                     break;

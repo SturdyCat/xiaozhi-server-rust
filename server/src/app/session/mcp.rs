@@ -97,13 +97,18 @@ async fn pump_reply<T: Transport>(
             return (Err(McpCallError::Timeout(timeout)), deferred);
         };
         match tokio::time::timeout(remaining, transport.recv()).await {
-            Err(_elapsed) => return (Err(McpCallError::Timeout(timeout)), deferred),
+            Err(_) => return (Err(McpCallError::Timeout(timeout)), deferred),
             Ok(IncomingFrame::Closed) => return (Err(McpCallError::Closed), deferred),
             Ok(IncomingFrame::Text(s)) => match mcp::take_response_for(&s, id) {
                 Some(reply) => return (Ok(reply), deferred),
                 None => deferred.push(IncomingFrame::Text(s)),
             },
-            Ok(frame @ IncomingFrame::Binary(_)) => {
+            Ok(
+                frame @ (IncomingFrame::Binary(_)
+                | IncomingFrame::Audio(_)
+                | IncomingFrame::AudioBoundary(_, _)
+                | IncomingFrame::EndOfUtterance(_)),
+            ) => {
                 if binary == BinaryPolicy::Keep {
                     deferred.push(frame);
                 }

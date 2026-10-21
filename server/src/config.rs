@@ -48,6 +48,8 @@ pub use crate::plugins::wakeup::WakeConfig;
 
 /// 每设备配置 overlay（白名单合并 / 落盘路径，见 `config/overlay.rs`）。
 pub mod overlay;
+pub mod playback;
+pub use playback::PlaybackConfig;
 
 /// 配置存储后端抽象（`ConfigStore` trait + 文件/默认两实现，见 `config/store.rs`）。
 pub mod store;
@@ -165,6 +167,8 @@ pub struct Config {
     /// 默认关闭；关闭时零路由、零 mDNS、行为与今天一致。
     #[serde(default)]
     pub echomuse: EchomuseConfig,
+    #[serde(default)]
+    pub playback: PlaybackConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -419,6 +423,7 @@ impl Default for Config {
             nlu: NluConfig::default(),
             wakeup: WakeConfig::default(),
             echomuse: EchomuseConfig::default(),
+            playback: PlaybackConfig::default(),
         };
         c.normalize();
         c
@@ -434,6 +439,7 @@ impl Config {
     /// - 保存时只写新结构（旧字段标了 `skip_serializing`），文件随一次保存完成迁移。
     pub fn normalize(&mut self) {
         self.audio.normalize();
+        self.playback.normalize();
         self.asr.normalize();
         self.vad.normalize();
         self.tts.normalize();

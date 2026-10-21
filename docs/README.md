@@ -18,6 +18,7 @@
 | 插件、注册表与能力维护 | [插件层](<../server/src/plugins/AGENTS.md>)（含[注册表](<../server/src/plugins/registry/AGENTS.md>)、[LLM](<../server/src/plugins/llm/AGENTS.md>)、[TTS](<../server/src/plugins/tts/AGENTS.md>)） |
 | 人格与记忆 | [人格](<../server/src/plugins/soul/AGENTS.md>)、[记忆](<../server/src/plugins/memory/AGENTS.md>) |
 | MCP、OTA 与音色探测 | [MCP](<../server/src/app/mcp/AGENTS.md>)、[OTA](<../server/src/app/firmware/AGENTS.md>)、[音色](<../server/src/app/voices/AGENTS.md>) |
+| 语音主流程、节点测试与公共 SVG UI | [重组与验证记录](<voice-pipeline.md>) |
 | 公共管理台与 Mac Catalyst 测试台 | [管理台](<../client/shared/src/commonMain/kotlin/com/xiaozhi/admin/AGENTS.md>)、[Mac Catalyst](<../client/apps/macosApp/AGENTS.md>) |
 | 测试与回归 | [测试入口](<../server/tests/AGENTS.md>) |
 

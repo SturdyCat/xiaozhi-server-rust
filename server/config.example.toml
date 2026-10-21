@@ -69,6 +69,13 @@ downlink_buffer_start_ms = 1500
 # 起跑，日志会写明"上游供数慢于实时"。
 downlink_buffer_start_max_ms = 4000
 
+# New sessions only. Existing sessions keep their pinned mode/gate.
+[playback]
+# interactive preserves the legacy [audio] gate; announcement uses the bounded gate below.
+mode = "interactive"
+announcement_start_ms = 5000
+announcement_start_max_ms = 10000
+
 [asr]
 # 引擎选择（P4 约定：engine = 实现 id，可选 sensevoice）。改后需重启 server。
 engine = "sensevoice"

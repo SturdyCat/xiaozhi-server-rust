@@ -410,15 +410,15 @@ fn download_budget_pauses_at_limit_and_resumes_on_release() {
     assert_eq!(after.peak_ms, 200, "峰值水位 = 实际积压");
 }
 
-/// 单片大于预算：按"至少放行一片"处理，否则整段一次性回传的上游会被卡死。
+/// Oversized reservations fail; production slices callbacks before queueing.
 #[test]
-fn download_budget_admits_oversized_single_chunk() {
+fn download_budget_rejects_oversized_reservation_before_slicing() {
     let b = DownloadBudget::new(100);
     assert!(
-        b.reserve(5_000, &AtomicBool::new(false), &|| false),
-        "单片超预算也必须放行"
+        !b.reserve(5_000, &AtomicBool::new(false), &|| false),
+        "oversized provider callbacks must be sliced before queue reservation"
     );
-    assert_eq!(b.queued_ms(), 5_000);
+    assert_eq!(b.queued_ms(), 0);
 }
 
 /// 额度归还靠 [`PcmChunk`] 的 Drop：**任何**退出路径都不泄漏。
@@ -564,3 +564,5 @@ async fn persistent_hit_skips_synthesis_and_inference_gate() {
     drop(rx);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+mod bounds;

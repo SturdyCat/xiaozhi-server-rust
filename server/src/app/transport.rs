@@ -25,6 +25,13 @@ use anyhow::Result;
 use axum::extract::ws::{Message, WebSocket};
 use futures_util::{FutureExt, StreamExt};
 
+/// 有界上行话语的结束原因；仅由明确支持此边界的承载产生，不映射 ESP listen stop。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UtteranceEnd {
+    Speech,
+    NoSpeech,
+}
+
 /// 上行帧：承载层原样交付，协议解析留在会话层（[`crate::protocol`]）。
 #[derive(Debug)]
 pub enum IncomingFrame {
@@ -32,12 +39,48 @@ pub enum IncomingFrame {
     Text(String),
     /// 二进制消息（上行 Opus 包）。
     Binary(Vec<u8>),
+    /// Native, explicitly described audio; bypasses legacy binary/Opus adapters.
+    Audio(crate::app::audio::media::AudioChunk),
+    /// 有界话语结束；排在本话语最后一个音频包之后，连接仍保持打开。
+    EndOfUtterance(UtteranceEnd),
+    /// Native boundary shares the captured connection epoch with its PCM.
+    AudioBoundary(UtteranceEnd, crate::app::audio::media::AudioEpoch),
     /// 承载已断开/出错。粘滞：此后 recv/try_recv 恒返回 `Closed`。
     Closed,
 }
 
 /// 会话传输：下行发送 + 上行收取 + 保活，三组承载原语。
 pub trait Transport: Send {
+    fn terminal_profile(
+        &self,
+        params: &crate::app::session::SessionParams,
+    ) -> crate::app::audio::media::TerminalProfile {
+        crate::app::audio::media::TerminalProfile::esp(params)
+    }
+
+    /// Default compatibility adapter: only ESP Opus consumes binary envelopes.
+    fn send_audio(
+        &mut self,
+        audio: crate::app::audio::media::AudioChunk,
+        profile: crate::app::audio::media::TerminalProfile,
+        timestamp: u32,
+    ) -> impl Future<Output = Result<crate::app::audio::media::AudioWrite>> + Send {
+        async move {
+            anyhow::ensure!(
+                audio.format == profile.output
+                    && audio.format.codec == crate::app::audio::media::AudioCodec::Opus,
+                "unsupported media format for legacy transport"
+            );
+            self.send_binary(crate::app::protocol::wrap_downlink(
+                profile.binary_version,
+                &audio.data,
+                timestamp,
+            ))
+            .await?;
+            Ok(crate::app::audio::media::AudioWrite::SocketWritten)
+        }
+    }
+
     /// 发送协议文本消息（`ServerMessage::to_json` 的产物）。
     fn send_text(&mut self, json: String) -> impl Future<Output = Result<()>> + Send;
 

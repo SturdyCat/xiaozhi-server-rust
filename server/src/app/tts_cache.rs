@@ -115,11 +115,10 @@ impl TtsCache {
 
     /// 内存 miss 才读盘，所有磁盘 IO 在 blocking 池内；读失败不影响合成回退。
     pub async fn get_async(&self, key: u64) -> Option<CachedAudio> {
+        // `get` 已对 `capacity == 0 || key == 0` 返回 `None`，内存 miss（含上述保留键）
+        // 才会落到这里走磁盘；无需重复判定。
         if let Some(hit) = self.get(key) {
             return Some(hit);
-        }
-        if self.capacity == 0 || key == 0 {
-            return None;
         }
         let store = self.store.as_ref()?.clone();
         let identity = self.identity(key)?;
@@ -207,7 +206,8 @@ impl TtsCache {
         true
     }
 
-    /// 热切换只清内存成品，身份与磁盘保留；新引擎/参数具有不同身份，不会串音。
+    /// 测试专用的内存重置；生产热切换保留按实际身份分隔的成品与磁盘。
+    #[cfg(test)]
     pub fn clear(&self) {
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         inner.map.clear();

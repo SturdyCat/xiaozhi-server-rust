@@ -13,6 +13,7 @@ use crate::app::transport::{IncomingFrame, Transport};
 
 fn params(buffer_ms: u32, start_ms: u32, start_max_ms: u32) -> SessionParams {
     SessionParams {
+        output_codec: crate::app::audio::media::AudioCodec::Opus,
         uplink_bin_ver: BinVersion::V1,
         downlink_bin_ver: BinVersion::V1,
         uplink_sr: 16000,

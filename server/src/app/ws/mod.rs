@@ -94,7 +94,9 @@ use memory::{memory_clear, memory_maintain, memory_rag_reindex, memory_recall, m
 use metrics::metrics_snapshot;
 use nlu_build::{build_log_ws, build_status, start_build};
 // 插件维护
-pub(crate) use config::config_is_persistent;
+#[cfg(test)]
+pub(crate) use bench_api::service_router as test_bench_router;
+pub(crate) use config::{config_is_persistent, config_revision};
 use ota::ota;
 use plugins::{config_schema, list_plugins};
 use registry::{conversations, device_detail, device_inject, devices, sessions, stats};
@@ -163,15 +165,8 @@ pub fn router(engines: Arc<Engines>) -> Router {
         // 远程客户端访问 SQLite 配置库：只读 SQL 查询（需 token）+ 一致性备份（VACUUM INTO）
         .route("/api/config/db/query", axum::routing::post(db_query))
         .route("/api/config/db/backup", axum::routing::post(db_backup))
-        // 内联配置测试（P0-2）：LLM/TTS/VAD 延迟测量（HTTP 直调，按磁盘最新配置 ad-hoc
-        // 构建引擎，不要求 is_test WS 会话；与 WS 测试台并存，测量核心见 app::bench_api）
-        .route("/api/test/llm", axum::routing::post(bench_api::test_llm))
-        .route(
-            "/api/test/llm/models",
-            axum::routing::post(bench_api::test_llm_models),
-        )
-        .route("/api/test/tts", axum::routing::post(bench_api::test_tts))
-        .route("/api/test/vad", axum::routing::post(bench_api::test_vad))
+        // Unified snapshot-isolated node diagnostics; legacy paths retained and admin-authenticated.
+        .merge(bench_api::routes(&engines))
         // 记忆：状态 / 测试召回 / 立即维护 / 清空（"记忆开了没用"的当场验证入口）
         .route("/api/memory/status", get(memory_status))
         .route("/api/memory/recall", axum::routing::post(memory_recall))
@@ -363,6 +358,7 @@ async fn handle_handshake(
         .map_err(|e| anyhow::anyhow!("发送 server hello 失败: {e}"))?;
 
     let params = SessionParams {
+        output_codec: crate::app::audio::media::AudioCodec::Opus,
         uplink_bin_ver,
         downlink_bin_ver,
         uplink_sr,
@@ -411,7 +407,12 @@ async fn recv_hello<T: Transport>(transport: &mut T) -> anyhow::Result<ClientHel
     let frame = transport.recv().await;
     let s = match frame {
         IncomingFrame::Text(s) => s,
-        IncomingFrame::Binary(_) => anyhow::bail!("首个消息不是文本 hello"),
+        IncomingFrame::Binary(_)
+        | IncomingFrame::Audio(_)
+        | IncomingFrame::AudioBoundary(_, _)
+        | IncomingFrame::EndOfUtterance(_) => {
+            anyhow::bail!("首个消息不是文本 hello")
+        }
         IncomingFrame::Closed => anyhow::bail!("连接在无 hello 时关闭或出错"),
     };
     let cm: ClientMessage =

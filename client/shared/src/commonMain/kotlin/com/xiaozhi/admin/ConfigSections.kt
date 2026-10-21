@@ -1,142 +1,67 @@
 package com.xiaozhi.admin
 
 /**
- * 配置页的 **section 常量表**（docs/plugin-architecture-unification.md §5.2/§5.7）。
- *
- * 借 DSH 的"声明 + 有序注册表 + 加载期校验"思想，但**不模拟运行时槽位**：
- * 本项目 Kuikly 侧没有运行时 UI 插件加载，因此这里就是一张编译期常量表——
- * 集中定义 id / order / label / group / keywords，构建期校验 id 唯一与 order 单调。
- *
- * 与「全部配置塞进 14 个平铺 tab」相比，本表额外承载**分组与搜索**信息：
- * - `group`：把 14 个 section 收拢为三个语义分组（服务与接入 / 语音与对话 / 智能体）。
- *   配置页采用**三级导航**（见 `renderConfigLayout`）：一级 = 管理台侧边栏（纵向，
- *   AdminNav）；二级 = 配置内容区顶部的**横向 tabs**（置顶项 + 分组，本表 [tabs]）；
- *   三级 = tab 内的**纵向子菜单**（该分组下的 section，`sectionsIn`）；
- * - `keywords`：为搜索框提供「中文意图 → section」的映射（如搜"音色"命中 TTS、
- *   搜"固件"命中 OTA），弥补单纯按 label 匹配覆盖不到的口语化查询。
- *
- * ⚠️ 页面内容仍写在 `ConfigCards.renderConfigSection` 的 `when` 里（而不是本文件返回 lambda）：
- * Kuikly 的 `ViewBuilder` 接收者由**调用点**的期望类型推断，把 lambda 装进 `when` 再返回
- * 会让接收者丢失（实测编译报 "receiver type mismatch"）。表与内容分开也正好符合
- * "表声明 + 渲染"的分工。
+ * Compiled navigation metadata, not executable/downloaded UI plugins.
+ * Stable section IDs preserve links and config paths; renderers stay explicit ViewContainer
+ * extensions. The voice group follows PipelinePanels, not server capability-array order.
  */
 class SectionDescriptor(
     val id: String,
     val order: Int,
     val label: String,
-    /** 所属分组（见 [ConfigSections.groups]）；null = 置顶项（如总览）。 */
     val group: String? = null,
-    /** 搜索关键词（口语化 / 中文意图 → 该 section），用于配置页搜索框。 */
-    val keywords: List<String> = emptyList(),
+    val capabilityId: String? = when (id) {
+        "aiui" -> "fullchain"
+        "soul", "memory", "wakeup", "command" -> id
+        else -> PipelinePanels.all.firstOrNull { it.sectionId == id }?.capabilityId
+    },
 )
 
 object ConfigSections {
-
-    /** 分组（order 升序即展示顺序）：id → 中文标题。 */
     val groups: List<Pair<String, String>> = listOf(
-        // order 以 10 为步长：留出插入空间，避免每次新增都要重排既有值
+        "voice" to "语音主流程",
+        "agent" to "上下文增强",
         "service" to "服务与接入",
-        "voice" to "语音与对话",
-        "agent" to "智能体",
     )
 
-    /**
-     * 全部 section，**按展示顺序声明**：先置顶项，再按分组顺序，组内保持逻辑顺序。
-     * `order` 仅用于构建期单调校验，展示顺序由本表声明顺序决定（与分组一致）。
-     */
     val all: List<SectionDescriptor> = listOf(
-        SectionDescriptor("overview", 0, "总览", null, listOf("总览", "能力", "插件", "overview")),
-        // 预设（P1-5）：置顶项。快照/应用全局配置；设备个性化模式下仅显示不可用提示。
-        SectionDescriptor(
-            "presets", 5, "预设", null,
-            listOf("预设", "快照", "备份", "回滚", "preset", "profile"),
-        ),
-        // —— 服务与接入 ——
-        SectionDescriptor(
-            "server", 10, "Server", "service",
-            listOf("端口", "地址", "token", "令牌", "服务", "server", "worker", "后台"),
-        ),
-        SectionDescriptor(
-            "aiui", 20, "AIUI 全链路", "service",
-            listOf("全链路", "讯飞", "aiui", "极速超拟人", "云端闭环"),
-        ),
-        SectionDescriptor("mcp", 30, "MCP 工具", "service", listOf("工具", "mcp", "插件", "能力")),
-        SectionDescriptor("ota", 40, "OTA", "service", listOf("固件", "升级", "ota", "firmware", "设备")),
-        // —— 语音与对话（VAD→ASR→LLM→TTS 流水线）——
-        SectionDescriptor(
-            "audio", 50, "Audio", "voice",
-            listOf("采样率", "帧长", "缓冲", "下行", "audio", "音频", "抖动"),
-        ),
-        // EchoMuse 设备入口（RestartOnly）：开启后 Echo Dot 2 / emOS 设备可经 mDNS 发现接入
-        SectionDescriptor(
-            "echomuse", 55, "EchoMuse", "service",
-            listOf("echomuse", "echo", "音箱", "dot", "emos", "设备入口"),
-        ),
-        SectionDescriptor("asr", 60, "ASR", "voice", listOf("识别", "语音识别", "sensevoice", "asr")),
-        SectionDescriptor("vad", 70, "VAD", "voice", listOf("静音", "语音端点", "vad", "切段")),
-        SectionDescriptor(
-            "llm", 80, "LLM", "voice",
-            listOf("大模型", "模型", "提示词", "prompt", "llm", "system", "对话"),
-        ),
-        SectionDescriptor("tts", 90, "TTS", "voice", listOf("语音合成", "音色", "tts", "合成", "发音人")),
-        SectionDescriptor("command", 100, "指令", "voice", listOf("指令", "退下", "闭嘴", "command", "拦截")),
-        SectionDescriptor(
-            "nlu", 105, "技能", "voice",
-            listOf("技能", "意图", "槽位", "模板", "级联", "nlu", "skill"),
-        ),
-        SectionDescriptor("wakeup", 110, "唤醒", "voice", listOf("唤醒", "问候", "wakeup", "我在")),
-        // —— 智能体（上下文生产者）——
-        SectionDescriptor("soul", 120, "灵魂", "agent", listOf("人格", "灵魂", "人设", "soul", "角色")),
-        SectionDescriptor("memory", 130, "记忆", "agent", listOf("记忆", "图记忆", "memory", "上下文")),
+        SectionDescriptor("overview", 0, "能力总览"),
+        SectionDescriptor("presets", 5, "预设"),
+        SectionDescriptor("vad", 10, "VAD · 语音分段", "voice"),
+        SectionDescriptor("asr", 20, "ASR · 语音识别", "voice"),
+        SectionDescriptor("nlu", 30, "NLU · 意图与技能", "voice"),
+        SectionDescriptor("llm", 40, "LLM · 对话生成", "voice"),
+        SectionDescriptor("tts", 50, "TTS · 语音合成", "voice"),
+        // Branches are separate sections, not additional mandatory pipeline stages.
+        SectionDescriptor("command", 60, "结束与指令", "voice"),
+        SectionDescriptor("wakeup", 70, "唤醒与问候", "voice"),
+        SectionDescriptor("soul", 80, "人格", "agent"),
+        SectionDescriptor("memory", 90, "记忆", "agent"),
+        SectionDescriptor("aiui", 100, "AIUI 全链路模式", "service"),
+        SectionDescriptor("audio", 110, "音频与播放", "service"),
+        SectionDescriptor("server", 120, "服务", "service"),
+        SectionDescriptor("echomuse", 130, "EchoMuse 接入", "service"),
+        SectionDescriptor("mcp", 140, "MCP 工具", "service"),
+        SectionDescriptor("ota", 150, "固件与 OTA", "service"),
     )
 
-    /** 置顶项（group == null），按声明顺序。 */
     val pinned: List<SectionDescriptor> get() = all.filter { it.group == null }
+    val tabs: List<Pair<String, String>> = pinned.map { it.id to it.label } + groups
 
-    /**
-     * 二级横向 tabs（order 升序 = 展示顺序）：置顶项各自成 tab，分组各成一个 tab。
-     * id 语义：置顶项 tab 的 id = 该 section 的 id；分组 tab 的 id = 分组 id。
-     */
-    val tabs: List<Pair<String, String>> =
-        pinned.map { it.id to it.label } + groups
+    fun tabOf(sectionId: String): String = all.firstOrNull { it.id == sectionId }?.group ?: sectionId
 
-    /** 某 section 所属的二级 tab id：置顶项 = 自身 id；分组项 = 所属分组 id。 */
-    fun tabOf(sectionId: String): String =
-        all.firstOrNull { it.id == sectionId }?.group ?: sectionId
-
-    /** 点二级 tab 时默认选中的 section：置顶项 tab = 自身；分组 tab = 组内第一个 section。 */
     fun firstSectionIn(tabId: String): String =
         if (groups.any { it.first == tabId }) sectionsIn(tabId).first().id else tabId
 
-    /** 某分组下的 section，按声明顺序。 */
     fun sectionsIn(group: String): List<SectionDescriptor> = all.filter { it.group == group }
-
-    /**
-     * 按关键词（label / keywords / 分组标题，不区分大小写）过滤 section。
-     * 空查询返回全部（用于"未搜索"态）。搜索命中口语化意图：如"音色"→TTS、"固件"→OTA、"识别"→ASR。
-     */
-    fun search(query: String): List<SectionDescriptor> {
-        val q = query.trim().lowercase()
-        if (q.isEmpty()) return all
-        val groupLabels = groups.associate { it.first to it.second.lowercase() }
-        return all.filter { d ->
-            d.label.lowercase().contains(q) ||
-                d.keywords.any { it.lowercase().contains(q) } ||
-                (d.group?.let { groupLabels[it]?.contains(q) } ?: false)
-        }
-    }
 
     init {
         val ids = all.map { it.id }
         require(ids.distinct().size == ids.size) { "配置 section id 必须唯一：$ids" }
-        val orders = all.map { it.order }
-        require(orders == orders.sorted()) { "配置 section 必须按 order 升序声明：$orders" }
-        require(ids.all { it.isNotBlank() } && all.all { it.label.isNotBlank() }) {
-            "配置 section 的 id/label 不得为空"
-        }
+        require(all.map { it.order } == all.map { it.order }.sorted()) { "配置 section 必须按 order 升序声明" }
+        require(ids.all { it.isNotBlank() } && all.all { it.label.isNotBlank() })
         val groupIds = groups.map { it.first }.toSet()
-        require(all.none { it.group != null && it.group !in groupIds }) {
-            "配置 section 的 group(${all.mapNotNull { it.group }}) 必须先在 groups 里声明"
-        }
+        require(all.none { it.group != null && it.group !in groupIds })
+        require(sectionsIn("voice").take(5).map { it.id } == PipelinePanels.all.map { it.sectionId })
     }
 }

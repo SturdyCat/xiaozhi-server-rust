@@ -17,7 +17,7 @@ use crate::app::downlink::pad_tail;
 /// 一句音频的分帧器（生命周期 = 一句合成）。
 pub(crate) struct StreamingFramer {
     resampler: StreamingResampler,
-    encoder: OpusFrameEncoder,
+    encoder: Option<OpusFrameEncoder>,
     /// 每帧样本数 = 下行采样率 × 帧长（毫秒）。
     frame: usize,
     /// 不足整帧的尾部样本（跨分片积攒）。
@@ -26,11 +26,40 @@ pub(crate) struct StreamingFramer {
 
 impl StreamingFramer {
     /// 按 `tts_sr`（引擎输出）→ `downlink_sr` 建立重采样与编码链。
+    #[cfg(test)]
     pub(crate) fn new(tts_sr: u32, downlink_sr: u32, frame_ms: u32) -> anyhow::Result<Self> {
-        let frame = ((downlink_sr as f32 * frame_ms.max(1) as f32 / 1000.0) as usize).max(1);
+        Self::new_format(
+            tts_sr,
+            crate::app::audio::media::AudioFormat::new(
+                crate::app::audio::media::AudioCodec::Opus,
+                downlink_sr,
+                frame_ms,
+            ),
+        )
+    }
+
+    pub(crate) fn new_format(
+        tts_sr: u32,
+        format: crate::app::audio::media::AudioFormat,
+    ) -> anyhow::Result<Self> {
+        use crate::app::audio::media::AudioCodec;
+        anyhow::ensure!(
+            tts_sr > 0
+                && format.sample_rate > 0
+                && format.frame_ms > 0
+                && format.channels == 1
+                && format.codec_version == 1,
+            "unsupported audio format"
+        );
+        let frame = ((u64::from(format.sample_rate) * u64::from(format.frame_ms.max(1)) / 1000)
+            as usize)
+            .max(1);
         Ok(Self {
-            resampler: StreamingResampler::new(tts_sr, downlink_sr),
-            encoder: OpusFrameEncoder::new(downlink_sr)?,
+            resampler: StreamingResampler::new(tts_sr, format.sample_rate),
+            encoder: match format.codec {
+                AudioCodec::Opus => Some(OpusFrameEncoder::new(format.sample_rate)?),
+                AudioCodec::PcmS16Le => None,
+            },
             frame,
             carry: Vec::new(),
         })
@@ -51,7 +80,7 @@ impl StreamingFramer {
         self.carry.extend_from_slice(&down);
         let mut out: Vec<Vec<u8>> = Vec::new();
         while self.carry.len() >= self.frame {
-            let opus = self.encoder.encode_frame(&self.carry[..self.frame])?;
+            let opus = encode(&mut self.encoder, &self.carry[..self.frame])?;
             self.carry.drain(..self.frame);
             out.push(opus);
         }
@@ -65,7 +94,17 @@ impl StreamingFramer {
         }
         let tail = pad_tail(&self.carry, self.frame);
         self.carry.clear();
-        Ok(Some(self.encoder.encode_frame(&tail)?))
+        Ok(Some(encode(&mut self.encoder, &tail)?))
+    }
+}
+
+fn encode(encoder: &mut Option<OpusFrameEncoder>, pcm: &[f32]) -> anyhow::Result<Vec<u8>> {
+    match encoder {
+        Some(encoder) => encoder.encode_frame(pcm),
+        None => Ok(pcm
+            .iter()
+            .flat_map(|s| ((s.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes())
+            .collect()),
     }
 }
 

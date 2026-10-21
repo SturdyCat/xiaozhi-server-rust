@@ -34,6 +34,11 @@ internal fun ConfigFormState.fill(obj: JSONObject) {
         downlinkBufferStartMs = a.optInt("downlink_buffer_start_ms", downlinkBufferStartMs.toIntOrNull() ?: 1500).toString()
         downlinkBufferStartMaxMs = a.optInt("downlink_buffer_start_max_ms", downlinkBufferStartMaxMs.toIntOrNull() ?: 4000).toString()
     }
+    obj.optJSONObject("playback")?.let { p ->
+        playbackMode = p.optString("mode", playbackMode)
+        announcementStartMs = p.optInt("announcement_start_ms", announcementStartMs.toIntOrNull() ?: 5000).toString()
+        announcementStartMaxMs = p.optInt("announcement_start_max_ms", announcementStartMaxMs.toIntOrNull() ?: 10000).toString()
+    }
     obj.optJSONObject("asr")?.let { a ->
         asrModel = a.optString("model", asrModel)
         asrTokens = a.optString("tokens", asrTokens)

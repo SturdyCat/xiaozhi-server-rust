@@ -2,14 +2,14 @@
 
 ## 链路与职责
 
-[回复编排](<../session/reply.rs>) → [逐句预取](<../prefetch.rs>)（流式 PCM 下载预算）→ [分帧](<framer.rs>)（连续重采样/Opus 编码）→ [服务端水库](<reservoir.rs>) → [发送端](<sender.rs>) → [节拍器](<../downlink.rs>) → 设备。
+[回复编排](<../session/reply.rs>) → [逐句预取](<../prefetch.rs>)（流式 PCM 下载预算）→ [分帧](<framer.rs>)（一句内复用重采样器，按实际 profile 输出 Opus 或原生 S16LE）→ [服务端水库](<reservoir.rs>) → [发送端](<sender.rs>) → [节拍器](<../downlink.rs>) → 设备。
 
 ## 不可破坏的不变量
 
 - ESP 解码队列有上限，队满可能静默丢包；macOS 测试台流畅不等于 ESP 可无限接收。发送端逐帧 `pace` 必须保留。
 - 节拍器按绝对时间表发送；生命周期是**一次回复**，句间不能 reset。真空重锚定按实际下发间隔判定，阈值不小于帧长，`mark_sent` 在 sleep 和下发之后记录。
 - 下一句在上一句播放时预取，合成仍串行且有界；不要恢复为“播完再合成”，也不要无界预取。
-- PCM 下载预算按音频时长而非通道槽数计量；分片 Drop 归还额度。水库满时对生产端施加背压，发送端依然按实时节奏取帧。
+- PCM 下载预算同时限制时长和字节；超大 provider callback 先切片，不得扩大预算。分片 Drop 同时归还两种额度。水库满时对生产端施加背压，发送端依然按实时节奏取帧。
 - 重采样器/编码器跨 PCM 分片复用，否则边界会相位跳变或爆音。在线 TTS 超时不能把下游背压等待算作上游无数据耗时。
 - 起跑闸有最大等待，生产已结束的短回复不应空等。设备在进入 Speaking 前会丢音频，`tts start` 后的首帧保护不能删除。
 - abort / 消费者关闭必须终止生产和发送；缓存只收完整句，不把中断半句当成可复用成品。
@@ -22,7 +22,8 @@
 
 ## 诊断与回归
 
-- TTFA 是首帧**实际下发**时刻，不是整句发送完成时刻。
+- TTFA 与 pacing 的 mark_sent 都在首帧 socket write 完成后记录，不是 provider 首片、mpsc 入队或设备播放证明；Echo 回执来自实际 data writer。
+- [playback](<../../config/playback.rs>) 在会话开始固定：interactive 保留旧起跑闸，announcement 只改有最大等待且不超过既有水库容量的起跑闸，不扩大水库/设备队列。旧 audio/echomuse 仍 RestartOnly；热生效元数据以注册表为准。
 - 同时看真空次数/最长真空、设备队列最低余量估计和整轮实时吞吐；真空为零不代表没有持续慢生产。
 - 修改后覆盖首帧、长回复、句间连续性、abort、起跑超时、水库背压和消费退出。
 - 回归：[节拍器测试](<tests.rs>)、[发送测试](<sender/tests.rs>)、[水库测试](<reservoir/tests.rs>)、[分帧测试](<framer/tests.rs>)、[预取测试](<../prefetch/tests.rs>)。真机队列溢出还需 ESP 验收。

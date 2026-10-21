@@ -79,7 +79,10 @@ pub(crate) const PREFETCH_PCM_CHUNKS: usize = 64;
 /// 生产端（TTS 回调）与消费端（编码入水库）必须用**同一个**口径记账，故两侧都调它；
 /// `sr` 由生产端捕获并随成品投递给消费端（见 [`PreparedAudio::Stream`]），保证一致。
 pub(crate) fn chunk_ms(samples: usize, sr: u32) -> u64 {
-    ((samples as u64).saturating_mul(1_000) / (sr.max(1) as u64)).max(1)
+    (samples as u64)
+        .saturating_mul(1_000)
+        .div_ceil(sr.max(1) as u64)
+        .max(1)
 }
 
 /// 一轮回复的**下载缓冲预算**：按音频秒数给「TTS 流下载」定上限。
@@ -102,7 +105,7 @@ pub(crate) struct DownloadBudget {
     /// 预算（毫秒）；至少 1 以免把下载掐死
     budget_ms: u64,
     /// 当前积压（毫秒）
-    queued_ms: Mutex<u64>,
+    queued_ms: Mutex<(u64, usize)>,
     /// 峰值积压（毫秒）
     peak_ms: AtomicU64,
     /// 因预算而**暂停下载**的累计等待（毫秒）与次数
@@ -128,7 +131,7 @@ impl DownloadBudget {
     pub(crate) fn new(budget_ms: u32) -> Arc<Self> {
         Arc::new(Self {
             budget_ms: (budget_ms as u64).max(1),
-            queued_ms: Mutex::new(0),
+            queued_ms: Mutex::new((0, 0)),
             peak_ms: AtomicU64::new(0),
             throttle_ms: AtomicU64::new(0),
             throttle_events: AtomicU64::new(0),
@@ -137,10 +140,23 @@ impl DownloadBudget {
 
     /// 生产端：为本片 PCM 预留额度。返回 `false` = 停止下载（打断 / 读端已放弃）。
     ///
-    /// 单片大于预算时按"至少放行一片"处理（`limit = max(预算, 本片)`）——否则永远等不到，
-    /// 大分片上游（整段一次性回传）会被卡死。
+    /// Large provider callbacks are sliced before reservation; a callback never
+    /// enlarges either ceiling.
+    #[cfg(test)]
     pub(crate) fn reserve(&self, ms: u64, abort: &AtomicBool, closed: &dyn Fn() -> bool) -> bool {
-        let limit = self.budget_ms.max(ms);
+        self.reserve_bytes(ms, 0, abort, closed)
+    }
+    fn reserve_bytes(
+        &self,
+        ms: u64,
+        bytes: usize,
+        abort: &AtomicBool,
+        closed: &dyn Fn() -> bool,
+    ) -> bool {
+        if ms > self.budget_ms || bytes > MAX_DOWNLOAD_BYTES {
+            return false;
+        }
+        let limit = self.budget_ms;
         let t0 = Instant::now();
         loop {
             if abort.load(Ordering::Relaxed) || closed() {
@@ -148,9 +164,12 @@ impl DownloadBudget {
             }
             {
                 let mut q = self.queued_ms.lock().unwrap_or_else(|e| e.into_inner());
-                if q.saturating_add(ms) <= limit {
-                    *q += ms;
-                    self.peak_ms.fetch_max(*q, Ordering::Relaxed);
+                if q.0.saturating_add(ms) <= limit
+                    && q.1.saturating_add(bytes) <= MAX_DOWNLOAD_BYTES
+                {
+                    q.0 += ms;
+                    q.1 += bytes;
+                    self.peak_ms.fetch_max(q.0, Ordering::Relaxed);
                     break;
                 }
             }
@@ -166,9 +185,14 @@ impl DownloadBudget {
     }
 
     /// 消费端：取走一片后归还额度（多余的归还按 0 处理，不会变负）。
+    #[cfg(test)]
     pub(crate) fn release(&self, ms: u64) {
+        self.release_bytes(ms, 0);
+    }
+    fn release_bytes(&self, ms: u64, bytes: usize) {
         let mut q = self.queued_ms.lock().unwrap_or_else(|e| e.into_inner());
-        *q = q.saturating_sub(ms);
+        q.0 = q.0.saturating_sub(ms);
+        q.1 = q.1.saturating_sub(bytes);
     }
 
     /// 本轮下载缓冲观测。
@@ -184,7 +208,7 @@ impl DownloadBudget {
     /// 当前积压（毫秒）：单测与诊断用。
     #[cfg(test)]
     pub(crate) fn queued_ms(&self) -> u64 {
-        *self.queued_ms.lock().unwrap_or_else(|e| e.into_inner())
+        self.queued_ms.lock().unwrap_or_else(|e| e.into_inner()).0
     }
 }
 
@@ -197,14 +221,16 @@ pub(crate) struct PcmChunk {
     pub pcm: Vec<f32>,
     /// 该片占用的下载缓冲额度（毫秒）；0 = 未记账
     ms: u64,
+    bytes: usize,
     /// 归还目标；`None` = 未记账（一次性回传路径：音频已在内存，不经下载缓冲）
     budget: Option<Arc<DownloadBudget>>,
 }
 
 impl PcmChunk {
-    /// 流式路径：已 [`DownloadBudget::reserve`] 过额度，Drop 时归还。
+    /// Streaming path: duration AND bytes reserved; Drop returns both.
     pub(crate) fn budgeted(pcm: Vec<f32>, ms: u64, budget: Arc<DownloadBudget>) -> Self {
         Self {
+            bytes: pcm.len() * std::mem::size_of::<f32>(),
             pcm,
             ms,
             budget: Some(budget),
@@ -216,6 +242,7 @@ impl PcmChunk {
         Self {
             pcm,
             ms: 0,
+            bytes: 0,
             budget: None,
         }
     }
@@ -224,7 +251,7 @@ impl PcmChunk {
 impl Drop for PcmChunk {
     fn drop(&mut self) {
         if let Some(budget) = &self.budget {
-            budget.release(self.ms);
+            budget.release_bytes(self.ms, self.bytes);
         }
     }
 }
@@ -241,13 +268,43 @@ pub(crate) fn push_pcm(
     sr: u32,
     abort: &AtomicBool,
 ) -> bool {
+    push_pcm_slice(budget, tx, &chunk, sr, abort)
+}
+
+pub(crate) const MAX_DOWNLOAD_BYTES: usize = 4 * 1024 * 1024;
+
+fn push_pcm_slice(
+    budget: &Arc<DownloadBudget>,
+    tx: &mpsc::Sender<PcmChunk>,
+    chunk: &[f32],
+    sr: u32,
+    abort: &AtomicBool,
+) -> bool {
+    if sr == 0 {
+        return false;
+    }
+    let samples = ((budget.budget_ms * sr as u64 / 1000) as usize).clamp(1, MAX_DOWNLOAD_BYTES / 4);
+    for part in chunk.chunks(samples) {
+        if !push_pcm_part(budget, tx, part, sr, abort) {
+            return false;
+        }
+    }
+    true
+}
+fn push_pcm_part(
+    budget: &Arc<DownloadBudget>,
+    tx: &mpsc::Sender<PcmChunk>,
+    chunk: &[f32],
+    sr: u32,
+    abort: &AtomicBool,
+) -> bool {
     let ms = chunk_ms(chunk.len(), sr);
     // 先预留额度：额度不够就在这里等（= 下载被限速），而不是把 PCM 无界灌进来
-    if !budget.reserve(ms, abort, &|| tx.is_closed()) {
+    if !budget.reserve_bytes(ms, std::mem::size_of_val(chunk), abort, &|| tx.is_closed()) {
         return false;
     }
     // 预留成功起，额度就由 `item` 的 Drop 负责归还（含下面每一条提前返回路径）
-    let mut item = PcmChunk::budgeted(chunk, ms, budget.clone());
+    let mut item = PcmChunk::budgeted(chunk.to_vec(), ms, budget.clone());
     loop {
         match tx.try_send(item) {
             Ok(()) => return true,
@@ -396,24 +453,32 @@ where
             let handle = tokio::task::spawn_blocking(move || {
                 // 推理闸门 permit：RAII——闭包退出（正常结束/回调取消收尾/panic 展开）即归还。
                 let _gate_permit = permit;
+                let callback_ok = Arc::new(AtomicBool::new(true));
+                let callback_ok_cb = callback_ok.clone();
                 let r = tts.synthesize_stream(
                     &synth_text,
                     speed,
                     speaker,
-                    Box::new(move |_sr, chunk| {
-                        // 打断/消费者退出：回调返回 false → 引擎尽快收尾
-                        if abort_cb.load(Ordering::Relaxed) || tx_cb.is_closed() {
-                            return false;
+                    Box::new(move |actual_sr, chunk| {
+                        let accepted = if abort_cb.load(Ordering::Relaxed)
+                            || tx_cb.is_closed()
+                            || actual_sr != sr
+                        {
+                            false
+                        } else {
+                            if let Some(hook) = first_pcm_cb.as_ref() {
+                                hook();
+                            }
+                            push_pcm_slice(&budget_cb, &chunk_tx, chunk, sr, &abort_cb)
+                        };
+                        if !accepted {
+                            callback_ok_cb.store(false, Ordering::Release);
                         }
-                        if let Some(hook) = first_pcm_cb.as_ref() {
-                            hook();
-                        }
-                        // 下载缓冲：额度不够就在这里等（= 按缓存需要控制下载流速）
-                        push_pcm(&budget_cb, &chunk_tx, chunk.to_vec(), sr, &abort_cb)
+                        accepted
                     }),
                 );
                 // 合成是否正常结束决定该句能否写入缓存（残缺句不入缓存）
-                let _ = done_tx.send(r.is_ok());
+                let _ = done_tx.send(r.is_ok() && callback_ok.load(Ordering::Acquire));
                 r
             });
             let item = PreparedSentence {

@@ -1,0 +1,130 @@
+package com.xiaozhi.admin
+
+import com.tencent.kuikly.core.base.Border
+import com.tencent.kuikly.core.base.BorderStyle
+import com.tencent.kuikly.core.base.CursorType
+import com.tencent.kuikly.core.base.ViewContainer
+import com.tencent.kuikly.core.pager.Pager
+import com.tencent.kuikly.core.views.Scroller
+import com.tencent.kuikly.core.views.Text
+import com.tencent.kuikly.core.views.View
+
+/** Same global workflow in the admin shell and standalone config page. */
+internal const val WORKFLOW_HEADER_HEIGHT = 121f
+private const val CONNECTION_WIDTH = 44f
+
+fun ViewContainer<*, *>.pipelineWorkflowHeader(
+    form: ConfigFormState,
+    ctx: Pager,
+    active: () -> Boolean = { true },
+    onSelect: () -> Unit = {},
+    topInset: Float = 0f,
+) {
+    val stageWidth = { ((ctx.pagerData.pageViewWidth - 32f - 6 * CONNECTION_WIDTH) / 5f).coerceAtLeast(112f) }
+    View {
+        attr {
+            flexDirectionColumn()
+            height(WORKFLOW_HEADER_HEIGHT + topInset)
+            paddingTop(topInset)
+            backgroundColor(AdminColors.sidebarBg)
+        }
+        View {
+            attr { height(44f); flexDirectionRow(); alignItemsCenter(); paddingLeft(AdminSpace.md); paddingRight(AdminSpace.md) }
+            Text { attr { text("语音工作流"); fontSize(AdminType.micro); fontWeightMedium(); color(AdminColors.textSecondary) } }
+            View { attr { flex(1f) } }
+            appButton("全局设置", variant = ButtonVariant.TEXT, icon = IconToken.Settings) {
+                form.openConfigSection("server")
+                onSelect()
+            }
+        }
+        Scroller {
+            attr { height(76f); flexDirectionRow(); showScrollerIndicator(false) }
+            View {
+                attr {
+                    flexDirectionRow(); alignItemsCenter(); height(76f)
+                    width(5 * stageWidth() + 6 * CONNECTION_WIDTH)
+                    marginLeft(AdminSpace.md); marginRight(AdminSpace.md)
+                }
+                for (position in PipelineWorkflow.positions) {
+                    val selected = { active() && form.workflowPosition?.id == position.id }
+                    val select = { form.selectWorkflowPosition(position.id); onSelect() }
+                    if (position.isCore) workflowStage(position, stageWidth, selected, select)
+                    else workflowConnection(position, selected, select)
+                }
+            }
+        }
+        View { attr { height(1f); backgroundColor(AdminColors.divider) } }
+    }
+}
+
+private fun ViewContainer<*, *>.workflowStage(
+    position: WorkflowPosition,
+    stageWidth: () -> Float,
+    selected: () -> Boolean,
+    onSelect: () -> Unit,
+) {
+    val node = position.nodes.single()
+    View {
+        attr {
+            width(stageWidth()); height(60f); flexDirectionColumn(); justifyContentCenter(); alignItemsCenter()
+            borderRadius(AdminShape.radiusSm)
+            border(Border(1f, BorderStyle.SOLID, if (selected()) AdminColors.accent else AdminColors.dividerStrong))
+            backgroundColor(if (selected()) AdminColors.accentTintBg else AdminColors.cardBg)
+            cursor(CursorType.POINTER)
+            accessibility("流程模块：${position.label}${if (selected()) "，已选中" else ""}")
+        }
+        event { click { onSelect() } }
+        View {
+            attr { flexDirectionRow(); alignItemsCenter(); touchEnable(false) }
+            appIcon({ node.icon }, size = 16f, tint = { if (selected()) AdminColors.accentTintText else AdminColors.textSecondary })
+            Text {
+                attr {
+                    marginLeft(AdminSpace.xs); text(position.label); fontSize(AdminType.body); fontWeightMedium()
+                    color(if (selected()) AdminColors.accentTintText else AdminColors.textPrimary); touchEnable(false)
+                }
+            }
+        }
+        Text {
+            attr {
+                text(node.label.substringAfter(" · ")); fontSize(AdminType.micro)
+                color(AdminColors.textSecondary); marginTop(2f); touchEnable(false)
+            }
+        }
+    }
+}
+
+private fun ViewContainer<*, *>.workflowConnection(
+    position: WorkflowPosition,
+    selected: () -> Boolean,
+    onSelect: () -> Unit,
+) {
+    val label = when (position.id) { "start" -> "流程开始"; "end" -> "流程结束"; else -> position.label }
+    View {
+        attr {
+            width(CONNECTION_WIDTH); height(76f); cursor(CursorType.POINTER)
+            accessibility("流程连接点：$label${if (selected()) "，已选中" else ""}")
+        }
+        event { click { onSelect() } }
+        View {
+            attr {
+                absolutePosition(left = if (position.id == "start") 22f else 0f, right = if (position.id == "end") 22f else 0f, top = 38f)
+                height(1f); backgroundColor(AdminColors.dividerStrong); touchEnable(false)
+            }
+        }
+        View {
+            attr {
+                absolutePosition(left = 13f, top = 29f); size(18f, 18f); borderRadius(9f)
+                border(Border(2f, BorderStyle.SOLID, if (selected()) AdminColors.accent else AdminColors.textTertiary))
+                backgroundColor(if (selected()) AdminColors.accent else AdminColors.sidebarBg); touchEnable(false)
+            }
+        }
+        if (position.id == "start" || position.id == "end") {
+            Text {
+                attr {
+                    absolutePosition(top = 50f, left = 8f); text(position.label); fontSize(11f)
+                    color(if (selected()) AdminColors.accentTintText else AdminColors.textTertiary); touchEnable(false)
+                }
+            }
+        }
+    }
+}

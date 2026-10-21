@@ -14,6 +14,8 @@ import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.pager.Pager
 import com.tencent.kuikly.core.reactive.handler.observable
 import com.tencent.kuikly.core.reactive.handler.observableList
+import com.tencent.kuikly.core.views.Input
+import com.tencent.kuikly.core.views.TextInputState
 import com.tencent.kuikly.core.views.Text
 import com.tencent.kuikly.core.views.View
 import platform.AppKit.NSPasteboard
@@ -93,6 +95,11 @@ private class ServerSwitchState(scope: PagerScope) {
     var input by scope.observable(DEFAULT_SERVER)
     var busy by scope.observable(false)
 
+    // Masked connection-form draft only. Applied credential lives in this Pager's params,
+    // never SP/keychain or ConfigFormState.expectedToken. Clear the draft on Apply/Cancel.
+    var tokenInput by scope.observable("")
+    var tokenEdited = false
+
     /** 当前生效基址（侧边栏入口小字实时展示；observable 在 attr 闭包内读取才被跟踪）。 */
     var current by scope.observable("")
 
@@ -130,6 +137,8 @@ actual fun ViewContainer<*, *>.macServerSwitchEntry(
         attr { flexDirectionColumn() }
         sidebarItem("服务器设置", { false }) {
             state.input = prefs(pager).getItem(KEY_SERVER_URL).ifEmpty { DEFAULT_SERVER }
+            state.tokenInput = pager.adminRequestToken()
+            state.tokenEdited = false
             state.busy = false
             onOpened()
             // 面板展开期间保持发现（列表实时刷新）；已在跑则复用。
@@ -194,7 +203,12 @@ actual fun ViewContainer<*, *>.macServerSwitchEntry(
                         backgroundColor(AdminColors.insetBg)
                         cursor(CursorType.POINTER)
                     }
-                    event { click { applyBase(pager, state, server.base, onClosed, onApplied) } }
+                    event {
+                        click {
+                            applyBase(pager, state, server.base, onClosed, onApplied,
+                                requestToken = tokenForTarget(state, server.base))
+                        }
+                    }
                     Text {
                         attr {
                             flex(1f)
@@ -217,9 +231,13 @@ actual fun ViewContainer<*, *>.macServerSwitchEntry(
             labeledField(
                 "服务器地址",
                 { state.input },
-                { state.input = it },
+                {
+                    state.input = it
+                    if (normalizeBase(it) != state.current && !state.tokenEdited) state.tokenInput = ""
+                },
                 DEFAULT_SERVER,
             )
+            sessionTokenField(state)
             actionRow {
                 primaryButton(
                     "保存并重新加载",
@@ -235,10 +253,13 @@ actual fun ViewContainer<*, *>.macServerSwitchEntry(
                     // 手动选择是最高优先级：写回 SP 后自动接管永久退场（尊重用户选择）。
                     state.autoApplied = true
                     stopDiscovery(pager, state)
-                    applyBase(pager, state, base, onClosed, onApplied)
+                    applyBase(pager, state, base, onClosed, onApplied,
+                        requestToken = tokenForTarget(state, base))
                 }
                 View { attr { width(AdminSpace.sm) } }
                 secondaryButton("取消") {
+                    state.tokenInput = ""
+                    state.tokenEdited = false
                     onClosed()
                     // 自动接管不再可能（有手填记忆）或用户主动收起且已接管 → 停止常驻浏览。
                     if (!autoDiscoveryNeeded(pager, state)) stopDiscovery(pager, state)
@@ -247,6 +268,57 @@ actual fun ViewContainer<*, *>.macServerSwitchEntry(
         }
     }
 }
+
+/** Official password input; native textInputState keeps the editor IME-safe (no text() echo). */
+private fun ViewContainer<*, *>.sessionTokenField(state: ServerSwitchState) {
+    fieldLabel("管理令牌（仅本次会话）")
+    View {
+        attr {
+            flexDirectionRow()
+            alignItemsCenter()
+            height(48f)
+            backgroundColor(AdminColors.fieldBg)
+            border(Border(1f, BorderStyle.SOLID, AdminColors.divider))
+            borderRadius(AdminShape.radiusSm)
+            paddingLeft(AdminSpace.sm)
+            paddingRight(AdminSpace.sm)
+        }
+        Input {
+            attr {
+                flex(1f)
+                height(48f)
+                backgroundColor(AdminColors.transparent)
+                fontSize(AdminType.body)
+                color(AdminColors.textPrimary)
+                keyboardTypePassword()
+                returnKeyTypeDone()
+                placeholder("留空不携带管理令牌")
+                accessibility("管理令牌，仅本次会话")
+                textInputState { TextInputState(text = state.tokenInput) }
+            }
+            event {
+                textInputStateChange { input ->
+                    if (input.compositionStart == TextInputState.NO_COMPOSITION && input.text != state.tokenInput) {
+                        state.tokenInput = input.text
+                        state.tokenEdited = true
+                    }
+                }
+            }
+        }
+    }
+    Text {
+        attr {
+            fontSize(AdminType.micro)
+            color(AdminColors.textTertiary)
+            marginTop(AdminSpace.xs)
+            text("仅用于当前管理请求，不写入服务端配置或本地存储。切换服务器请重新输入令牌。")
+        }
+    }
+}
+
+/** Never forward a previous server's credential implicitly to another authority. */
+private fun tokenForTarget(state: ServerSwitchState, base: String): String =
+    if (base == state.current || state.tokenEdited) state.tokenInput else ""
 
 /** 表单内分组细分割线（发现列表与手填区之间）。 */
 private fun ViewContainer<*, *>.fieldDivider() {
@@ -279,7 +351,9 @@ private fun startDiscovery(pager: Pager, state: ServerSwitchState, onApplied: ()
             servers.firstOrNull()?.let { first ->
                 state.autoApplied = true
                 stopDiscovery(pager, state)
-                applyBase(pager, state, first.base, onClosed = {}, onApplied = onApplied)
+                // Automatic discovery may select an address, never an uncommitted token draft.
+                applyBase(pager, state, first.base, onClosed = {}, onApplied = onApplied,
+                    requestToken = if (first.base == state.current) pager.adminRequestToken() else "")
             }
         }
     }
@@ -310,10 +384,14 @@ private fun applyBase(
     base: String,
     onClosed: () -> Unit,
     onApplied: () -> Unit,
+    requestToken: String,
 ) {
     prefs(pager).setItem(KEY_SERVER_URL, base)
+    pager.applyAdminRequestToken(requestToken)
     state.current = base
     state.input = base
+    state.tokenInput = ""
+    state.tokenEdited = false
     onClosed()
     onApplied()
 }

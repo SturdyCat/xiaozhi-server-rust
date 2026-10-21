@@ -84,7 +84,7 @@ impl VadPool {
             if g.sig != sig {
                 // [vad] 配置变了：池中旧实例参数已过期，整体丢弃重建（新会话用新参数）。
                 g.idle.clear();
-                g.sig = sig;
+                g.sig = sig.clone();
             }
             // 惰性空闲回收：借出前丢弃空闲超时的实例。
             while let Some(at) = g.idle.front().map(|(_, t)| *t) {
@@ -104,6 +104,7 @@ impl VadPool {
         };
         Ok(VadGuard {
             engine: Some(engine),
+            sig,
             pool: Arc::clone(&self.state),
             _permit: permit,
         })
@@ -115,6 +116,7 @@ impl VadPool {
 /// 代理 `accept` / `flush`（与 `Box<dyn VadEngine>` 同名同签名），会话代码零改动。
 pub struct VadGuard {
     engine: Option<Box<dyn VadEngine>>,
+    sig: String,
     pool: Arc<PoolState>,
     _permit: OwnedSemaphorePermit,
 }
@@ -123,6 +125,12 @@ impl VadGuard {
     pub fn accept(&mut self, samples: &[f32], cb: &mut dyn FnMut(Vec<f32>)) {
         if let Some(e) = self.engine.as_mut() {
             e.accept(samples, cb);
+        }
+    }
+
+    pub fn reset(&mut self) {
+        if let Some(e) = self.engine.as_mut() {
+            e.reset();
         }
     }
 
@@ -135,9 +143,13 @@ impl VadGuard {
 
 impl Drop for VadGuard {
     fn drop(&mut self) {
-        if let Some(e) = self.engine.take() {
+        if let Some(mut e) = self.engine.take() {
+            // 池复用不能把上一连接的残留/recurrent state 带给下一连接。
+            e.reset();
             let mut g = self.pool.inner.lock().unwrap_or_else(|e| e.into_inner());
-            g.idle.push_back((e, Instant::now()));
+            if g.sig == self.sig {
+                g.idle.push_back((e, Instant::now()));
+            } // 配置已换代：旧借出实例只释放，不回灌新池。
         }
         // `_permit` 随之 drop → 名额归还信号量
     }

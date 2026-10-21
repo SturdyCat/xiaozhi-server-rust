@@ -1,0 +1,27 @@
+Original Xiaozhi admin icon resources
+
+SPDX-License-Identifier: CC0-1.0
+
+The SVG vector sources in source/ were authored specifically for this project
+in 2026. No third-party icon library, image, or font was copied or bundled.
+These original icon resources are dedicated to the public domain under
+CC0 1.0 Universal: https://creativecommons.org/publicdomain/zero/1.0/
+
+The canonical 24x24 SVGs use currentColor for theme-aware vector painting.
+Common UI passes bundled SVG source URIs to its dedicated SVG view; Web embeds
+the canonical common XML in a generated Kotlin registry and uses inline SVG,
+without publishing a second copy of the SVG files. Native uses CAShapeLayer paths.
+SVG roots omit width/height so container sizing controls their bounds.
+No derived bitmap or UIImage fallback is provided. Native safely accepts bundled
+common SVG resources and is not limited to this icon catalogue.
+
+source/verify.py uses only Python's standard library to verify token mapping,
+SVG syntax/paint/container sizing, SHA-256, licensing metadata and native vector
+policy. --generated-registry decodes actual Kotlin literals against all canonical
+common SVGs; --web-dir rejects obsolete copied assets. --bundle-zip verifies the
+shared/native asset archive. Copied-SVG --published-dir mode is obsolete.
+No image conversion or download occurs. Run --write-manifest only after an
+intentional source/licence update; normal --check is read-only.
+
+This dedication applies only to the original icon artwork resources, not to
+application code or third-party dependencies.

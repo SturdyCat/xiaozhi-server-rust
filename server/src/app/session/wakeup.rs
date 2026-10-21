@@ -119,13 +119,8 @@ impl<'a, T: Transport> Session<'a, T> {
     /// [`crate::app::hot_audio::managed`]）。取不到成品帧（`[tts].cache_entries == 0`
     /// 或本句被中断）时 debug 静默跳过——落盘是复用优化，绝不影响会话。
     pub(super) fn persist_canned_audio(&self, slot: &str, text: &str) {
-        // 键口径与合成路径共用同一构造入口（见 `HotAudioKey::from_session` 文档）。
-        let key = HotAudioKey::from_session(
-            &self.eff_config,
-            self.params.downlink_sr,
-            self.params.downlink_frame_ms,
-            text,
-        );
+        // 键口径与合成路径共用同一构造入口（见 `HotAudioKey::from_lease` 文档）。
+        let key = HotAudioKey::from_media_lease(&self.tts_lease, self.params.output_format(), text);
         let Some(audio) = self.engines.tts_cache.get(key.mem_key()) else {
             tracing::debug!(
                 "session {} 话术无成品帧可落盘（缓存关闭或被中断，slot={slot}）",
@@ -158,14 +153,10 @@ impl<'a, T: Transport> Session<'a, T> {
 
         let text = self.wake.text().to_string();
         let persist = self.wake.persist();
-        // 键口径与合成路径**共用**同一构造入口（见 `HotAudioKey::from_session` 文档）：
+        // 键口径与合成路径**共用**同一构造入口（见 `HotAudioKey::from_lease` 文档）：
         // 两处各写一遍必然漂移，而漂移的表现是"缓存永远不命中"——不报错，最难查。
-        let key = HotAudioKey::from_session(
-            &self.eff_config,
-            self.params.downlink_sr,
-            self.params.downlink_frame_ms,
-            &text,
-        );
+        let key =
+            HotAudioKey::from_media_lease(&self.tts_lease, self.params.output_format(), &text);
         let mem_key = key.mem_key();
 
         // ①② 决策（纯函数，见 `resolve_greeting_audio`）：内存命中 → 磁盘命中并暖进内存

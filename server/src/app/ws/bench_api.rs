@@ -1,95 +1,202 @@
-//! 内联配置测试 HTTP 端点（P0-2）：`POST /api/test/{llm,tts,vad}`。
-//!
-//! 与 WS 测试台（`session/bench.rs`）**并存**：端点按请求 ad-hoc 构建引擎（读磁盘最新
-//! 配置），**不要求 `is_test` WS 会话**——管理页配置卡（Web 无麦克风）可直接调它测
-//! LLM 连通性 / TTS 与 VAD 延迟。测量核心在 [`crate::app::bench_api`]（与 Session 解耦）。
-//!
-//! ⚠️ 密钥安全：请求里携带的 `api_key` / `api_base` 只用于本次 ad-hoc 构建，
-//! 绝不写日志明文、绝不持久化。
+//! Unified diagnostics HTTP boundary. Legacy paths retained, all delegate to one test service.
+use crate::{
+    app::bench_api::{BenchResult, StageResult, TestRequest, TestService, MAX_BODY_BYTES},
+    config::ServerConfig,
+    engine::Engines,
+};
+use axum::{
+    extract::{rejection::JsonRejection, DefaultBodyLimit, Query, Request, State},
+    http::StatusCode,
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
+    routing::{get, post},
+    Json, Router,
+};
+use serde_json::{json, Value};
+use std::{collections::HashMap, sync::Arc};
 
-use std::sync::Arc;
-
-use axum::extract::State;
-use axum::response::{IntoResponse, Response};
-use serde::Deserialize;
-
-use crate::app::bench_api::{bench_llm, bench_tts, bench_vad};
-use crate::engine::Engines;
-
-#[derive(Deserialize)]
-pub struct TestLlmReq {
-    pub text: String,
-    pub api_base: Option<String>,
-    pub api_key: Option<String>,
+struct HttpState {
+    service: Arc<TestService>,
+    server: ServerConfig,
 }
-
-#[derive(Deserialize)]
-pub struct TestTtsReq {
-    pub text: String,
-    pub lang: Option<String>,
-    pub vcn: Option<String>,
-    pub speed: Option<f32>,
-}
-
-#[derive(Deserialize)]
-pub struct TestVadReq {}
-
-/// `POST /api/test/llm`：LLM 连通性 + 首 token 延迟（无历史单轮）。
-pub(super) async fn test_llm(
-    State(engines): State<Arc<Engines>>,
-    axum::Json(req): axum::Json<TestLlmReq>,
-) -> Response {
-    let r = bench_llm(
-        &engines,
-        &req.text,
-        req.api_base.as_deref(),
-        req.api_key.as_deref(),
+pub(super) fn routes(engines: &Arc<Engines>) -> Router<Arc<Engines>> {
+    service_router(
+        TestService::from_engines(engines),
+        engines.config.server.clone(),
     )
-    .await;
-    axum::Json(r).into_response()
+    .with_state(())
 }
-
-/// `POST /api/test/tts`：TTS 流式合成 + 首个音频 chunk 延迟。
-pub(super) async fn test_tts(
-    State(engines): State<Arc<Engines>>,
-    axum::Json(req): axum::Json<TestTtsReq>,
+/// Used by HTTP contract tests with a real SQLite store and injected provider factories.
+pub(crate) fn service_router(service: Arc<TestService>, server: ServerConfig) -> Router {
+    let state = Arc::new(HttpState { service, server });
+    Router::new()
+        .route("/api/test/capabilities", get(capabilities))
+        .route("/api/test/run", post(run))
+        .route("/api/test/llm", post(llm))
+        .route("/api/test/llm/models", post(models))
+        .route("/api/test/tts", post(tts))
+        .route("/api/test/vad", post(vad))
+        .route("/api/test/asr", post(asr))
+        .route("/api/test/nlu", post(nlu))
+        .route("/api/test/pipeline", post(pipeline))
+        .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
+        .route_layer(middleware::from_fn_with_state(state.clone(), auth))
+        .with_state(state)
+}
+async fn auth(State(state): State<Arc<HttpState>>, req: Request, next: Next) -> Response {
+    let query = Query::<HashMap<String, String>>::try_from_uri(req.uri())
+        .map(|q| q.0)
+        .unwrap_or_default();
+    if !super::auth_ok(req.headers(), &query, &state.server) {
+        return error(
+            StatusCode::UNAUTHORIZED,
+            "",
+            "unauthorized",
+            "Admin authentication required",
+        );
+    }
+    next.run(req).await
+}
+async fn capabilities(State(state): State<Arc<HttpState>>) -> Response {
+    Json(state.service.capabilities().await).into_response()
+}
+async fn handle(
+    state: Arc<HttpState>,
+    input: Result<Json<Value>, JsonRejection>,
+    alias: Option<&str>,
 ) -> Response {
-    let r = bench_tts(
-        &engines,
-        &req.text,
-        req.lang.as_deref(),
-        req.vcn.as_deref(),
-        req.speed,
+    let raw = match input {
+        Ok(Json(v)) => v,
+        Err(_) => return error(
+            StatusCode::BAD_REQUEST,
+            "",
+            "invalid_input",
+            "Invalid JSON or request body exceeds diagnostic limit",
+        ),
+    };
+    let req = match request(raw, alias) {
+        Ok(v) => v,
+        Err(e) => return error(StatusCode::BAD_REQUEST, "", "invalid_input", &e),
+    };
+    response(state.service.run(req).await)
+}
+fn request(mut raw: Value, alias: Option<&str>) -> Result<TestRequest, String> {
+    if let Some(alias) = alias {
+        let asked = raw.get("action_id").and_then(|v| v.as_str());
+        let allowed = match alias {
+            "asr.sample" => matches!(asked, None | Some("asr.sample" | "asr.recording")),
+            "pipeline.text" => matches!(asked, None | Some("pipeline.text" | "pipeline.audio")),
+            _ => asked.is_none() || asked == Some(alias),
+        };
+        if !allowed {
+            return Err("action_id does not match endpoint".into());
+        }
+        if asked.is_none() {
+            let action = if alias == "pipeline.text"
+                && (raw.get("audio").is_some() || raw.get("sample_id").is_some())
+            {
+                "pipeline.audio"
+            } else {
+                alias
+            };
+            let Some(map) = raw.as_object_mut() else {
+                return Err("JSON object required".into());
+            };
+            map.insert("action_id".into(), json!(action));
+        }
+    }
+    serde_json::from_value(raw).map_err(|_|"Invalid test request; supported fields are action_id/text/sample_id/audio/expected_revision and legacy provider overrides. Draft patches, device overlays, paths and URLs are unsupported.".into())
+}
+pub(crate) fn response(out: BenchResult) -> Response {
+    let code = match out.result.error_code {
+        Some("invalid_input") => StatusCode::BAD_REQUEST,
+        Some("revision_conflict") => StatusCode::CONFLICT,
+        Some("busy") => StatusCode::TOO_MANY_REQUESTS,
+        _ => StatusCode::OK,
+    };
+    (code, Json(out)).into_response()
+}
+fn error(code: StatusCode, action: &str, kind: &'static str, message: &str) -> Response {
+    (
+        code,
+        Json(BenchResult::new(
+            action,
+            None,
+            StageResult::error(action, kind, message),
+        )),
     )
-    .await;
-    axum::Json(r).into_response()
+        .into_response()
 }
-
-/// `POST /api/test/vad`：VAD 引擎构建（冷启动）+ 首次检测耗时。
-pub(super) async fn test_vad(
-    State(engines): State<Arc<Engines>>,
-    axum::Json(_req): axum::Json<TestVadReq>,
+async fn run(
+    State(state): State<Arc<HttpState>>,
+    v: Result<Json<Value>, JsonRejection>,
 ) -> Response {
-    let r = bench_vad(&engines).await;
-    axum::Json(r).into_response()
+    handle(state, v, None).await
 }
-
-#[derive(Deserialize)]
-pub struct TestLlmModelsReq {
-    pub api_base: Option<String>,
-    pub api_key: Option<String>,
-}
-
-/// `POST /api/test/llm/models`：拉取上游模型列表（OpenAI 兼容 GET {base}/models）。
-pub(super) async fn test_llm_models(
-    State(engines): State<Arc<Engines>>,
-    axum::Json(req): axum::Json<TestLlmModelsReq>,
+async fn llm(
+    State(state): State<Arc<HttpState>>,
+    v: Result<Json<Value>, JsonRejection>,
 ) -> Response {
-    let r = crate::app::bench_api::llm_models(
-        &engines,
-        req.api_base.as_deref(),
-        req.api_key.as_deref(),
+    handle(state, v, Some("llm.chat")).await
+}
+async fn tts(
+    State(state): State<Arc<HttpState>>,
+    v: Result<Json<Value>, JsonRejection>,
+) -> Response {
+    handle(state, v, Some("tts.synthesis")).await
+}
+async fn vad(
+    State(state): State<Arc<HttpState>>,
+    v: Result<Json<Value>, JsonRejection>,
+) -> Response {
+    handle(state, v, Some("vad.sample")).await
+}
+async fn asr(
+    State(state): State<Arc<HttpState>>,
+    v: Result<Json<Value>, JsonRejection>,
+) -> Response {
+    handle(state, v, Some("asr.sample")).await
+}
+async fn nlu(
+    State(state): State<Arc<HttpState>>,
+    v: Result<Json<Value>, JsonRejection>,
+) -> Response {
+    handle(state, v, Some("nlu.classify")).await
+}
+async fn pipeline(
+    State(state): State<Arc<HttpState>>,
+    v: Result<Json<Value>, JsonRejection>,
+) -> Response {
+    handle(state, v, Some("pipeline.text")).await
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ModelsRequest {
+    api_base: Option<String>,
+    api_key: Option<String>,
+}
+async fn models(
+    State(state): State<Arc<HttpState>>,
+    v: Result<Json<Value>, JsonRejection>,
+) -> Response {
+    let req = match v
+        .ok()
+        .and_then(|Json(raw)| serde_json::from_value::<ModelsRequest>(raw).ok())
+    {
+        Some(v) => v,
+        None => return error(
+            StatusCode::BAD_REQUEST,
+            "llm.models",
+            "invalid_input",
+            "Expected api_base/api_key only",
+        ),
+    };
+    Json(
+        state
+            .service
+            .models(req.api_base.as_deref(), req.api_key.as_deref())
+            .await,
     )
-    .await;
-    axum::Json(r).into_response()
+    .into_response()
 }

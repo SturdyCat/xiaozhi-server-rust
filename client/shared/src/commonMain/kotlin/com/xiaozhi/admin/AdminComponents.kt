@@ -55,18 +55,20 @@ fun ViewContainer<*, *>.dividerH() {
  * `error`（不可用/失败，如加载失败 + 怎么修）。
  * 全站提示文字的**唯一**入口，避免每处各写一套字号与色值。
  */
-fun ViewContainer<*, *>.textNote(text: String, tone: String = "tertiary", micro: Boolean = false) {
+fun ViewContainer<*, *>.textNote(text: String, tone: String = "tertiary", micro: Boolean = false) =
+    textNote({ text }, { tone }, micro)
+
+/** Dynamic values are read inside attr, never captured as construction-time snapshots. */
+fun ViewContainer<*, *>.textNote(text: () -> String, tone: () -> String = { "tertiary" }, micro: Boolean = false) {
     Text {
         attr {
             fontSize(if (micro) AdminType.micro else AdminType.caption)
-            color(
-                when (tone) {
-                    "warn" -> AdminColors.warningTintText
-                    "error" -> AdminColors.dangerTintText
-                    else -> AdminColors.textTertiary
-                },
-            )
-            text(text)
+            color(when (tone()) {
+                "warn" -> AdminColors.warningTintText
+                "error" -> AdminColors.dangerTintText
+                else -> AdminColors.textTertiary
+            })
+            text(text())
         }
     }
 }
@@ -85,7 +87,7 @@ fun ViewContainer<*, *>.groupedCard(title: String, withDivider: Boolean = true, 
             backgroundColor(AdminColors.cardBg)
             borderRadius(AdminShape.radiusLg)
             border(Border(1f, BorderStyle.SOLID, AdminColors.divider))
-            padding(AdminSpace.cardPadding)
+            padding(if (workspaceIsCompact(getPager())) AdminSpace.sm else AdminSpace.cardPadding)
             marginBottom(AdminSpace.gutter)
         }
         sectionTitle(title)
@@ -109,7 +111,7 @@ fun ViewContainer<*, *>.skeletonCard(rows: Int = 3) {
             backgroundColor(AdminColors.cardBg)
             borderRadius(AdminShape.radiusLg)
             border(Border(1f, BorderStyle.SOLID, AdminColors.divider))
-            padding(AdminSpace.cardPadding)
+            padding(if (workspaceIsCompact(getPager())) AdminSpace.sm else AdminSpace.cardPadding)
             marginBottom(AdminSpace.gutter)
         }
         // 骨架条：高 12 圆角灰条，Column 子项默认 stretch 满宽（同 dividerH），

@@ -9,6 +9,8 @@
 
 use super::*;
 
+mod utterance;
+
 /// 内存传输：预置上行帧 + 记录下行文本。
 ///
 /// `hang=true` 时"没有预置帧"表现为**永不就绪**（模拟设备收下请求却不回包），
@@ -335,6 +337,9 @@ async fn discovery_buffers_every_frame_and_hands_it_back_in_order() {
         .map(|f| match f {
             IncomingFrame::Text(_) => "text",
             IncomingFrame::Binary(_) => "binary",
+            IncomingFrame::Audio(_) => "audio",
+            IncomingFrame::AudioBoundary(_, _) => "audio_boundary",
+            IncomingFrame::EndOfUtterance(_) => "utterance_end",
             IncomingFrame::Closed => "closed",
         })
         .collect();

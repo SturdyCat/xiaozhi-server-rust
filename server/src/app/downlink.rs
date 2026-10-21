@@ -137,7 +137,7 @@ impl DownlinkPacer {
         }
     }
 
-    /// 记录"该帧已实际下发"。**必须在下发之后调用**（`pace` 在 sleep 之后调用）：
+    /// 记录"该帧已实际下发"。**必须在下发之后调用**（发送端在 socket write 完成之后调用）：
     /// 真空判定看的是两次真实下发的间隔，若在 sleep 之前记录，贴实时（lead=0）时
     /// 每帧都会把睡眠时长算成"真空"从而反复重锚定 → 节流失效。
     /// 单测用它在不 sleep 的前提下精确模拟下发时刻。
@@ -151,7 +151,6 @@ impl DownlinkPacer {
         if !wait.is_zero() {
             tokio::time::sleep(wait).await;
         }
-        self.mark_sent(Instant::now());
     }
 
     /// 帧调度计算（纯函数，可测）：返回需等待时长并推进虚拟播放位置一帧。
@@ -232,7 +231,10 @@ pub(crate) fn poll_abort<T: Transport>(
                 }
             }
             // 播报期的上行音频/listen 等在轮询中丢弃
-            IncomingFrame::Binary(_) => {}
+            IncomingFrame::Binary(_)
+            | IncomingFrame::Audio(_)
+            | IncomingFrame::AudioBoundary(_, _)
+            | IncomingFrame::EndOfUtterance(_) => {}
         }
     }
     abort.load(Ordering::Relaxed)

@@ -97,7 +97,7 @@ private fun ViewContainer<*, *>.nluBuildModelSection(form: ConfigFormState, nlu:
             text("可选增强：用当前技能定义自动生成一个本地语义分类模型，替换「轻量模型」级的启发式打分（对口语化说法识别更稳，零外网推理）。训练在服务端宿主 docker 里进行，约数分钟。")
         }
     }
-    primaryButton(if (nlu.buildBusy) "训练中…" else "生成 NLU 模型") {
+    primaryButton("生成 NLU 模型", loading = { nlu.buildBusy }, loadingText = "训练中…") {
         nlu.startBuildModel(ctx, form.serverBase)
     }
     vif({ nlu.buildMsg.isNotEmpty() }) {

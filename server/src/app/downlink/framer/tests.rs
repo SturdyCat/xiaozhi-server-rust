@@ -53,3 +53,5 @@ fn empty_input_yields_no_frames() {
     assert!(f.push(&[]).expect("空分片").is_empty());
     assert!(f.finish().expect("空收尾").is_none());
 }
+
+mod native;

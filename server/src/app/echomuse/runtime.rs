@@ -27,6 +27,8 @@ pub(crate) struct LiveControl {
     pub session_id: uuid::Uuid,
     pub peer: Option<IpAddr>,
     pub authenticated: bool,
+    pub(crate) turn: super::turn::BoundedTurn,
+    pub(crate) media: Arc<super::media::MediaState>,
     state: Mutex<Runtime>,
 }
 
@@ -36,6 +38,8 @@ impl LiveControl {
             session_id: uuid::Uuid::new_v4(),
             peer,
             authenticated,
+            turn: super::turn::BoundedTurn::default(),
+            media: Arc::new(super::media::MediaState::default()),
             state: Mutex::new(Runtime::default()),
         }
     }
@@ -150,6 +154,7 @@ pub(crate) struct ControlLease {
 
 impl Drop for ControlLease {
     fn drop(&mut self) {
+        self.live.media.close();
         super::hub_remove_session(&self.id, &self.ctl);
     }
 }

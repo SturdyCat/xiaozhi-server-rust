@@ -48,6 +48,12 @@ targets:
         excludes: ["Podfile", "project.yml", "*.xcodeproj", "*.xcworkspace"]
       # App 图标资源目录（macOS AppIcon，蓝紫渐变螺旋对话气泡）
       - path: Assets.xcassets
+      # Keep canonical common SVGs in a folder reference for XzSvgView's trusted
+      # NSBundle common tree; flattening breaks the shared vector-resource paths.
+      - path: ../../shared/src/commonMain/assets/common
+        type: folder
+        buildPhase: resources
+        excludes: ["**/*.py", "**/__pycache__/**"]
     info:
       path: Info.plist
       properties:

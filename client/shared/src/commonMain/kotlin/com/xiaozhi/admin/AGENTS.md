@@ -8,10 +8,11 @@
 
 - [AdminTheme](<AdminTheme.kt>)提供 token，现有[组件](<AdminComponents.kt>)、[表单控件](<AdminFormControls.kt>)、[widgets](<AdminWidgets.kt>)统一封装官方控件；不要绕过封装散写样式。
 - 页面/配置分区由[AdminNav](<AdminNav.kt>)和[ConfigSections](<ConfigSections.kt>)常量表驱动，id 稳定、order 确定。新增分区同时补渲染分支。
-- Tabs/PageList 显式提供 pageItemWidth/Height；滚动事件回传 Tabs.scrollParams，点击 tab 调 scrollToPageIndex。不自画指示器。
+- Tabs/PageList 显式提供 pageItemWidth/Height；滚动事件回传 Tabs.scrollParams，点击 tab 调 scrollToPageIndex。不自画指示器。配置/测试工作区无横向 PageList，以相同两态驱动官方 Tabs.scrollParams 与选中内容。
+- 紧凑断点取 `adminContentWidth`：AdminPage 常驻侧栏时扣 240+1，其余页取整窗，不能直接拿整窗判工作区宽。H5 官方 Scroller 的 `showScrollerIndicator(false)` 对应 `isList list-no-scrollbar`；宿主 [index](<../../../../../../../apps/h5App/web/index.html>)须保留该 class 的 scoped CSS，不能用 overflow:hidden 或 DOM 轮询伪修滚动条裁切。
 - 嵌套 DSL 先 `val ctx=this` 再显式访问 Pager；复用渲染为文件级 ViewContainer 扩展，ViewBuilder 显式传接收者。observable 在 attr/vif 闭包内读取才被跟踪。
 - 可点击目标（侧边栏项/标签页/按钮/下拉与选项行/健康跳转行）一律 `attr { cursor(CursorType.POINTER) }`；core 的 cursor prop 仅 macOS 原生直读，web 端靠 h5App 的 `WebCursorPropHandler` 外部处理器落 `style.cursor`，别在业务里散写 CSS。
-- 官方 compose Button 负责居中；不塞子节点 loading 菊花。NMAllResponse.data 非空，不复制恒假的 data==null 判断。
+- 官方传统 DSL Button 保留标题、交互与无障碍语义；加载 Canvas 和独立 SvgView 都是不可交互的兄弟覆盖层，不塞任意子节点、不把 SVG 交给图片槽。SVG 源文件仅保留在 common，根不写固定 width/height，只保留 viewBox，由容器决定尺寸；Web 从同一源自动生成内联资源表，不另存一套 SVG 文件。资源经 [SvgView](<SvgView.kt>) 到 Apple CGPath/CAShapeLayer 或 Web SVG DOM，不允许 PNG/UIImage/位图回退。NMAllResponse.data 非空，不复制恒假的 data==null 判断。
 
 ## 表单与网络契约
 
@@ -20,7 +21,7 @@
 - 整型字段用 labeledIntField、浮点字段用 labeledDecimalField（[AdminFormControls](<AdminFormControls.kt>)，输入侧实时剥离非法字符）：裸 labeledField 留给文本/密钥——整数字段混入脏输入会让 `toIntOrNull() ?: 默认值` 把错误静默存成默认值。
 - BLE 的危险目标 handle 是严格校验例外：使用 `labeledField` 保留原始输入并由 [EchoMuseBleCodec](<EchoMuseBleCodec.kt>) 的纯函数拒绝非法十进制/范围；不得把 -1 或 1.2 清洗成别的真实外设 handle，也不允许解析服务树数字时截断小数。
 - hot/字段提示由[FormSchemaState](<FormSchemaState.kt>)消费服务端 schema，不手写另一套档位。schema 不是自动布局，engine/preset 可选项仍需两端同步。
-- 409 保留草稿，显式“重新加载”，不静默覆盖。preset 应用复用服务端配置管线；overlay 编辑只提交设备增量，不能混成全局整份配置。
+- 409 保留草稿，显式“重新加载”，不静默覆盖；紧凑标题栏冲突/设备操作另起右对齐行，不挤压标题。preset 应用复用服务端配置管线；overlay 编辑只提交设备增量，不能混成全局整份配置。健康修复/全局设置的明确配置跳转用 `openConfigSection` 回到 Configuration 参数页，普通顶部节点点击才保留 tab。
 - NetworkModule 只支持 GET/POST，使用服务端 POST 别名；curl 的 PUT/DELETE 能用不等于页面可用。
 - 人格预览 effective 全段 fill，客户端不复制预设合并。能力 enabled 与 phase 分开，异常/降级须显示原因与修复指引。
 - 设备/会话/最近对话/延迟注明进程内口径，online 非心跳，不呈现为完整历史。
@@ -38,7 +39,7 @@
 
 管理台是 **Kuikly 多端工程**（`client/`），逻辑在 `client/shared/commonMain` 跨端复用；web 构建产物由 server 在 `/` 静态托管。
 
-默认落地页 **管理台**（`@Page("admin")`）：一级纵向侧边栏；「配置」section 内为三级导航——二级横向 tabs（总览/预设/三分组）→ 三级纵向子菜单 + 右侧内容（布局见 `ConfigTabs.kt`，分区常量见 `ConfigSections.kt`）：
+默认落地页是 **语音流程与配置**（`@Page("admin")`）：该内容区顶部为[横向工作流](<PipelineWorkflowView.kt>)（仅配置区渲染，不跨运维页面），VAD → ASR → NLU → LLM → TTS 为模块，头尾及衔接共六个可点击圆点；独立配置页复用同一组件。窄屏横向滚动，不能退回纵向节点轨道/下拉。点击模块/圆点进入「配置 / 测试」两个官方 Tabs（官方 `indicatorInTabItem` 文字下滑块样式），各自固定左菜单、右内容；测试左菜单选择单个动作。无配置搜索框，分区只能经工作流、全局设置或侧边栏到达。工作区小于 700 宽保留 92 宽左菜单，操作行靠右并可换行。布局见 [ConfigTabs](<ConfigTabs.kt>)及[工作区菜单](<ConfigWorkspaceViews.kt>)，位置投影见 [PipelineWorkflow](<PipelineWorkflow.kt>)，功能仍由 [PipelineFlow](<PipelineFlow.kt>)声明。只持有一个 `ConfigSelection(sectionId,nodeId?,workflowPositionId?)`，top/left 选择均由它派生；tab/status/action 是局部展示维度。空圆点只说明暂无扩展，不创建伪配置或测试。全局设置、草稿、保存冲突和独立请求凭据保持原契约，不得恢复第二份 active 状态：
 
 | Section | 数据源 | 回答什么问题 |
 |---|---|---|
@@ -63,7 +64,8 @@
 | `GET / POST(=PUT) /api/config` | 配置读写（部分更新：缺失保持原值、显式 `null` 清除、密钥空串保留、`expected_revision` 乐观并发 409 拦过期写入） |
 | `GET/PUT/DELETE /api/devices/{id}/overlay` | 每设备白名单增量（POST = PUT、`POST .../overlay/delete` = DELETE 别名，供 Kuikly 客户端使用） |
 | `GET/POST /api/config/presets`、`POST .../{name}/apply`、`DELETE/POST .../{name}/delete` | 预设：列出 / 快照当前 / 应用 / 删除 |
-| `POST /api/test/{llm,tts,vad}` | 内联连通性与首包延迟测试（按磁盘最新配置 ad-hoc 建引擎，无需麦克风，Web 可用） |
+| `GET /api/test/capabilities`、`POST /api/test/run` | 保存态 SQLite 快照的隔离节点/串联测试，带 revision、输入边界、阶段与真实观测口径；Web/macOS 复用公共面板，不声明硬件播放成功 |
+| `POST /api/test/{llm,tts,vad}` | 旧接口保留，复用隔离服务与管理鉴权；请求级覆盖不落盘，不发布生产引擎 |
 | `POST /api/test/llm/models` | 拉取上游模型列表（服务端代理 OpenAI 兼容 `GET {base}/models`；请求可带 api_base/api_key 仅本次覆盖，密钥不下发客户端） |
 | `GET /api/memory/status`、`POST /api/memory/{recall,maintain,clear,rag/reindex}` | 记忆状态 / 手动试召回 / 立即维护 / 清空 / RAG 索引重建 |
 | `GET /api/soul/presets`、`POST /api/soul/preview` | 人格预设清单 / 最终提示词预览 |
@@ -77,7 +79,7 @@
 EchoMuse 实现按职责分为 [列表与配置状态](<EchoMuseState.kt>)（含卡内菜单状态机与管理台 WS 订阅 [AdminRealtime](<AdminRealtime.kt>)）、[设备卡（标题行+卡内左菜单/右面板）](<EchoMuseDeviceCard.kt>)、[页面壳体](<EchoMusePage.kt>)、[管理状态](<EchoMuseManagementState.kt>)、[管理面板](<EchoMuseManagementCard.kt>)、[鉴权与编码](<EchoMuseAccess.kt>)：
 - 进入管理区不自动读设备；加载/失败/操作结果就地呈现，日志与系统输出可滚动及复制诊断内容。断线标历史；列表/详情/runtime 的 `session_id` 是当前 control 的观测身份，变化时清旧请求代际、busy、重启确认并标旧诊断为历史；runtime 仅设备号与会话都匹配时视为当前快照，双空兼容旧服务端、不将空当通配符。
 - `configureAccess(token, base)` 在加载前传入；切 base 或 token 清管理目标和输出，列表/长挂/写操作通过代际丢弃旧连接回包。
-- 系统操作要求服务端同时配置非空 `server.expected_token` 和 `echomuse.token`；web 用 `?token=URL编码后的管理令牌` 进入，不附裸查询参数，不在诊断内容中复制 token；macOS 原生宿主目前无管理 token 输入入口，本次仅验证公共源码编译，不承诺受保护连接可用。
+- 系统操作要求服务端同时配置非空 `server.expected_token` 和 `echomuse.token`；web 用 `?token=URL编码后的管理令牌` 进入，不附裸查询参数，不在诊断内容中复制 token；macOS 服务器设置提供密码型管理令牌输入，只保留在当前 Pager 会话，不落 SP/配置。请求凭据由 [AdminAccess](<AdminAccess.kt>)统一读取，不得复用配置草稿 expectedToken；受保护真实服务仍需独立联调。
 - 唤醒设置以固件类型发送：`owwOnDevice=off|shadow|on`、`wakeSoundLevel=quiet|medium|loud`，旧 bool/number 只在读取时迁移（旧数字统一 medium）；阈值 UI 为 0.05～1，保存拒绝非正数；只发送本表单字段，服务端按部分更新合并，保留 BLE 等其他设置。
 
 BLE 独立分为 [纯校验/codec/确认指纹](<EchoMuseBleCodec.kt>)、[请求与状态](<EchoMuseBleState.kt>)、[面板](<EchoMuseBleCard.kt>)：
@@ -92,7 +94,7 @@ BLE 独立分为 [纯校验/codec/确认指纹](<EchoMuseBleCodec.kt>)、[请求
 cd client && ./gradlew :apps:h5App:publishWeb
 
 ## 启动 server（admin_dir 默认 ../client/apps/h5App/web，按实际构建输出调整）
-cd server && ~/.cargo/bin/cargo run --features sherpa -- --config config.toml
+cd server && ~/.cargo/bin/cargo run --features sherpa -- --config-db ./data/data.db
 ## 浏览器访问 http://127.0.0.1:8000/（管理台）
 ```
 

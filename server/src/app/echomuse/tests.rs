@@ -145,10 +145,7 @@ async fn recv_translates_uplink_events() {
 #[tokio::test]
 async fn send_binary_produces_speaker_pcm_chunks() {
     let mut h = harness();
-    // 一包 Opus 在 default（无 sherpa）构建下解码为空——仍应走通不发帧；
-    // 真实解码路径由 `--features sherpa` 集成覆盖，这里验证通道与帧封装不断。
-    h.transport.send_binary(b"\x01\x02".to_vec()).await.unwrap();
-    // default 构建：解码空 → 无 0x02；data 面应有 0 条消息。
+    assert!(h.transport.send_binary(b"\x01\x02".to_vec()).await.is_err());
     assert!(h.data_rx.try_recv().is_err());
 }
 
@@ -156,7 +153,14 @@ async fn send_binary_produces_speaker_pcm_chunks() {
 async fn tts_stop_emits_eos() {
     let mut h = harness();
     h.transport
-        .send_text(r#"{"type":"tts_stop","session_id":""}"#.into())
+        .send_text(
+            crate::app::protocol::ServerMessage::Tts {
+                session_id: "contract-session".into(),
+                state: "stop".into(),
+                text: None,
+            }
+            .to_json(),
+        )
         .await
         .unwrap();
     // tts stop → 0x03 EOS（default 构建下无积压 PCM，直接一条 EOS）。
@@ -395,8 +399,8 @@ async fn 开轮聆听先detect再listen_start且重复唤醒零副作用() {
     let (up_tx, mut up_rx) = mpsc::unbounded_channel();
     // 丢弃 sink：mic_start 走 control 面不进 up_tx，这里只验证会话侧投帧顺序。
     let mut sink = futures_util::sink::drain::<axum::extract::ws::Message>();
-    let mut listening = false;
-    super::routes::start_turn(&mut listening, &mut sink, &up_tx)
+    let turn = super::turn::BoundedTurn::default();
+    super::turn::start_turn(&turn, &mut sink, &up_tx)
         .await
         .expect("开轮不应失败");
     match up_rx.recv().await {
@@ -417,9 +421,8 @@ async fn 开轮聆听先detect再listen_start且重复唤醒零副作用() {
         }
         other => panic!("次帧应是文本帧: {other:?}"),
     }
-    assert!(listening, "开轮后必须置位聆听标志");
     // 已在聆听：重复唤醒零副作用（不重复 mic_start、不再投帧）。
-    super::routes::start_turn(&mut listening, &mut sink, &up_tx)
+    super::turn::start_turn(&turn, &mut sink, &up_tx)
         .await
         .expect("重复开轮也不应失败");
     assert!(up_rx.try_recv().is_err(), "重复唤醒不得再投帧");

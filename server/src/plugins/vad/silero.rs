@@ -43,6 +43,11 @@ impl VadEngine for SherpaVad {
         }
     }
 
+    fn reset(&mut self) {
+        self.detector.reset();
+        self.detector.clear();
+    }
+
     fn flush(&mut self, cb: &mut dyn FnMut(Vec<f32>)) {
         self.detector.flush();
         while let Some(seg) = self.detector.front() {

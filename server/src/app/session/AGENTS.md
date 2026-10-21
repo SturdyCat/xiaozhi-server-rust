@@ -17,6 +17,8 @@
 - 告别语前清 stale abort；顺序是告别音频 → `tts stop` → MCP stop-listening。失败降级置 close_requested，由主循环跳过 VAD flush、排空后 close；不要分支直接 drop socket。
 - MCP 主循环内调用必须同任务抽帧，否则等自己投递响应会死锁。能力发现保留上行音频，退下等待则丢弃残留音频；其他文本帧按序补派发。详细契约见[MCP 说明](<../mcp/AGENTS.md>)。
 - [唤醒问候](<wakeup.rs>)挂 `listen detect`，不是 listen start 或 ASR；每次 detect 均问候，不能设“每会话一次”。复用 `speak_canned` 和原下行路径，跳过 LLM。
+- TTS **实际租约**在会话建立时固定（`engine::TtsLease`），实例/构建配置/签名/代际原子发布；设备 overlay 仅覆写 speaker/speed。欢迎语、问候、固定应答和正常分句统一由 `HotAudioKey::from_media_lease` 取缓存身份（实际 codec/版本/采样率/声道/帧长同样入键），重建失败继续用旧实例身份，不把请求配置当作已生效构建；别的会话热刷新不会令旧会话句间换引擎。
+- EchoMuse 有界话语通过 typed epoch 化 `AudioBoundary` 结束，不改变 ESP `listen stop`：Speech 合并已切段与 flush 尾段后 reset 再识别；NoSpeech 丢弃两类残留并 reset，零 ASR/LLM。`utterance.rs` 的有界承载包装在下行轮询期间有序暂存上行（保留原生 PCM 的时长/字节 RAII 额度，另有4096项/8MiB防御上限，溢出关闭），不丢末包/结束事件；ESP 仍沿用播报期丢上行行为。
 - 热音频内存→磁盘→真合成三级复用，共用[HotAudioKey](<../hot_audio.rs>)；生产预取路径逐句登记完整身份（`SentenceSource.hot_audio_key`），完整句合成成功经 `insert_async` 落盘，磁盘命中经 `get_async` 暖入内存。键含引擎签名/音色/语速/音频参数/文本，含凭据的签名绝不写日志；磁盘用稳定 file_id 和参数头校验；测试台等不可复现路径填 `None`。配置固定话术（欢迎语/问候语池/技能应答含告别语）另经 `persist_canned_audio`（wakeup.rs，`put_managed`）登记 `managed.json`，启动 `sync_managed` 按内容哈希校验、文案改了自动清旧。
 - persist 要求 TTS 缓存开启且配置来源有路径；问候语应短，避免主循环等待播放期间拖住用户第一句话。
 

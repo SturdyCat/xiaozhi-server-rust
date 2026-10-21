@@ -15,10 +15,10 @@
 //!
 //! | EchoMuse 事件 | 会话语义 |
 //! |---|---|
-//! | `oww_wake`（设备本地唤醒词命中） | `listen state=start` + 下发 `mic_start{lock_mic:true}` |
+//! | `oww_wake`（设备本地唤醒词命中） | `listen detect` → `mic_start{lock_mic:true}` → `listen start` |
 //! | `button`（动作键单击） | 同上（无唤醒词模型的兜底入口） |
 //! | `0x01`/`0x07` mic PCM | 上行 Opus 二进制帧（16kHz 编码，见下） |
-//! | `0x04` / `0x05` | `listen state=stop` |
+//! | `0x04` / `0x05` | typed `EndOfUtterance(Speech / NoSpeech)`，立即允许下一轮 |
 //! | 下行 Opus 帧（`send_binary`） | `0x02` speaker PCM（16kHz 解码） |
 //! | `tts stop` 文本 | `0x03` speaker EOS |
 //!
@@ -69,6 +69,8 @@ pub(crate) mod shell;
 pub(crate) mod system;
 #[cfg(test)]
 mod tests;
+mod turn;
+mod uplink;
 
 pub use config::{connect_welcome, EchomuseConfig};
 
@@ -94,6 +96,8 @@ pub enum ControlOut {
 
 /// data 面出站消息：已完整组帧的字节（`0x02`/`0x03`）。
 pub type DataOut = Vec<u8>;
+mod data_writer;
+pub(crate) mod media;
 
 /// 一台已通过 register 的设备的交接件，登记在 hub 里存活到会话结束；data 路由
 /// 只认领其中的 [`PendingDevice::data_rx`]（认领后 data 任务退出时经
@@ -132,6 +136,8 @@ pub(crate) struct DataClaim {
     pub data_tx: UnboundedSender<DataOut>,
     /// 蓝牙代理链路（data 任务收发 `0x06`/`0x08` 用；与 hub 条目同享）。
     pub ble: Arc<Mutex<ble::BleLink>>,
+    /// Captured control identity; never reacquire the listening gate by device id.
+    pub management: Arc<runtime::LiveControl>,
 }
 
 /// 进程级单例：设备 → 交接件 的登记表。
@@ -180,11 +186,15 @@ pub(crate) fn subscribe_devices_version() -> watch::Receiver<u64> {
 
 /// 登记（control 侧）；同名旧记录被替换（设备重拨是常态，旧通道随任务退出关闭）。
 fn hub_insert(device_id: &str, entry: PendingDevice) {
-    hub()
+    if let Some(old) = hub()
         .pending
         .lock()
         .expect("echomuse hub 锁中毒")
-        .insert(device_id.to_string(), entry);
+        .insert(device_id.to_string(), entry)
+    {
+        old.management.media.close();
+        let _ = old.up_tx.send(crate::app::transport::IncomingFrame::Closed);
+    }
     // 上线/下线对管理台列表可见（online / connected_secs）。
     bump_devices_version();
 }
@@ -194,17 +204,7 @@ pub(crate) fn hub_claim_data(device_id: &str) -> Option<DataClaim> {
     let mut guard = hub_iter();
     let entry = guard.get_mut(device_id)?;
     let data_rx = entry.data_rx.take()?;
-    let data_tx = entry
-        .data_tx
-        .clone()
-        .expect("register 构造的条目 data_tx 必在");
-    Some(DataClaim {
-        device_id: device_id.to_string(),
-        up_tx: entry.up_tx.clone(),
-        data_rx,
-        data_tx,
-        ble: entry.ble.clone(),
-    })
+    Some(build_claim(device_id.to_string(), entry, data_rx))
 }
 
 /// 恰好一台 data 未认领时取它；零台或多台都返回 None（多台必须显式 device_id）。
@@ -219,19 +219,32 @@ pub(crate) fn hub_claim_only() -> Option<DataClaim> {
             found = Some(id.clone());
         }
     }
-    let entry = guard.get_mut(found.as_deref()?)?;
+    let id = found?;
+    let entry = guard.get_mut(&id)?;
     let data_rx = entry.data_rx.take()?;
+    Some(build_claim(id, entry, data_rx))
+}
+
+/// 取走 data 接收端后为指定设备构造 [`DataClaim`]（两个认领入口共用）：
+/// 认领媒体收发、克隆 GATT 下发口，其余出站口/蓝牙链路与管理面引用一并转出。
+fn build_claim(
+    device_id: String,
+    entry: &mut PendingDevice,
+    data_rx: UnboundedReceiver<DataOut>,
+) -> DataClaim {
+    entry.management.media.claim();
     let data_tx = entry
         .data_tx
         .clone()
         .expect("register 构造的条目 data_tx 必在");
-    Some(DataClaim {
-        device_id: found.expect("上面已写入"),
+    DataClaim {
+        device_id,
         up_tx: entry.up_tx.clone(),
         data_rx,
         data_tx,
         ble: entry.ble.clone(),
-    })
+        management: entry.management.clone(),
+    }
 }
 
 /// Return only the owning data claim. Reset BLE and discard frames queued before
@@ -250,6 +263,13 @@ pub(crate) fn hub_restore_data(
             .as_ref()
             .is_some_and(|tx| tx.same_channel(probe));
         if same_session && entry.data_rx.is_none() {
+            entry.management.media.disconnect();
+            // Data loss cancels only this control's capture before a re-claim.
+            entry.management.turn.finish(
+                crate::app::transport::UtteranceEnd::NoSpeech,
+                &entry.up_tx,
+                |_| {},
+            );
             entry.ble.lock().expect("echomuse ble link 锁中毒").reset();
             // Snapshot the length so concurrent audio producers cannot keep this
             // bounded cleanup running forever. GATT producers require hub lock.
@@ -520,19 +540,10 @@ fn local_ipv4() -> Option<Ipv4Addr> {
     super::local_ipv4()
 }
 
-/// 会话参数：EchoMuse 侧固定 16k/60ms/v1——mic 是 16k PCM（协议常量），TTS 解码后
-/// 直接按 16k 出 PCM 给设备，无需重采样；二进制协议 v1（裸 Opus，无头）。
+/// Native Echo PCM geometry; no ESP codec/wire negotiation occurs.
 pub(crate) fn session_params(cfg: &crate::config::Config) -> crate::app::session::SessionParams {
-    crate::app::session::SessionParams {
-        uplink_bin_ver: crate::app::protocol::BinVersion::V1,
-        downlink_bin_ver: crate::app::protocol::BinVersion::V1,
-        uplink_sr: frames::MIC_SAMPLE_RATE,
-        downlink_sr: frames::MIC_SAMPLE_RATE,
-        downlink_frame_ms: 60,
-        downlink_lead_ms: cfg.audio.downlink_lead_ms,
-        downlink_buffer_ms: cfg.audio.downlink_buffer_ms,
-        download_buffer_ms: cfg.audio.download_budget_ms(),
-        downlink_buffer_start_ms: cfg.audio.downlink_buffer_start_ms,
-        downlink_buffer_start_max_ms: cfg.audio.downlink_buffer_start_max_ms,
-    }
+    crate::app::session::SessionParams::configured_defaults(
+        cfg,
+        crate::app::audio::media::AudioCodec::PcmS16Le,
+    )
 }

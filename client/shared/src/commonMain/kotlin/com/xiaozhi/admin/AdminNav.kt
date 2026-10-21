@@ -50,11 +50,11 @@ object AdminNav {
         NavDescriptor("conversations", 30, "对话记录", GROUP_OBSERVE),
         NavDescriptor("usage", 40, "用量", GROUP_OBSERVE),
         NavDescriptor("metrics", 45, "延迟", GROUP_OBSERVE),
-        NavDescriptor("config", 50, "配置", GROUP_CONFIG),
+        NavDescriptor("config", 50, "语音流程与配置", GROUP_CONFIG),
     )
 
-    /** 默认落地页：概览（打开管理台先看"现在什么状态"，而不是先看一堆配置字段）。 */
-    const val DEFAULT = "overview"
+    /** 默认进入主流程；设备、运行观测与基础设施仍保留稳定导航 ID。 */
+    const val DEFAULT = "config"
 
     init {
         val ids = all.map { it.id }
@@ -105,6 +105,7 @@ fun ViewContainer<*, *>.sidebarItem(
     isSelected: () -> Boolean,
     enabled: Boolean = true,
     showDot: () -> Boolean = { false },
+    icon: IconToken? = null,
     onClick: () -> Unit,
 ) {
     View {
@@ -133,6 +134,10 @@ fun ViewContainer<*, *>.sidebarItem(
                     marginRight(AdminSpace.sm)
                 }
             }
+        }
+        if (icon != null) {
+            appIcon({ icon }, size = 18f, tint = { if (!enabled) AdminColors.disabledText else if (isSelected()) AdminColors.accentTintText else AdminColors.textTertiary })
+            View { attr { width(AdminSpace.sm) } }
         }
         Text {
             attr {

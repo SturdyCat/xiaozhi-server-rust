@@ -65,7 +65,9 @@ class ConfigPage : Pager() {
             }
 
             // ⚠️ 非限定调用（接收者=当前容器），组件才能挂进正确的父容器
-            largeTitleBar({ "配置" + if (ctx.form.editDeviceId.isEmpty()) "" else " · 设备 ${ctx.form.editDeviceId}" }, trailing = {
+            largeTitleBar({ "节点管理" + if (ctx.form.editDeviceId.isEmpty()) "" else " · 设备 ${ctx.form.editDeviceId}" },
+                stackActions = { workspaceIsCompact(ctx) && (ctx.form.conflict || ctx.form.editDeviceId.isNotEmpty()) },
+                trailing = {
                 // 过期写入（409）后：草稿仍在本地，给一个「重新加载」出口（对齐 DSH 的冲突文案口径）
                 vif({ ctx.form.conflict }) {
                     secondaryButton("重新加载") {
@@ -106,8 +108,8 @@ class ConfigPage : Pager() {
                 }
             })
 
-            // 配置采用三级导航：一级侧边栏（壳）→ 二级横向 tabs → 三级纵向子菜单 + section 内容
-            // （布局与官方 Tabs 用法见 ConfigTabs.kt，分区常量见 ConfigSections.kt）
+            // Workflow at the top of this config content area, then the shared two-tab workspace.
+            pipelineWorkflowHeader(ctx.form, ctx)
             renderConfigLayout(
                 ctx.form,
                 ctx.plugins,

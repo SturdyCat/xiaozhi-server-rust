@@ -1,6 +1,7 @@
 package com.xiaozhi.admin
 
 import com.tencent.kuikly.core.render.web.ktx.SizeI
+import com.tencent.kuikly.core.render.web.runtime.web.expand.setAutoUpdateRootViewSizeOnResize
 import com.xiaozhi.admin.KuiklyWebRenderViewDelegator
 import kotlinx.browser.document
 import kotlinx.browser.window
@@ -28,11 +29,10 @@ fun main() {
     val containerHeight = window.innerHeight
 
     val params: MutableMap<String, String> = mutableMapOf()
-    if (urlParams.isNotEmpty()) {
-        urlParams.forEach { (k, v) -> params[k] = v }
-    }
     // 标记来自 H5 平台（业务侧可据此做降级 / 特殊处理）
     params[H5Sign] = "1"
+    // 透传所有 URL 参数（如 page_name），空参数集时等价于不清空
+    params.putAll(urlParams)
 
     val paramMap = mapOf(
         "statusBarHeight" to 0f,
@@ -41,6 +41,9 @@ fun main() {
         "param" to params,
     )
 
+    // Official throttled window/container forwarding keeps Pager breakpoints reactive
+    // on desktop resize without recreating the page or losing drafts/IME state.
+    setAutoUpdateRootViewSizeOnResize(true)
     val delegator = KuiklyWebRenderViewDelegator()
     delegator.init(containerId, pageName, paramMap, SizeI(containerWidth, containerHeight))
     delegator.resume()

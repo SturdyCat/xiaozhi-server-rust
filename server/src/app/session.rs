@@ -27,7 +27,7 @@ use std::sync::{Arc, Mutex};
 use crate::app::audio::opus::OpusFrameDecoder;
 use crate::app::downlink::DownlinkPacer;
 use crate::app::events::{TurnId, TurnTrace};
-use crate::app::protocol::{unwrap_uplink, BinVersion, ClientMessage, ServerMessage};
+use crate::app::protocol::{BinVersion, ClientMessage, ServerMessage};
 use crate::app::transport::{IncomingFrame, Transport};
 use crate::config::Config;
 use crate::engine::Engines;
@@ -50,10 +50,12 @@ mod aiui;
 mod bench;
 mod command;
 mod mcp;
+mod media;
 mod observe;
 mod producer;
 mod reply;
 mod start;
+mod utterance;
 mod wakeup;
 
 // 上行 PCM 采样格式换算（AIUI 路径用）：下移到 app/audio/pcm（行为不变搬移）。
@@ -84,6 +86,7 @@ pub struct SessionParams {
     pub downlink_bin_ver: BinVersion,
     pub uplink_sr: u32,
     pub downlink_sr: u32,
+    pub output_codec: crate::app::audio::media::AudioCodec,
     pub downlink_frame_ms: u32,
     /// 下行抖动缓冲提前量（毫秒），见 `[audio].downlink_lead_ms`。
     pub downlink_lead_ms: u32,
@@ -118,12 +121,17 @@ pub struct Session<'a, T: Transport> {
     /// 每设备生效配置（全局 `live_config()` ⊕ 设备 overlay 白名单字段）。
     /// 会话开始时算一次；请求时现读类与命令/唤醒快照类都走它，使 per-device overlay 生效。
     eff_config: Arc<Config>,
+    /// 固定实际 TTS 实例与身份；NextSession 不在句间读取进程最新引擎。
+    tts_lease: crate::engine::TtsLease,
+    /// 明确结束标记的承载延迟 ASR 到边界，NoSpeech 才能无副作用丢弃。
+    bounded_turn: bool,
+    pending_segments: Vec<Vec<f32>>,
     history: Vec<(String, String)>,
     downlink_ts: u32,
     test_recording: bool,
     test_buf: Vec<f32>,
     vad: crate::plugins::vad::pool::VadGuard,
-    uplink_decoder: OpusFrameDecoder,
+    uplink_decoder: Option<OpusFrameDecoder>,
     real_audio: bool,
     /// hello.test=true 的测试台会话：唯一能发起 asr_test/tts_test/llm_test 的连接。
     is_test: bool,
@@ -225,7 +233,7 @@ impl<'a, T: Transport> Session<'a, T> {
         // 会话结束：flush VAD 残留语音段（真实音频模式），尽力把最后一句话送完流水线。
         // 连接可能已关闭，此时发送会失败并被记录，属正常情况。
         // ⚠️ 指令断开会话时**不** flush：用户已明确要求退下，不该再为残留音频开一轮对话。
-        if self.real_audio && !self.close_requested {
+        if self.real_audio && !self.close_requested && !self.bounded_turn {
             let mut segments = Vec::new();
             self.vad.flush(&mut |seg| segments.push(seg));
             self.recognize_segments(segments).await;
@@ -272,6 +280,18 @@ impl<'a, T: Transport> Session<'a, T> {
                 }
             }
             IncomingFrame::Binary(b) => self.handle_binary(&b).await,
+            IncomingFrame::Audio(audio) => self.handle_audio(audio).await,
+            IncomingFrame::AudioBoundary(reason, epoch) => {
+                let reason = if epoch.is_current() {
+                    reason
+                } else {
+                    crate::app::transport::UtteranceEnd::NoSpeech
+                };
+                self.handle_utterance_end(reason).await;
+            }
+            IncomingFrame::EndOfUtterance(reason) => {
+                self.handle_utterance_end(reason).await;
+            }
             // 承载关闭/读取错误：会话结束（recv 内已记日志）
             IncomingFrame::Closed => return false,
         }
@@ -391,7 +411,6 @@ impl<'a, T: Transport> Session<'a, T> {
         }
     }
 
-    /// 一条用户话语在进入 LLM 前的决策结果（文本侧管线 P0-4 的 Stop 信号）。
     /// 文本/控制侧优先级管线（P0-4）：一条用户话语的**有序**处理入口，
     /// 级联流水线（`recognize_segments`）与 AIUI 全链路（`aiui_segments`）共用。
     ///
@@ -426,6 +445,21 @@ impl<'a, T: Transport> Session<'a, T> {
             return UtteranceDecision::NluStop;
         }
         UtteranceDecision::Respond
+    }
+
+    /// 测试台专用端点（`hello.test=true` 才受理）：非测试会话收到一律忽略并记日志。
+    /// 返回 `true` 表示当前会话是测试台、可继续处理；`false` 表示已记日志忽略、调用方应跳过。
+    fn accept_test_only(&self, endpoint: &str) -> bool {
+        if self.is_test {
+            true
+        } else {
+            tracing::warn!(
+                "session {} 非测试会话收到 {}，忽略",
+                self.session_id,
+                endpoint
+            );
+            false
+        }
     }
 
     async fn handle_text(&mut self, text: &str) -> anyhow::Result<()> {
@@ -473,13 +507,12 @@ impl<'a, T: Transport> Session<'a, T> {
                     crate::app::mcp::summarize(&payload)
                 );
             }
+            // 测试台专用端点（仅 hello.test=true 受理）；实现见 session/bench.rs。
+            // 非测试会话收到一律忽略（accept_test_only 记日志后返回 false）。
             ClientMessage::AsrTest { action, .. } => {
-                // 测试台专用端点（仅 hello.test=true 受理）；实现见 session/bench.rs
-                if !self.is_test {
-                    tracing::warn!("session {session_id} 非测试会话收到 asr_test，忽略");
-                    return Ok(());
+                if self.accept_test_only("asr_test") {
+                    self.handle_asr_test(action).await?;
                 }
-                self.handle_asr_test(action).await?;
             }
             ClientMessage::TtsTest {
                 text,
@@ -489,57 +522,26 @@ impl<'a, T: Transport> Session<'a, T> {
                 vcn,
                 ..
             } => {
-                // 测试台专用端点（仅 hello.test=true 受理）；实现见 session/bench.rs
-                if !self.is_test {
-                    tracing::warn!("session {session_id} 非测试会话收到 tts_test，忽略");
-                    return Ok(());
+                if self.accept_test_only("tts_test") {
+                    self.handle_tts_test(text, speaker, lang, speed, vcn)
+                        .await?;
                 }
-                self.handle_tts_test(text, speaker, lang, speed, vcn)
-                    .await?;
             }
             ClientMessage::LlmTest { text, .. } => {
-                // 测试台专用端点（仅 hello.test=true 受理）；实现见 session/bench.rs
-                if !self.is_test {
-                    tracing::warn!("session {session_id} 非测试会话收到 llm_test，忽略");
-                    return Ok(());
+                if self.accept_test_only("llm_test") {
+                    self.handle_llm_test(text).await?;
                 }
-                self.handle_llm_test(text).await?;
             }
             ClientMessage::NluTest { text, .. } => {
-                // 测试台专用端点（仅 hello.test=true 受理）；实现见 session/bench.rs
-                if !self.is_test {
-                    tracing::warn!("session {session_id} 非测试会话收到 nlu_test，忽略");
-                    return Ok(());
+                if self.accept_test_only("nlu_test") {
+                    self.handle_nlu_test(text).await?;
                 }
-                self.handle_nlu_test(text).await?;
             }
             ClientMessage::Hello(_) => {
                 tracing::warn!("会话内收到重复 hello，忽略");
             }
         }
         Ok(())
-    }
-
-    async fn handle_binary(&mut self, data: &[u8]) {
-        let payload = unwrap_uplink(self.params.uplink_bin_ver, data);
-        if payload.is_empty() {
-            return;
-        }
-        // 会话级解码器连续解码（帧间状态保留；逐包新建会在帧边界产生 PCM 断层）
-        let Ok(pcm) = self.uplink_decoder.decode_frame(payload) else {
-            return;
-        };
-        // 测试台录音中（hello.test=true 的会话）：直接缓冲整段 PCM，跳过 VAD。
-        if self.test_recording {
-            self.test_buf.extend_from_slice(&pcm);
-            return;
-        }
-        if !self.real_audio {
-            return;
-        }
-        let mut segments = Vec::new();
-        self.vad.accept(&pcm, &mut |seg| segments.push(seg));
-        self.recognize_segments(segments).await;
     }
 }
 
@@ -549,11 +551,4 @@ pub(crate) async fn send_text<T: Transport>(
     msg: &ServerMessage,
 ) -> anyhow::Result<()> {
     transport.send_text(msg.to_json()).await
-}
-
-pub(crate) async fn send_binary<T: Transport>(
-    transport: &mut T,
-    data: Vec<u8>,
-) -> anyhow::Result<()> {
-    transport.send_binary(data).await
 }

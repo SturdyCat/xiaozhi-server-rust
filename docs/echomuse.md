@@ -45,10 +45,13 @@ mDNS 广播地址**无配置项**：启动时动态探测部署机默认出口�
 | `oww_wake`（设备本地唤醒词命中） | `listen state=detect` → `listen state=start` + 下发 `mic_start{lock_mic:true}` | bounded turn：设备自己做 VAD，结束发哨兵；`detect` 先投（`[wakeup]` 唤醒问候语的触发点，问候关闭时仅多一行会话日志） |
 | `button`（动作键） | 同上 | 无唤醒词模型时的兜底入口 |
 | `0x01`/`0x07` mic PCM（16k S16LE） | 上行 Opus 二进制帧 | 服务端用同一 `OpusFrameEncoder` 编码，攒满 60ms 一包；`0x07` 会话头（session u32 + seq u16 BE）已剥离 |
-| `0x04` / `0x05`（VAD 结束/无语音哨兵） | 残段补零成整帧后 `listen state=stop` | `0x05` 与 `0x04` 同路径（服务器 VAD 兜底切段不受影响） |
+| `0x04`（VAD 结束） | 补齐残 PCM 后投 typed `EndOfUtterance(Speech)` | core 合并已切段与 VAD flush 尾段、reset 后识别；立即允许下次唤醒，不等回复 EOS |
+| `0x05`（无语音超时） | 丢弃残 PCM 后投 typed `EndOfUtterance(NoSpeech)` | core 丢弃已切段与尾段、reset，不触发 ASR/LLM；重复/空闲哨兵幂等 |
 | 下行 Opus 帧（`send_binary`） | `0x02` speaker PCM | 解码回 16k，切 40ms（1280B）一块 |
-| `tts stop` 文本 | 残段补齐 + `0x03` speaker EOS | 其余服务器 JSON（stt/llm/tts 句起）设备不消费，不下发 |
+| `ServerMessage::Tts { state:"stop" }`（JSON `type=tts,state=stop`） | 残 PCM 补零至一块 `0x02` 后发一条 `0x03` speaker EOS | 按 JSON 结构解析，不匹配伪造 `tts_stop`/文本子串；其余服务器 JSON 不下发 |
 | 会话 `close` | `Shutdown` → control 任务退出、连接关闭 | 与 WsTransport 的粘滞 `Closed` 同语义 |
+
+有界捕获 gate 属于当前 control，data claim 捕获同一对象；data 断线仅经同会话探针通过的 `hub_restore_data` 取消本轮，旧 control/data 不得清理替换会话。下行轮询保留有界话语末包与结束事件的顺序，普通 ESP `listen stop` 不变。实现与外置契约回归见 [`turn.rs`](<../server/src/app/echomuse/turn.rs>)、[`uplink.rs`](<../server/src/app/echomuse/uplink.rs>)、[`transport_tests.rs`](<../server/src/app/echomuse/transport_tests.rs>)；默认 feature 音频编解码为编译桩，测试通过不等同真实 sherpa/固件联调通过。
 
 能力协商：`ack.features` 只声明 `mic/speaker/leds/buttons/oww_trigger/oww_local_only`。**不声明** `listen_session`（不走 `0x07` 私听会话）、`audio_mix`（不做音乐面）——按协议"未声明即降级"静默关闭；未知帧型/未知 JSON 双向忽略。`ble_connect` + `ble_adverts_data` 仅在 `[echomuse].ble_proxy=true` **且**设备 register 声明 `ble_connect` 时条件追加（协议要求双向声明才启用）。
 

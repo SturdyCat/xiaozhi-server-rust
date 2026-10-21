@@ -103,3 +103,52 @@ fn hub_restore_discards_queued_frames_before_reclaim() {
     hub_remove(id);
     drop(ctl_rx);
 }
+
+#[tokio::test]
+async fn owning_data_restore_rearms_capture_but_old_restore_cannot_cancel_new_control() {
+    use crate::app::transport::UtteranceEnd;
+    let _guard = HUB_LOCK.lock().unwrap();
+    let id = "dev-turn-data-reconnect";
+    let _old_ctl = insert_online(id);
+    let old = hub_claim_data(id).unwrap();
+    let (up, mut rx) = mpsc::unbounded_channel();
+    // Use the same captured LiveControl that production data_loop uses.
+    let mut sink = futures_util::sink::drain::<axum::extract::ws::Message>();
+    super::turn::start_turn(&old.management.turn, &mut sink, &up)
+        .await
+        .unwrap();
+    rx.try_recv().unwrap();
+    rx.try_recv().unwrap();
+    hub_restore_data(id, old.data_rx, &old.data_tx);
+    let again = hub_claim_data(id).unwrap();
+    assert!(Arc::ptr_eq(&old.management, &again.management));
+    super::turn::start_turn(&again.management.turn, &mut sink, &up)
+        .await
+        .unwrap();
+    assert!(matches!(rx.try_recv().unwrap(), IncomingFrame::Text(t) if t.contains("detect")));
+    rx.try_recv().unwrap();
+
+    let _new_ctl = insert_online(id);
+    let fresh = hub_claim_data(id).unwrap();
+    assert!(!Arc::ptr_eq(&again.management, &fresh.management));
+    super::turn::start_turn(&fresh.management.turn, &mut sink, &up)
+        .await
+        .unwrap();
+    rx.try_recv().unwrap();
+    rx.try_recv().unwrap();
+    // Stale data claim cannot clear replacement's turn or return its receiver.
+    hub_restore_data(id, again.data_rx, &again.data_tx);
+    super::turn::start_turn(&fresh.management.turn, &mut sink, &up)
+        .await
+        .unwrap();
+    assert!(rx.try_recv().is_err());
+    fresh
+        .management
+        .turn
+        .finish(UtteranceEnd::Speech, &up, |_| {});
+    assert!(matches!(
+        rx.try_recv().unwrap(),
+        IncomingFrame::EndOfUtterance(UtteranceEnd::Speech)
+    ));
+    hub_remove(id);
+}

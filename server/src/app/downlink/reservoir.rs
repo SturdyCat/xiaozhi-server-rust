@@ -58,7 +58,7 @@ use super::framer::StreamingFramer;
 pub(crate) enum DownlinkItem {
     /// 句首通知：发送端据此下发 `sentence_start(text)`，**必须先于**同句音频帧。
     SentenceStart(String),
-    /// 一个已编码的下行 Opus 帧负载（**不含**二进制协议头：协议头由发送端按当前
+    /// 一个按会话实际格式编码的下行帧负载（Opus 或 PCM S16LE）（**不含**二进制协议头：协议头由发送端按当前
     /// 下行版本 + 时间戳现包，水库因此与协议版本解耦）。
     Frame(Vec<u8>),
 }
@@ -83,9 +83,13 @@ pub(crate) struct ReservoirStats {
 }
 
 /// 生产端 / 消费端共享的水位与观测。
+pub(crate) const MAX_RESERVOIR_BYTES: usize = 8 * 1024 * 1024;
+
 struct ReservoirShared {
     /// 容量（帧数）。
     cap_frames: usize,
+    duration_slots: Arc<tokio::sync::Semaphore>,
+    byte_slots: Arc<tokio::sync::Semaphore>,
     /// 一帧多少毫秒（水位换算）。
     frame_ms: u64,
     depth_frames: AtomicUsize,
@@ -105,6 +109,8 @@ impl ReservoirShared {
     fn new(cap_frames: usize, frame_ms: u64) -> Self {
         Self {
             cap_frames,
+            duration_slots: Arc::new(tokio::sync::Semaphore::new(cap_frames)),
+            byte_slots: Arc::new(tokio::sync::Semaphore::new(MAX_RESERVOIR_BYTES)),
             frame_ms,
             depth_frames: AtomicUsize::new(0),
             depth_bytes: AtomicUsize::new(0),
@@ -145,6 +151,8 @@ impl ReservoirShared {
         self.depth_frames.fetch_sub(frames, Ordering::Relaxed);
         self.depth_bytes
             .fetch_sub(item_bytes(item), Ordering::Relaxed);
+        self.duration_slots.add_permits(frames);
+        self.byte_slots.add_permits(item_bytes(item));
     }
 
     /// 入队失败（读端已放弃）时回滚 [`Self::on_push`] 的记账。
@@ -224,6 +232,28 @@ impl ReservoirSink {
     pub(crate) async fn push(&self, item: DownlinkItem) -> bool {
         let frames = item_frames(&item);
         let bytes = item_bytes(&item);
+        let t = Instant::now();
+        if bytes > MAX_RESERVOIR_BYTES {
+            return false;
+        }
+        let Ok(duration) = self
+            .shared
+            .duration_slots
+            .clone()
+            .acquire_many_owned(frames as u32)
+            .await
+        else {
+            return false;
+        };
+        let Ok(byte_guard) = self
+            .shared
+            .byte_slots
+            .clone()
+            .acquire_many_owned(bytes as u32)
+            .await
+        else {
+            return false;
+        };
         // ⚠️ **先记账再入队**：`send().await` 返回时消费者可能已经 `recv()` 取走该项，
         // 若在 send 之后才自增，读端的自减会先发生 → 水位计数下溢成天文数字
         // （起跑闸会误判"水库已满"，观测也全错）。失败/取消由 `PushGuard` 回滚。
@@ -233,8 +263,9 @@ impl ReservoirSink {
             frames,
             bytes,
             committed: false,
+            duration: Some(duration),
+            byte_guard: Some(byte_guard),
         };
-        let t = Instant::now();
         if self.tx.send(item).await.is_err() {
             return false; // guard 析构即回滚记账
         }
@@ -258,11 +289,15 @@ struct PushGuard<'a> {
     frames: usize,
     bytes: usize,
     committed: bool,
+    duration: Option<tokio::sync::OwnedSemaphorePermit>,
+    byte_guard: Option<tokio::sync::OwnedSemaphorePermit>,
 }
 
 impl PushGuard<'_> {
     fn commit(mut self) {
         self.committed = true;
+        self.duration.take().expect("duration reservation").forget();
+        self.byte_guard.take().expect("byte reservation").forget();
     }
 }
 
@@ -271,6 +306,13 @@ impl Drop for PushGuard<'_> {
         if !self.committed {
             self.shared.on_rollback(self.frames, self.bytes);
         }
+    }
+}
+
+impl Drop for ReservoirSource {
+    fn drop(&mut self) {
+        self.shared.duration_slots.close();
+        self.shared.byte_slots.close();
     }
 }
 
@@ -440,16 +482,15 @@ async fn push_sentence(
             mut chunks,
             done,
         } => {
-            let mut framer =
-                match StreamingFramer::new(sr, params.downlink_sr, params.downlink_frame_ms) {
-                    Ok(f) => f,
-                    Err(e) => {
-                        tracing::warn!("建立 Opus 分帧器失败（本句丢弃，{text}）: {e:#}");
-                        drop(chunks); // 停止上游，不能持接收端等待已被背压的合成退出
-                        let _ = done.await;
-                        return true; // 单句失败不终止整轮（与旧实现一致：只丢这一句）
-                    }
-                };
+            let mut framer = match StreamingFramer::new_format(sr, params.output_format()) {
+                Ok(f) => f,
+                Err(e) => {
+                    tracing::warn!("建立 Opus 分帧器失败（本句丢弃，{text}）: {e:#}");
+                    drop(chunks); // 停止上游，不能持接收端等待已被背压的合成退出
+                    let _ = done.await;
+                    return true; // 单句失败不终止整轮（与旧实现一致：只丢这一句）
+                }
+            };
             let mut collected: Vec<Vec<u8>> = Vec::new();
             let mut collected_bytes = 0usize;
             let mut cacheable = cache_key != 0;

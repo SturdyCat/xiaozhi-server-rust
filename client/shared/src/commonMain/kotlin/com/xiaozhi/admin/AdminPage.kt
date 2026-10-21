@@ -27,6 +27,8 @@ import com.tencent.kuikly.core.views.View
  * ```
  * ┌ 侧边栏(240) ┬ 内容区 ─────────────────────────┐
  * │ 概览        │ largeTitleBar(标题 + 右侧动作)   │
+ * │ 设备        │ 配置区顶部：横向工作流(121)      │
+ * │ 会话        │ → 配置/测试 Tabs → 左菜单+右内容 │
  * │ 设备        │ Scroller / tabbedPanel          │
  * │ 会话        │                                 │
  * │ 对话记录    │                                 │
@@ -36,8 +38,8 @@ import com.tencent.kuikly.core.views.View
  * └─────────────┴─────────────────────────────────┘
  * ```
  *
- * 「配置」沿用既有的 `renderForm`（14 个 tab 的 Tabs+PageList），因此本页**没有**取代
- * [ConfigPage]：`page_name=config` 仍可单独打开（单页模式，便于嵌入式/调试场景）。
+ * 「节点管理」与 [ConfigPage] 共用 renderConfigLayout：配置/测试两个 Tabs，各自左菜单、右内容。
+ * `page_name=config` 仍可单独打开，并复用同一顶部工作流与草稿。
  *
  * ## 响应式布局（P1-4）
  *
@@ -165,7 +167,7 @@ class AdminPage : Pager() {
         // 测试台布局参数（mac-only section，见下方分支）：与 AdminShell 时代同一口径
         //（宽 = 窗口宽 - 侧边栏(240) - 分隔(1)；高 = 窗口高 - 顶避让(36) - 标题栏区(145-36)）。
         val twoColumn = { pagerData.pageViewWidth >= 900f }
-        val contentPageWidth = { pagerData.pageViewWidth - 241f }
+        val contentPageWidth = { adminContentWidth(ctx) }
         val contentPageHeight = { pagerData.pageViewHeight - 145f }
         return {
             attr {
@@ -182,7 +184,6 @@ class AdminPage : Pager() {
 
                 // ===== 侧边栏：宽屏常驻；窄屏隐藏（改顶栏汉堡 + 抽屉浮层，见文件末尾）=====
                 vif({ !isNarrow() }) {
-                    // ⚠️ 非限定调用：接收者必须是本容器，侧边栏节点才会挂进主行
                     adminSidebar(ctx, topInset)
                     // 侧边栏右侧 1px 分隔
                     View {
@@ -205,7 +206,7 @@ class AdminPage : Pager() {
                         title = {
                             // 配置 section：编辑目标为设备时标题带设备号（P1-5「当前编辑对象」）
                             if (ctx.selectedSection == "config") {
-                                if (ctx.form.editDeviceId.isEmpty()) "配置" else "配置 · 设备 ${ctx.form.editDeviceId}"
+                                if (ctx.form.editDeviceId.isEmpty()) "节点管理" else "节点管理 · 设备 ${ctx.form.editDeviceId}"
                             } else {
                                 AdminNav.label(ctx.selectedSection)
                             }
@@ -216,6 +217,8 @@ class AdminPage : Pager() {
                                 hamburgerButton { ctx.drawerOpen = true }
                             }
                         },
+                        stackActions = { ctx.selectedSection == "config" && workspaceIsCompact(ctx) &&
+                            (ctx.form.conflict || ctx.form.editDeviceId.isNotEmpty()) },
                         trailing = {
                             vif({ ctx.selectedSection == "config" && ctx.form.conflict }) {
                                 // 过期写入（409）：草稿仍在本地，给一个「重新加载」出口
@@ -259,7 +262,7 @@ class AdminPage : Pager() {
                             renderOpsOverview(ctx.stats, ctx.plugins, ctx.engineHealth, ctx) { section ->
                                 // 横幅跳转：切到配置页并定位对应 section（P0 导航重组既有链路）
                                 ctx.selectedSection = "config"
-                                ctx.form.configSection = section
+                                ctx.form.openConfigSection(section)
                             }
                         }
                     }
@@ -307,7 +310,9 @@ class AdminPage : Pager() {
                         opsScroller { renderOpsMetrics(ctx.metrics, ctx) }
                     }
                     vif({ ctx.selectedSection == "config" }) {
-                        // 配置采用三级导航：一级侧边栏 → 二级横向 tabs → 三级纵向子菜单 + 内容
+                        // Workflow sits at the top of the voice config content area only,
+                        // then drives the local tabs and their left/right workspace.
+                        pipelineWorkflowHeader(ctx.form, ctx)
                         renderConfigLayout(
                             ctx.form,
                             ctx.plugins,
@@ -338,7 +343,7 @@ class AdminPage : Pager() {
                 View {
                     attr {
                         absolutePosition(top = 0f, left = 0f, bottom = 0f)
-                        width(240f)
+                        width(ADMIN_SIDEBAR_WIDTH)
                         backgroundColor(AdminColors.sidebarBg)
                         zIndex(9)
                     }
@@ -353,7 +358,8 @@ class AdminPage : Pager() {
 }
 
 /** 窄屏断点（P1-4）：低于此宽度侧边栏改抽屉。与 twoPane 的 900 双列断点各自独立。 */
-private const val NARROW_BREAKPOINT = 768f
+internal const val NARROW_BREAKPOINT = 768f
+internal const val ADMIN_SIDEBAR_WIDTH = 240f
 
 /**
  * 侧边栏（宽屏常驻列与窄屏抽屉**共用**）：分组标题 + 导航项 + 底部版本行。
@@ -365,7 +371,7 @@ private const val NARROW_BREAKPOINT = 768f
 private fun ViewContainer<*, *>.adminSidebar(ctx: AdminPage, topInset: Float) {
     View {
         attr {
-            width(240f)
+            width(ADMIN_SIDEBAR_WIDTH)
             flexDirectionColumn()
             backgroundColor(AdminColors.sidebarBg)
             paddingTop(topInset)

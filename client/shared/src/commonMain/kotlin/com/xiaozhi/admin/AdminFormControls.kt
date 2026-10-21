@@ -14,7 +14,6 @@ import com.tencent.kuikly.core.views.Text
 import com.tencent.kuikly.core.views.TextArea
 import com.tencent.kuikly.core.views.TextInputState
 import com.tencent.kuikly.core.views.View
-import com.tencent.kuikly.core.views.compose.Button
 
 
 // ===================== 输入 =====================
@@ -230,155 +229,15 @@ fun ViewContainer<*, *>.labeledTextArea(
     }
 }
 
-// ===================== 按钮 =====================
-
-/** 按钮视觉变体：主按钮（实心强调色）/ 次按钮（浅底内嵌）。危险态（danger）仅主按钮适用。 */
-enum class ButtonVariant { PRIMARY, SECONDARY }
-
-/**
- * 全站唯一按钮封装（appButton）：所有可点击的 CTA 按钮**必须**经由它。
- *
- * 基座 = **官方 Button 组件**（`com.tencent.kuikly.core.views.compose.Button`，ButtonView）：
- * 内部 `justifyContentCenter + alignItemsCenter` + 自适应宽度 Text——文字居中由布局层保证，
- * 与 Catalyst 文字测量/对齐无关（手搓 View+Text 的 textAlignCenter/flex 方案实测不可靠，
- * 「连接/断开」二字多次偏侧就是它）。官方 Button 还自带按压态高亮（highlightBackgroundColor）。
- *
- * 三态（正常 / 加载中 / 完成）由 lambda 响应式驱动（⚠️ Kuikly 响应式铁律）：
- * enabled/loading/result/danger/dynamicText 必须是 lambda，在 attr/titleAttr 闭包内读取才随状态刷新。
- * - loading=true：中性灰底 + 禁用文字 + 文案切为 loadingText（官方 Button 无子节点插槽，
- *   塞不了菊花——官方机制优先，进度反馈靠文案 + 页面内状态徽标），且点击被拦截
- *   （isActive() 在 event 闭包内实时重读 observable，处理中真挡得住重复点击）。
- * - result="ok"/"error"（**异步动作完成态**，如「保存配置」等接口返回后的就地反馈）：
- *   失败=危险红实心、成功=品牌绿实心，文案切 successText/errorText；完成后约 2s 由调用方复位。
- * - danger=true（仅主按钮）：红色系（断开/停止等破坏性操作）。
- * - dynamicText：响应式文案（如 连接↔断开 随状态切换）；提供时优先于 text。
- *
- * [primaryButton] / [secondaryButton] 仅是本函数的语义别名，最终都收敛到这一个封装。
- */
-fun ViewContainer<*, *>.appButton(
-    text: String,
-    variant: ButtonVariant = ButtonVariant.PRIMARY,
-    enabled: () -> Boolean = { true },
-    danger: () -> Boolean = { false },
-    loading: () -> Boolean = { false },
-    /** 完成态："" 正常 / "ok" 成功 / "error" 失败（见上方三态说明）。 */
-    result: () -> String = { "" },
-    dynamicText: (() -> String)? = null,
-    loadingText: String? = null,
-    successText: String? = null,
-    errorText: String? = null,
-    onClick: () -> Unit,
-) {
-    // 实时「是否可点」：在 event/attr/titleAttr 闭包内调用，读取最新 observable（非构建期快照）
-    val isActive: () -> Boolean = { enabled() && !loading() }
-    val isPrimary = variant == ButtonVariant.PRIMARY
-    // 失败完成态与 danger 同色系（红），在 attr 闭包内实时求值
-    val isFail: () -> Boolean = { result() == "error" }
-    Button {
-        attr {
-            height(if (isPrimary) 48f else 44f)
-            if (isPrimary) minWidth(88f)
-            paddingLeft(AdminSpace.md)
-            paddingRight(AdminSpace.md)
-            borderRadius(AdminShape.radiusSm)
-            // 桌面端悬停可点击语义（web 经 h5App 的 cursor prop 处理器落 CSS，macOS 原生直读）
-            cursor(CursorType.POINTER)
-            backgroundColor(
-                when {
-                    !isActive() -> AdminColors.disabledBg // 禁用与处理中统一中性灰底（动作不可用语义）
-                    isPrimary && (danger() || isFail()) -> AdminColors.danger
-                    isPrimary -> AdminColors.accent
-                    isFail() -> AdminColors.dangerTintBg
-                    else -> AdminColors.insetBg
-                },
-            )
-            // 官方按压态高亮（touchDown/touchUp 内部自治）；禁用/处理中不高亮（透明）
-            highlightBackgroundColor(
-                when {
-                    !isActive() -> AdminColors.transparent
-                    isPrimary && (danger() || isFail()) -> AdminColors.dangerActive
-                    isPrimary -> AdminColors.accentActive
-                    else -> AdminColors.cardHover
-                },
-            )
-            // titleAttr 属 ButtonAttr（须写在 attr 块内）；即 TextAttr，闭包内读 observable，
-            // 由 Text 自身的 attr 响应式绑定驱动——状态变化时文字/颜色实时刷新
-            titleAttr {
-                fontSize(AdminType.body)
-                fontWeightMedium()
-                lines(1)
-                text(
-                    when {
-                        loading() -> loadingText ?: dynamicText?.invoke() ?: text
-                        result() == "ok" -> successText ?: dynamicText?.invoke() ?: text
-                        isFail() -> errorText ?: dynamicText?.invoke() ?: text
-                        else -> dynamicText?.invoke() ?: text
-                    },
-                )
-                color(
-                    when {
-                        !isActive() -> AdminColors.disabledText
-                        isPrimary -> AdminColors.textOnAccent
-                        isFail() -> AdminColors.dangerTintText
-                        else -> AdminColors.textPrimary
-                    },
-                )
-            }
-        }
-        event { click { if (isActive()) onClick() } }
-    }
-}
-
-/**
- * 主按钮（三态）：[appButton] 的 PRIMARY 别名——实心强调色，danger 可用于断开/停止等破坏性操作。
- * 参数语义同 [appButton]（result/successText/errorText = 接口返回后的完成态）。
- */
-fun ViewContainer<*, *>.primaryButton(
-    text: String,
-    enabled: () -> Boolean = { true },
-    danger: () -> Boolean = { false },
-    loading: () -> Boolean = { false },
-    result: () -> String = { "" },
-    dynamicText: (() -> String)? = null,
-    loadingText: String? = null,
-    successText: String? = null,
-    errorText: String? = null,
-    onClick: () -> Unit,
-) = appButton(
-    text, ButtonVariant.PRIMARY,
-    enabled = enabled, danger = danger, loading = loading, result = result,
-    dynamicText = dynamicText, loadingText = loadingText,
-    successText = successText, errorText = errorText, onClick = onClick,
-)
-
-/**
- * 次按钮（三态）：[appButton] 的 SECONDARY 别名——浅底内嵌样式，用于次要动作。
- * 参数语义同 [appButton]。
- */
-fun ViewContainer<*, *>.secondaryButton(
-    text: String,
-    enabled: () -> Boolean = { true },
-    loading: () -> Boolean = { false },
-    result: () -> String = { "" },
-    dynamicText: (() -> String)? = null,
-    loadingText: String? = null,
-    successText: String? = null,
-    errorText: String? = null,
-    onClick: () -> Unit,
-) = appButton(
-    text, ButtonVariant.SECONDARY,
-    enabled = enabled, loading = loading, result = result,
-    dynamicText = dynamicText, loadingText = loadingText,
-    successText = successText, errorText = errorText, onClick = onClick,
-)
-
-/** 卡片内动作行：横向排按钮/徽标，顶部留 sm(12) 间距；元素间距由调用处 `View { width(12f) }` 控制。
- *  ⚠️ allCenter()：行内元素水平+垂直居中（按钮不再贴左，连接按钮等 CTA 居中更清晰）。 */
+/** 卡片内动作行：按钮/徽标靠右且垂直居中，窄屏自动换行；顶部留 sm(12) 间距。
+ * 元素间距由调用处 `View { width(12f) }` 控制。 */
 fun ViewContainer<*, *>.actionRow(content: ViewBuilder) {
     View {
         attr {
             flexDirectionRow()
-            allCenter()
+            alignItemsCenter()
+            justifyContentFlexEnd()
+            flexWrapWrap()
             marginTop(AdminSpace.sm)
         }
         content()

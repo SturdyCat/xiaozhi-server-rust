@@ -43,6 +43,9 @@ include(":shared")
 // Kuikly renderer, native host exports, or introducing tests into shipped bundles.
 include(":bleProtocolTests")
 
+// Production UI contracts and navigation models, without a Kuikly renderer or KSP.
+include(":adminCoreTests")
+
 // 各平台宿主 App 统一汇聚在 apps/ 下
 // —— 以下两个是 Gradle 模块（带 build.gradle.kts）
 include(":apps:androidApp")   // Android 宿主（com.android.application）

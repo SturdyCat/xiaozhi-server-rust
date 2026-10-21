@@ -30,7 +30,7 @@ use super::{Session, SessionParams};
 pub async fn run_session<T: Transport>(
     transport: &mut T,
     engines: Arc<Engines>,
-    params: SessionParams,
+    mut params: SessionParams,
     session_id: String,
     device_id: String,
     client_id: String,
@@ -52,12 +52,32 @@ pub async fn run_session<T: Transport>(
             Err(e) => tracing::warn!("session {sid} 引擎热刷新任务异常: {e}"),
         }
     }
+    let profile = transport.terminal_profile(&params);
+    let bounded_turn = profile.capabilities.bounded_utterance;
+    let mut turn_transport = super::utterance::TurnTransport::new(transport, bounded_turn);
+    let transport = &mut turn_transport;
     let vad = engines.acquire_vad().await?;
-    let uplink_decoder = OpusFrameDecoder::new(params.uplink_sr)?;
+    let uplink_decoder = if super::media::needs_opus(profile.input.codec) {
+        Some(OpusFrameDecoder::new(params.uplink_sr)?)
+    } else {
+        None
+    };
     let real_audio = engines.config.real_audio();
     // 每设备生效配置：全局 live_config ⊕ 本设备 overlay（白名单字段）。
     // 会话开始算一次，供命令/唤醒快照与请求时现读类共用（overlay 仅会话级生效）。
     let eff_config = engines.effective_config(&device_id);
+    // Reset startup defaults before applying the latest session-pinned policy;
+    // an older pre-handshake announcement must not stick after a live change.
+    params.downlink_buffer_start_ms = engines
+        .config
+        .audio
+        .downlink_buffer_start_ms
+        .min(params.downlink_buffer_ms);
+    params.downlink_buffer_start_max_ms = engines.config.audio.downlink_buffer_start_max_ms;
+    eff_config.playback.apply(&mut params);
+    let tts_lease = engines
+        .tts_lease()
+        .with_synthesis_params(eff_config.tts.speaker, eff_config.tts.speed);
     // 连接欢迎语（仅 EchoMuse 承载，见 `echomuse::connect_welcome`）：client_id 会被
     // 下面的 begin_session 按值消费，决策必须在其之前完成。
     let welcome = crate::app::echomuse::connect_welcome(&client_id, &eff_config.echomuse);
@@ -93,7 +113,7 @@ pub async fn run_session<T: Transport>(
     let wake = WakeGreeting::new(&eff_config.wakeup);
     // 登记设备与会话（管理页「设备 / 会话 / 对话记录 / 概览」的数据源）。
     //
-    // ⚠️ 位置在**所有可失败的初始化之后**：`new_vad()` / `OpusFrameDecoder::new()` 出错时
+    // ⚠️ 位置在**所有可失败的初始化之后**：`acquire_vad()` / `OpusFrameDecoder::new()` 出错时
     // 会话根本没跑起来，不该在管理页留下一条"在线"的假连接。
     // 守卫类型是 RAII：`run_session` 返回（正常、`?` 提前返回、panic 展开）都会自动摘除活会话，
     // 因此这里**不需要**（也不该有）任何成对的清理代码。
@@ -135,6 +155,9 @@ pub async fn run_session<T: Transport>(
         session_id,
         device_id,
         eff_config,
+        tts_lease,
+        bounded_turn,
+        pending_segments: Vec::new(),
         history: Vec::new(),
         downlink_ts: 0,
         test_recording: false,

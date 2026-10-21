@@ -28,6 +28,10 @@ pub trait VadEngine: Send {
     fn accept(&mut self, samples: &[f32], cb: &mut dyn FnMut(Vec<f32>));
     /// 输入结束时 flush 残留语音段。
     fn flush(&mut self, cb: &mut dyn FnMut(Vec<f32>));
+    /// 丢弃话语残留状态；无 recurrent state 的实现可复用默认 flush-discard。
+    fn reset(&mut self) {
+        self.flush(&mut |_| {});
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

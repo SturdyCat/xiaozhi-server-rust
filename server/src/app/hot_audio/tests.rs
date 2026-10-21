@@ -448,3 +448,5 @@ fn 未持久化时管理路径为无操作() {
     let summary = store.sync_managed(&[managed(SLOT_ECHOMUSE_WELCOME, "我在")]);
     assert!(summary.contains("跳过"), "{summary}");
 }
+
+mod media;

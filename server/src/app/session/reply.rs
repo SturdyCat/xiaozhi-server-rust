@@ -271,63 +271,23 @@ impl<'a, T: Transport> Session<'a, T> {
             Ok(Err(e)) => {
                 // 具名分类：日志/上报/后续路由都按分类走，而不是解析错误串
                 let failure = crate::plugins::llm::LlmFailure::classify(&e);
-                tracing::warn!(
-                    turn,
+                let warn_msg = format!(
                     "session {session_id} LLM 调用失败（{}，耗时 {}ms）: {e} —— {}",
                     failure.category(),
                     t0.elapsed().as_millis(),
                     failure.hint()
                 );
-                // ⚠️ 语音场景**绝不能静默**：用户听不到任何声音 = "AI 没反应"（最差体验，
-                // 也是此前运行期失败全部只 warn! 的老问题）。一个字都还没下发时，用一句
-                // 兜底话术回应；已经出过声就不再补充（避免"说完半句又道歉"）。
-                self.note_error(format!("LLM 调用失败（{}）", failure.category()));
-                self.engines
-                    .event_bus
-                    .emit(crate::app::events::ServerEvent::Error {
-                        session_id: self.session_id.clone(),
-                        device_id: self.device_id.clone(),
-                        message: format!("LLM 调用失败（{}）", failure.category()),
-                    });
-                // 分段延迟：失败轮照样 emit（锚点轮次发生了就是发生了）
-                self.emit_turn_latency(trace, interrupted);
-                self.log_turn_end(trace, interrupted);
-                if !interrupted && frames_total == 0 {
-                    self.speak_fallback(FALLBACK_REPLY, turn).await?;
-                }
-                // 兜底话术也是"说过的一句"：记进对话，避免界面出现"用户问了却没有任何回复"
-                self.note_assistant_turn(FALLBACK_REPLY, t0.elapsed().as_millis() as u64);
-                self.emit_message_added(
-                    turn,
-                    "assistant",
-                    FALLBACK_REPLY,
-                    Some(t0.elapsed().as_millis() as u64),
-                );
-                return Ok(());
+                let error_msg = format!("LLM 调用失败（{}）", failure.category());
+                return self
+                    .report_llm_failure(trace, turn, interrupted, frames_total, t0, warn_msg, error_msg)
+                    .await;
             }
             Err(e) => {
-                tracing::warn!(turn, "session {session_id} LLM 任务异常: {e}");
-                self.note_error(format!("LLM 任务异常: {e}"));
-                self.engines
-                    .event_bus
-                    .emit(crate::app::events::ServerEvent::Error {
-                        session_id: self.session_id.clone(),
-                        device_id: self.device_id.clone(),
-                        message: format!("LLM 任务异常: {e}"),
-                    });
-                self.emit_turn_latency(trace, interrupted);
-                self.log_turn_end(trace, interrupted);
-                if !interrupted && frames_total == 0 {
-                    self.speak_fallback(FALLBACK_REPLY, turn).await?;
-                }
-                self.note_assistant_turn(FALLBACK_REPLY, t0.elapsed().as_millis() as u64);
-                self.emit_message_added(
-                    turn,
-                    "assistant",
-                    FALLBACK_REPLY,
-                    Some(t0.elapsed().as_millis() as u64),
-                );
-                return Ok(());
+                let warn_msg = format!("session {session_id} LLM 任务异常: {e}");
+                let error_msg = format!("LLM 任务异常: {e}");
+                return self
+                    .report_llm_failure(trace, turn, interrupted, frames_total, t0, warn_msg, error_msg)
+                    .await;
             }
         };
         // 令牌计量：回答"成本多少 / 记忆与灵魂让上下文长了多少"。
@@ -397,6 +357,47 @@ impl<'a, T: Transport> Session<'a, T> {
         Ok(())
     }
 
+    /// LLM 失败 / 任务异常两条错误分支的共用收尾（保持日志与记录口径完全一致）：
+    /// 记错误 → 事件总线 → 分段延迟 emit → 失败轮 log → （尚未出声时）兜底话术 → 记助手轮次。
+    ///
+    /// ⚠️ 语音场景**绝不能静默**：用户听不到任何声音 = "AI 没反应"（最差体验，也是此前运行期
+    /// 失败全部只 `warn!` 的老问题）。一个字都还没下发时才用兜底话术回应，已经出过声就不再补充
+    /// （避免"说完半句又道歉"）；兜底话术也记进对话，避免界面出现"用户问了却没有任何回复"。
+    ///
+    /// `warn_msg` / `error_msg` 由调用方在**进入本函数前**按各自分支格式化（warn 含当时的耗时，
+    /// 必须取调用瞬间的值，本函数内不再重算以免计时漂移）。
+    async fn report_llm_failure(
+        &mut self,
+        trace: &Arc<TurnTrace>,
+        turn: TurnId,
+        interrupted: bool,
+        frames_total: usize,
+        t0: Instant,
+        warn_msg: String,
+        error_msg: String,
+    ) -> anyhow::Result<()> {
+        tracing::warn!(turn, "{warn_msg}");
+        self.note_error(error_msg.clone());
+        self.engines
+            .event_bus
+            .emit(crate::app::events::ServerEvent::Error {
+                session_id: self.session_id.clone(),
+                device_id: self.device_id.clone(),
+                message: error_msg,
+            });
+        // 分段延迟：失败轮照样 emit（锚点轮次发生了就是发生了）
+        self.emit_turn_latency(trace, interrupted);
+        self.log_turn_end(trace, interrupted);
+        if !interrupted && frames_total == 0 {
+            self.speak_fallback(FALLBACK_REPLY, turn).await?;
+        }
+        // 取"说完兜底话术之后"的耗时为这一轮助手轮次的耗时（与正常成功轮口径一致）。
+        let elapsed = t0.elapsed().as_millis() as u64;
+        self.note_assistant_turn(FALLBACK_REPLY, elapsed);
+        self.emit_message_added(turn, "assistant", FALLBACK_REPLY, Some(elapsed));
+        Ok(())
+    }
+
     /// 用一句兜底话术回应 LLM 失败（拔网 / 限流 / 超时），**绝不静默**。
     ///
     /// 复用 [`Self::speak_canned`] 的完整下行链路（结果缓存 / 节拍器 / 首帧时刻），
@@ -462,8 +463,8 @@ impl<'a, T: Transport> Session<'a, T> {
 
     /// 启动逐句**预取**（见 [`crate::app::prefetch`]）：句子流 → 成品流。
     ///
-    /// 每句都按**会话级最新配置**解析引擎/音色/语速/引擎签名与缓存键——与旧实现的
-    /// "句间热切换"语义一致（切引擎后不会命中上一个引擎的缓存音频）。
+    /// 每句共用会话建立时固定的实际 TTS 租约（NextSession）；音色/语速已应用 overlay。
+    /// 失败重建不冒充新配置，旧会话也不会随别的会话刷新而在句间切换引擎。
     ///
     /// 同时建出本轮的**下载缓冲**（[`DownloadBudget`]）：合成回调据此按预算暂停/恢复
     /// TTS 流下载（内存换性能 + 下载限速），返回值随行交给 [`Self::drain_prepared`]。
@@ -478,9 +479,8 @@ impl<'a, T: Transport> Session<'a, T> {
         tokio::sync::mpsc::Receiver<PreparedSentence>,
         Arc<crate::app::prefetch::DownloadBudget>,
     ) {
-        let engines = self.engines.clone();
+        let lease = self.tts_lease.clone();
         let params = self.params;
-        let eff_config = self.eff_config.clone();
         let download = crate::app::prefetch::DownloadBudget::new(self.params.download_buffer_ms);
         // 首个非缓存句的首个 PCM 分片 → mark_tts_first_pcm（first-only 用原子标志，
         // 避免每分片加锁；缓存命中句不走合成回调，天然不触发——与"缓存轮该阶段为
@@ -499,21 +499,19 @@ impl<'a, T: Transport> Session<'a, T> {
             self.engines.inference.tts(),
             Some(first_pcm),
             move |sentence: &str| {
-                let live = eff_config.clone();
-                // 缓存键口径的**唯一权威**在 `HotAudioKey::from_session`。
+                // 缓存键口径的**唯一权威**在 `HotAudioKey::from_lease`。
                 //
                 // 为什么不让本处自己拼 `TtsCache::make_key`：唤醒问候语路径要把**同一个键**
                 // 的成品音频暖进本缓存（读盘复用），两处各写一遍参数顺序，一旦漂移就是
                 // "缓存永远不命中"——不报错、只是白合成，是最难查的一类 bug。所以合成路径
                 // 与问候路径共用这一个构造入口。
-                let key = crate::app::hot_audio::HotAudioKey::from_session(
-                    &live,
-                    params.downlink_sr,
-                    params.downlink_frame_ms,
+                let key = crate::app::hot_audio::HotAudioKey::from_media_lease(
+                    &lease,
+                    params.output_format(),
                     sentence,
                 );
                 SentenceSource {
-                    tts: engines.tts(),
+                    tts: lease.engine(),
                     cache_key: key.mem_key(),
                     // 完整身份：预取 worker 据此登记热音频（磁盘持久化，跨重启复用）。
                     // `register_identity` 内部校验 `mem_key == cache_key`，漂移即不登记。

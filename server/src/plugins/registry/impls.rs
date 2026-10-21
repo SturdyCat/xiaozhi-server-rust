@@ -87,11 +87,12 @@ fn sig_vad(cfg: &Config) -> String {
         v.model, v.threshold, v.min_silence_duration, v.min_speech_duration
     )
 }
-/// Kokoro 签名：字段与 P4 前 `TtsConfig::engine_signature()` 的 sherpa 分支**等价**
-///（回归安全：签名只用于内存内热切换判定，但要保证"没改配置就不重建"）。
+/// 覆盖 Kokoro 的全部构建输入；JSON 长度/转义避免路径中分隔符引发签名碰撞。
 fn sig_tts_kokoro(cfg: &Config) -> String {
-    let k = &cfg.tts.kokoro;
-    format!("kokoro|{}|{}|{}", k.model, k.lang, k.num_threads)
+    format!(
+        "kokoro|{}",
+        serde_json::to_string(&cfg.tts.kokoro).expect("Kokoro 配置可序列化")
+    )
 }
 /// ⚠️ 含密钥，**绝不打日志**（仅内存比较）。
 fn sig_tts_xfyun(cfg: &Config) -> String {

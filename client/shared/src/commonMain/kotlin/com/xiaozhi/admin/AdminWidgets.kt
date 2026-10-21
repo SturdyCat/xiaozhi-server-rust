@@ -38,6 +38,7 @@ fun ViewContainer<*, *>.dropdownField(
     onToggle: () -> Unit,
     onSelect: (String) -> Unit,
 ) {
+    val modalWidth = { (getPager().pageData.pageViewWidth - 2 * AdminSpace.md).coerceAtMost(340f).coerceAtLeast(0f) }
     fieldLabel(label)
     View {
         attr {
@@ -77,7 +78,7 @@ fun ViewContainer<*, *>.dropdownField(
             customContentView {
                 View {
                     attr {
-                        width(340f)
+                        width(modalWidth())
                         backgroundColor(AdminColors.cardBg)
                         borderRadius(AdminShape.radiusLg)
                         border(Border(1f, BorderStyle.SOLID, AdminColors.divider))
@@ -112,8 +113,9 @@ fun ViewContainer<*, *>.dropdownField(
                                 }
                                 event {
                                     click {
-                                        onSelect(opt.first)
+                                        // Dismiss before dispatch: callbacks may already clear/open another menu.
                                         onToggle()
+                                        onSelect(opt.first)
                                     }
                                 }
                                 vif({ opt.first == selectedId() }) {
@@ -338,42 +340,44 @@ fun ViewContainer<*, *>.pluginStatusBadge(phase: String, enabled: Boolean) {
  * 右可选按钮/徽标（trailing ViewBuilder）。
  * ⚠️ title 是 lambda，须在 Text 的 attr 闭包内读取（如 `{ "配置" }` 或依赖 observable 的
  * `{ when (ctx.selectedSection) ... }`），切 section 时标题才会响应式更新。
- * ⚠️ 顶部避让区（macOS 红黄绿窗口按钮）由 AdminPage 的内容区/侧边栏 paddingTop 控制。
+ * 紧凑冲突/设备编辑可将动作移到独立右对齐行，避免按钮挤压标题。
+ * 顶部避让区由全局 workflow header 统一保留，此栏不重复留白。
  */
 fun ViewContainer<*, *>.largeTitleBar(
     title: () -> String,
     leading: ViewBuilder? = null,
+    stackActions: () -> Boolean = { false },
     trailing: ViewBuilder? = null,
 ) {
     View {
-        attr {
-            flexDirectionRow()
-            alignItemsCenter()
-            height(64f)
-            paddingLeft(AdminSpace.xl)
-            paddingRight(AdminSpace.xl)
-            backgroundColor(AdminColors.windowBg)
-        }
-        if (leading != null) {
-            leading()
-        }
-        Text {
+        attr { flexDirectionColumn(); backgroundColor(AdminColors.windowBg) }
+        View {
             attr {
-                flex(1f)
-                fontSize(AdminType.display)
-                fontWeightMedium()
-                color(AdminColors.textPrimary)
-                text(title())
+                flexDirectionRow(); alignItemsCenter(); height(64f)
+                paddingLeft(AdminSpace.xl); paddingRight(AdminSpace.xl)
+            }
+            if (leading != null) leading(this)
+            Text {
+                attr {
+                    flex(1f)
+                    fontSize(if (workspaceIsCompact(getPager())) AdminType.title else AdminType.display)
+                    fontWeightMedium(); color(AdminColors.textPrimary); lines(1); text(title())
+                }
+            }
+            vif({ !stackActions() }) {
+                if (trailing != null) trailing(this)
             }
         }
-        if (trailing != null) {
-            trailing()
+        // Multiple conflict/overlay actions must not paint over a compact title.
+        vif({ stackActions() }) {
+            View {
+                attr {
+                    flexDirectionRow(); alignItemsCenter(); justifyContentFlexEnd(); flexWrapWrap()
+                    paddingLeft(AdminSpace.xl); paddingRight(AdminSpace.xl); paddingBottom(AdminSpace.sm)
+                }
+                if (trailing != null) trailing(this)
+            }
         }
     }
-    View {
-        attr {
-            height(1f)
-            backgroundColor(AdminColors.divider)
-        }
-    }
+    View { attr { height(1f); backgroundColor(AdminColors.divider) } }
 }

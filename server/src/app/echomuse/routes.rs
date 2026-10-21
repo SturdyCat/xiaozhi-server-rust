@@ -24,14 +24,14 @@ use futures_util::{SinkExt, StreamExt};
 use std::net::{IpAddr, SocketAddr};
 use tokio::sync::mpsc;
 
-use crate::app::audio::opus::OpusFrameEncoder;
 use crate::app::session::run_session;
 use crate::app::transport::IncomingFrame;
 use crate::engine::Engines;
 
 use super::ble::BleLink;
-use super::frames::{self, UplinkFrame};
 use super::transport::EchomuseTransport;
+use super::turn::{start_turn, BoundedTurn};
+use super::uplink::MicUplink;
 use super::{
     ack_message, config_baseline, config_push_with, hub_claim_data, hub_claim_only, hub_insert,
     hub_restore_data, session_params, ControlOut, DataOut, DeviceRegister,
@@ -178,6 +178,7 @@ async fn control_session(
     );
 
     // control 任务：收设备事件（唤醒/按钮/旧固件 ble_adverts）+ 发 mic_start 等出站。
+    let media = live.media.clone();
     let lease = super::runtime::ControlLease {
         id: device_id.clone(),
         ctl: ctl_tx.clone(),
@@ -191,7 +192,7 @@ async fn control_session(
     let params = session_params(&engines.config);
     let session_id = uuid::Uuid::new_v4().to_string();
     let result = run_session(
-        &mut EchomuseTransport::new(up_rx, ctl_tx, data_tx)?,
+        &mut EchomuseTransport::with_media(up_rx, ctl_tx, data_tx, media),
         engines,
         params,
         session_id,
@@ -219,8 +220,6 @@ async fn control_loop(
     ble_on: bool,
     lease: super::runtime::ControlLease,
 ) {
-    // 当前是否处于一轮聆听（唤醒后到哨兵/停止之间）。
-    let mut listening = false;
     loop {
         tokio::select! {
             inbound = stream.next() => {
@@ -229,7 +228,7 @@ async fn control_loop(
                     if t.len() <= super::runtime::MAX_TELEMETRY_BYTES {
                         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&t) { lease.live.update(&v); }
                     }
-                    if handle_control_text(&t, &mut listening, &mut sink, &up_tx, &ble, ble_on)
+                    if handle_control_text(&t, &lease.live.turn, &mut sink, &up_tx, &ble, ble_on)
                         .await
                         .is_err()
                     {
@@ -255,7 +254,7 @@ async fn control_loop(
 /// `ble_adverts` 是旧固件的广播回退路径（`0x06` 未被 ack 声明时设备改走 control 面）。
 async fn handle_control_text(
     text: &str,
-    listening: &mut bool,
+    turn: &BoundedTurn,
     sink: &mut futures_util::stream::SplitSink<WebSocket, Message>,
     up_tx: &mpsc::UnboundedSender<IncomingFrame>,
     ble: &Arc<std::sync::Mutex<BleLink>>,
@@ -268,9 +267,9 @@ async fn handle_control_text(
     match kind {
         // 设备本地唤醒词命中（oww_trigger）。服务器未声明 `listen_session`，设备不会走
         // 私听会话（无 session 字段），这里直接开 bounded turn（mic_start + listen start）。
-        "oww_wake" => start_turn(listening, sink, up_tx).await?,
+        "oww_wake" => start_turn(turn, sink, up_tx).await?,
         // 动作键单击 = 无唤醒词模型的兜底入口；mute/音量走 mute_state/volume_state，不进这里。
-        "button" => start_turn(listening, sink, up_tx).await?,
+        "button" => start_turn(turn, sink, up_tx).await?,
         "ble_adverts" if ble_on => {
             if let Some(list) = v.get("adverts").and_then(|a| a.as_array()) {
                 ble.lock()
@@ -280,38 +279,6 @@ async fn handle_control_text(
         }
         _ => {}
     }
-    Ok(())
-}
-
-/// 开一轮聆听：先投 `listen state=detect`（唤醒信号——`[wakeup]` 唤醒问候语的唯一
-/// 触发点，与 ESP 固件唤醒后上报 `detect` 同义；问候语关闭时它只多一行会话日志），
-/// 再 `mic_start{lock_mic:true}`（设备做 VAD 的 bounded turn，结束发 `0x04`/`0x05`
-/// 哨兵），最后会话侧 `listen state=start`。
-/// `S` 抽象只为测试可驱动（生产传 control 的 SplitSink，测试传丢弃 sink）。
-pub(super) async fn start_turn<S>(
-    listening: &mut bool,
-    sink: &mut S,
-    up_tx: &mpsc::UnboundedSender<IncomingFrame>,
-) -> anyhow::Result<()>
-where
-    S: futures_util::Sink<Message> + Unpin,
-{
-    if *listening {
-        return Ok(()); // 一轮已在进行，忽略重复唤醒
-    }
-    *listening = true;
-    let _ = up_tx.send(IncomingFrame::Text(
-        r#"{"type":"listen","state":"detect"}"#.into(),
-    ));
-    futures_util::SinkExt::send(
-        sink,
-        Message::Text(r#"{"type":"mic_start","lock_mic":true}"#.into()),
-    )
-    .await
-    .map_err(|_| anyhow::anyhow!("mic_start 下发失败（control 面已断）"))?;
-    let _ = up_tx.send(IncomingFrame::Text(
-        r#"{"type":"listen","state":"start"}"#.into(),
-    ));
     Ok(())
 }
 
@@ -374,7 +341,7 @@ pub(super) fn parse_identify(text: &str) -> Option<String> {
     (!id.is_empty()).then(|| id.to_string())
 }
 
-/// data 任务：上行帧翻译（PCM→Opus、哨兵→listen stop、蓝牙代理 0x06/0x08 采集）
+/// data 任务：上行帧翻译（PCM→Opus、typed utterance end、BLE 0x06/0x08 采集）
 /// + 下行帧直发。`prelude` 是认领前替读到的首帧（无 identify 客户端的先行二进制），
 /// 认领后补处理。返回 `Some(claim)` 表示应把认领归还 hub（所有退出路径都归还）。
 async fn data_loop(
@@ -389,26 +356,13 @@ async fn data_loop(
         mut data_rx,
         data_tx,
         ble,
+        management,
     } = claim;
     let (mut sink, mut stream) = socket.split();
-    let mut up_enc = match OpusFrameEncoder::new(frames::MIC_SAMPLE_RATE) {
-        Ok(enc) => enc,
-        Err(e) => {
-            tracing::warn!("[echomuse] 上行编码器创建失败: {e}");
-            return Some(super::DataClaim {
-                device_id,
-                up_tx,
-                data_rx,
-                data_tx,
-                ble,
-            });
-        }
-    };
-    // 上行 PCM 暂存：攒满一个 60ms 帧（960 样本）编一包 Opus。
-    let mut up_pcm: Vec<i16> = Vec::with_capacity(frames::MIC_FRAME_SAMPLES * 2);
+    let mut uplink = MicUplink::for_media(management.media.clone());
     // 认领前替读的首帧（若有）按正常上行处理，不丢首包。
     if let Some(Message::Binary(raw)) = prelude {
-        on_uplink_binary(&raw, &mut up_enc, &mut up_pcm, &up_tx, &ble, ble_on);
+        uplink.on_binary(&raw, &management.turn, &up_tx, &ble, ble_on);
     }
     loop {
         tokio::select! {
@@ -419,7 +373,7 @@ async fn data_loop(
                     // 此把 Text 当致命帧 break，真机固件的 identify 直接把 data 链踢掉
                     // （设备侧表现为 close 1006 每 5s 重连）。
                     Some(Ok(Message::Binary(raw))) => {
-                        on_uplink_binary(&raw, &mut up_enc, &mut up_pcm, &up_tx, &ble, ble_on);
+                        uplink.on_binary(&raw, &management.turn, &up_tx, &ble, ble_on);
                     }
                     Some(Ok(Message::Text(_))) => {}
                     _ => break,
@@ -428,7 +382,9 @@ async fn data_loop(
             out = data_rx.recv() => {
                 match out {
                     Some(frame) => {
-                        if sink.send(Message::Binary(frame.into())).await.is_err() { break; }
+                        let written = super::data_writer::write_frame(&mut sink, &mut stream, frame, &management.media,
+                            |raw| uplink.on_binary(raw, &management.turn, &up_tx, &ble, ble_on)).await;
+                        if !written { break; }
                     }
                     None => break,
                 }
@@ -444,73 +400,6 @@ async fn data_loop(
         data_rx,
         data_tx,
         ble,
+        management,
     })
-}
-
-/// 处理一个上行二进制帧：PCM 累积编码（攒满 60ms 一包）/ 哨兵收口（残段补零 +
-/// listen stop）/ BLE 广播与 GATT 采集（仅 ble_proxy 开启时翻译）。
-fn on_uplink_binary(
-    raw: &[u8],
-    up_enc: &mut OpusFrameEncoder,
-    up_pcm: &mut Vec<i16>,
-    up_tx: &mpsc::UnboundedSender<IncomingFrame>,
-    ble: &Arc<std::sync::Mutex<BleLink>>,
-    ble_on: bool,
-) {
-    match frames::parse_uplink(raw) {
-        UplinkFrame::MicPcm(pcm) => {
-            push_pcm(up_pcm, pcm);
-            while up_pcm.len() >= frames::MIC_FRAME_SAMPLES {
-                let frame: Vec<f32> = up_pcm
-                    .drain(..frames::MIC_FRAME_SAMPLES)
-                    .map(|s| s as f32 / 32768.0)
-                    .collect();
-                match up_enc.encode_frame(&frame) {
-                    Ok(opus) => {
-                        let _ = up_tx.send(IncomingFrame::Binary(opus));
-                    }
-                    Err(e) => tracing::debug!("[echomuse] 上行编码失败（丢帧）: {e}"),
-                }
-            }
-        }
-        UplinkFrame::VadEnd | UplinkFrame::NoSpeech => {
-            // 一轮收口：残段补零成整帧发最后一包，然后会话侧 listen stop。
-            if !up_pcm.is_empty() {
-                up_pcm.resize(frames::MIC_FRAME_SAMPLES, 0);
-                let frame: Vec<f32> = up_pcm.drain(..).map(|s| s as f32 / 32768.0).collect();
-                if let Ok(opus) = up_enc.encode_frame(&frame) {
-                    let _ = up_tx.send(IncomingFrame::Binary(opus));
-                }
-            }
-            let _ = up_tx.send(IncomingFrame::Text(
-                r#"{"type":"listen","state":"stop"}"#.into(),
-            ));
-        }
-        UplinkFrame::BleAdverts(payload) if ble_on => {
-            if let Ok(v) = serde_json::from_slice::<serde_json::Value>(payload) {
-                if let Some(list) = v.get("adverts").and_then(|a| a.as_array()) {
-                    ble.lock()
-                        .expect("echomuse ble link 锁中毒")
-                        .merge_adverts(list, super::registry::now_secs());
-                }
-            }
-        }
-        UplinkFrame::BleGatt(payload) if ble_on => {
-            ble.lock()
-                .expect("echomuse ble link 锁中毒")
-                .on_gatt(payload);
-        }
-        // ble_proxy 关闭时按未知帧忽略（与能力未声明一致，行为零变化）。
-        UplinkFrame::BleAdverts(_) | UplinkFrame::BleGatt(_) => {}
-        UplinkFrame::Unknown(_) => {}
-    }
-}
-
-/// 把 S16_LE 字节推入 i16 缓冲（截掉奇数尾巴）。
-fn push_pcm(buf: &mut Vec<i16>, pcm: &[u8]) {
-    let pairs = pcm.len() / 2;
-    buf.reserve(pairs);
-    for chunk in pcm[..pairs * 2].chunks_exact(2) {
-        buf.push(i16::from_le_bytes([chunk[0], chunk[1]]));
-    }
 }

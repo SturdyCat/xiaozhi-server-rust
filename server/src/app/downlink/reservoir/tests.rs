@@ -10,13 +10,14 @@ use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 
 use super::*;
-use crate::app::prefetch::{PcmChunk, PreparedAudio, PREFETCH_SENTENCES};
+use crate::app::prefetch::{PcmChunk, PreparedAudio};
 use crate::app::protocol::BinVersion;
 use crate::app::session::SessionParams;
 use crate::app::tts_cache::TtsCache;
 
 fn params() -> SessionParams {
     SessionParams {
+        output_codec: crate::app::audio::media::AudioCodec::Opus,
         uplink_bin_ver: BinVersion::V1,
         downlink_bin_ver: BinVersion::V1,
         uplink_sr: 16000,
@@ -79,7 +80,7 @@ async fn producer_done_closes_source_after_drain() {
 #[tokio::test]
 async fn full_reservoir_backpressures_producer() {
     let (sink, mut source) = new_reservoir(120, 60); // 容量 2 帧
-    let slots = 2 + PREFETCH_SENTENCES;
+    let slots = 2; // Extra channel slots are metadata, never extra audio duration.
     for i in 0..slots {
         assert!(
             sink.push(DownlinkItem::Frame(vec![i as u8])).await,
@@ -460,4 +461,29 @@ async fn failed_synthesis_never_creates_persistent_entry() {
     assert!(cache.get(key.mem_key()).is_none());
     assert!(store.get(&key).is_none());
     assert!(!dir.exists());
+}
+
+#[tokio::test]
+async fn byte_budget_backpressures_independently_and_reader_drop_unblocks_waiters() {
+    let (sink, mut source) = new_reservoir(6000, 60);
+    assert!(
+        sink.push(DownlinkItem::Frame(vec![0; MAX_RESERVOIR_BYTES]))
+            .await
+    );
+    assert!(tokio::time::timeout(
+        Duration::from_millis(5),
+        sink.push(DownlinkItem::Frame(vec![1]))
+    )
+    .await
+    .is_err());
+    assert_eq!(source.depth_frames(), 1);
+    drop(source.recv().await);
+    assert!(sink.push(DownlinkItem::Frame(vec![1])).await);
+    assert!(
+        !sink
+            .push(DownlinkItem::Frame(vec![0; MAX_RESERVOIR_BYTES + 1]))
+            .await
+    );
+    drop(source);
+    assert!(!sink.push(DownlinkItem::Frame(vec![2])).await);
 }

@@ -22,6 +22,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use crate::app::tts_cache::TtsCache;
+#[cfg(test)]
 use crate::config::Config;
 
 /// 首选配置来源目录；无来源时复用记忆库目录（包括相对路径的当前目录）。
@@ -55,7 +56,7 @@ const MAX_FILE_BYTES: usize = HEADER_LEN + MAX_ENTRY_BYTES + 4 * MAX_FRAMES + 8;
 
 /// 一句热句音频的**身份**：影响编码结果的一切参数。
 ///
-/// 构造入口只有 [`HotAudioKey::from_session`] 一个——预取合成路径与唤醒问候路径都走它，
+/// 生产构造入口只有 [`HotAudioKey::from_lease`] 一个——预取合成路径与唤醒问候路径都走它，
 /// 避免两处各写一遍参数顺序导致"键永远不相等、缓存永远不命中"（这类 bug 不会报错，只会
 /// 表现为"缓存没用"，最难查）。
 ///
@@ -72,10 +73,38 @@ pub struct HotAudioKey {
 }
 
 impl HotAudioKey {
-    /// **唯一权威**的键构造口径。
-    ///
-    /// `live` = 会话级最新配置（`Engines::live_config()`），因此引擎/音色/语速的热切换
-    /// 天然反映在键里：换了音色 → 键不同 → 不会命中上一个音色的音频。
+    /// 生产唯一入口：身份来自实际实例租约，不来自可能重建失败的请求配置。
+    pub fn from_lease(
+        lease: &crate::engine::TtsLease,
+        downlink_sr: u32,
+        downlink_frame_ms: u32,
+        text: &str,
+    ) -> Self {
+        Self {
+            engine_sig: lease.fingerprint().to_string(),
+            speaker: lease.config().speaker,
+            speed: lease.config().speed,
+            downlink_sr,
+            downlink_frame_ms,
+            text: text.to_string(),
+        }
+    }
+
+    pub fn from_media_lease(
+        lease: &crate::engine::TtsLease,
+        format: crate::app::audio::media::AudioFormat,
+        text: &str,
+    ) -> Self {
+        Self::from_lease(lease, format.sample_rate, format.frame_ms, text)
+            .with_media_identity(format)
+    }
+    fn with_media_identity(mut self, format: crate::app::audio::media::AudioFormat) -> Self {
+        self.engine_sig = format!("{}|media:{}", self.engine_sig, format.identity());
+        self
+    }
+
+    /// 配置投影只供离线格式测试；生产无法调用，必须使用实际租约构造身份。
+    #[cfg(test)]
     pub fn from_session(
         live: &Config,
         downlink_sr: u32,

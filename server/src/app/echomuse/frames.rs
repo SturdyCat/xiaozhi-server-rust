@@ -37,8 +37,6 @@ pub const FRAME_SPEAKER_EOS: u8 = 0x03;
 
 /// 设备 mic 音频固定 16 kHz 单声道（协议常量，不随配置变）。
 pub const MIC_SAMPLE_RATE: u32 = 16_000;
-/// 上行编码帧长（样本数）：60 ms @16kHz，与 xiaozhi 会话流水线的 Opus 帧长一致。
-pub const MIC_FRAME_SAMPLES: usize = 960;
 
 /// `0x07` 帧头长度（session u32 + seq u16）。
 pub const SESSION_HEADER_LEN: usize = 6;
@@ -81,6 +79,14 @@ pub fn parse_uplink(data: &[u8]) -> UplinkFrame<'_> {
         FRAME_BLE_GATT => UplinkFrame::BleGatt(&data[1..]),
         other => UplinkFrame::Unknown(other),
     }
+}
+
+/// Sole outbound kind classifier used by the socket writer's PCM ticket adapter.
+pub(crate) fn is_voice(data: &[u8]) -> bool {
+    matches!(
+        data.first(),
+        Some(&FRAME_SPEAKER) | Some(&FRAME_SPEAKER_EOS)
+    )
 }
 
 /// 打一条下行 speaker PCM 帧（`0x02` + PCM）。
