@@ -54,7 +54,7 @@ impl MicUplink {
                     if bytes == 0 {
                         return;
                     }
-                    let us = AudioFormat::echo().duration_us(bytes);
+                    let us = AudioFormat::echo_mic().duration_us(bytes);
                     let Some(permit) = self.media.input.reserve(us, bytes) else {
                         overflow = true;
                         return;
@@ -64,7 +64,7 @@ impl MicUplink {
                         overflow = true;
                         return;
                     }
-                    let mut chunk = AudioChunk::new(AudioFormat::echo(), pcm[..bytes].to_vec());
+                    let mut chunk = AudioChunk::new(AudioFormat::echo_mic(), pcm[..bytes].to_vec());
                     chunk.epoch = Some(
                         AudioEpoch::capture(&self.media.generation, generation).with_turn(token),
                     );

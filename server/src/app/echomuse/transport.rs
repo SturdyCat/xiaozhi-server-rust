@@ -1,5 +1,5 @@
 //! Native PCM Echo adapter. No Opus codec exists in either Echo direction.
-use super::{frames, media::MediaState, ControlOut, DataOut};
+use super::{media::MediaState, ControlOut, DataOut};
 use crate::app::audio::media::*;
 use crate::app::transport::{IncomingFrame, Transport};
 use anyhow::Result;
@@ -55,9 +55,8 @@ impl Transport for EchomuseTransport {
         _: u32,
     ) -> Result<AudioWrite> {
         anyhow::ensure!(
-            audio.format == AudioFormat::new(AudioCodec::PcmS16Le, frames::MIC_SAMPLE_RATE, 40)
-                && profile.output == audio.format,
-            "Echo requires PCM16k/40ms mono S16LE"
+            audio.format == AudioFormat::echo_speaker() && profile.output == audio.format,
+            "Echo requires PCM48k/40ms mono S16LE"
         );
         let Some(epoch) = self.reply_epoch.clone() else {
             return Ok(AudioWrite::Cancelled);

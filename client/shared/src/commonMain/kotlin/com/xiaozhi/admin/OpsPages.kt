@@ -58,7 +58,7 @@ internal fun ViewContainer<*, *>.opsHeader(summary: () -> String, loading: () ->
                 text(summary())
             }
         }
-        secondaryButton("刷新", loading = loading, loadingText = "刷新中…") { onRefresh() }
+        secondaryButton("刷新", loading = loading, loadingText = "刷新中…", icon = IconToken.Refresh) { onRefresh() }
     }
 }
 
@@ -249,16 +249,22 @@ fun ViewContainer<*, *>.renderOpsDevices(
                 actionRow {
                     secondaryButton(
                         if (form.editDeviceId == row.deviceId) "正在编辑该设备" else "个性化配置",
+                        icon = IconToken.Settings,
                     ) { onEditDevice(row.deviceId) }
                 }
             }
             // 设备消息注入（P1-2）：在线的设备会话才能注入（文本作为用户话语走完整管线）；
             // 测试台连接不显示入口（服务端也会拒绝——它走独立请求-响应，语义不通）。
             if (row.online && !row.isTest) {
+                // 展开/收起双态按钮：vif 成对分支让文字与图标都随 injectTarget 响应式切换
+                // （按钮 label/icon 是构建期值，直接写 if 读 observable 不会触发刷新）。
                 actionRow {
-                    secondaryButton(
-                        if (devices.injectTarget == row.deviceId) "收起" else "注入消息",
-                    ) { devices.toggleInject(row.deviceId) }
+                    vif({ devices.injectTarget != row.deviceId }) {
+                        secondaryButton("注入消息", icon = IconToken.Text) { devices.toggleInject(row.deviceId) }
+                    }
+                    vif({ devices.injectTarget == row.deviceId }) {
+                        secondaryButton("收起", icon = IconToken.ChevronUp) { devices.toggleInject(row.deviceId) }
+                    }
                 }
                 vif({ devices.injectTarget == row.deviceId }) {
                     labeledField(
@@ -272,6 +278,7 @@ fun ViewContainer<*, *>.renderOpsDevices(
                             "发送",
                             loading = { devices.injectBusy },
                             loadingText = "注入中…",
+                            icon = IconToken.Play,
                         ) { devices.inject(ctx, row.deviceId) }
                     }
                     vif({ devices.injectMsg.isNotEmpty() }) {
@@ -375,9 +382,9 @@ fun ViewContainer<*, *>.renderOpsConversations(conversations: ConversationsState
             "aa:bb:cc:dd:ee:ff",
         )
         actionRow {
-            primaryButton("筛选") { conversations.filterBy(ctx, conversations.filterDraft.trim()) }
+            primaryButton("筛选", icon = IconToken.Funnel) { conversations.filterBy(ctx, conversations.filterDraft.trim()) }
             View { attr { width(AdminSpace.sm) } }
-            secondaryButton("全部") { conversations.filterBy(ctx, "") }
+            secondaryButton("全部", icon = IconToken.Close) { conversations.filterBy(ctx, "") }
         }
         if (conversations.deviceFilter.isNotEmpty()) {
             textNote("当前只看：${conversations.deviceFilter}", micro = true)

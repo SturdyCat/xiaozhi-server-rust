@@ -8,7 +8,9 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::{mpsc::UnboundedSender, oneshot, Notify};
 
 pub(crate) const AUDIO_QUEUE_MS: u64 = 2000;
-pub(crate) const AUDIO_QUEUE_BYTES: usize = 128 * 1024;
+/// 输出队列字节额度：48 kHz mono S16LE = 96 kB/s，2 s 需 192 kB，取 256 kB 留余量
+/// （时长额度 [`AUDIO_QUEUE_MS`] 仍会先到，字节额度只是防超大块绕开时长检查）。
+pub(crate) const AUDIO_QUEUE_BYTES: usize = 256 * 1024;
 pub(crate) const MAX_CAPTURE_US: u64 = 60_000_000;
 
 #[derive(Debug)]
@@ -84,7 +86,7 @@ impl MediaState {
         }
         let permit = self
             .output
-            .reserve(AudioFormat::echo().duration_us(pcm.len()), pcm.len())?;
+            .reserve(AudioFormat::echo_speaker().duration_us(pcm.len()), pcm.len())?;
         let (ack, done) = oneshot::channel();
         writes.push_back(WriteTicket {
             epoch: epoch.clone(),

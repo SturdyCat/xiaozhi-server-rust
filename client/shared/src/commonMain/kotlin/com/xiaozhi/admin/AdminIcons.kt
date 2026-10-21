@@ -54,6 +54,26 @@ internal object AdminIconVectors {
     internal val Model = listOf(stroke("m12 3 9 5-9 5-9-5 9-5ZM3 12l9 5 9-5M3 16l9 5 9-5"))
     internal val Speaker = listOf(stroke("M4 9h4l5-5v16l-5-5H4ZM16 8a6 6 0 0 1 0 8M19 5a10 10 0 0 1 0 14"))
     internal val Info = listOf(stroke("M3 12a9 9 0 1 0 18 0a9 9 0 1 0-18 0ZM12 11v6M12 7v.5"))
+
+    /** WiFi：三条上行弧（描边）+ 实心圆点；弧用半椭圆 arc（sweep=1 向上拱） */
+    internal val Wifi = listOf(
+        stroke("M8.3 15.2a5.3 5.3 0 0 1 7.4 0M5.4 11.9a9.4 9.4 0 0 1 13.2 0M2.8 8.6a13.2 13.2 0 0 1 18.4 0"),
+        fill("M12 17.6a1.4 1.4 0 1 0 0 2.8a1.4 1.4 0 1 0 0-2.8Z"),
+    )
+
+    /** 蓝牙符文（开路径，与 lucide bluetooth 同形） */
+    internal val Bluetooth = listOf(stroke("m7 7 10 10-5 5V2l5 5L7 17"))
+
+    /** 电源：顶部竖线 + 底部大半圆（large-arc 走下方留出顶部缺口） */
+    internal val Power = listOf(stroke("M12 3v8M6.3 6.5a8 8 0 1 0 11.4 0"))
+
+    /** 复制：前后两层圆角矩形 */
+    internal val Copy = listOf(
+        stroke("M9 8h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2ZM15 5H7a2 2 0 0 0-2 2v8"),
+    )
+
+    /** 漏斗（筛选） */
+    internal val Funnel = listOf(stroke("M3.5 4.5h17l-6.7 7.8v7.2l-3.6-2.3v-4.9Z"))
 }
 
 /** [IconToken] 的图层序列；与枚举的一一对应由 shared 构建护栏 `verifyAdminIcons` 锁定 */
@@ -77,6 +97,11 @@ internal fun IconToken.vectors(): List<IconLayer> = when (this) {
     IconToken.Model -> AdminIconVectors.Model
     IconToken.Speaker -> AdminIconVectors.Speaker
     IconToken.Info -> AdminIconVectors.Info
+    IconToken.Wifi -> AdminIconVectors.Wifi
+    IconToken.Bluetooth -> AdminIconVectors.Bluetooth
+    IconToken.Power -> AdminIconVectors.Power
+    IconToken.Copy -> AdminIconVectors.Copy
+    IconToken.Funnel -> AdminIconVectors.Funnel
 }
 
 /**

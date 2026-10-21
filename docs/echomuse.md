@@ -35,7 +35,7 @@ mDNS 广播地址**无配置项**：启动时动态探测部署机默认出口�
 
 **官方端口对齐（`plain_port` 的来由）**：上游 emOS 固件（`emos/init/init.c` 的 `tcp_peer()`）只把「ESTABLISHED 且远端端口 8767/8770」的连接识别为 controller——这是设备串口 banner `controller` 字段的唯一判据，2026-10-20 对 v2.18.1 源码核对为**全固件唯一**按端口判连接的位置（其余逻辑不依赖该状态，纯显示）。自建服务器若只听主端口（如 80/8000），banner 恒显 `not connected`；服务端默认在 8767 额外监听并把 mDNS `plain_port` 指向它，设备经发现自动迁移到官方端口，banner 如实显示 `192.168.x.x:8767`。host 网络部署下 8767 即宿主端口，无需额外映射。
 
-会话侧固定参数：上行 16kHz/二进制协议 v1、下行 16kHz/60ms/v1（mic 是 16k PCM 协议常量；TTS 解码后直接出 16k PCM，无重采样）。
+会话侧固定参数：上行 mic 16kHz / 下行 speaker **48kHz**，均 mono `S16_LE` / 40ms / 二进制协议 v1。采样率都是协议常量（不跟随 `[audio]` 里给 ESP 的 24k/60ms）：上游控制器用 ffmpeg 把 TTS 直接解码成 48kHz mono 发 `0x02`，设备端 DAC 也是 48kHz 且**不做重采样**——按 16kHz 发会变成 3 倍速的尖叫声。
 
 ## 协议映射（EchoMuse → xiaozhi 会话语义）
 
@@ -47,7 +47,7 @@ mDNS 广播地址**无配置项**：启动时动态探测部署机默认出口�
 | `0x01`/`0x07` mic PCM（16k S16LE） | 上行 Opus 二进制帧 | 服务端用同一 `OpusFrameEncoder` 编码，攒满 60ms 一包；`0x07` 会话头（session u32 + seq u16 BE）已剥离 |
 | `0x04`（VAD 结束） | 补齐残 PCM 后投 typed `EndOfUtterance(Speech)` | core 合并已切段与 VAD flush 尾段、reset 后识别；立即允许下次唤醒，不等回复 EOS |
 | `0x05`（无语音超时） | 丢弃残 PCM 后投 typed `EndOfUtterance(NoSpeech)` | core 丢弃已切段与尾段、reset，不触发 ASR/LLM；重复/空闲哨兵幂等 |
-| 下行 Opus 帧（`send_binary`） | `0x02` speaker PCM | 解码回 16k，切 40ms（1280B）一块 |
+| TTS PCM（typed `send_audio`） | `0x02` speaker PCM | 重采样到 48kHz，切 40ms（3840B）一块；`tts stop` 时残块补零 |
 | `ServerMessage::Tts { state:"stop" }`（JSON `type=tts,state=stop`） | 残 PCM 补零至一块 `0x02` 后发一条 `0x03` speaker EOS | 按 JSON 结构解析，不匹配伪造 `tts_stop`/文本子串；其余服务器 JSON 不下发 |
 | 会话 `close` | `Shutdown` → control 任务退出、连接关闭 | 与 WsTransport 的粘滞 `Closed` 同语义 |
 

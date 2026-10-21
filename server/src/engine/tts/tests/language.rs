@@ -72,7 +72,7 @@ fn same_language_single_flight_while_other_language_builds_independently() {
         assert_eq!(lease.generation(), 1);
         assert_eq!(output(lease), vec![1.0]);
     }
-    assert_ne!(key(&leases[0]).mem_key(), key(&slot.lease()).mem_key());
+    assert_ne!(mem(&key(&leases[0])), mem(&key(&slot.lease())));
     assert_eq!(slot.pool.lock().unwrap().len(), 2);
 
     let mut params_only = cfg.clone();
@@ -102,7 +102,7 @@ fn same_language_single_flight_while_other_language_builds_independently() {
     );
     assert_eq!(next.generation(), 2);
     assert_eq!(output(&next), vec![4.0]);
-    assert_ne!(key(&next).mem_key(), key(&leases[0]).mem_key());
+    assert_ne!(mem(&key(&next)), mem(&key(&leases[0])));
 }
 
 #[test]

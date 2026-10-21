@@ -279,14 +279,30 @@ impl<'a, T: Transport> Session<'a, T> {
                 );
                 let error_msg = format!("LLM 调用失败（{}）", failure.category());
                 return self
-                    .report_llm_failure(trace, turn, interrupted, frames_total, t0, warn_msg, error_msg)
+                    .report_llm_failure(
+                        trace,
+                        turn,
+                        interrupted,
+                        frames_total,
+                        t0,
+                        warn_msg,
+                        error_msg,
+                    )
                     .await;
             }
             Err(e) => {
                 let warn_msg = format!("session {session_id} LLM 任务异常: {e}");
                 let error_msg = format!("LLM 任务异常: {e}");
                 return self
-                    .report_llm_failure(trace, turn, interrupted, frames_total, t0, warn_msg, error_msg)
+                    .report_llm_failure(
+                        trace,
+                        turn,
+                        interrupted,
+                        frames_total,
+                        t0,
+                        warn_msg,
+                        error_msg,
+                    )
                     .await;
             }
         };
@@ -498,6 +514,7 @@ impl<'a, T: Transport> Session<'a, T> {
             download.clone(),
             self.engines.inference.tts(),
             Some(first_pcm),
+            self.params.output_format(),
             move |sentence: &str| {
                 // 缓存键口径的**唯一权威**在 `HotAudioKey::from_lease`。
                 //
@@ -505,14 +522,12 @@ impl<'a, T: Transport> Session<'a, T> {
                 // 的成品音频暖进本缓存（读盘复用），两处各写一遍参数顺序，一旦漂移就是
                 // "缓存永远不命中"——不报错、只是白合成，是最难查的一类 bug。所以合成路径
                 // 与问候路径共用这一个构造入口。
-                let key = crate::app::hot_audio::HotAudioKey::from_media_lease(
-                    &lease,
-                    params.output_format(),
-                    sentence,
-                );
+                let key = crate::app::hot_audio::HotAudioKey::from_lease(&lease, sentence);
+                let fmt = params.output_format();
                 SentenceSource {
                     tts: lease.engine(),
-                    cache_key: key.mem_key(),
+                    // 内存键含整个下行格式（帧按会话格式编码）；磁盘身份不含（存 PCM 24k）。
+                    cache_key: key.mem_key(fmt),
                     // 完整身份：预取 worker 据此登记热音频（磁盘持久化，跨重启复用）。
                     // `register_identity` 内部校验 `mem_key == cache_key`，漂移即不登记。
                     hot_audio_key: Some(key.clone()),

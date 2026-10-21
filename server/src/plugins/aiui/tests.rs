@@ -33,7 +33,20 @@ fn first_frame_carries_full_params_and_base64_audio() {
     // parameter 仅首帧携带：tts 音色/语速与 payload 音频参数
     assert_eq!(f["parameter"]["tts"]["vcn"], "x6_dongmanshaonv_pro");
     assert_eq!(f["parameter"]["tts"]["speed"], 60);
-    assert_eq!(f["parameter"]["tts"]["tts"]["sample_rate"], 16000);
+    // 下行合成请求 24k（与 Kokoro 对齐）；上行识别音频仍 16k
+    assert_eq!(
+        f["parameter"]["tts"]["tts"]["sample_rate"],
+        super::TTS_SAMPLE_RATE
+    );
+    assert_eq!(
+        f["payload"]["audio"]["sample_rate"],
+        super::UPLINK_SAMPLE_RATE
+    );
+    assert_ne!(
+        super::TTS_SAMPLE_RATE,
+        super::UPLINK_SAMPLE_RATE,
+        "上下行采样率是两个契约，写成同一个值即失去收敛意义"
+    );
     assert_eq!(f["parameter"]["nlp"]["prompt"], "你是测试助手");
     let audio = base64::engine::general_purpose::STANDARD
         .decode(f["payload"]["audio"]["audio"].as_str().unwrap())

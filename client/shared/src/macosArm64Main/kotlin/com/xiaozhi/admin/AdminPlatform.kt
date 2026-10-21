@@ -70,6 +70,11 @@ actual fun ViewContainer<*, *>.renderTestbenchSection(
 private const val KEY_SERVER_URL = "xz.server.baseUrl"
 private const val DEFAULT_SERVER = "http://127.0.0.1:8000"
 
+// 已保存地址的连通性三态：初始未知，探测失败才允许广播发现的服务器接管。
+private const val SAVED_BASE_UNKNOWN = 0
+private const val SAVED_BASE_USABLE = 1
+private const val SAVED_BASE_UNUSABLE = 2
+
 /** 服务端 API 基址：读记忆地址（ConnectState 时代同一 SP key），没存过回退本地默认。 */
 actual fun pagerBaseUrl(pager: Pager): String =
     prefs(pager).getItem(KEY_SERVER_URL).ifEmpty { DEFAULT_SERVER }
@@ -106,6 +111,17 @@ private class ServerSwitchState(scope: PagerScope) {
     /** 自动接管只发生一次：首次运行（从未保存过地址）发现到服务器即自动连接。 */
     var autoApplied = false
 
+    /**
+     * 已保存地址的连通性探测结果（[SAVED_BASE_UNKNOWN] / [SAVED_BASE_USABLE] /
+     * [SAVED_BASE_UNUSABLE]）。服务器换机或换 IP/端口后旧地址会永久失效，
+     * 只有确认旧地址连不通，才允许被局域网广播发现的服务器接管——
+     * 用户手填的可用地址（含远程服务器）永远优先，不被自动改掉。
+     */
+    var savedBaseState by scope.observable(SAVED_BASE_UNKNOWN)
+
+    /** 探测只发一次（入口每次渲染都会走到这里）。 */
+    var savedBaseProbing = false
+
     /** 原生 mDNS 浏览是否在跑（observable：面板提示文案随它响应式切换；防重复 start）。 */
     var discoveryOn by scope.observable(false)
 
@@ -129,9 +145,15 @@ actual fun ViewContainer<*, *>.macServerSwitchEntry(
 ) {
     val state = switchStates.getOrPut(pager) { ServerSwitchState(pager) }
     if (state.current.isEmpty()) state.current = pagerBaseUrl(pager)
-    // 首次运行（用户从未配置过地址）：启动常驻发现，命中即自动接管 —— 开箱自动连接。
-    if (prefs(pager).getItem(KEY_SERVER_URL).isEmpty() && !state.autoApplied) {
-        startDiscovery(pager, state, onApplied)
+    // 启动即尝试自动连接：从未配置过地址 → 直接开始广播发现（开箱自动连接）；
+    // 已有保存地址 → 先探一次 /api/health，确认旧地址连不通才让发现的服务器接管
+    // （服务器换机/换 IP 或端口后旧地址会永久失效，不探测则自动发现永远不会生效）。
+    if (!state.autoApplied) {
+        if (prefs(pager).getItem(KEY_SERVER_URL).isEmpty()) {
+            startDiscovery(pager, state, onApplied)
+        } else {
+            probeSavedBase(pager, state, onApplied)
+        }
     }
     View {
         attr { flexDirectionColumn() }
@@ -151,6 +173,18 @@ actual fun ViewContainer<*, *>.macServerSwitchEntry(
                 marginLeft(AdminSpace.md + AdminSpace.sm)
                 marginBottom(AdminSpace.xs)
                 text("当前：${state.current}")
+            }
+        }
+        // 旧地址连不通时明确说出来：服务器换机/改端口后用户只看「连不上」是猜不到原因的。
+        vif({ state.savedBaseState == SAVED_BASE_UNUSABLE && state.discovered.isEmpty() }) {
+            Text {
+                attr {
+                    fontSize(AdminType.micro)
+                    color(AdminColors.danger)
+                    marginLeft(AdminSpace.md + AdminSpace.sm)
+                    marginBottom(AdminSpace.xs)
+                    text("当前地址连不通，正在搜索局域网内的服务器…")
+                }
             }
         }
     }
@@ -335,9 +369,29 @@ private fun ViewContainer<*, *>.fieldDivider() {
 // 发现与地址应用
 // ------------------------------------------------------------
 
-/** 是否还需要常驻发现：仅在「用户从未保存过地址且尚未自动接管」时为真。 */
+/** 是否还需要常驻发现：仅在「未自动接管且（从未保存地址 或 保存的地址已连不通）」时为真。 */
 private fun autoDiscoveryNeeded(pager: Pager, state: ServerSwitchState): Boolean =
-    !state.autoApplied && prefs(pager).getItem(KEY_SERVER_URL).isEmpty()
+    !state.autoApplied &&
+        (prefs(pager).getItem(KEY_SERVER_URL).isEmpty() || state.savedBaseState == SAVED_BASE_UNUSABLE)
+
+/**
+ * 探测已保存地址是否还活着（GET /api/health）。连不通 = 服务器换机/换 IP/改端口，
+ * 此时才启用广播发现接管，让客户端自己恢复，不用用户去猜新地址。
+ */
+private fun probeSavedBase(pager: Pager, state: ServerSwitchState, onApplied: () -> Unit) {
+    if (state.savedBaseProbing) return
+    state.savedBaseProbing = true
+    val base = prefs(pager).getItem(KEY_SERVER_URL)
+    network(pager).httpRequest("$base/api/health", false, JSONObject(), JSONObject(), timeout = 5) { _, success, _, resp ->
+        // 只有明确的 HTTP 2xx 才算可用；超时/连接拒绝/5xx 一律视为失效。
+        val usable = success && (resp.statusCode == null || resp.statusCode in 200..299)
+        state.savedBaseState = if (usable) SAVED_BASE_USABLE else SAVED_BASE_UNUSABLE
+        if (!usable && !state.autoApplied) {
+            // 旧地址已死：启动广播发现，命中即接管（saveBase 写回新地址并重载全部数据）。
+            startDiscovery(pager, state, onApplied)
+        }
+    }
+}
 
 /** 启动 mDNS 发现（幂等）；回调（已在 Kuikly 线程）整体替换列表并尝试自动接管。 */
 private fun startDiscovery(pager: Pager, state: ServerSwitchState, onApplied: () -> Unit) {

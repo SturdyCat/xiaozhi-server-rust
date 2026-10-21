@@ -153,10 +153,11 @@ fun ViewContainer<*, *>.primaryButton(
     loadingText: String? = null,
     successText: String? = null,
     errorText: String? = null,
+    icon: IconToken? = null,
     onClick: () -> Unit,
 ) = appButton(
     text, ButtonVariant.PRIMARY, enabled, danger, loading, result, dynamicText,
-    loadingText, successText, errorText, onClick = onClick,
+    loadingText, successText, errorText, icon = icon, onClick = onClick,
 )
 
 fun ViewContainer<*, *>.secondaryButton(
@@ -168,11 +169,12 @@ fun ViewContainer<*, *>.secondaryButton(
     loadingText: String? = null,
     successText: String? = null,
     errorText: String? = null,
+    icon: IconToken? = null,
     onClick: () -> Unit,
 ) = appButton(
     text, ButtonVariant.SECONDARY, enabled = enabled, loading = loading, result = result,
     dynamicText = dynamicText, loadingText = loadingText, successText = successText,
-    errorText = errorText, onClick = onClick,
+    errorText = errorText, icon = icon, onClick = onClick,
 )
 
 fun ViewContainer<*, *>.textButton(text: String, enabled: () -> Boolean = { true }, onClick: () -> Unit) =

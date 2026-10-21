@@ -73,6 +73,11 @@ targets:
         #    与 Info.plist 同步维护（xcodegen 每次重写该文件）。
         NSBonjourServices:
           - "_xiaozhi-admin._tcp"
+        # ⚠️ 本地网络权限说明（macOS 15+ 强制）：局域网发现与连接都算「访问本地网络」，
+        #    缺这个 key 时系统不弹授权提示、直接把 Bonjour 浏览与局域网连接静默拒绝
+        #    （表现为发现列表一直为空、NWConnection 停在 preparing）。首次运行会弹窗询问，
+        #    用户误点"不允许"后需到 系统设置 → 隐私与安全性 → 本地网络 重新打开。
+        NSLocalNetworkUsageDescription: 用于发现并连接同一局域网内的小智服务端（Bonjour 广播），授权后管理台可自动连接服务器，无需手填地址。
         # Finder / Dock 读取编译后的 AppIcon.icns；图标名与资源目录保持一致。
         # 声明本身不会打包图片，仍须保留上面的 Assets.xcassets 资源输入。
         CFBundleIconFile: AppIcon

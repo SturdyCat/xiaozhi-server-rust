@@ -18,6 +18,11 @@ admin_dir = "../client/apps/h5App/web"
 [audio]
 # 服务器下行（TTS）采样率，写入服务器 hello，设备据此解码播放。
 # 设备上行默认 16k，跟随设备 hello 的 audio_params。
+# 只允许 16000 / 24000 / 48000（其它值会被 normalize 回落 24000 并告警：
+# 非法率会让 Opus 编码器建不起来、每句音频被静默丢弃）。
+# 24000 是推荐锚点：Kokoro 原生 24k（零重采样）、AIUI 按 24k 请求、Opus 原生支持。
+# EchoMuse 例外：下行固定 48k（设备 DAC 48k 且不重采样，协议常量），
+# 由服务端从 24k 做一次整数倍 2× 升采样。
 downlink_sample_rate = 24000
 downlink_frame_duration_ms = 60
 channels = 1
@@ -251,7 +256,7 @@ greeting = """我在"""                # 设备唤醒（固件上报 listen stat
                                     # 在呢
                                     # 你好呀"""）。建议每句都短（≤10 字）：问候语播放期间
                                     # 上行音频会在缓冲区排队，太长会推迟用户第一句话的处理。
-persist = true                      # 把成品音频（已编码的下行 Opus 帧，约 2KB）落盘到
+persist = true                      # 把成品音频（TTS 原始 24kHz PCM，约 48KB/秒）落盘到
                                     # <配置文件目录>/hot-audio/，进程重启后直接读盘复用。
                                     # ⚠️ 需要 [tts].cache_entries > 0（复用经内存缓存承载成品帧）；
                                     # 缓存被关掉时配置校验会拦下并提示怎么改。

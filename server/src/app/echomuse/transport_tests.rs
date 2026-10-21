@@ -18,18 +18,30 @@ fn stop() -> String {
 }
 #[tokio::test]
 async fn native_framer_pads_tail_then_socket_receipt_precedes_eos() {
+    assert_eq!(
+        frames::SPEAKER_SAMPLE_RATE,
+        AudioFormat::echo_speaker().sample_rate,
+        "协议常量与 AudioFormat 必须同源（漂移的表现是设备按错采样率播放）"
+    );
     let (mut transport, mut data) = harness();
     let mut framer =
-        crate::app::downlink::framer::StreamingFramer::new_format(16000, AudioFormat::echo())
+        crate::app::downlink::framer::StreamingFramer::new_format(16000, AudioFormat::echo_speaker())
             .unwrap();
     assert!(framer.push(&[0.5, -0.5]).unwrap().is_empty());
     let tail = framer.finish().unwrap().unwrap();
-    assert_eq!(tail.len(), 1280);
-    assert!(tail[4..].iter().all(|b| *b == 0));
+    assert_eq!(
+        tail.len(),
+        frames::SPEAKER_CHUNK_BYTES,
+        "48k/40ms 一块 = 3840 字节，与 media 层整块校验同源"
+    );
+    assert!(
+        tail[tail.len() - 64..].iter().all(|b| *b == 0),
+        "残样本补零到整块"
+    );
     let media = transport.media.clone();
     {
         let pending = transport.send_audio(
-            AudioChunk::new(AudioFormat::echo(), tail.clone()),
+            AudioChunk::new(AudioFormat::echo_speaker(), tail.clone()),
             TerminalProfile::echo(),
             0,
         );
@@ -79,7 +91,10 @@ async fn lost_data_cancels_receipt_and_never_queues_eos_for_reconnect() {
     let media = transport.media.clone();
     {
         let pending = transport.send_audio(
-            AudioChunk::new(AudioFormat::echo(), vec![0; 1280]),
+            AudioChunk::new(
+                AudioFormat::echo_speaker(),
+                vec![0; frames::SPEAKER_CHUNK_BYTES],
+            ),
             TerminalProfile::echo(),
             0,
         );

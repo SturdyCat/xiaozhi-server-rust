@@ -78,8 +78,8 @@ fn entry_of(key: &HotAudioKey) -> ManagedEntry {
         sig: format!("{:016x}", fnv1a64(key.engine_sig.as_bytes())),
         speaker: key.speaker,
         speed: key.speed.to_bits(),
-        sr: key.downlink_sr,
-        frame_ms: key.downlink_frame_ms,
+        sr: super::PCM_SAMPLE_RATE,
+        frame_ms: 0,
     }
 }
 
@@ -136,13 +136,14 @@ impl HotAudioStore {
         }
     }
 
-    /// 管理槽位写盘：与 [`HotAudioStore::put`] 相同的原子落盘，并把成品**登记**进
-    /// `managed.json`（同一条目幂等，不重复；逐设备音色各自的条目并存）。
+    /// 管理槽位写盘：与 [`HotAudioStore::put`] 相同的原子落盘（`pcm` = 整句 S16LE
+    /// 字节），并把成品**登记**进 `managed.json`（同一条目幂等，不重复；逐设备音色
+    /// 各自的条目并存）。
     ///
     /// 返回值与 `put` 同义（是否落盘）；登记失败只告警——音频复用不受影响，仅该项
     /// 旧文案的启动清理失效。
-    pub fn put_managed(&self, slot: &str, key: &HotAudioKey, frames: &[Vec<u8>]) -> bool {
-        if !self.put(key, frames) {
+    pub fn put_managed(&self, slot: &str, key: &HotAudioKey, pcm: &[u8]) -> bool {
+        if !self.put(key, pcm) {
             return false;
         }
         let Some(dir) = self.dir.as_ref() else {

@@ -332,7 +332,8 @@ pub(crate) enum PreparedAudio {
         chunks: mpsc::Receiver<PcmChunk>,
         done: oneshot::Receiver<bool>,
     },
-    /// 结果缓存命中：已编码的下行 Opus 帧负载（零合成/零编码，直接按节拍下发）。
+    /// 结果缓存命中：已编码的下行 Opus 帧负载（零合成，直接按节拍下发；磁盘命中
+    /// 的帧由 `TtsCache::get_async` 按会话下行格式现场编码，见其模块文档）。
     Cached(Arc<Vec<Vec<u8>>>),
 }
 
@@ -366,6 +367,9 @@ pub(crate) struct SentenceSource {
 /// ⚠️ **不要**在等上一句 `prev` 时持许可——上一句在飞时先 `await` 它收尾，许可只覆盖
 /// 本句自己的推理窗口。
 ///
+/// `output_format` = 本会话的下行音频格式（会话开始时固定）：内存缓存键与磁盘命中的
+/// 编码都依赖它（磁盘存的是 24k PCM，见 `app::hot_audio`）。
+///
 /// `first_pcm`（缺口②）= 首个**非缓存**句的首个 PCM 分片回调（TTFA 分段采集的
 /// `tts_first_pcm` 埋点）；`None` = 不采集。first-only 语义由调用方闭包用 `AtomicBool`
 /// 实现（每分片一次原子读，无锁），本模块不 import [`crate::app::events`] 类型——
@@ -380,6 +384,7 @@ pub(crate) fn spawn_sentence_prefetch<F>(
     budget: Arc<DownloadBudget>,
     tts_gate: crate::app::inference::GateHandle,
     first_pcm: Option<Arc<dyn Fn() + Send + Sync>>,
+    output_format: crate::app::audio::media::AudioFormat,
     mut resolve: F,
     mut sentences: mpsc::UnboundedReceiver<String>,
 ) -> mpsc::Receiver<PreparedSentence>
@@ -410,12 +415,12 @@ where
                 speaker,
             } = resolve(&sentence);
             if let Some(identity) = hot_audio_key {
-                if cache_key != 0 && identity.mem_key() == cache_key {
-                    cache.register_identity(identity);
+                if cache_key != 0 && identity.mem_key(output_format) == cache_key {
+                    cache.register_identity(identity, cache_key);
                 }
             }
-            // 先内存、再 blocking 读盘；命中均零合成、不过推理闸门。
-            let hit = cache.get_async(cache_key).await;
+            // 先内存、再 blocking 读盘（读盘命中含 PCM→帧编码）；命中均零合成、不过推理闸门。
+            let hit = cache.get_async(cache_key, output_format).await;
             // 等 IO 期间也可能已打断/消费者关闭，不再启动新合成或投递旧轮音频。
             if abort.load(Ordering::Relaxed) || tx.is_closed() {
                 break;

@@ -72,6 +72,7 @@ async fn provider_returning_ok_after_rejected_callback_is_not_complete_success()
         budget(),
         gate(1),
         None,
+        out_fmt(),
         |_| SentenceSource {
             tts: Arc::new(WrongRateTts),
             cache_key: 77,

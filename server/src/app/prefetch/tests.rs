@@ -138,6 +138,20 @@ fn abort_flag() -> Arc<AtomicBool> {
     Arc::new(AtomicBool::new(false))
 }
 
+/// 测试用下行档位（24k / 60ms Opus）：内存键与磁盘命中编码都用它。
+fn out_fmt() -> crate::app::audio::media::AudioFormat {
+    crate::app::audio::media::AudioFormat::new(
+        crate::app::audio::media::AudioCodec::Opus,
+        24_000,
+        60,
+    )
+}
+
+/// 100ms 的 24k 静音 PCM（S16LE）。
+fn pcm_100ms() -> Vec<u8> {
+    vec![0u8; 2_400 * 2]
+}
+
 /// 测试用 TTS 闸门（默认与生产一致的 1 路许可；串行断言用例传 1）。
 fn gate(permits: u32) -> crate::app::inference::GateHandle {
     let mut cfg = crate::config::Config::default();
@@ -165,6 +179,7 @@ async fn prefetch_starts_next_synthesis_before_current_finishes_playing() {
         budget(),
         gate(1),
         None,
+        out_fmt(),
         resolver(tts.clone(), 1),
         sentences(&["A", "B"]),
     );
@@ -210,6 +225,7 @@ async fn prefetch_serializes_synthesis() {
         budget(),
         gate(1),
         None,
+        out_fmt(),
         resolver(tts.clone(), 1),
         sentences(&["A", "B", "C"]),
     );
@@ -248,6 +264,7 @@ async fn prefetch_stops_on_abort() {
         budget(),
         gate(1),
         None,
+        out_fmt(),
         resolver(tts.clone(), 1),
         sentences(&["A", "B", "C"]),
     );
@@ -295,6 +312,7 @@ async fn prefetch_cache_hit_delivers_encoded_frames() {
         budget(),
         gate(1),
         None,
+        out_fmt(),
         resolver(tts.clone(), 42),
         sentences(&["好的"]),
     );
@@ -321,6 +339,7 @@ async fn prefetch_reports_failed_synthesis() {
         budget(),
         gate(1),
         None,
+        out_fmt(),
         resolver(tts.clone(), 1),
         sentences(&["会失败的句子"]),
     );
@@ -350,6 +369,7 @@ async fn prefetch_reports_successful_synthesis() {
         budget(),
         gate(1),
         None,
+        out_fmt(),
         resolver(tts, 1),
         sentences(&["正常句子"]),
     );
@@ -498,6 +518,7 @@ async fn download_budget_bounds_pipeline_without_losing_chunks() {
         budget.clone(),
         gate(1),
         None,
+        out_fmt(),
         resolver(tts, 1),
         sentences(&["A"]),
     );
@@ -525,10 +546,11 @@ mod gates;
 async fn persistent_hit_skips_synthesis_and_inference_gate() {
     use crate::app::hot_audio::{HotAudioKey, HotAudioStore};
     let dir = std::env::temp_dir().join(format!("xz-prefetch-{}", uuid::Uuid::new_v4()));
-    let key = HotAudioKey::from_session(&crate::config::Config::default(), 24_000, 60, "普通回答");
-    let frames = vec![vec![1, 2], vec![3]];
+    let key = HotAudioKey::from_session(&crate::config::Config::default(), "普通回答");
+    // 磁盘上存的是 24k PCM（v3 格式）；内存键与编码按 24k/60ms 下行档位。
+    let fmt = out_fmt();
     let store = Arc::new(HotAudioStore::new(Some(dir.clone())));
-    assert!(store.put(&key, &frames));
+    assert!(store.put(&key, &pcm_100ms()));
     let cache = Arc::new(TtsCache::with_store(8, store));
     let tts = Arc::new(MockTts::new(Arc::new(Mutex::new(Vec::new()))));
     let shared_gate = gate(1);
@@ -542,11 +564,12 @@ async fn persistent_hit_skips_synthesis_and_inference_gate() {
         budget(),
         shared_gate,
         None,
+        fmt,
         {
             let tts = tts.clone();
             move |_| SentenceSource {
                 tts: tts.clone(),
-                cache_key: key.mem_key(),
+                cache_key: key.mem_key(fmt),
                 hot_audio_key: Some(key.clone()),
                 speed: 1.0,
                 speaker: 0,
@@ -558,7 +581,11 @@ async fn persistent_hit_skips_synthesis_and_inference_gate() {
         .await
         .expect("磁盘命中不能等待已被占满的推理闸门")
         .unwrap();
-    assert!(matches!(item.audio, PreparedAudio::Cached(ref f) if **f == frames));
+    // 磁盘命中 = PCM 按会话档位现场编码：100ms@24k → 24k/60ms = 1 整帧 + 1 尾帧。
+    let PreparedAudio::Cached(f) = &item.audio else {
+        panic!("磁盘命中应投递缓存帧");
+    };
+    assert_eq!(f.len(), 2);
     assert_eq!(tts.calls(), 0);
     drop(held);
     drop(rx);

@@ -11,13 +11,14 @@
 //!   header.status 与 payload.audio.status 每轮 0→1→2。
 //! - 结果为 JSON 文本帧：`payload.$sub.text` 为 base64（tts 的数据字段是 `audio`）；
 //!   event.key = Bos/Eos/Silence（云端 VAD 事件）；iat 为识别结果；nlp 为大模型回复
-//!   （流式增量）；tts.audio 为合成音频（流式，按请求参数 raw/16k/16bit）。
+//!   （流式增量）；tts.audio 为合成音频（流式，raw / [`TTS_SAMPLE_RATE`] / 单声道 / 16bit）。
 //!
 //! ## 硬约束（务必遵守，勿"优化"掉）
 //! - **60 秒无请求数据服务端主动断连**；单连接最长 30 分钟 → 断连后下一轮自动重建。
 //! - **对话历史按连接保留**（不受 new_session 影响）——重建连接 = 上下文清零。
 //! - 收到任何非 0 错误码必须重建连接，否则后续持续报错。
-//! - 上行音频：raw PCM 16000Hz / 单声道 / 16bit，base64；分帧建议 40ms/1280 字节。
+//! - 上行音频：raw PCM 16000Hz / 单声道 / 16bit，base64；分帧建议 40ms/1280 字节
+//!   （与下行合成采样率 [`TTS_SAMPLE_RATE`] 无关，勿混用）。
 
 use serde::{Deserialize, Serialize};
 /// AIUI 全链路接入配置（协议见 https://aiui-doc.xf-yun.com/project-1/doc-584/）。
@@ -121,6 +122,22 @@ const READ_TIMEOUT: Duration = Duration::from_secs(15);
 /// 上行分帧：40ms @16k/16bit = 1280 字节（官方建议值）。
 const FRAME_BYTES: usize = 1280;
 
+/// **下行合成**采样率（请求参数 `parameter.tts.tts.sample_rate`）。
+///
+/// 取 24 kHz：与本地 Kokoro 原生输出一致，ESP 下行（默认 24k）因此**零重采样**，
+/// Echo 下行只需一次整数倍 2× 升采样——全链路只保留一处重采样。
+///
+/// ⚠️ 只作用于**下行合成**；上行识别音频恒为 [`UPLINK_SAMPLE_RATE`]（16k），
+/// 两者是两个独立契约，不可合并成一个常量。
+/// ⚠️ 若讯飞忽略该参数仍回 16 kHz，服务端会按 24k 解读 → 听感「语速慢 2/3、
+/// 音调偏低」。此时把本常量改回 `16_000` 即可（其余代码全部由它推导，无需再改）。
+pub const TTS_SAMPLE_RATE: u32 = 24_000;
+
+/// **上行识别**采样率（`payload.audio.sample_rate`）：AIUI 只收 16 kHz。
+///
+/// 设备上行（ESP hello / Echo mic）本来就是 16k，故此处不做任何重采样。
+pub const UPLINK_SAMPLE_RATE: u32 = 16_000;
+
 /// 全链路轮次结果（与具体厂商解耦：识别文本 + 回复文本 + 合成音频）。
 #[derive(Debug, Default, Clone)]
 pub struct FullChainTurn {
@@ -128,7 +145,7 @@ pub struct FullChainTurn {
     pub stt: String,
     /// 大模型回复文本。
     pub reply: String,
-    /// 合成音频：raw PCM 16000Hz 单声道 16bit LE 字节流。
+    /// 合成音频：raw PCM [`TTS_SAMPLE_RATE`] 单声道 16bit LE 字节流。
     pub audio: Vec<u8>,
 }
 
@@ -146,7 +163,7 @@ pub struct AiuiTurn {
     pub stt: String,
     /// 大模型回复文本（流式增量拼接）。
     pub reply: String,
-    /// 合成音频：raw PCM 16000Hz 单声道 16bit LE 字节流。
+    /// 合成音频：raw PCM [`TTS_SAMPLE_RATE`] 单声道 16bit LE 字节流。
     pub audio: Vec<u8>,
 }
 

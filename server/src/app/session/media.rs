@@ -7,6 +7,10 @@ impl SessionParams {
     /// Saved-defaults diagnostic, NOT a claim about an ESP's negotiated hello.
     pub fn configured_defaults(cfg: &crate::config::Config, codec: AudioCodec) -> Self {
         let echo = codec == AudioCodec::PcmS16Le;
+        // EchoMuse 上下行几何不同：mic 16 kHz、speaker 48 kHz（设备不重采样，
+        // 见 `AudioFormat::echo_speaker` 的上游依据）。都取协议常量，不跟随
+        // `[audio]` 里给 ESP 的 24 k/60 ms 配置。
+        let echo_out = AudioFormat::echo_speaker();
         let version = if echo {
             crate::app::protocol::BinVersion::V1
         } else {
@@ -17,13 +21,13 @@ impl SessionParams {
             downlink_bin_ver: version,
             uplink_sr: 16_000,
             downlink_sr: if echo {
-                16_000
+                echo_out.sample_rate
             } else {
                 cfg.audio.downlink_sample_rate
             },
             output_codec: codec,
             downlink_frame_ms: if echo {
-                40
+                echo_out.frame_ms
             } else {
                 cfg.audio.downlink_frame_duration_ms
             },
@@ -40,9 +44,9 @@ impl SessionParams {
         AudioFormat::new(self.output_codec, self.downlink_sr, self.downlink_frame_ms)
     }
 }
-
 pub(super) fn native_pcm(chunk: &AudioChunk) -> Option<Vec<f32>> {
-    if !chunk.is_current() || chunk.format != AudioFormat::echo() || chunk.data.len() % 2 != 0 {
+    if !chunk.is_current() || chunk.format != AudioFormat::echo_mic() || chunk.data.len() % 2 != 0
+    {
         return None;
     }
     Some(

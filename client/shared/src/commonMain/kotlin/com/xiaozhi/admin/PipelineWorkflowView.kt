@@ -67,9 +67,10 @@ private fun ViewContainer<*, *>.workflowStage(
     onSelect: () -> Unit,
 ) {
     val node = position.nodes.single()
+    // 图标在左且放大（28），右侧两行文字：阶段名 / 中文说明（不再把图标挤在第一行文字前）。
     View {
         attr {
-            width(stageWidth()); height(60f); flexDirectionColumn(); justifyContentCenter(); alignItemsCenter()
+            width(stageWidth()); height(60f); flexDirectionRow(); justifyContentCenter(); alignItemsCenter()
             borderRadius(AdminShape.radiusSm)
             border(Border(1f, BorderStyle.SOLID, if (selected()) AdminColors.accent else AdminColors.dividerStrong))
             backgroundColor(if (selected()) AdminColors.accentTintBg else AdminColors.cardBg)
@@ -77,20 +78,23 @@ private fun ViewContainer<*, *>.workflowStage(
             accessibility("流程模块：${position.label}${if (selected()) "，已选中" else ""}")
         }
         event { click { onSelect() } }
+        appIcon(
+            { node.icon }, size = 28f,
+            tint = { if (selected()) AdminColors.accentTintText else AdminColors.textSecondary },
+        )
         View {
-            attr { flexDirectionRow(); alignItemsCenter(); touchEnable(false) }
-            appIcon({ node.icon }, size = 16f, tint = { if (selected()) AdminColors.accentTintText else AdminColors.textSecondary })
+            attr { flexDirectionColumn(); justifyContentCenter(); marginLeft(AdminSpace.xs); touchEnable(false) }
             Text {
                 attr {
-                    marginLeft(AdminSpace.xs); text(position.label); fontSize(AdminType.body); fontWeightMedium()
+                    text(position.label); fontSize(AdminType.body); fontWeightMedium()
                     color(if (selected()) AdminColors.accentTintText else AdminColors.textPrimary); touchEnable(false)
                 }
             }
-        }
-        Text {
-            attr {
-                text(node.label.substringAfter(" · ")); fontSize(AdminType.micro)
-                color(AdminColors.textSecondary); marginTop(2f); touchEnable(false)
+            Text {
+                attr {
+                    text(node.label.substringAfter(" · ")); fontSize(AdminType.micro)
+                    color(AdminColors.textSecondary); marginTop(2f); touchEnable(false)
+                }
             }
         }
     }

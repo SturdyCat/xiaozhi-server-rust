@@ -38,7 +38,8 @@ fn policy_is_session_pinned_and_never_expands_reservoir_or_device_queues() {
     assert_eq!(next.downlink_buffer_ms, old.downlink_buffer_ms);
     assert_eq!(next.downlink_lead_ms, old.downlink_lead_ms);
     assert_eq!(echo.downlink_frame_ms, 40);
-    assert_eq!(echo.downlink_sr, 16000);
+    // EchoMuse speaker 线缆是 48kHz mono（设备不重采样，16k 会被播成 3 倍速）。
+    assert_eq!(echo.downlink_sr, 48000);
     assert_eq!(echo.downlink_lead_ms, 0);
     assert_eq!(
         crate::plugins::registry::section_hot("playback"),

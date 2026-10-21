@@ -171,15 +171,18 @@ pub(super) fn first_frame(
                 "speed": cfg.speed,
                 "volume": cfg.volume,
                 "pitch": cfg.pitch,
-                "tts": { "encoding": "raw", "sample_rate": 16000, "channels": 1, "bit_depth": 16 }
+                // 下行合成采样率：与本地 Kokoro 一致的 24k，见 `TTS_SAMPLE_RATE`。
+                "tts": { "encoding": "raw", "sample_rate": super::TTS_SAMPLE_RATE, "channels": 1, "bit_depth": 16 }
             }
         },
+        // ⚠️ payload.audio 是**上行识别音频**，恒 16 kHz（AIUI 只收 16k）；
+        // 与上面 parameter.tts.tts.sample_rate（下行合成 24k）是两个独立契约。
         "payload": {
             "audio": {
                 "status": status,
                 "audio": base64::engine::general_purpose::STANDARD.encode(audio),
                 "encoding": "raw",
-                "sample_rate": 16000,
+                "sample_rate": super::UPLINK_SAMPLE_RATE,
                 "channels": 1,
                 "bit_depth": 16
             }
@@ -203,7 +206,7 @@ pub(super) fn next_frame(
                 "status": status,
                 "audio": base64::engine::general_purpose::STANDARD.encode(audio),
                 "encoding": "raw",
-                "sample_rate": 16000,
+                "sample_rate": super::UPLINK_SAMPLE_RATE,
                 "channels": 1,
                 "bit_depth": 16
             }

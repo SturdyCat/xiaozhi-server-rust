@@ -32,7 +32,12 @@ async fn native_partial_pcm_precedes_end_without_codec_padding_or_replay() {
         panic!("native PCM expected")
     };
     assert_eq!(audio.data.len(), 246);
-    assert_eq!(audio.format, AudioFormat::echo());
+    assert_eq!(audio.format, AudioFormat::echo_mic());
+    assert_eq!(
+        frames::MIC_SAMPLE_RATE,
+        audio.format.sample_rate,
+        "上行格式必须与协议常量同源"
+    );
     assert!(audio.is_current());
     uplink.on_binary(&[frames::FRAME_VAD_END], &turn, &up, &ble, false);
     assert!(matches!(

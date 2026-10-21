@@ -17,7 +17,7 @@ import com.tencent.kuikly.core.views.View
  *
  * ```
  * ┌────────────────────────────────────────────────┐
- * │ 标题  ● 在线 [待批准]                 （🗑 删除） │ ← header：删除点击进行内二次确认
+ * │ 标题  ● 在线 [待批准]                 （[del] 删除） │ ← header：删除 icon 按钮进行内二次确认
  * ├────────────────────────────────────────────────┤
  * │ 概览        │ 设备号  xx:xx…        [复制信息]    │
  * │ WiFi 配置   │ 版本    1.2.3                      │ ← 卡内左菜单 + 右内容面板
@@ -67,8 +67,9 @@ internal fun ViewContainer<*, *>.echoMuseDeviceCard(
                     width(ECHOMUSE_MENU_WIDTH)
                     flexDirectionColumn()
                 }
-                for ((itemId, itemLabel) in echoMuseMenuItems(row)) {
+                for ((itemId, itemLabel, itemIcon) in echoMuseMenuItems(row)) {
                     echoMuseMenuItem(
+                        itemIcon,
                         itemLabel,
                         isSelected = { state.activeMenuItem(row) == itemId },
                     ) { state.selectMenu(row, itemId) }
@@ -150,30 +151,19 @@ private fun ViewContainer<*, *>.echoMuseCardHeader(row: EchoMuseDeviceRow, state
 }
 
 /**
- * 删除记录的圆形 icon 按钮（自绘：dangerTintBg 底 + danger 描边 + 🗑，Kuikly 无 icon 字体）。
- * 点击只进入行内二次确认（[echoMuseDeleteConfirm]），不直接删除。
+ * 删除记录的 icon-only 按钮（封装 [appButton]：OUTLINE + danger + [IconToken.Delete]
+ * 内嵌矢量图标，替代早期手绘 🗑 emoji 圆钮）。点击只进入行内二次确认
+ * （[echoMuseDeleteConfirm]），不直接删除。
  */
 private fun ViewContainer<*, *>.echoMuseDeleteButton(state: EchoMuseState, deviceId: String) {
-    View {
-        attr {
-            width(32f)
-            height(32f)
-            borderRadius(AdminShape.radiusPill)
-            allCenter()
-            backgroundColor(AdminColors.dangerTintBg)
-            border(Border(1f, BorderStyle.SOLID, AdminColors.danger))
-            // 可点击目标：悬停指针
-            cursor(CursorType.POINTER)
-        }
-        event { click { state.confirmDeleteId = deviceId } }
-        Text {
-            attr {
-                fontSize(AdminType.body)
-                color(AdminColors.dangerTintText)
-                text("🗑")
-            }
-        }
-    }
+    appButton(
+        "删除记录",
+        ButtonVariant.OUTLINE,
+        danger = { true },
+        icon = IconToken.Delete,
+        iconOnly = true,
+        accessibilityLabel = "删除该设备记录",
+    ) { state.confirmDeleteId = deviceId }
 }
 
 /** 删除记录的行内二次确认（header 下方）：确认/取消 + 口径说明（同原删除按钮文案）。 */
@@ -194,6 +184,7 @@ private fun ViewContainer<*, *>.echoMuseDeleteConfirm(
                 danger = { true },
                 loading = { state.actionBusy },
                 loadingText = "删除中…",
+                icon = IconToken.Delete,
             ) {
                 state.delete(ctx, row.deviceId) { ok, msg ->
                     toast.show(msg, if (ok) "ok" else "error")
@@ -201,7 +192,7 @@ private fun ViewContainer<*, *>.echoMuseDeleteConfirm(
                 }
             }
             View { attr { width(AdminSpace.sm) } }
-            secondaryButton("取消") { state.confirmDeleteId = "" }
+            secondaryButton("取消", icon = IconToken.Close) { state.confirmDeleteId = "" }
         }
         textNote(
             "删除只清服务端登记（含批准/唤醒词设置），不影响设备本身；设备下次接入会重新登记。",
@@ -215,28 +206,30 @@ private fun ViewContainer<*, *>.echoMuseDeleteConfirm(
 // ============================================================
 
 /** 卡片内菜单项集合：未批准 = 概览/批准；已批准 = 概览/WiFi 配置/唤醒词设置/设备管理/蓝牙代理。 */
-private fun echoMuseMenuItems(row: EchoMuseDeviceRow): List<Pair<String, String>> =
+private fun echoMuseMenuItems(row: EchoMuseDeviceRow): List<Triple<String, String, IconToken>> =
     if (row.approved) {
         listOf(
-            ECHOMUSE_MENU_OVERVIEW to "概览",
-            ECHOMUSE_MENU_WIFI to "WiFi 配置",
-            ECHOMUSE_MENU_WAKE to "唤醒词设置",
-            ECHOMUSE_MENU_MANAGE to "设备管理",
-            ECHOMUSE_MENU_BLE to "蓝牙代理",
+            Triple(ECHOMUSE_MENU_OVERVIEW, "概览", IconToken.Info),
+            Triple(ECHOMUSE_MENU_WIFI, "WiFi 配置", IconToken.Wifi),
+            Triple(ECHOMUSE_MENU_WAKE, "唤醒词设置", IconToken.Waveform),
+            Triple(ECHOMUSE_MENU_MANAGE, "设备管理", IconToken.Settings),
+            Triple(ECHOMUSE_MENU_BLE, "蓝牙代理", IconToken.Bluetooth),
         )
     } else {
         listOf(
-            ECHOMUSE_MENU_OVERVIEW to "概览",
-            ECHOMUSE_MENU_APPROVE to "批准",
+            Triple(ECHOMUSE_MENU_OVERVIEW, "概览", IconToken.Info),
+            Triple(ECHOMUSE_MENU_APPROVE, "批准", IconToken.Check),
         )
     }
 
 /**
- * 卡片内紧凑菜单项：高 36、radiusSm，选中 = sidebarSelectedBg 底 + accentTintText 文字，
- * 未选中 textSecondary。⚠️ isSelected 必须是 lambda 且只在 attr 闭包内求值
+ * 卡片内紧凑菜单项（左图标 + 文字，图标随选中态着色）：高 36、radiusSm，
+ * 选中 = sidebarSelectedBg 底 + accentTintText 文字，未选中 textSecondary。
+ * ⚠️ isSelected 必须是 lambda 且只在 attr 闭包内求值
  * （Kuikly 仅跟踪闭包内的 observable 读取，同 AdminNav.sidebarItem 的教训）。
  */
 private fun ViewContainer<*, *>.echoMuseMenuItem(
+    icon: IconToken,
     label: String,
     isSelected: () -> Boolean,
     onClick: () -> Unit,
@@ -254,8 +247,14 @@ private fun ViewContainer<*, *>.echoMuseMenuItem(
             cursor(CursorType.POINTER)
         }
         event { click { onClick() } }
+        appIcon(
+            { icon },
+            size = 16f,
+            tint = { if (isSelected()) AdminColors.accentTintText else AdminColors.textTertiary },
+        )
         Text {
             attr {
+                marginLeft(AdminSpace.xs)
                 fontSize(AdminType.body)
                 color(if (isSelected()) AdminColors.accentTintText else AdminColors.textSecondary)
                 text(label)
@@ -313,7 +312,7 @@ private fun ViewContainer<*, *>.echoMuseOverviewPanel(
     }
     // Kuikly 渲染的文本不支持长按选中复制，一键复制兜底（粘到聊天/工单可直接读）
     actionRow {
-        secondaryButton("复制信息") {
+        secondaryButton("复制信息", icon = IconToken.Copy) {
             if (copyToClipboard(row.copyText)) {
                 toast.show("设备信息已复制到剪贴板", "ok")
             } else {
@@ -368,6 +367,7 @@ private fun ViewContainer<*, *>.echoMuseApprovePanel(
             "确认批准",
             loading = { state.actionBusy },
             loadingText = "批准中…",
+            icon = IconToken.Check,
         ) {
             state.approve(ctx, row.deviceId) { ok, msg ->
                 toast.show(msg, if (ok) "ok" else "error")
@@ -392,6 +392,7 @@ private fun ViewContainer<*, *>.echoMuseWifiPanel(
             enabled = { row.online },
             loading = { state.actionBusy },
             loadingText = "下发中…",
+            icon = IconToken.Wifi,
         ) {
             state.sendWifi(ctx, row.deviceId) { ok, msg ->
                 toast.show(msg, if (ok) "ok" else "error")
@@ -473,6 +474,7 @@ private fun ViewContainer<*, *>.echoMuseWakeSettings(
             "保存唤醒词设置",
             loading = { state.actionBusy },
             loadingText = "保存中…",
+            icon = IconToken.Save,
         ) {
             state.saveSettings(ctx, deviceId) { ok, msg ->
                 toast.show(msg, if (ok) "ok" else "error")

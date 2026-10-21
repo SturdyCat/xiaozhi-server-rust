@@ -33,7 +33,22 @@ fn cfg(voice: &str) -> Config {
     cfg
 }
 fn key(lease: &TtsLease) -> HotAudioKey {
-    HotAudioKey::from_lease(lease, 24000, 60, "same sentence")
+    HotAudioKey::from_lease(lease, "same sentence")
+}
+
+/// 测试用下行档位（只影响内存键；磁盘身份不含它）。
+fn fmt() -> crate::app::audio::media::AudioFormat {
+    use crate::app::audio::media::{AudioCodec, AudioFormat};
+    AudioFormat::new(AudioCodec::Opus, 24_000, 60)
+}
+
+fn mem(k: &HotAudioKey) -> u64 {
+    k.mem_key(fmt())
+}
+
+/// 测试用 PCM：70ms 24k 静音（S16LE）。
+fn pcm() -> Vec<u8> {
+    vec![0u8; 70 * 48]
 }
 fn output(lease: &TtsLease) -> Vec<f32> {
     lease.engine().synthesize("test", 1.0, 0).unwrap().0
@@ -45,7 +60,7 @@ fn failed_build_retains_instance_config_fingerprint_generation_and_cache_identit
     let slot = TtsSlot::new(&initial, fake("old", 1.0));
     let old = slot.lease();
     let cache = TtsCache::new(8);
-    cache.insert(key(&old).mem_key(), vec![vec![1, 2, 3]]);
+    cache.insert(mem(&key(&old)), vec![vec![1, 2, 3]]);
     assert!(slot
         .refresh_with(&cfg("bad-new"), |_| Err("fake failure".into()))
         .is_err());
@@ -55,10 +70,10 @@ fn failed_build_retains_instance_config_fingerprint_generation_and_cache_identit
     assert_eq!(retained.fingerprint(), old.fingerprint());
     assert_eq!(retained.generation(), old.generation());
     assert_eq!(output(&retained), vec![1.0]);
-    assert!(cache.get(key(&retained).mem_key()).is_some());
+    assert!(cache.get(mem(&key(&retained))).is_some());
     assert_ne!(
         key(&retained),
-        HotAudioKey::from_session(&cfg("bad-new"), 24000, 60, "same sentence")
+        HotAudioKey::from_session(&cfg("bad-new"), "same sentence")
     );
 }
 
@@ -75,11 +90,11 @@ fn successful_refresh_keeps_old_session_pinned_and_separates_cache_entries() {
     assert_eq!(old_session.config().speaker, 3);
     assert_eq!(old_session.config().speed, 1.2);
     assert_eq!(new_session.generation(), old_session.generation() + 1);
-    assert_ne!(key(&old_session).mem_key(), key(&new_session).mem_key());
+    assert_ne!(mem(&key(&old_session)), mem(&key(&new_session)));
     let cache = TtsCache::new(8);
-    cache.insert(key(&old_session).mem_key(), vec![vec![1]]);
-    assert!(cache.get(key(&new_session).mem_key()).is_none());
-    assert!(cache.get(key(&old_session).mem_key()).is_some());
+    cache.insert(mem(&key(&old_session)), vec![vec![1]]);
+    assert!(cache.get(mem(&key(&new_session))).is_none());
+    assert!(cache.get(mem(&key(&old_session))).is_some());
 }
 
 #[test]
@@ -97,7 +112,7 @@ fn unchanged_build_identity_updates_parameters_without_rebuild_or_generation_cha
     assert!(Arc::ptr_eq(&old.engine(), &new.engine()));
     assert_eq!(new.generation(), old.generation());
     assert_eq!(new.fingerprint(), old.fingerprint());
-    assert_ne!(key(&old).mem_key(), key(&new).mem_key());
+    assert_ne!(mem(&key(&old)), mem(&key(&new)));
 }
 
 #[test]
@@ -152,25 +167,23 @@ async fn disk_cache_uses_retained_actual_identity_after_failed_refresh() {
     let actual = key(&slot.lease());
     let store = Arc::new(HotAudioStore::new(Some(dir.clone())));
     let cache = TtsCache::with_store(4, store.clone());
-    cache.register_identity(actual.clone());
+    cache.register_identity(actual.clone(), mem(&actual));
     cache
-        .insert_async(actual.mem_key(), vec![vec![9, 8, 7]])
+        .insert_async(mem(&actual), vec![vec![9, 8, 7]], Some(pcm()))
         .await;
     cache.clear();
     assert!(slot
         .refresh_with(&cfg("bad"), |_| Err("failed".into()))
         .is_err());
     let retained = key(&slot.lease());
-    cache.register_identity(retained.clone());
-    let hit = cache.get_async(retained.mem_key()).await.unwrap();
-    assert_eq!(&*hit.opus_frames, &vec![vec![9, 8, 7]]);
+    cache.register_identity(retained.clone(), mem(&retained));
+    let hit = cache.get_async(mem(&retained), fmt()).await.unwrap();
+    assert!(
+        !hit.opus_frames.is_empty(),
+        "磁盘命中按会话格式从 PCM 重新编码"
+    );
     assert!(store
-        .get(&HotAudioKey::from_session(
-            &cfg("bad"),
-            24000,
-            60,
-            "same sentence"
-        ))
+        .get(&HotAudioKey::from_session(&cfg("bad"), "same sentence"))
         .is_none());
     // 只清理由本测试创建的明确临时目录。
     assert!(dir

@@ -119,7 +119,7 @@ impl TtsEngine for AiuiTts {
         let mut chunk_cb = chunk_cb;
         let mut got_audio = false;
         synthesize_frames(&self.cfg, text, speed, &mut |pcm: &[f32]| {
-            let keep = chunk_cb(16_000, pcm);
+            let keep = chunk_cb(crate::plugins::aiui::TTS_SAMPLE_RATE, pcm);
             if keep {
                 got_audio = true;
             }
@@ -136,7 +136,8 @@ impl TtsEngine for AiuiTts {
     }
 
     fn output_sample_rate(&self) -> u32 {
-        16_000 // 请求固定 auf/tts.sample_rate=16000
+        // 请求参数与回调采样率同源（`TTS_SAMPLE_RATE` = 24k），勿在此另写字面量
+        crate::plugins::aiui::TTS_SAMPLE_RATE
     }
 
     fn name(&self) -> &'static str {

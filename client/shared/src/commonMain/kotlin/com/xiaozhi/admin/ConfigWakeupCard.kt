@@ -63,7 +63,7 @@ fun ViewContainer<*, *>.wakeupConfigCard(form: ConfigFormState) {
                 attr {
                     fontSize(AdminType.caption)
                     color(AdminColors.textTertiary)
-                    text("把成品音频（已编码的下行 Opus 帧，约 2KB）写到配置文件同级的 hot-audio/ 目录；容器重建后仍在挂载卷上。换音色会自动重新合成并另存一份，不会串用旧音色。")
+                    text("把成品音频（TTS 原始 24kHz PCM，约 48KB/秒）写到配置文件同级的 hot-audio/ 目录；容器重建后仍在挂载卷上。下行格式（采样率/帧长）不影响复用，换音色会自动重新合成并另存一份，不会串用旧音色。")
                 }
             }
             // ⚠️ 跨段矛盾必须显式说出来：复用经内存缓存承载成品帧，缓存关掉时落盘会静默失效。

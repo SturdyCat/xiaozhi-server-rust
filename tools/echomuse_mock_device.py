@@ -33,6 +33,8 @@ FRAME_SPEAKER = 0x02
 FRAME_SPEAKER_EOS = 0x03
 
 MIC_SR = 16000
+# 下行 speaker 线缆采样率：上游契约是 mono 48kHz（设备 DAC 48k、不重采样）。
+SPEAKER_SR = 48000
 
 
 class WsClient:
@@ -199,7 +201,7 @@ def main() -> int:
             got += len(frame) - 1
         elif kind == FRAME_SPEAKER_EOS:
             eos = True
-    print(f"[4/4] 下行回复 ✓  共 {got} 字节 PCM（16kHz S16LE ≈ {got / MIC_SR / 2:.2f}s）")
+    print(f"[4/4] 下行回复 ✓  共 {got} 字节 PCM（48kHz S16LE ≈ {got / SPEAKER_SR / 2:.2f}s）")
     if got == 0:
         print("⚠️  回复为空：检查 TTS 是否可用（[tts] 引擎/凭据）", file=sys.stderr)
 

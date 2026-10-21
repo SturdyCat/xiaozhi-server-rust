@@ -86,26 +86,23 @@ pub(super) enum GreetingAudio {
 ///
 /// 刻意写成自由函数的原因与会话层其它逻辑一致：`Session` 需要真实 VAD 模型才能构造
 ///（`engine.rs` 的必需能力），把决策留在 `impl Session` 里就**只能靠真机验证**。
-/// 抽出来之后，"内存命中 / 磁盘命中并暖进内存 / 都不命中 / 关闭落盘" 四条分支都能单测。
+/// 抽出来之后，"内存命中 / 磁盘命中 / 都不命中 / 关闭落盘" 四条分支都能单测。
 ///
-/// 副作用只有一个：**磁盘命中时把成品帧暖进内存缓存**——这样调用方随后的
-/// `speak_canned` 会在既有预取路径上直接命中，零合成地走完整条下行链路
-///（`tts start` → `sentence_start` → 帧 → `tts stop`），不需要为"缓存音频"再写一套下发。
+/// 磁盘命中只做**校验**（读盘+解码，损坏即删待重合成）；把 PCM 按会话格式编码成
+/// 帧、暖进内存缓存由 `speak_canned` 的预取路径（`TtsCache::get_async`）统一完成，
+/// 本函数不做——同一件事只留一个实现，两处口径才不会漂移。
 pub(super) fn resolve_greeting_audio(
     cache: &TtsCache,
     store: &HotAudioStore,
     key: &HotAudioKey,
+    out: crate::app::audio::media::AudioFormat,
     persist: bool,
 ) -> GreetingAudio {
-    let mem_key = key.mem_key();
-    if cache.get(mem_key).is_some() {
+    if cache.get(key.mem_key(out)).is_some() {
         return GreetingAudio::Ready("内存缓存");
     }
-    if persist {
-        if let Some(frames) = store.get(key) {
-            cache.insert(mem_key, frames);
-            return GreetingAudio::Ready("磁盘缓存");
-        }
+    if persist && store.get(key).is_some() {
+        return GreetingAudio::Ready("磁盘缓存");
     }
     GreetingAudio::NeedsSynth
 }
@@ -114,25 +111,31 @@ impl<'a, T: Transport> Session<'a, T> {
     /// 预制话术的**落盘登记**（连接欢迎语 / 技能应答共用；唤醒问候在
     /// [`Self::handle_wake_greeting`] 内自带同款逻辑并带更细的日志）。
     ///
-    /// 把刚合成出的成品帧写盘并登记进管理槽位（`put_managed` → `managed.json`），
-    /// 供下次启动按配置文本做内容哈希校验、清理文案改了/清空的陈旧音频（见
-    /// [`crate::app::hot_audio::managed`]）。取不到成品帧（`[tts].cache_entries == 0`
-    /// 或本句被中断）时 debug 静默跳过——落盘是复用优化，绝不影响会话。
+    /// 磁盘上已是合成完成时由预取/水库链路写入的**24k PCM**（见
+    /// [`crate::app::hot_audio`]）；这里读回、经 `put_managed` 原子重写并登记进
+    /// 管理槽位（`managed.json`），供下次启动按配置文本做内容哈希校验、清理文案
+    /// 改了/清空的陈旧音频。取不到成品（缓存关闭、被中断或超限）时 debug 静默
+    /// 跳过——落盘是复用优化，绝不影响会话。
     pub(super) fn persist_canned_audio(&self, slot: &str, text: &str) {
         // 键口径与合成路径共用同一构造入口（见 `HotAudioKey::from_lease` 文档）。
-        let key = HotAudioKey::from_media_lease(&self.tts_lease, self.params.output_format(), text);
-        let Some(audio) = self.engines.tts_cache.get(key.mem_key()) else {
+        let key = HotAudioKey::from_lease(&self.tts_lease, text);
+        let fmt = self.params.output_format();
+        // 内存缓存里有成品帧 = 本句完整合成成功（缓存关闭/被中断时没有）。
+        if self.engines.tts_cache.get(key.mem_key(fmt)).is_none() {
             tracing::debug!(
                 "session {} 话术无成品帧可落盘（缓存关闭或被中断，slot={slot}）",
                 self.session_id
             );
             return;
+        }
+        let Some(pcm) = self.engines.hot_audio.get(&key) else {
+            tracing::debug!(
+                "session {} 话术磁盘无 PCM 可登记（超限/未持久化，slot={slot}）",
+                self.session_id
+            );
+            return;
         };
-        if self
-            .engines
-            .hot_audio
-            .put_managed(slot, &key, &audio.opus_frames)
-        {
+        if self.engines.hot_audio.put_managed(slot, &key, &pcm) {
             tracing::info!("session {} 话术已落盘登记（slot={slot}）", self.session_id);
         }
     }
@@ -155,16 +158,16 @@ impl<'a, T: Transport> Session<'a, T> {
         let persist = self.wake.persist();
         // 键口径与合成路径**共用**同一构造入口（见 `HotAudioKey::from_lease` 文档）：
         // 两处各写一遍必然漂移，而漂移的表现是"缓存永远不命中"——不报错，最难查。
-        let key =
-            HotAudioKey::from_media_lease(&self.tts_lease, self.params.output_format(), &text);
-        let mem_key = key.mem_key();
+        let key = HotAudioKey::from_lease(&self.tts_lease, &text);
+        let mem_key = key.mem_key(self.params.output_format());
 
-        // ①② 决策（纯函数，见 `resolve_greeting_audio`）：内存命中 → 磁盘命中并暖进内存
+        // ①② 决策（纯函数，见 `resolve_greeting_audio`）：内存命中 → 磁盘命中
         // → 都不命中则真合成。
         let audio = resolve_greeting_audio(
             &self.engines.tts_cache,
             &self.engines.hot_audio,
             &key,
+            self.params.output_format(),
             persist,
         );
         let reused = matches!(audio, GreetingAudio::Ready(_));
@@ -196,32 +199,37 @@ impl<'a, T: Transport> Session<'a, T> {
             return;
         }
 
-        // ④ 刚合成出来的 → 落盘（命中路径不需要，盘上已经有了）
+        // ④ 刚合成出来的 → 登记（命中路径不需要，盘上已经有了）。磁盘 PCM 由预取/
+        // 水库链路在合成完成时写入，这里读回做登记。
         if !reused && persist {
-            match self.engines.tts_cache.get(mem_key) {
-                Some(audio) => {
-                    if self
-                        .engines
-                        .hot_audio
-                        .put_managed(crate::app::hot_audio::SLOT_WAKEUP_GREETING, &key, &audio.opus_frames)
-                    {
-                        tracing::info!(
-                            "session {} 唤醒问候已落盘登记（重启/下次唤醒免合成，文案变更启动自动清旧）: {text:?}",
-                            self.session_id
-                        );
-                    } else {
-                        tracing::warn!(
-                            "session {} 唤醒问候未能落盘（下次唤醒仍走内存缓存）",
-                            self.session_id
-                        );
-                    }
-                }
+            if self.engines.tts_cache.get(mem_key).is_none() {
                 // 成品帧取不到 = `[tts].cache_entries == 0`（insert 直接丢弃）或本句被中断。
                 // 前者已由配置校验拦下，这里再留一行 warn——**绝不静默失效**。
-                None => tracing::warn!(
+                tracing::warn!(
                     "session {} 唤醒问候已合成但取不到成品帧（[tts].cache_entries 是否为 0？），本次不落盘",
                     self.session_id
-                ),
+                );
+            } else if let Some(pcm) = self.engines.hot_audio.get(&key) {
+                if self.engines.hot_audio.put_managed(
+                    crate::app::hot_audio::SLOT_WAKEUP_GREETING,
+                    &key,
+                    &pcm,
+                ) {
+                    tracing::info!(
+                        "session {} 唤醒问候已落盘登记（重启/下次唤醒免合成，文案变更启动自动清旧）: {text:?}",
+                        self.session_id
+                    );
+                } else {
+                    tracing::warn!(
+                        "session {} 唤醒问候未能落盘（下次唤醒仍走内存缓存）",
+                        self.session_id
+                    );
+                }
+            } else {
+                tracing::warn!(
+                    "session {} 唤醒问候磁盘无 PCM 可登记（超限/未持久化），本次不登记",
+                    self.session_id
+                );
             }
         }
     }

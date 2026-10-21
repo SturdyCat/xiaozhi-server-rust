@@ -25,7 +25,8 @@ async fn media_profiles_use_native_builders_and_show_clamps_without_playback_cla
         .find(|p| p["terminal"] == "esp_default")
         .unwrap();
     assert_eq!(echo["output"]["codec"], "pcm_s16le");
-    assert_eq!(echo["output"]["sample_rate"], 16000);
+    assert_eq!(echo["output"]["sample_rate"], 48000);
+    assert_eq!(echo["input"]["sample_rate"], 16000);
     assert_eq!(echo["output"]["frame_ms"], 40);
     assert_eq!(echo["output"]["codec_version"], 1);
     assert_eq!(echo["effective"]["lead_ms"], 0);

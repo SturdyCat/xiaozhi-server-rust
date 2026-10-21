@@ -8,8 +8,8 @@
 //! - 上行：`0x01` mic PCM（mono S16_LE 16kHz）、`0x07` 私听会话音频
 //!   （`[session u32 BE][seq u16 BE][PCM]` 头）、`0x04`/`0x05` bounded-turn 哨兵、
 //!   `0x06` BLE 广播批次（`ble_proxy` 开启时经 [`super::ble`] 采集）。
-//! - 下行：`0x02` speaker PCM、`0x03` speaker EOS、`0x08` BLE 连接桥 JSON
-//!   （管理面直驱 GATT 请求）。
+//! - 下行：`0x02` speaker PCM（**mono S16_LE 48 kHz**，见 [`SPEAKER_SAMPLE_RATE`]）、
+//!   `0x03` speaker EOS、`0x08` BLE 连接桥 JSON（管理面直驱 GATT 请求）。
 //! - 其余帧型（音乐面 `0x04/0x05` 下行）**不解析、静默忽略**——协议规定"未知帧型
 //!   双向忽略"，即正确的前向兼容降级。
 //!
@@ -30,13 +30,24 @@ pub const FRAME_BLE_ADVERTS: u8 = 0x06;
 /// 双向：BLE 连接桥一条 JSON 消息（服务器请求 / 设备 result·notify·disconnected·slots）。
 /// 仅当双方都在 ack 声明 `ble_connect` 后使用；负载由 [`super::ble`] 收发。
 pub const FRAME_BLE_GATT: u8 = 0x08;
-/// 下行：voice-response PCM 块（设备立即播放）。
+/// 下行：voice-response PCM 块（设备立即播放，mono S16_LE 48 kHz）。
 pub const FRAME_SPEAKER: u8 = 0x02;
 /// 下行：voice 流结束。
 pub const FRAME_SPEAKER_EOS: u8 = 0x03;
 
 /// 设备 mic 音频固定 16 kHz 单声道（协议常量，不随配置变）。
 pub const MIC_SAMPLE_RATE: u32 = 16_000;
+
+/// 设备 speaker 线缆采样率：**48 kHz 单声道 S16_LE**（协议常量，不随配置变）。
+///
+/// 上游依据（`docs/device-controller-interface.md` + `controller/CLAUDE.md`）：
+/// 控制器把 TTS 用 ffmpeg 直接解码成 "48kHz mono" 后发 `0x02` 帧；设备端 DAC 也是
+/// 48 kHz（ALSA 写入时把单声道复制成 L=R），**收到 PCM 不做任何重采样**。
+/// ⚠️ 早期按 16 kHz 下发 → 设备按 48k 播放 → 3 倍速、音调拔高（"快进尖叫"）。
+pub const SPEAKER_SAMPLE_RATE: u32 = 48_000;
+
+/// 下行 PCM 块时长（毫秒）。与上行 mic 块对齐，便于按块计时。
+pub const SPEAKER_FRAME_MS: u32 = 40;
 
 /// `0x07` 帧头长度（session u32 + seq u16）。
 pub const SESSION_HEADER_LEN: usize = 6;
@@ -110,6 +121,10 @@ pub fn frame_ble_gatt(json: &str) -> Vec<u8> {
     out
 }
 
-/// 下行 PCM 块大小（字节）：40ms @16kHz mono S16LE = 1280 字节。
-/// 设备侧立即播放，块小有利时延；TCP 上 1280B 仍是单包，不碎。
-pub const SPEAKER_CHUNK_BYTES: usize = 1280;
+/// 下行 PCM 块大小（字节）：40ms @48kHz mono S16LE = 3840 字节。
+///
+/// 按 [`SPEAKER_SAMPLE_RATE`]/[`SPEAKER_FRAME_MS`] 推导，改采样率时不会与分帧器
+/// 的 `sample_rate × frame_ms` 口径漂移（漂移的表现是每块都被 media 层拒收、
+/// 静默无声）。块小有利时延；3840B 在 TCP 上会拆成 3 段，可接受。
+pub const SPEAKER_CHUNK_BYTES: usize =
+    (SPEAKER_SAMPLE_RATE as usize * SPEAKER_FRAME_MS as usize / 1000) * 2;

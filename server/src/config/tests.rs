@@ -293,6 +293,29 @@ fn audio_reservoir_params_are_normalized() {
     );
 }
 
+/// 下行采样率只允许 16k/24k/48k（Opus 合法且真实设备会用到的档位）。
+///
+/// 为什么不放行任意值：非法率不会在启动报错，而是每句合成时 `OpusFrameEncoder::new`
+/// 失败 → 整句静默丢弃，现场形态是"设备完全没声音"（比报错难查得多）。
+#[test]
+fn illegal_downlink_sample_rate_falls_back_to_24k() {
+    let mut bad = AudioConfig {
+        downlink_sample_rate: 22_050,
+        ..AudioConfig::default()
+    };
+    bad.normalize();
+    assert_eq!(bad.downlink_sample_rate, 24_000, "非法采样率必须回落锚点 24k");
+
+    for sr in [16_000, 24_000, 48_000] {
+        let mut ok = AudioConfig {
+            downlink_sample_rate: sr,
+            ..AudioConfig::default()
+        };
+        ok.normalize();
+        assert_eq!(ok.downlink_sample_rate, sr, "合法档位不得被改写：{sr}");
+    }
+}
+
 /// 下载缓冲预算（`AudioConfig::download_budget_ms`）：由水库容量派生并夹在 [1s, 10s]。
 ///
 /// 为什么要夹：水库里是 Opus 帧（~2KB/s），下载缓冲里是 PCM f32（~64KB/s @16kHz，贵 ~30 倍）

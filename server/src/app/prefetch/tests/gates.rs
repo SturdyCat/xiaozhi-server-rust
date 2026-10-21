@@ -69,6 +69,7 @@ async fn inference_gate_serializes_concurrent_synthesis() {
             budget(),
             g,
             None,
+            out_fmt(),
             move |_s: &str| SentenceSource {
                 tts: tts.clone(),
                 cache_key: 0,
@@ -116,6 +117,7 @@ async fn inference_gate_allows_parallel_when_permits_allow() {
             budget(),
             g,
             None,
+            out_fmt(),
             move |_s: &str| SentenceSource {
                 tts: tts.clone(),
                 cache_key: 0,
@@ -166,6 +168,7 @@ async fn first_pcm_hook_fires_once_for_uncached_sentence() {
         budget(),
         gate(1),
         Some(hook),
+        out_fmt(),
         resolver(tts, 1),
         sentences(&["多分片的句子"]),
     );

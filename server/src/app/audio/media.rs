@@ -5,13 +5,13 @@ use crate::app::protocol::BinVersion;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AudioCodec {
     Opus,
     PcmS16Le,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AudioFormat {
     pub codec: AudioCodec,
     /// Our encoder/PCM conversion contract revision, not an ESP binary header version.
@@ -31,8 +31,19 @@ impl AudioFormat {
             frame_ms,
         }
     }
-    pub const fn echo() -> Self {
+    /// EchoMuse **上行**（麦克风）：协议常量 mono `S16_LE` 16 kHz / 40 ms。
+    pub const fn echo_mic() -> Self {
         Self::new(AudioCodec::PcmS16Le, 16_000, 40)
+    }
+    /// EchoMuse **下行**（扬声器）：线缆格式为 mono `S16_LE` **48 kHz** / 40 ms。
+    ///
+    /// 依据上游 `controller/CLAUDE.md`：控制器把 TTS 用 ffmpeg 直接解码成
+    /// "48kHz mono" 再发 `0x02` 帧；设备端 DAC 同样是 48 kHz 输出（ALSA 写入时
+    /// 复制 L=R）。设备收到 PCM 后**不重采样**，直接按 48 kHz 播放。
+    /// ⚠️ 早期按 16 kHz 下发时，设备把 16k 流当 48k 播 → 3 倍速、音调拔高
+    /// （听感即"快进的高频尖叫声"）。
+    pub const fn echo_speaker() -> Self {
+        Self::new(AudioCodec::PcmS16Le, 48_000, 40)
     }
     pub fn identity(self) -> String {
         format!(
@@ -82,8 +93,8 @@ impl TerminalProfile {
     }
     pub fn echo() -> Self {
         Self {
-            input: AudioFormat::echo(),
-            output: AudioFormat::echo(),
+            input: AudioFormat::echo_mic(),
+            output: AudioFormat::echo_speaker(),
             binary_version: BinVersion::V1,
             capabilities: TerminalCapabilities {
                 bounded_utterance: true,

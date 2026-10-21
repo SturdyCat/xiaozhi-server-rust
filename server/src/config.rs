@@ -192,6 +192,11 @@ pub struct ServerConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AudioConfig {
     /// 服务器下行（TTS）采样率，写入服务器 hello，设备据此解码播放。
+    ///
+    /// **只允许 16000 / 24000 / 48000**（非法值由 [`AudioConfig::normalize`] 回落 24k）。
+    /// 推荐 24000 —— 全链路锚点：本地 Kokoro 原生输出 24k（零重采样）、AIUI 也按 24k
+    /// 请求、Opus 原生支持；EchoMuse 固定 48k 由服务端做一次整数倍 2× 升采样（协议常量，
+    /// 设备 DAC 48k 且不重采样，改小会变调）。
     #[serde(default = "default_downlink_sr")]
     pub downlink_sample_rate: u32,
     #[serde(default = "default_frame_ms")]
@@ -313,6 +318,21 @@ impl AudioConfig {
     /// ——表现为"回复开头少一截"，比抖动更难排查。故此处硬收敛（对齐 `session::run` 里
     /// `drain_ms.clamp(100, 1000)` 的护栏风格）。
     pub fn normalize(&mut self) {
+        // 下行采样率收敛到"真实设备会用的三档"：16k / 24k / 48k。
+        //
+        // 为什么必须在这里拦：配置非法值（如 22050）不会在启动时报错，而是在**每句**
+        // 合成时 `OpusFrameEncoder::new` 失败 → 整句静默丢弃（只有一条 warn），
+        // 现场表现是"设备完全没声音"，极难定位。
+        // 24k 是全链路锚点：Kokoro 原生 24k（零重采样）、Opus 原生支持、ESP 默认值。
+        if !matches!(self.downlink_sample_rate, 16_000 | 24_000 | 48_000) {
+            tracing::warn!(
+                "[audio].downlink_sample_rate={} 非法（只支持 16000/24000/48000；\
+                 其它值会让 Opus 编码器建不起来、整句音频被静默丢弃），已回落到默认 {}",
+                self.downlink_sample_rate,
+                default_downlink_sr()
+            );
+            self.downlink_sample_rate = default_downlink_sr();
+        }
         if self.downlink_frame_duration_ms == 0 {
             tracing::warn!(
                 "[audio].downlink_frame_duration_ms=0 非法（节拍器会退化成零等待尽速灌入，\

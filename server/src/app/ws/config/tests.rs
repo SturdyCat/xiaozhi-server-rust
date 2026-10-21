@@ -41,7 +41,7 @@ worker_threads = 3
 admin_dir = "/app/web"
 
 [audio]
-downlink_sample_rate = 22050
+downlink_sample_rate = 16000
 downlink_frame_duration_ms = 40
 channels = 2
 binary_protocol_version = 3
@@ -286,7 +286,8 @@ fn merge_patch_explicit_null_clears_to_default() {
     assert_eq!(saved.audio.downlink_queue_packets, 20);
     // 同段其它字段不受影响
     assert_eq!(saved.llm.model, "m1");
-    assert_eq!(saved.audio.downlink_sample_rate, 22050);
+    // 合法档位（16k/24k/48k）原样保留；22050 这类非法值会被 normalize 回落 24k
+    assert_eq!(saved.audio.downlink_sample_rate, 16000);
 }
 
 #[test]

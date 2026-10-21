@@ -26,6 +26,7 @@ fun ViewContainer<*, *>.echoMuseManagementPanel(
                 enabled = { management.approved && management.idle },
                 loading = { management.busy == "runtime" },
                 loadingText = "读取中…",
+                icon = IconToken.Refresh,
             ) { management.readRuntime(ctx) }
         }
         echoMuseDiagnosticOutput { management.runtimeText }
@@ -48,6 +49,7 @@ fun ViewContainer<*, *>.echoMuseManagementPanel(
                 enabled = { management.canVolume && management.idle },
                 loading = { management.busy == "volume" },
                 loadingText = "下发中…",
+                icon = IconToken.Speaker,
             ) { management.setVolume(ctx) }
         }
         textNote("请求成功仅代表排队，实际上报音量请再次读取运行状态核对。", micro = true)
@@ -66,6 +68,7 @@ fun ViewContainer<*, *>.echoMuseManagementPanel(
                 enabled = { management.canSystem && management.idle },
                 loading = { management.busy == "system/info" },
                 loadingText = "读取中…",
+                icon = IconToken.Info,
             ) { management.readInfo(ctx) }
         }
         vif({ management.infoLoaded }) {
@@ -89,6 +92,7 @@ fun ViewContainer<*, *>.echoMuseManagementPanel(
                 enabled = { management.canSystem && management.idle },
                 loading = { management.busy.startsWith("system/logs") },
                 loadingText = "读取中…",
+                icon = IconToken.Text,
             ) { management.readLogs(ctx) }
         }
         vif({ management.logsLoaded }) {
@@ -100,7 +104,7 @@ fun ViewContainer<*, *>.echoMuseManagementPanel(
         }
         actionRow {
             vif({ !management.confirmReboot }) {
-                secondaryButton("重启设备", enabled = { management.canSystem && management.idle }) {
+                secondaryButton("重启设备", enabled = { management.canSystem && management.idle }, icon = IconToken.Power) {
                     management.confirmReboot = true
                 }
             }
@@ -111,9 +115,10 @@ fun ViewContainer<*, *>.echoMuseManagementPanel(
                     enabled = { management.canSystem && management.idle },
                     loading = { management.busy == "system/reboot" },
                     loadingText = "发送中…",
+                    icon = IconToken.Power,
                 ) { management.reboot(ctx) }
                 View { attr { width(AdminSpace.sm) } }
-                secondaryButton("取消", enabled = { management.idle }) { management.confirmReboot = false }
+                secondaryButton("取消", enabled = { management.idle }, icon = IconToken.Close) { management.confirmReboot = false }
             }
         }
         vif({ management.confirmReboot }) {
@@ -129,7 +134,7 @@ fun ViewContainer<*, *>.echoMuseManagementPanel(
             echoMuseManagementNote { management.result }
         }
         actionRow {
-            secondaryButton("复制诊断内容") {
+            secondaryButton("复制诊断内容", icon = IconToken.Copy) {
                 if (copyToClipboard(management.diagnosticText)) toast.show("诊断内容已复制", "ok")
                 else toast.show("复制失败：当前平台剪贴板不可用", "error")
             }

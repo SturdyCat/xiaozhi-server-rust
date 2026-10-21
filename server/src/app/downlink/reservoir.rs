@@ -46,11 +46,11 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::{mpsc, Notify};
 
-use crate::app::hot_audio::{MAX_ENTRY_BYTES, MAX_FRAMES};
 use crate::app::prefetch::{PreparedAudio, PreparedSentence, PREFETCH_SENTENCES};
 use crate::app::session::SessionParams;
 use crate::app::tts_cache::TtsCache;
 
+use self::collect::SentenceCollector;
 use super::framer::StreamingFramer;
 
 /// 水库里的一项（入队顺序 = 播出顺序）。
@@ -491,9 +491,8 @@ async fn push_sentence(
                     return true; // 单句失败不终止整轮（与旧实现一致：只丢这一句）
                 }
             };
-            let mut collected: Vec<Vec<u8>> = Vec::new();
-            let mut collected_bytes = 0usize;
-            let mut cacheable = cache_key != 0;
+            let mut collected: Option<SentenceCollector> =
+                (cache_key != 0).then(|| SentenceCollector::new(sr));
             let mut intact = true;
             while let Some(chunk) = chunks.recv().await {
                 if abort.load(Ordering::Relaxed) {
@@ -503,21 +502,20 @@ async fn push_sentence(
                 // 先编码，再**立刻丢弃分片**：Drop 即把下载额度还给上游（见 `PcmChunk`）。
                 // 于是水库的背压不会反向摁住 TTS 下载——两段缓冲各按自己的口径吃满
                 // （水库多秒 Opus + 下载缓冲多秒 PCM，见 `app::prefetch` 模块文档）。
+                // 缓存收集（下行帧副本 + 原始 24k PCM）也只在 Drop 之前做。
                 let encoded = framer.push(&chunk.pcm);
+                if let Some(c) = collected.as_mut() {
+                    c.on_chunk(&chunk.pcm);
+                }
                 drop(chunk);
                 match encoded {
                     Ok(frames) => {
                         for frame in frames {
-                            // 帧仅在写 TTS 缓存时需要副本；cache_key == 0（不可复现/测试台）
-                            // 的句子永远不写缓存，克隆纯属白费（下行是每帧都走的热路径）。
-                            collect_frame(
-                                &frame,
-                                &mut collected,
-                                &mut collected_bytes,
-                                &mut cacheable,
-                            );
-                            if !sink.push(DownlinkItem::Frame(frame)).await {
+                            if !sink.push(DownlinkItem::Frame(frame.clone())).await {
                                 return false;
+                            }
+                            if let Some(c) = collected.as_mut() {
+                                c.on_frame(&frame);
                             }
                         }
                     }
@@ -532,9 +530,11 @@ async fn push_sentence(
             if intact {
                 match framer.finish() {
                     Ok(Some(tail)) => {
-                        collect_frame(&tail, &mut collected, &mut collected_bytes, &mut cacheable);
-                        if !sink.push(DownlinkItem::Frame(tail)).await {
+                        if !sink.push(DownlinkItem::Frame(tail.clone())).await {
                             return false;
+                        }
+                        if let Some(c) = collected.as_mut() {
+                            c.on_frame(&tail);
                         }
                     }
                     Ok(None) => {}
@@ -544,38 +544,24 @@ async fn push_sentence(
                     }
                 }
             }
-            // 完整句才入缓存（引擎正常结束 + 未被中断 + 编码全程成功）。
-            // `cache_key == 0` = 该句**不入缓存**（AIUI 云端回传音频不可复现 / 测试台直连合成，
-            // 与旧实现传 `cache_sink: None` 同义；`make_key` 是 64 位哈希，真实键撞 0 可忽略）。
+            // 完整句才入缓存（引擎正常结束 + 未被中断 + 编码全程成功）。收集器缺席
+            //（`cache_key == 0`：AIUI 云端回传音频不可复现 / 测试台直连合成，与旧实现
+            // 传 `cache_sink: None` 同义）或中途超限放弃时，`take()` 给 None = 不入缓存。
             drop(chunks); // 编码失败/打断时解除上游背压，避免等待 done 死锁
             if intact
-                && cacheable
                 && matches!(done.await, Ok(true))
                 && !abort.load(Ordering::Relaxed)
                 && !sink.tx.is_closed()
-                && !collected.is_empty()
             {
-                cache.insert_async(cache_key, collected).await;
+                if let Some((frames, pcm)) = collected.take().and_then(|c| c.take()) {
+                    cache.insert_async(cache_key, frames, Some(pcm)).await;
+                }
             }
             true
         }
     }
 }
 
-/// 缓存副本单句有界；超限只停止收集，不丢帧、不破坏实时流式下行。
-fn collect_frame(frame: &[u8], frames: &mut Vec<Vec<u8>>, bytes: &mut usize, cacheable: &mut bool) {
-    if !*cacheable {
-        return;
-    }
-    if frames.len() >= MAX_FRAMES || bytes.saturating_add(frame.len()) > MAX_ENTRY_BYTES {
-        *cacheable = false;
-        frames.clear();
-        *bytes = 0;
-        return;
-    }
-    *bytes += frame.len();
-    frames.push(frame.to_vec());
-}
-
+mod collect;
 #[cfg(test)]
 mod tests;
