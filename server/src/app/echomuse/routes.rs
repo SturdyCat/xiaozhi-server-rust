@@ -191,6 +191,13 @@ async fn control_session(
     // 进入会话主循环（无 hello：参数固定，设备不做 xiaozhi 协商）。
     let params = session_params(&engines.config);
     let session_id = uuid::Uuid::new_v4().to_string();
+    // 几何上日志：排查设备端语速/音调问题的第一现场（协议常量，非协商值）。
+    tracing::info!(
+        "session {session_id} [echomuse] {device_id} 会话几何：下行 {}Hz/{}ms mono PCM（{}B/帧，设备 DAC 直出不重采样） 上行 16k/40ms",
+        params.output_format().sample_rate,
+        params.downlink_frame_ms,
+        super::frames::SPEAKER_CHUNK_BYTES
+    );
     let result = run_session(
         &mut EchomuseTransport::with_media(up_rx, ctl_tx, data_tx, media),
         engines,

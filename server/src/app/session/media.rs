@@ -45,8 +45,7 @@ impl SessionParams {
     }
 }
 pub(super) fn native_pcm(chunk: &AudioChunk) -> Option<Vec<f32>> {
-    if !chunk.is_current() || chunk.format != AudioFormat::echo_mic() || chunk.data.len() % 2 != 0
-    {
+    if !chunk.is_current() || chunk.format != AudioFormat::echo_mic() || chunk.data.len() % 2 != 0 {
         return None;
     }
     Some(

@@ -14,6 +14,12 @@
 
 用法：
     python3 tools/echomuse_mock_device.py --host 127.0.0.1 --port 8000 [--token TOKEN]
+           [--save-downlink out.pcm]
+
+`--save-downlink` 把服务端下发的全部 `0x02` 载荷（mono S16LE 48kHz）追加写入文件——
+这是"服务端下行内容到底是不是 48k"的抓包判据：用
+`ffplay -f s16le -ar 48000 -ch_layout mono out.pcm` 播放，语速自然 = 服务端正确，
+加速 = 服务端内容未到 48k；再与真机听感对照即可定位问题在服务器还是设备侧。
 """
 
 import argparse
@@ -150,6 +156,11 @@ def main() -> int:
     ap.add_argument("--port", type=int, default=8000)
     ap.add_argument("--token", default="")
     ap.add_argument("--device-id", default="mock-biscuit-001")
+    ap.add_argument(
+        "--save-downlink",
+        default="",
+        help="把下行 0x02 载荷（48kHz mono S16LE）追加写入该文件，供本地播放核对",
+    )
     args = ap.parse_args()
 
     # 1) control 面：register → ack + config
@@ -194,14 +205,27 @@ def main() -> int:
     # 4) 等回复：0x02*…0x03（容忍无回复——流水线引擎未配好时也明确指出）
     got = 0
     eos = False
-    while not eos:
-        frame = data.recv_binary()
-        kind = frame[0]
-        if kind == FRAME_SPEAKER:
-            got += len(frame) - 1
-        elif kind == FRAME_SPEAKER_EOS:
-            eos = True
+    sink = open(args.save_downlink, "ab") if args.save_downlink else None
+    try:
+        while not eos:
+            frame = data.recv_binary()
+            kind = frame[0]
+            if kind == FRAME_SPEAKER:
+                payload = frame[1:]
+                got += len(payload)
+                if sink:
+                    sink.write(payload)
+            elif kind == FRAME_SPEAKER_EOS:
+                eos = True
+    finally:
+        if sink:
+            sink.close()
     print(f"[4/4] 下行回复 ✓  共 {got} 字节 PCM（48kHz S16LE ≈ {got / SPEAKER_SR / 2:.2f}s）")
+    if args.save_downlink and got:
+        print(
+            f"       下行已保存 → {args.save_downlink}："
+            f"ffplay -f s16le -ar 48000 -ch_layout mono {args.save_downlink}"
+        )
     if got == 0:
         print("⚠️  回复为空：检查 TTS 是否可用（[tts] 引擎/凭据）", file=sys.stderr)
 

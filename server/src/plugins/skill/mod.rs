@@ -176,24 +176,6 @@ impl SkillRegistry {
         !self.definitions.is_empty()
     }
 
-    /// 目录中全部非空应答文本（trim 后去重，顺序稳定）。
-    ///
-    /// 配置侧固定话术的唯一权威出口：`hot_audio::SLOT_SKILL_REPLY` 的启动校验清单与
-    /// 运行时 [`SkillInvocation::reply`](Self::resolve 的产物) 必须同源，故从**编译后的
-    /// 目录**枚举（含 `end_session` 告别语与内置提醒技能应答），而不是重走一遍配置遍历
-    /// ——两处各写一遍必然漂移，漂移的表现是"刚说过的话启动就被当过时清掉"。
-    pub fn replies(&self) -> Vec<String> {
-        let mut seen = std::collections::BTreeSet::new();
-        let mut out = Vec::new();
-        for d in &self.definitions {
-            let reply = d.reply.trim();
-            if !reply.is_empty() && seen.insert(reply.to_string()) {
-                out.push(reply.to_string());
-            }
-        }
-        out
-    }
-
     /// 三级中的本地两级：规则 → TinyBERT（配置时）→ 轻量模型；都未命中返回 `None`
     /// （调用方放行 LLM）。命中层级见 [`SkillStage`]（规则与模型两级，TinyBERT 与
     /// 启发式打分同属 Model——执行路径完全一致，仅提名来源不同）。

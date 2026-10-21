@@ -304,7 +304,10 @@ fn illegal_downlink_sample_rate_falls_back_to_24k() {
         ..AudioConfig::default()
     };
     bad.normalize();
-    assert_eq!(bad.downlink_sample_rate, 24_000, "非法采样率必须回落锚点 24k");
+    assert_eq!(
+        bad.downlink_sample_rate, 24_000,
+        "非法采样率必须回落锚点 24k"
+    );
 
     for sr in [16_000, 24_000, 48_000] {
         let mut ok = AudioConfig {

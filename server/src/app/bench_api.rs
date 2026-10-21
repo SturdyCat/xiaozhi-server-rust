@@ -82,12 +82,14 @@ impl TestService {
         }
         let slot = match self.limit.clone().try_acquire_owned() {
             Ok(v) => Arc::new(v),
-            Err(_) => return failure(
-                &action,
-                None,
-                "busy",
-                "Two diagnostics are already running; retry after completion",
-            ),
+            Err(_) => {
+                return failure(
+                    &action,
+                    None,
+                    "busy",
+                    "Two diagnostics are already running; retry after completion",
+                )
+            }
         };
         let saved = match snapshot(
             self.store.clone(),

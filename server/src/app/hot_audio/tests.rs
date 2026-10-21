@@ -1,10 +1,12 @@
 //! [`super`]（持久化热句音频库）的回归测试。
 //!
-//! 重点不在"能存能取"，而在**失效语义**：文件必须自校验（换了音色/引擎/文本一律 miss，
-//! 下行参数**不**参与磁盘身份），坏文件与旧格式必须被安全丢弃，凭据绝不落盘，容量有界。
-//! 这些错了不会报错，只会"播出别的音色的声音"或"磁盘慢慢涨"，所以每条都有独立断言。
+//! 重点不在"能存能取"，而在**失效语义与裸文件契约**：文件必须是可直接播放的裸 PCM
+//!（无任何容器字节），文件名按内容寻址（换了音色/引擎/文本一律 miss，下行参数不参与
+//! 磁盘身份），坏文件被安全丢弃，凭据绝不落盘，容量有界，旧格式文件绝不读取也不自动
+//! 清理。这些错了不会报错，只会"播出别的音色的声音"或"磁盘慢慢涨"，所以每条都有
+//! 独立断言。
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use super::*;
 
@@ -34,6 +36,21 @@ fn 存取往返_内容不变() {
     assert!(store.put(&k, &p), "应落盘");
     let got = store.get(&k).expect("应命中");
     assert_eq!(got, p, "PCM 字节必须逐字节一致");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn 落盘的就是裸_pcm_无任何容器字节() {
+    let dir = tmp_dir();
+    let store = HotAudioStore::new(Some(dir.clone()));
+    let k = key_of("我在");
+    let p = pcm(64);
+    assert!(store.put(&k, &p));
+
+    // 文件扩展名 .pcm，文件字节与写入载荷**逐字节一致**——外部工具可直接播放。
+    let path = dir.join(format!("{:016x}.pcm", k.file_id()));
+    assert_eq!(std::fs::read(&path).unwrap(), p, "不得有任何头部/校验尾");
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -89,35 +106,31 @@ fn 坏文件被丢弃且不影响会话() {
     let store = HotAudioStore::new(Some(dir.clone()));
     let k = key_of("我在");
     std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join(format!("{:016x}.hot", k.file_id()));
+    let path = dir.join(format!("{:016x}.pcm", k.file_id()));
 
-    // 1) 魔数错（含旧 Opus 格式文件：v3 起魔数/版本都不同，失配即清）
-    std::fs::write(&path, b"NOTMAGIC................").unwrap();
+    // 1) 同名垃圾文件（外部误放/写坏）：读不得命中，且删除避免长期占位
+    std::fs::write(&path, b"garbage-not-pcm").unwrap();
     assert!(store.get(&k).is_none());
-    assert!(!path.exists(), "作废文件应被删除，避免长期占位");
+    assert!(!path.exists(), "作废文件应被删除");
 
-    // 2) 截断（长度字段越界）
-    std::fs::write(&path, encode(&k, &pcm(48))[..40].to_vec()).unwrap();
+    // 2) 奇数字节（非整 S16LE 样本）同样拒绝并清除
+    std::fs::write(&path, [0u8, 0, 1]).unwrap();
     assert!(store.get(&k).is_none());
-
-    // 3) PCM 长度字段被改成超大值（防御性上限）
-    let mut raw = encode(&k, &pcm(48));
-    raw[48..52].copy_from_slice(&u32::MAX.to_le_bytes());
-    std::fs::write(&path, &raw).unwrap();
-    assert!(store.get(&k).is_none(), "超上限 PCM 必须拒绝而不是尝试分配");
-
-    // 4) 头部格式常量被改（存储采样率字段 ≠ 24k）
-    let mut raw = encode(&k, &pcm(48));
-    raw[28] ^= 1;
-    std::fs::write(&path, &raw).unwrap();
-    assert!(store.get(&k).is_none(), "存储采样率必须与格式常量一致");
     assert!(!path.exists());
 
-    // 5) 空/奇数字节 PCM：不写
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn 拒绝非法载荷() {
+    let store = HotAudioStore::new(Some(tmp_dir()));
+    let k = key_of("我在");
     assert!(!store.put(&k, &[]), "空音频不入库");
     assert!(!store.put(&k, &[0, 0, 1]), "奇数字节不是完整 S16LE 样本");
-
-    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        !store.put(&k, &vec![0u8; MAX_ENTRY_BYTES + 2]),
+        "超上限不入库"
+    );
 }
 
 #[test]
@@ -189,13 +202,13 @@ fn 凭据不落盘() {
     k.engine_sig = "xfyun|api_key=SUPER-SECRET-KEY|voice=x6".to_string();
     assert!(store.put(&k, &pcm(32)));
 
-    let raw = std::fs::read(dir.join(format!("{:016x}.hot", k.file_id()))).unwrap();
+    let raw = std::fs::read(dir.join(format!("{:016x}.pcm", k.file_id()))).unwrap();
     let hay = String::from_utf8_lossy(&raw);
     assert!(
         !hay.contains("SUPER-SECRET-KEY"),
         "引擎签名（含密钥）绝不能明文落盘"
     );
-    // 但校验仍然有效：同一签名能命中，换签名即 miss
+    // 但身份仍然有效：同一签名能命中，换签名即 miss
     assert!(store.get(&k).is_some());
     k.engine_sig = "xfyun|api_key=OTHER|voice=x6".to_string();
     assert!(store.get(&k).is_none());
@@ -210,17 +223,13 @@ fn 超出上限被淘汰() {
     std::fs::create_dir_all(&dir).unwrap();
     for i in 0..(MAX_FILES + 5) {
         let key = key_of(&format!("句{i}"));
-        std::fs::write(
-            dir.join(format!("{:016x}.hot", key.file_id())),
-            encode(&key, &pcm(64)),
-        )
-        .unwrap();
+        std::fs::write(dir.join(format!("{:016x}.pcm", key.file_id())), pcm(64)).unwrap();
     }
     assert!(store.put(&key_of("触发回收"), &pcm(64)));
     let n = std::fs::read_dir(&dir)
         .unwrap()
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().is_some_and(|x| x == "hot"))
+        .filter(|e| e.path().extension().is_some_and(|x| x == "pcm"))
         .count();
     assert!(n <= MAX_FILES, "文件数必须被钉在上限内，实际 {n}");
     // 无残留临时文件
@@ -235,47 +244,26 @@ fn 超出上限被淘汰() {
 }
 
 #[test]
-fn 旧帧格式文件被拒绝并清除() {
+fn 旧格式遗留不读取也不清理() {
+    // `.hot` 容器 / `managed.json` 是历史格式：磁盘身份只按 `<hash>.pcm` 寻址，
+    // 它们永远不会被读取，也**不做自动删除**（由使用者手动处理）。
     let dir = tmp_dir();
     let store = HotAudioStore::new(Some(dir.clone()));
-    let k = key_of("我在");
     std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join(format!("{:016x}.hot", k.file_id()));
-    // 旧 v2 文件：旧魔数 + 帧表正文。v3 起（PCM）不再兼容——读不了就清，
-    // 首次使用重新合成一次即可。
-    let mut raw = vec![0u8; 96];
-    raw[0..8].copy_from_slice(b"XZHOTAU1");
-    raw[8..12].copy_from_slice(&2u32.to_le_bytes());
-    std::fs::write(&path, &raw).unwrap();
-    assert!(store.get(&k).is_none(), "旧 Opus 格式不得命中");
-    assert!(!path.exists(), "旧格式文件应被清除，避免长期占位");
+    let legacy_hot = dir.join("0123456789abcdef.hot");
+    let legacy_json = dir.join("managed.json");
+    std::fs::write(&legacy_hot, b"XZHOTAU1-legacy").unwrap();
+    std::fs::write(&legacy_json, b"{}").unwrap();
+
+    assert!(store.get(&key_of("我在")).is_none(), "新键不得命中旧文件");
+    assert!(legacy_hot.exists(), "旧格式文件不做自动清理");
+    assert!(legacy_json.exists(), "登记表不做自动清理");
+
+    // 放一个真缓存条目再触发淘汰：旧格式不计入 `.pcm` 容量口径。
+    assert!(store.put(&key_of("触发"), &pcm(64)));
+    assert!(legacy_hot.exists());
+
     let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn 校验和拒绝负载损坏和尾随垃圾() {
-    let key = key_of("普通生产文本");
-    let mut raw = encode(&key, &pcm(64));
-    let last = raw.len() - 9;
-    raw[last] ^= 1;
-    assert!(decode(&raw, &key.header()).is_err());
-    let mut raw = encode(&key, &pcm(64));
-    raw.push(0);
-    assert!(decode(&raw, &key.header()).is_err());
-}
-
-#[test]
-fn 拒绝超限句子与声明不一致的正文() {
-    let store = HotAudioStore::new(Some(tmp_dir()));
-    let key = key_of("文本");
-    assert!(!store.put(&key, &vec![0u8; MAX_ENTRY_BYTES + 2]));
-    let mut raw = encode(&key, &pcm(64));
-    raw[44..48].copy_from_slice(&u32::MAX.to_le_bytes());
-    assert!(decode(&raw, &key.header()).is_err());
-    // 头部声明的长度与正文实际长度不一致
-    let mut raw = encode(&key, &pcm(64));
-    raw[44..48].copy_from_slice(&1024u32.to_le_bytes());
-    assert!(decode(&raw, &key.header()).is_err());
 }
 
 #[test]
@@ -297,7 +285,7 @@ fn 目录跟随配置来源或记忆库() {
 
 #[test]
 fn 文件名投影保持稳定() {
-    // v3（PCM 24k）：身份 = 签名/音色/语速/文本；sr=24000、frame_ms=0 是格式常量。
+    // 裸 .pcm 起的身份投影 = FNV(签名) | speaker | speed bits | FNV(文本) 打包再 FNV。
     // 改任何一项打包口径都会让既有部署的缓存全部失效，必须显式换版本号。
     let key = HotAudioKey {
         engine_sig: "sig".into(),
@@ -305,7 +293,7 @@ fn 文件名投影保持稳定() {
         speed: 1.0,
         text: "我在".into(),
     };
-    assert_eq!(key.file_id(), 0x64c2_029c_5e07_3542);
+    assert_eq!(key.file_id(), 0x5f3d_e7b3_c54e_e881);
 }
 
 #[test]
@@ -314,7 +302,7 @@ fn 总字节上限也会回收() {
     std::fs::create_dir_all(&dir).unwrap();
     // sparse 文件只占逻辑大小，验证字节上限不需要真正写 512MB。
     for i in 0..2 {
-        let path = dir.join(format!("oversize{i}.hot"));
+        let path = dir.join(format!("oversize{i}.pcm"));
         std::fs::File::create(path)
             .unwrap()
             .set_len(MAX_TOTAL_BYTES)
@@ -329,147 +317,20 @@ fn 总字节上限也会回收() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-// ---- 管理槽位（managed.json）：启动校验与陈旧清理 ----
-
-fn managed(slot: &str, text: &str) -> ManagedText {
-    ManagedText {
-        slot: slot.to_string(),
-        text: text.to_string(),
-    }
-}
-
-fn hot_path(dir: &Path, k: &HotAudioKey) -> PathBuf {
-    dir.join(format!("{:016x}.hot", k.file_id()))
-}
-
 #[test]
-fn put_managed_登记且跨实例存续() {
+fn 淘汰只看_pcm_不碰其他文件() {
     let dir = tmp_dir();
-    let store = HotAudioStore::new(Some(dir.clone()));
-    let k = key_of("我在");
-    assert!(store.put_managed(SLOT_WAKEUP_GREETING, &k, &pcm(64)));
-
-    // 登记表：含文件 id；不含文本明文（凭据口径一致）
-    let raw = std::fs::read(dir.join("managed.json")).unwrap();
-    let hay = String::from_utf8_lossy(&raw);
-    assert!(hay.contains(&format!("{:016x}", k.file_id())));
-    assert!(!hay.contains("我在"), "登记表不得含文本明文");
-
-    // 重复登记幂等
-    assert!(store.put_managed(SLOT_WAKEUP_GREETING, &k, &pcm(64)));
-    let reg: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(dir.join("managed.json")).unwrap()).unwrap();
-    assert_eq!(
-        reg["slots"][SLOT_WAKEUP_GREETING].as_array().unwrap().len(),
-        1,
-        "同一条目不得重复登记"
-    );
-
-    // 新实例（= 重启）按同一清单校验：有效保留，文件不动
-    let summary = HotAudioStore::new(Some(dir.clone()))
-        .sync_managed(&[managed(SLOT_WAKEUP_GREETING, "我在")]);
-    assert!(summary.contains("1 条有效"), "{summary}");
-    assert!(hot_path(&dir, &k).exists());
+    std::fs::create_dir_all(&dir).unwrap();
+    let other = dir.join("managed.json");
+    std::fs::write(&other, b"{}").unwrap();
+    let path = dir.join("oversize.pcm");
+    std::fs::File::create(&path)
+        .unwrap()
+        .set_len(MAX_TOTAL_BYTES + 1)
+        .unwrap();
+    evict_overflow(&dir);
+    assert!(!path.exists(), "超限 .pcm 被淘汰");
+    assert!(other.exists(), "非 .pcm 文件不在淘汰职责内");
 
     let _ = std::fs::remove_dir_all(&dir);
 }
-
-#[test]
-fn 文案改动_启动清理旧音频() {
-    let dir = tmp_dir();
-    let store = HotAudioStore::new(Some(dir.clone()));
-    let old = key_of("我已连接，喊我的唤醒词就能开始对话。");
-    let new = key_of("我上线啦，喊我就能聊天。");
-    assert!(store.put_managed(SLOT_ECHOMUSE_WELCOME, &old, &pcm(64)));
-
-    // 文案已改、新音频尚未合成：旧文件在启动校验时删除
-    let summary = store.sync_managed(&[managed(SLOT_ECHOMUSE_WELCOME, "我上线啦，喊我就能聊天。")]);
-    assert!(summary.contains("1 条过时"), "{summary}");
-    assert!(!hot_path(&dir, &old).exists(), "旧文案音频必须删除");
-    // 新文案随后首次使用 → 重新合成落盘并重新登记
-    assert!(store.put_managed(SLOT_ECHOMUSE_WELCOME, &new, &pcm(64)));
-    assert!(hot_path(&dir, &new).exists());
-
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn 槽位移除_整槽清理() {
-    let dir = tmp_dir();
-    let store = HotAudioStore::new(Some(dir.clone()));
-    let k = key_of("我在");
-    assert!(store.put_managed(SLOT_WAKEUP_GREETING, &k, &pcm(64)));
-    // 问候语清空 → 清单中无该槽位 → 旧音频删除
-    let summary = store.sync_managed(&[]);
-    assert!(summary.contains("1 条过时"), "{summary}");
-    assert!(!hot_path(&dir, &k).exists());
-
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn 多句池_只清改掉的那句() {
-    let dir = tmp_dir();
-    let store = HotAudioStore::new(Some(dir.clone()));
-    let a = key_of("我在");
-    let b = key_of("在呢");
-    let c = key_of("来啦");
-    assert!(store.put_managed(SLOT_WAKEUP_GREETING, &a, &pcm(64)));
-    assert!(store.put_managed(SLOT_WAKEUP_GREETING, &b, &pcm(64)));
-    // 池子改成「在呢 / 来啦」：「我在」过时；「来啦」尚未合成、不该有文件
-    let summary = store.sync_managed(&[
-        managed(SLOT_WAKEUP_GREETING, "在呢"),
-        managed(SLOT_WAKEUP_GREETING, "来啦"),
-    ]);
-    assert!(summary.contains("1 条有效"), "{summary}");
-    assert!(summary.contains("1 条过时"), "{summary}");
-    assert!(!hot_path(&dir, &a).exists());
-    assert!(hot_path(&dir, &b).exists());
-    assert!(!hot_path(&dir, &c).exists());
-
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn 损坏成品_启动删除待重合成() {
-    let dir = tmp_dir();
-    let store = HotAudioStore::new(Some(dir.clone()));
-    let k = key_of("好的");
-    assert!(store.put_managed(SLOT_SKILL_REPLY, &k, &pcm(64)));
-    let path = hot_path(&dir, &k);
-    let mut raw = std::fs::read(&path).unwrap();
-    let last = raw.len() - 9;
-    raw[last] ^= 1; // 破坏校验和
-    std::fs::write(&path, &raw).unwrap();
-
-    let summary = store.sync_managed(&[managed(SLOT_SKILL_REPLY, "好的")]);
-    assert!(summary.contains("1 条损坏"), "{summary}");
-    assert!(!path.exists(), "损坏成品必须删除，下次使用重新合成");
-
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn 非管理文件_校验不碰() {
-    let dir = tmp_dir();
-    let store = HotAudioStore::new(Some(dir.clone()));
-    let k = key_of("一句普通的LLM回复");
-    assert!(store.put(&k, &pcm(64))); // 普通生产路径：无登记
-    store.sync_managed(&[managed(SLOT_ECHOMUSE_WELCOME, "欢迎")]);
-    assert!(
-        hot_path(&dir, &k).exists(),
-        "未登记文件不归启动校验管（仍由溢出淘汰）"
-    );
-
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn 未持久化时管理路径为无操作() {
-    let store = HotAudioStore::new(None);
-    assert!(!store.put_managed(SLOT_ECHOMUSE_WELCOME, &key_of("我在"), &pcm(64)));
-    let summary = store.sync_managed(&[managed(SLOT_ECHOMUSE_WELCOME, "我在")]);
-    assert!(summary.contains("跳过"), "{summary}");
-}
-
-mod media;

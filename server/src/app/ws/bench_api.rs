@@ -67,12 +67,14 @@ async fn handle(
 ) -> Response {
     let raw = match input {
         Ok(Json(v)) => v,
-        Err(_) => return error(
-            StatusCode::BAD_REQUEST,
-            "",
-            "invalid_input",
-            "Invalid JSON or request body exceeds diagnostic limit",
-        ),
+        Err(_) => {
+            return error(
+                StatusCode::BAD_REQUEST,
+                "",
+                "invalid_input",
+                "Invalid JSON or request body exceeds diagnostic limit",
+            )
+        }
     };
     let req = match request(raw, alias) {
         Ok(v) => v,
@@ -185,12 +187,14 @@ async fn models(
         .and_then(|Json(raw)| serde_json::from_value::<ModelsRequest>(raw).ok())
     {
         Some(v) => v,
-        None => return error(
-            StatusCode::BAD_REQUEST,
-            "llm.models",
-            "invalid_input",
-            "Expected api_base/api_key only",
-        ),
+        None => {
+            return error(
+                StatusCode::BAD_REQUEST,
+                "llm.models",
+                "invalid_input",
+                "Expected api_base/api_key only",
+            )
+        }
     };
     Json(
         state

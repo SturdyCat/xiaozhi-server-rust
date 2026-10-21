@@ -21,8 +21,7 @@ use std::sync::{Arc, Mutex};
 use crate::app::audio::media::AudioFormat;
 use crate::app::downlink::framer::StreamingFramer;
 use crate::app::hot_audio::{
-    pcm_bytes_to_f32, HotAudioIdentity, HotAudioKey, HotAudioStore, MAX_ENTRY_BYTES, MAX_FRAMES,
-    PCM_SAMPLE_RATE,
+    pcm_bytes_to_f32, HotAudioKey, HotAudioStore, MAX_ENTRY_BYTES, MAX_FRAMES, PCM_SAMPLE_RATE,
 };
 
 /// 一句缓存音频：已编码的下行 Opus 帧负载序列（不含二进制协议头）。
@@ -44,8 +43,8 @@ pub struct TtsCache {
 struct Inner {
     map: HashMap<u64, CachedAudio>,
     order: VecDeque<u64>,
-    /// 只保存固定长度的哈希投影，不保留任意长原文或含凭据的引擎签名。
-    identities: HashMap<u64, HotAudioIdentity>,
+    /// 只保存磁盘身份键（键内不含凭据明文的投影；原始签名不保留）。
+    identities: HashMap<u64, HotAudioKey>,
     identity_order: VecDeque<u64>,
 }
 
@@ -98,7 +97,6 @@ impl TtsCache {
         if mem_key == 0 {
             return;
         }
-        let identity = HotAudioIdentity::from_key(&key);
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(pos) = inner.identity_order.iter().position(|k| *k == mem_key) {
             inner.identity_order.remove(pos);
@@ -107,7 +105,7 @@ impl TtsCache {
                 inner.identities.remove(&oldest);
             }
         }
-        inner.identities.insert(mem_key, identity);
+        inner.identities.insert(mem_key, key);
         inner.identity_order.push_back(mem_key);
     }
 
@@ -134,7 +132,7 @@ impl TtsCache {
             return Some(hit);
         }
         let store = self.store.as_ref()?.clone();
-        let identity = self.identity(key)?;
+        let hot_key = self.identity(key)?;
         let permit = self.io_gate.clone().acquire_owned().await.ok()?;
         if let Some(hit) = self.get(key) {
             return Some(hit);
@@ -142,9 +140,7 @@ impl TtsCache {
         let frames = tokio::task::spawn_blocking(move || {
             let _permit = permit;
             // 磁盘 miss（None）与编码失败（Err）都按 miss 处理。
-            store
-                .get_identity(&identity)
-                .map(|pcm| encode_pcm(pcm, format))
+            store.get(&hot_key).map(|pcm| encode_pcm(pcm, format))
         })
         .await
         .ok()
@@ -180,7 +176,7 @@ impl TtsCache {
         if !self.insert_memory(key, audio.clone()) {
             return;
         }
-        let (Some(store), Some(identity)) = (self.store.as_ref().cloned(), self.identity(key))
+        let (Some(store), Some(hot_key)) = (self.store.as_ref().cloned(), self.identity(key))
         else {
             return;
         };
@@ -192,7 +188,7 @@ impl TtsCache {
         };
         if let Err(e) = tokio::task::spawn_blocking(move || {
             let _permit = permit;
-            store.put_identity(&identity, &pcm)
+            store.put(&hot_key, &pcm)
         })
         .await
         {
@@ -200,7 +196,7 @@ impl TtsCache {
         }
     }
 
-    fn identity(&self, key: u64) -> Option<HotAudioIdentity> {
+    fn identity(&self, key: u64) -> Option<HotAudioKey> {
         self.inner
             .lock()
             .unwrap_or_else(|e| e.into_inner())

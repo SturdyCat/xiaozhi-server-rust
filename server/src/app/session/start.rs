@@ -181,18 +181,15 @@ pub async fn run_session<T: Transport>(
         },
     };
     // 连接欢迎语（`[echomuse].welcome`，RestartOnly）：设备接入即说一次，走唤醒问候
-    // 同一预制话术链路（`speak_canned`）——固定文本合成一次即经 hot-audio 落盘，
-    // 稳态零合成；失败只记日志，绝不影响会话本身。成功后把成品**登记**进管理槽位
-    // （`managed.json`）：下次启动按当前文案做内容哈希校验，文案改了自动清理旧音频。
+    // 同一预制话术链路（`speak_canned`）——固定文本合成一次即经预取链路落盘
+    // hot-audio/（裸 24k PCM 文件，见 `app::hot_audio`），稳态零合成；失败只记日志，
+    // 绝不影响会话本身。
     if let Some(text) = welcome {
-        match session.speak_canned(&text).await {
-            Ok(()) => {
-                session.persist_canned_audio(crate::app::hot_audio::SLOT_ECHOMUSE_WELCOME, &text)
-            }
-            Err(e) => tracing::warn!(
+        if let Err(e) = session.speak_canned(&text).await {
+            tracing::warn!(
                 "session {} 连接欢迎语下发失败（不影响会话）: {e}",
                 session.session_id
-            ),
+            );
         }
     }
     session.run().await

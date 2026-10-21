@@ -156,8 +156,10 @@ async fn lru_eviction_keeps_disk_entry_and_corruption_falls_back() {
     assert!(c.get(ma).is_none());
     assert!(c.get_async(ma, OUT).await.is_some(), "内存淘汰不删除磁盘");
     c.clear();
-    std::fs::write(dir.join(format!("{:016x}.hot", a.file_id())), b"broken").unwrap();
-    assert!(c.get_async(ma, OUT).await.is_none(), "损坏安全回退");
+    // 裸 .pcm 无头部/校验和：**结构性**损坏（奇数字节 = 非整 S16LE 样本）读取即拒绝
+    // 并删除；内容级损坏不可判定，完整性由 tmp+rename 原子写保证（见 hot_audio 文档）。
+    std::fs::write(dir.join(format!("{:016x}.pcm", a.file_id())), b"broken!").unwrap();
+    assert!(c.get_async(ma, OUT).await.is_none(), "结构损坏安全回退");
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -208,7 +210,7 @@ async fn pcm_overflow_writes_memory_only() {
         .await;
     assert!(c.get(mem).is_some(), "内存成品保留");
     assert!(
-        !dir.join(format!("{:016x}.hot", k.file_id())).exists(),
+        !dir.join(format!("{:016x}.pcm", k.file_id())).exists(),
         "超限不写盘"
     );
     let _ = std::fs::remove_dir_all(dir);

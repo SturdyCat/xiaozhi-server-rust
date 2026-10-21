@@ -84,9 +84,10 @@ impl MediaState {
         if !self.ready() || !epoch.is_current() || pcm.len() != super::frames::SPEAKER_CHUNK_BYTES {
             return None;
         }
-        let permit = self
-            .output
-            .reserve(AudioFormat::echo_speaker().duration_us(pcm.len()), pcm.len())?;
+        let permit = self.output.reserve(
+            AudioFormat::echo_speaker().duration_us(pcm.len()),
+            pcm.len(),
+        )?;
         let (ack, done) = oneshot::channel();
         writes.push_back(WriteTicket {
             epoch: epoch.clone(),

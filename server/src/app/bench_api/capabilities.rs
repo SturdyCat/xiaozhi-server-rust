@@ -105,9 +105,7 @@ fn nlu(cfg: &Config) -> Option<String> {
 }
 fn pipeline_reason(cfg: &Config, audio: bool) -> Option<String> {
     if cfg.aiui.enabled {
-        return Some(
-            "AIUI managed full-chain has no isolated local pipeline test adapter".into(),
-        );
+        return Some("AIUI managed full-chain has no isolated local pipeline test adapter".into());
     }
     let audio_check = if audio {
         provider(cfg, Capability::Vad).or_else(|| provider(cfg, Capability::Asr))

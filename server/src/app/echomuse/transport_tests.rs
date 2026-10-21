@@ -24,9 +24,11 @@ async fn native_framer_pads_tail_then_socket_receipt_precedes_eos() {
         "协议常量与 AudioFormat 必须同源（漂移的表现是设备按错采样率播放）"
     );
     let (mut transport, mut data) = harness();
-    let mut framer =
-        crate::app::downlink::framer::StreamingFramer::new_format(16000, AudioFormat::echo_speaker())
-            .unwrap();
+    let mut framer = crate::app::downlink::framer::StreamingFramer::new_format(
+        16000,
+        AudioFormat::echo_speaker(),
+    )
+    .unwrap();
     assert!(framer.push(&[0.5, -0.5]).unwrap().is_empty());
     let tail = framer.finish().unwrap().unwrap();
     assert_eq!(

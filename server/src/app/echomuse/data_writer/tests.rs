@@ -7,7 +7,9 @@ async fn stalled_actual_writer_processes_uplink_and_acks_only_after_sink_complet
     let media = MediaState::default();
     media.claim();
     let (tx, mut rx) = mpsc::unbounded_channel();
-    let mut receipt = media.enqueue(&[0; crate::app::echomuse::frames::SPEAKER_CHUNK_BYTES], &tx).unwrap();
+    let mut receipt = media
+        .enqueue(&[0; crate::app::echomuse::frames::SPEAKER_CHUNK_BYTES], &tx)
+        .unwrap();
     let frame = rx.try_recv().unwrap();
     let (release, wait) = oneshot::channel::<()>();
     let mut sink = Box::pin(futures_util::sink::unfold(
@@ -51,7 +53,9 @@ async fn control_close_interrupts_stalled_writer_and_cancels_audio_receipt() {
     let media = MediaState::default();
     media.claim();
     let (tx, mut rx) = mpsc::unbounded_channel();
-    let receipt = media.enqueue(&[0; crate::app::echomuse::frames::SPEAKER_CHUNK_BYTES], &tx).unwrap();
+    let receipt = media
+        .enqueue(&[0; crate::app::echomuse::frames::SPEAKER_CHUNK_BYTES], &tx)
+        .unwrap();
     let mut sink = Box::pin(futures_util::sink::unfold(
         (),
         |(), _: Message| async move {

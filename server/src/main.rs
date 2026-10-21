@@ -109,35 +109,8 @@ async fn run(config: Config, config_store: Arc<dyn ConfigStore>) -> Result<()> {
             "未加载配置文件：唤醒问候语（[wakeup]）只能在进程内复用音频，重启后需重新合成"
         ),
     }
-    // 配置固定话术的启动校验（内容哈希，见 `app::hot_audio` managed 模块）：
-    // welcome / 问候语池 / 技能应答（含告别语）逐一登记在册——文案改了或清空的旧音频
-    // 本次启动直接删除，文本未变的成品读盘校验（损坏即删，下次使用重新合成）。
-    // 技能应答清单从编译后的技能目录枚举，与运行时 `SkillInvocation.reply` 同源。
-    {
-        let mut managed = Vec::new();
-        let mut push = |slot: &'static str, text: &str| {
-            let text = text.trim();
-            if !text.is_empty() {
-                managed.push(crate::app::hot_audio::ManagedText {
-                    slot: slot.to_string(),
-                    text: text.to_string(),
-                });
-            }
-        };
-        push(
-            crate::app::hot_audio::SLOT_ECHOMUSE_WELCOME,
-            &config.echomuse.welcome,
-        );
-        for line in config.wakeup.pool() {
-            push(crate::app::hot_audio::SLOT_WAKEUP_GREETING, &line);
-        }
-        let skills = crate::plugins::skill::SkillRegistry::new(&config.command, &config.nlu, None);
-        for reply in skills.replies() {
-            push(crate::app::hot_audio::SLOT_SKILL_REPLY, &reply);
-        }
-        let summary = engines.hot_audio.sync_managed(&managed);
-        tracing::info!("固定话术音频启动校验：{summary}");
-    }
+    // 旧格式遗留（`.hot` 容器 / `managed.json` 登记表）不做自动清理：内容寻址缓存
+    // 永远不会再命中它们，磁盘占用由使用者手动处理（见 `app::hot_audio` 模块文档）。
     // 运行端口落盘（HEALTHCHECK 消费）：镜像 HEALTHCHECK 无法读 SQLite 配置库，
     // 启动时把实际监听端口写到配置库同目录的 `.runtime_port`，健康检查读它——
     // 改 [server].port 后无需再同步改 Dockerfile（读不到文件时健康检查兜底 8000）。
