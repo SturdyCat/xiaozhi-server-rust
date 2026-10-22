@@ -134,8 +134,8 @@ fn example_config_parses_and_normalizes() {
     assert_eq!(cfg.tts.kokoro.lang, "zh");
     assert_eq!(cfg.llm.engine, "openai");
     assert_eq!(cfg.memory.engine_id(), "graph");
-    // 指令闸门：样例里默认关闭，且填的默认词表就是需求里那三个词
-    assert!(!cfg.command.enabled);
+    // 指令闸门：样例里默认开启（标准行为、开机即用），且填的默认词表就是需求里那三个词
+    assert!(cfg.command.enabled);
     assert_eq!(cfg.command.keywords, vec!["退下", "闭嘴", "关闭"]);
     assert_eq!(
         cfg.command.match_mode,

@@ -173,7 +173,7 @@ async fn deadline_and_abort_cleanup_pending_and_send_close() {
 #[derive(Clone)]
 struct TestState {
     reg: Arc<Registry>,
-    admin_token: &'static str,
+    device_token: &'static str,
 }
 
 async fn handler(
@@ -183,19 +183,12 @@ async fn handler(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     State(state): State<TestState>,
 ) -> Response {
-    admit(
-        ws,
-        &headers,
-        &id,
-        peer.ip(),
-        &state.reg,
-        (state.admin_token, "device-secret"),
-    )
+    admit(ws, &headers, &id, peer.ip(), &state.reg, state.device_token)
 }
 
 async fn server(
     id: &str,
-    admin_token: &'static str,
+    device_token: &'static str,
 ) -> (String, tokio::task::JoinHandle<()>, std::path::PathBuf) {
     let (reg, path) = em::tests::temp_registry(id);
     let mut record = em::tests::reg_load(id, "test");
@@ -206,7 +199,7 @@ async fn server(
         .route("/shell/{id}", get(handler))
         .with_state(TestState {
             reg: Arc::new(reg),
-            admin_token,
+            device_token,
         });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("ws://{}/shell/{id}", listener.local_addr().unwrap());
@@ -229,11 +222,12 @@ fn request(url: &str, token: &str) -> tungstenite::http::Request<()> {
 }
 
 #[tokio::test]
-async fn loopback_upgrade_rejects_tokens_peer_unsolicited_and_unsecured_admin() {
+async fn loopback_upgrade_rejects_tokens_peer_and_trusts_empty_device_token() {
     let _g = em::hub_tests::HUB_LOCK.lock().unwrap();
     let id = "shell-wire-auth";
-    let (url, server, path) = server(id, "admin-secret").await;
+    let (url, server, path) = server(id, "device-secret").await;
     let (ctl, _rx) = online(id, localhost(), true);
+    // 设备 token 非空：错 token 拒（401），对 token 过了鉴权、卡在 claim 冲突（409 busy）
     for (token, code) in [("wrong", 401), ("device-secret", 409)] {
         let url = url.clone();
         let status =
@@ -260,17 +254,21 @@ async fn loopback_upgrade_rejects_tokens_peer_unsolicited_and_unsecured_admin() 
     server.abort();
     em::hub_remove(id);
     let _ = std::fs::remove_file(path);
-    let (url, server, path) = self::server("shell-no-admin", "").await;
+    // 设备 token 为空（局域网默认可管理）：不再有 503 配置闸门，连接免鉴权直达
+    // claim（hub 被占用 → 409 busy）——证明空 token 信任局域网，而非拒绝服务。
+    let (url, server, path) = self::server("shell-lan-trust", "").await;
+    let (_ctl, _rx) = online("shell-lan-trust", localhost(), true);
     let status = tokio::task::spawn_blocking(move || {
-        match tungstenite::connect(request(&url, "device-secret")) {
+        match tungstenite::connect(request(&url, "anything")) {
             Err(tungstenite::Error::Http(r)) => r.status().as_u16(),
-            other => panic!("expected config denial, got {other:?}"),
+            other => panic!("expected busy denial past auth, got {other:?}"),
         }
     })
     .await
     .unwrap();
-    assert_eq!(status, 503);
+    assert_eq!(status, 409);
     server.abort();
+    em::hub_remove("shell-lan-trust");
     let _ = std::fs::remove_file(path);
 }
 
@@ -278,7 +276,7 @@ async fn loopback_upgrade_rejects_tokens_peer_unsolicited_and_unsecured_admin() 
 async fn loopback_fixed_info_accepts_text_input_and_mixed_split_output() {
     let _g = em::hub_tests::HUB_LOCK.lock().unwrap();
     let id = "shell-wire-info";
-    let (url, server, path) = server(id, "admin-secret").await;
+    let (url, server, path) = server(id, "device-secret").await;
     let (_ctl, mut rx) = online(id, localhost(), true);
     let operation = tokio::spawn(run(id, em::system::INFO));
     match rx.recv().await.unwrap() {
@@ -325,7 +323,7 @@ async fn loopback_fixed_info_accepts_text_input_and_mixed_split_output() {
 async fn loopback_disconnect_without_marker_is_error_and_cleans_slot() {
     let _g = em::hub_tests::HUB_LOCK.lock().unwrap();
     let id = "shell-wire-eof";
-    let (url, server, path) = server(id, "admin-secret").await;
+    let (url, server, path) = server(id, "device-secret").await;
     let (_ctl, mut rx) = online(id, localhost(), true);
     let operation = tokio::spawn(run(id, em::system::INFO));
     rx.recv().await.unwrap();

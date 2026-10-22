@@ -36,9 +36,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::observability::events::TurnTrace;
-use crate::workflow::pipeline::splitter::{spawn_flush_watchdog, SentenceSplitter};
 use crate::plugins::llm::{Llm, LlmEvent, LlmTurnResult};
 use crate::plugins::prompt::TurnPrompt;
+use crate::workflow::pipeline::splitter::{spawn_flush_watchdog, SentenceSplitter};
 
 /// producer 的对外产物：句子接收端 + LLM 汇总结果的等待句柄。
 pub(super) struct LlmProducer {

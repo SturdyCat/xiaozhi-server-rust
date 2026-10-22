@@ -2,6 +2,7 @@ package com.xiaozhi.admin
 
 import com.tencent.kuikly.core.base.Border
 import com.tencent.kuikly.core.base.BorderStyle
+import com.tencent.kuikly.core.base.Color
 import com.tencent.kuikly.core.base.CursorType
 import com.tencent.kuikly.core.base.PagerScope
 import com.tencent.kuikly.core.base.ViewBuilder
@@ -43,6 +44,55 @@ fun ViewContainer<*, *>.dividerH() {
             height(1f)
             backgroundColor(AdminColors.divider)
             marginBottom(AdminSpace.sm)
+        }
+    }
+}
+
+/** 左右分栏之间 1px 纵向分隔线（行内 stretch 自动撑满列高）。 */
+fun ViewContainer<*, *>.dividerV() {
+    View {
+        attr {
+            width(1f)
+            backgroundColor(AdminColors.divider)
+        }
+    }
+}
+
+/**
+ * 「左菜单 │ 1px 分隔线 │ 右面板」左右分栏原语——配置工作区（ConfigTabs）与 EchoMuse
+ * 设备卡卡内布局的唯一出处，避免各处自画竖线造成宽窄/颜色/有无漂移。
+ * menu/panel 为 ViewBuilder，在对应列容器闭包内执行（接收者=列容器）；
+ * fillHeight=true 整行 flex(1f) 撑满剩余高度（工作区挂定高父容器），false 行高随内容（设备卡）。
+ */
+fun ViewContainer<*, *>.menuPaneRow(
+    menuWidth: Float,
+    fillHeight: Boolean = false,
+    menuBackground: Color = AdminColors.transparent,
+    panelPaddingLeft: Float = 0f,
+    menu: ViewBuilder,
+    panel: ViewBuilder,
+) {
+    View {
+        attr {
+            flexDirectionRow()
+            if (fillHeight) flex(1f)
+        }
+        View {
+            attr {
+                width(menuWidth)
+                flexDirectionColumn()
+                backgroundColor(menuBackground)
+            }
+            menu()
+        }
+        dividerV()
+        View {
+            attr {
+                flex(1f)
+                flexDirectionColumn()
+                if (panelPaddingLeft > 0f) paddingLeft(panelPaddingLeft)
+            }
+            panel()
         }
     }
 }

@@ -21,8 +21,8 @@ import com.tencent.kuikly.core.views.View
  * ├────────────────────────────────────────────────┤
  * │ 概览        │ 设备号  xx:xx…        [复制信息]    │
  * │ WiFi 配置   │ 版本    1.2.3                      │ ← 卡内左菜单 + 右内容面板
- * │ 唤醒词设置  │ …                                  │   （范式同 ConfigTabs 的
- * │ 设备管理    │                                    │     configGroupPane，缩微版）
+ * │ 唤醒词设置  │ …                                  │   （menuPaneRow 原语，与
+ * │ 设备管理    │                                    │     ConfigTabs 工作区同一出处）
  * │ 蓝牙代理    │                                    │
  * └────────────────────────────────────────────────┘
  * ```
@@ -60,14 +60,11 @@ internal fun ViewContainer<*, *>.echoMuseDeviceCard(
         echoMuseCardHeader(row, state)
         vif({ state.confirmDeleteId == row.deviceId }) { echoMuseDeleteConfirm(row, state, toast, ctx) }
         dividerH()
-        View {
-            attr { flexDirectionRow() }
-            // —— 左列：卡内菜单（全局单选，见 EchoMuseState.menuDevice/menuItem）——
-            View {
-                attr {
-                    width(ECHOMUSE_MENU_WIDTH)
-                    flexDirectionColumn()
-                }
+        // 卡内左右分栏：与配置工作区同一 menuPaneRow 原语（左菜单 │ 1px 纵向分隔线 │ 右面板）
+        menuPaneRow(
+            menuWidth = ECHOMUSE_MENU_WIDTH,
+            panelPaddingLeft = AdminSpace.md,
+            menu = {
                 for ((itemId, itemLabel, itemIcon) in echoMuseMenuItems(row)) {
                     echoMuseMenuItem(
                         itemIcon,
@@ -75,24 +72,9 @@ internal fun ViewContainer<*, *>.echoMuseDeviceCard(
                         isSelected = { state.activeMenuItem(row) == itemId },
                     ) { state.selectMenu(row, itemId) }
                 }
-            }
-            // 菜单与面板之间 1px 分隔
-            View {
-                attr {
-                    width(1f)
-                    backgroundColor(AdminColors.divider)
-                }
-            }
-            // —— 右栏：当前生效菜单项对应的内容面板 ——
-            View {
-                attr {
-                    flex(1f)
-                    flexDirectionColumn()
-                    paddingLeft(AdminSpace.md)
-                }
-                echoMusePanel(row, state, toast, ctx, onOpenModelFiles)
-            }
-        }
+            },
+            panel = { echoMusePanel(row, state, toast, ctx, onOpenModelFiles) },
+        )
     }
 }
 
@@ -314,7 +296,8 @@ private fun ViewContainer<*, *>.echoMuseOverviewPanel(
     if (row.metaText.isNotEmpty()) {
         textNote(row.metaText, micro = true)
     }
-    // Kuikly 渲染的文本不支持长按选中复制，一键复制兜底（粘到聊天/工单可直接读）
+    // web 端文本已可划选复制（h5App 入口关掉了渲染器 selectstart 拦截）；此按钮仍是
+    // macOS/触屏等无划选平台的一键兜底（粘到聊天/工单可直接读）
     actionRow {
         secondaryButton("复制信息", icon = IconToken.Copy) {
             if (copyToClipboard(row.copyText)) {

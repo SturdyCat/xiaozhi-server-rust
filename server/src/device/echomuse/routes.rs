@@ -24,9 +24,9 @@ use futures_util::{SinkExt, StreamExt};
 use std::net::{IpAddr, SocketAddr};
 use tokio::sync::mpsc;
 
-use crate::workflow::session::run_session;
-use crate::workflow::protocol::IncomingFrame;
 use crate::runtime::Engines;
+use crate::workflow::protocol::IncomingFrame;
+use crate::workflow::session::run_session;
 
 use super::ble::BleLink;
 use super::transport::EchomuseTransport;
@@ -235,7 +235,7 @@ async fn control_loop(
                     if t.len() <= super::runtime::MAX_TELEMETRY_BYTES {
                         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&t) { lease.live.update(&v); }
                     }
-                    if handle_control_text(&t, &lease.live.turn, &mut sink, &up_tx, &ble, ble_on)
+                    if handle_control_text(&t, &lease.id, &lease.live.turn, &mut sink, &up_tx, &ble, ble_on)
                         .await
                         .is_err()
                     {
@@ -259,8 +259,10 @@ async fn control_loop(
 /// （未知类型双向忽略；listen_state/stats/volume_state/mute_state 已由 control_loop
 /// 先写入有界 runtime，其余 log/pong 等仍忽略）。
 /// `ble_adverts` 是旧固件的广播回退路径（`0x06` 未被 ack 声明时设备改走 control 面）。
+/// `device_id` 只用于日志（唤醒/按键是用户最关心的"收到了什么事件"，行里要能对上设备）。
 async fn handle_control_text(
     text: &str,
+    device_id: &str,
     turn: &BoundedTurn,
     sink: &mut futures_util::stream::SplitSink<WebSocket, Message>,
     up_tx: &mpsc::UnboundedSender<IncomingFrame>,
@@ -274,9 +276,16 @@ async fn handle_control_text(
     match kind {
         // 设备本地唤醒词命中（oww_trigger）。服务器未声明 `listen_session`，设备不会走
         // 私听会话（无 session 字段），这里直接开 bounded turn（mic_start + listen start）。
-        "oww_wake" => start_turn(turn, sink, up_tx).await?,
+        // 来源标签随 detect 的 text 透传给会话层（会话日志据此区分唤醒词 vs 按键）。
+        "oww_wake" => {
+            tracing::info!("[echomuse] device {device_id} 触发来源：本地唤醒词，开轮");
+            start_turn(turn, sink, up_tx, "本地唤醒词").await?
+        }
         // 动作键单击 = 无唤醒词模型的兜底入口；mute/音量走 mute_state/volume_state，不进这里。
-        "button" => start_turn(turn, sink, up_tx).await?,
+        "button" => {
+            tracing::info!("[echomuse] device {device_id} 触发来源：action 键，开轮");
+            start_turn(turn, sink, up_tx, "action 键").await?
+        }
         "ble_adverts" if ble_on => {
             if let Some(list) = v.get("adverts").and_then(|a| a.as_array()) {
                 ble.lock()

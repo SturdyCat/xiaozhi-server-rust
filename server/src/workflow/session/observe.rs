@@ -22,8 +22,8 @@
 use std::sync::Arc;
 
 use super::Session;
-use crate::observability::events::{ServerEvent, TurnId, TurnTrace};
 use crate::device::registry::Phase;
+use crate::observability::events::{ServerEvent, TurnId, TurnTrace};
 use crate::workflow::protocol::Transport;
 
 impl<'a, T: Transport> Session<'a, T> {
@@ -97,9 +97,12 @@ impl<'a, T: Transport> Session<'a, T> {
     ///
     /// `anchor` 与 `interrupted` 同时作为结构化字段与文案出现：前者供订阅者/检索，
     /// 后者让纯文本日志（`journalctl` 不带 JSON）也不丢口径。
+    ///
+    /// **debug 档**（日志降噪）：分段延迟是排障数据，不是"收到了什么事件/说了什么"——
+    /// 默认 info 档不出现，`RUST_LOG=debug` 全量可见（见 `main.rs::default_log_filter`）。
     pub(super) fn log_turn_end(&self, trace: &Arc<TurnTrace>, interrupted: bool) {
         let stages = trace.snapshot();
-        tracing::info!(
+        tracing::debug!(
             turn = trace.turn_id(),
             anchor = stages.anchor,
             interrupted,
@@ -118,6 +121,10 @@ impl<'a, T: Transport> Session<'a, T> {
     ///
     /// 四条全部带 `turn=`：它们是"这一轮慢在哪一段"的**下半程**证据（与上面的
     /// `log_turn_end` 上半程摘要配对），`grep turn=N` 一次捞全。
+    ///
+    /// **日志分级（降噪）**：默认 info 档只在**异常**时出现——断音 / 吞吐 <0.98×（warn）；
+    /// 健康轮的平顺/水库/下载缓冲/吞吐细节全部 debug（`RUST_LOG=debug` 全量可见）。
+    /// 正常对话在 info 档只剩：唤醒上报 → 用户 → 回复 三类关键行。
     pub(super) fn log_downlink(
         &self,
         session_id: &str,
@@ -143,7 +150,7 @@ impl<'a, T: Transport> Session<'a, T> {
                 stats.vacuum_events,
                 stats.max_vacuum_ms
             ),
-            Some(depth) => tracing::info!(
+            Some(depth) => tracing::debug!(
                 turn,
                 "session {session_id} 本轮下行平顺：设备解码队列余量最低估计 {depth}ms，真空 {} 次（最长 {}ms）",
                 stats.vacuum_events,
@@ -151,7 +158,7 @@ impl<'a, T: Transport> Session<'a, T> {
             ),
             None => tracing::debug!(turn, "session {session_id} 本轮下行过短，未采集队列余量"),
         }
-        tracing::info!(
+        tracing::debug!(
             turn,
             "session {session_id} 本轮水库：容量 {}ms（峰值水位 {}ms / {}KB），起跑闸等待 {}ms（水位 {}ms），\
              背压 {}ms，上游断供 {} 次（累计 {}ms）{}",
@@ -172,7 +179,7 @@ impl<'a, T: Transport> Session<'a, T> {
         // ③ 下载缓冲（PCM）：预算 = 上游 PCM 积压上限；限速等待 > 0 = 服务端按预算压住了下载
         //    速率（上游下载快于消费，内存因此有界——这正是"根据缓存需要控制下载流速"）
         let dl = download.stats();
-        tracing::info!(
+        tracing::debug!(
             turn,
             "session {session_id} 本轮下载缓冲：预算 {}ms（峰值水位 {}ms），下载限速等待 {}ms / {} 次{}",
             dl.budget_ms,
@@ -202,7 +209,7 @@ impl<'a, T: Transport> Session<'a, T> {
                          调大（先攒后播：要整轮不断音需攒 ≈ (1/{rate:.2} − 1) × {audio_ms}ms）"
                     );
                 } else {
-                    tracing::info!(
+                    tracing::debug!(
                         turn,
                         "session {session_id} 本轮吞吐：音频 {audio_ms}ms / 播放窗口 {window_ms}ms ≈ {rate:.2}× 实时（上游跟得上播放）"
                     );

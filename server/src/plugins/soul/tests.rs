@@ -20,11 +20,14 @@ fn enabled_soul() -> SoulConfig {
 
 #[test]
 fn disabled_soul_is_byte_identical_to_system_prompt() {
-    let cfg = Config::default();
+    // soul 默认已改为 enabled=true（标准体验）；显式关闭必须与现状逐字节一致（可无痛回滚）。
+    let mut cfg = Config::default();
+    cfg.soul.enabled = false;
     let out = instructions(&cfg, "dev-1").unwrap();
     assert_eq!(out, cfg.llm.system_prompt, "关闭人格必须与现状逐字节一致");
     // 空 system_prompt 也不会拼出噪音
     let mut cfg2 = Config::default();
+    cfg2.soul.enabled = false;
     cfg2.llm.system_prompt = String::new();
     assert_eq!(instructions(&cfg2, "dev-1").unwrap(), "");
 }
@@ -88,6 +91,7 @@ fn validate_rejects_bad_ranges_and_unknown_vars() {
     assert!(format!("{:#}", s.validate().unwrap_err()).contains("未声明的变量"));
     // 关闭时全部豁免（老配置不该因为新段的存在而无法启动；写错的 preset 同理）
     let off = SoulConfig {
+        enabled: false,
         max_sentences: 0,
         name: String::new(),
         preset: "typo-not-a-preset".into(),
@@ -240,8 +244,8 @@ fn preset_normalizes_empty_to_default_and_keeps_explicit_none() {
 fn default_config_uses_the_default_preset() {
     let s = SoulConfig::default();
     assert_eq!(s.preset, presets::DEFAULT_ID);
-    assert!(!s.enabled, "默认仍不启用人格（关掉=回到今天）");
-    // 老配置（**没有** preset 键）必须落到内置默认灵魂，而不是"没有基线"——升级不改行为的前提
+    assert!(s.enabled, "默认启用人格（产品决策：开箱即用内置默认灵魂）");
+    // 显式关闭仍合法（用户不要人格可关），且老配置（**没有** preset 键）必须落到内置默认灵魂
     let legacy: SoulConfig = serde_json::from_str(r#"{"enabled":true}"#).unwrap();
     assert_eq!(legacy.preset, presets::DEFAULT_ID);
     let explicit: SoulConfig = serde_json::from_str(r#"{"enabled":true,"preset":"none"}"#).unwrap();

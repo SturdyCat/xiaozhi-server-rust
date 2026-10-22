@@ -28,7 +28,6 @@ pub(super) enum BleError {
     NotFound,
     Unapproved,
     Unsupported,
-    MissingToken,
     Unauthorized,
     Offline,
     SessionChanged,

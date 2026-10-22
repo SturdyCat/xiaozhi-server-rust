@@ -181,7 +181,8 @@ stream = true
 sentence_flush_ms = 1500
 
 # ===== 语音指令闸门（ASR → LLM 之间）：说「退下」就直接结束这次会话 =====
-# 默认关闭（enabled = false）：不启用时行为与没有这一段完全一致（零开销）。
+# 默认开启（enabled = true）：标准行为，开机即用；不需要的用户改 false——
+# 关闭时行为与没有这一段完全一致（零开销）。
 # 打开后，识别文本在送进 LLM **之前**先按指令词表匹配：命中则先说一句告别语
 # （走本地 TTS 一次性合成），随后**断开本次 WebSocket 会话**，一次大模型调用都不发。
 #
@@ -191,7 +192,7 @@ sentence_flush_ms = 1500
 # 生效时机：保存后**新会话**生效（与 [tts]/[llm]/[soul]/[memory] 一致）。
 # 注：AIUI 全链路模式下识别在云端闭环内完成，指令只能在轮次回来后生效（本轮云端回复被丢弃）。
 [command]
-enabled = false                     # true = 启用指令闸门
+enabled = true                      # 默认 true = 启用指令闸门（不需要可改 false）
 keywords = ["退下", "闭嘴", "关闭"]  # 指令词表（归一化后比较；每项一个词）
 match_mode = "exact"                # exact（整句相等，推荐）| contains（句中出现即命中）
 max_chars = 5                       # 只对 ≤5 个字（去标点/语气词后）的识别文本做指令判断；
@@ -201,7 +202,7 @@ reply = "好的，我先退下了。"          # 命中后先说这句，再用 
                                     # 留空 = 不说告别语（仍执行结束聆听）。
 
 # ===== 技能级联（`[nlu]` + `[command]`）：ASR → LLM **之间**的本地识别层 =====
-# 默认关闭。识别文本按三级级联处理：**规则模板命中 → 本地轻量模型打分 → 云 LLM 兜底**：
+# 默认开启（标准行为，不需要可关）。识别文本按三级级联处理：**规则模板命中 → 本地轻量模型打分 → 云 LLM 兜底**：
 #   1) 规则：模板锚点 + 封闭槽位值表确定性命中（零误判），命中即本地执行、不送大模型；
 #   2) 轻量模型：规则未命中时本地打分（零外网），达到 model_threshold 且领先
 #      model_margin 也直接执行（容忍「帮我把客厅的灯打开一下」这类口语化说法；
@@ -236,7 +237,7 @@ reply = "好的，我先退下了。"          # 命中后先说这句，再用 
 # bert_max_len = 64                            # 分词截断长度，须与模型导出一致
 # bert_label_map = { light_on = "control_light" }  # 模型标签 → 技能名映射（缺省同名）
 [nlu]
-enabled = false                     # true = 启用技能级联（自定义技能）；end_session 仍由 [command] 决定。
+enabled = true                      # 默认 true = 启用技能级联（自定义技能）；end_session 仍由 [command] 决定。
 model_threshold = 0.9               # 轻量模型接受阈值（0~1；1.0 = 关闭该级）。越高越保守。
 model_margin = 0.1                  # 最高分需领先其他技能的幅度（防「开灯/关灯」歧义误触发）。
 # 示例（取消注释即可启用一条"控制灯"的本地指令）：
@@ -250,7 +251,7 @@ model_margin = 0.1                  # 最高分需领先其他技能的幅度（
 # ]
 
 [wakeup]
-enabled = false                     # true = 启用唤醒问候语
+enabled = true                      # 默认 true = 启用唤醒问候语（不需要可改 false）
 greeting = """我在"""                # 设备唤醒（固件上报 listen state=detect；EchoMuse 设备
                                     # 唤醒/按键时服务器代发 detect）时立刻说这句，**跳过 LLM
                                     # 与正常回复**。支持多句：换行分隔，每次唤醒随机选一句
@@ -271,7 +272,7 @@ persist = true                      # 把成品音频（裸 24kHz PCM 文件，�
 #       前置：Dot 需先用 firebreak 解锁并经 EchoMuse 官方向导刷入 emOS（一次性）。
 #       ⚠️ 改动本段需**重启**生效。
 [echomuse]
-enabled = false                     # true = 挂载 /em/control、/em/data 路由并广播 mDNS
+enabled = true                      # 默认 true = 挂载 /em/control、/em/data 路由并广播 mDNS（不用 EchoMuse 设备可改 false）
 token = ""                          # 期望的设备 token（`X-Em-Token` 头）；留空 = 不校验。
                                     # 取 Dot 上 EchoMuse 凭据文件里的 token（配对时下发）；
                                     # 生产建议设置——同网段任何设备都能按此协议连进来。
@@ -329,7 +330,7 @@ welcome = "我已连接，喊我的唤醒词或按一下按键就能开始对话
 # ⚠️ 语音第一性原则是「短」：max_sentences / max_chars 会作为硬约束写进提示词；
 #    emoji 默认关闭（TTS 会把 emoji 念出来）。
 [soul]
-enabled = false                     # true = 启用人格档案
+enabled = true                      # 默认 true = 启用人格档案（开箱即用 xiaozhi 预设；不需要可改 false）
 preset = "xiaozhi"                  # 内置人格预设（"none" = 不用预设，完全自定义）
 name = "小智"                        # 自称（留空 = 用预设提供的名字）
 self_intro = ""                     # 自我定位（一段话：你是谁、在做什么）
@@ -354,13 +355,14 @@ examples = []                       # 风格范例：每条一组 Q/A（锁风�
                                     # 例：examples = ["用户：今天几度？\n小智：我看不到天气，你手机上看一眼？"]
 
 # ===== 记忆（本地图记忆）=====
-# 默认关闭 = 零依赖零成本（行为与加记忆之前完全一致）。
+# 默认开启（enabled = true）：开箱即用；提取未配 LLM 路由时只记原文、提示降级，不阻断会话。
+# 改 false = 零依赖零成本（行为与加记忆之前完全一致）。
 # 打开后：每轮对话写入本地 SQLite（原文事实源），后台用一次辅助模型调用抽取摘要，
 # 下一轮提问时按词法（摘要汉字二元组倒排索引）召回，注入**原始 Q/A**作为背景资料。
 # ⚠️ 目前**不含 embedding**：召回是本地词法（中文场景可用、零外网调用）；语义检索为后续阶段。
 # ⚠️ 记忆只在本地 LLM 流水线生效：启用 [aiui] 全链路时云端闭环绕过本地 LLM，人格/记忆都不参与。
 [memory]
-enabled = false                     # true = 启用记忆
+enabled = true                      # 默认 true = 启用记忆（不需要可改 false）
 engine = "graph"                    # graph = 内置图记忆 | store = 纯存储（只存原文不抽取不召回，先积累再决定）| rag = 本地文档 RAG（词法检索，零外网）| none = 保留配置但不生效（旧键 backend 仍可读）
 db_path = "/data/data.db"        # ⚠️ 必须放在挂载卷内，否则重建容器即丢全部记忆（graph/store/rag 共用，切后端数据不丢）；与配置库共用同一文件
 db_busy_timeout_ms = 5000           # SQLite 写锁等待（与 DSH 桌面端共用同一库文件时才需调大）

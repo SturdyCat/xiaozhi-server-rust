@@ -16,9 +16,11 @@ fn enabled_cfg() -> MemoryConfig {
 }
 
 #[tokio::test]
-async fn default_config_builds_noop_and_has_no_side_effects() {
-    let cfg = MemoryConfig::default();
-    assert!(!cfg.enabled, "默认必须关闭");
+async fn disabled_config_builds_noop_and_has_no_side_effects() {
+    // memory 默认已改为 enabled=true（标准行为）；显式关闭必须装配为 NoopMemory（零成本）。
+    let mut cfg = MemoryConfig::default();
+    cfg.enabled = false;
+    assert!(!cfg.enabled);
     assert!(!cfg.active());
     let m = build_memory(&cfg, &Config::default().llm).unwrap();
     assert_eq!(m.name(), "none");
@@ -70,8 +72,9 @@ fn validate_rejects_empty_path_scope_and_bad_node_count() {
     cfg.recall_max_nodes = 0;
     assert!(format!("{:#}", cfg.validate().unwrap_err()).contains("recall_max_nodes"));
 
-    // 关闭时一律豁免（老配置不该因为新段而无法启动）
+    // 显式关闭时一律豁免（老配置不该因为新段而无法启动）
     let off = MemoryConfig {
+        enabled: false,
         db_path: String::new(),
         ..MemoryConfig::default()
     };

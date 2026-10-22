@@ -140,31 +140,33 @@ pub struct Config {
     #[serde(default)]
     pub aiui: AiuiConfig,
     /// 灵魂（人格档案）：`[soul].enabled=false` 时完全退回 `[llm].system_prompt`。
+    /// 默认开启（内置「xiaozhi」预设，开箱即有人格）。
     #[serde(default)]
     pub soul: SoulConfig,
-    /// 记忆（图记忆）：默认关闭，关闭时零依赖、行为与今天一致。
+    /// 记忆（图记忆）：默认开启，开箱即用；提取未配 LLM 路由时给出降级提示不阻断会话，
+    /// `enabled=false` 时零依赖零成本。
     #[serde(default)]
     pub memory: MemoryConfig,
     /// 语音指令闸门（`[command]`）：ASR → LLM **之前**拦截「退下/闭嘴/关闭」这类指令，
     /// 命中即说一句告别语，再用 MCP 让设备结束聆听（设备不支持 MCP 时断开本次会话），
-    /// 跳过 LLM 与正常回复。默认关闭。
+    /// 跳过 LLM 与正常回复。默认开启（标准行为，不需要可关）。
     #[serde(default)]
     pub command: CommandConfig,
     /// 规则 NLU（`[nlu]`）：ASR → LLM **之间**的本地意图识别层，是 `[command]` 的**超集**。
     /// 它"含有" `end_session`（退下/闭嘴/关闭，配置仍落在 `[command]` 段、向后兼容），
     /// 并允许在此定义更多带槽位的本地命令意图（如「把{room}的灯{action}」）。
-    /// 命中即本地执行（不再送 LLM），**未知意图才放行给 LLM**。默认关闭。
+    /// 命中即本地执行（不再送 LLM），**未知意图才放行给 LLM**。默认开启（标准行为，不需要可关）。
     #[serde(default)]
     pub nlu: NluConfig,
     /// 唤醒问候语（`[wakeup]`）：设备唤醒（固件上报 `listen state=detect`）时**立刻**说一句
     /// 预制话术（默认「我在」），跳过 LLM 与正常回复；成品音频按音色持久化复用，
-    /// 稳态下每次唤醒零 LLM、零 TTS。默认关闭。
+    /// 稳态下每次唤醒零 LLM、零 TTS。默认开启（标准行为，不需要可关）。
     #[serde(default)]
     pub wakeup: WakeConfig,
     /// EchoMuse 设备入口（`[echomuse]`）：Echo Dot 2 刷 emOS 后以 EchoMuse 设备协议
     /// （`/em/control` + `/em/data` 双 WS、mic PCM 16k、`X-EM-Token` 鉴权、mDNS
     /// `_emcontroller._tcp` 发现）直接接入，复用与 xiaozhi 设备同一条会话流水线。
-    /// 默认关闭；关闭时零路由、零 mDNS、行为与今天一致。
+    /// 默认开启（开机即用）；关闭时零路由、零 mDNS、行为与没有这个入口完全一致。
     #[serde(default)]
     pub echomuse: EchomuseConfig,
     #[serde(default)]

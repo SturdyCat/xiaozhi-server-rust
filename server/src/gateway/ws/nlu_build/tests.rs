@@ -8,7 +8,10 @@ use super::*;
 
 #[test]
 fn validate_rejects_when_nlu_disabled() {
-    let err = validate_buildable(&crate::plugins::nlu::NluConfig::default()).unwrap_err();
+    // 默认已改为 enabled=true（标准行为）；显式关闭的用户点训练必须被拦下并说清修法。
+    let mut nlu = crate::plugins::nlu::NluConfig::default();
+    nlu.enabled = false;
+    let err = validate_buildable(&nlu).unwrap_err();
     assert!(err.contains("enabled=false"), "{err}");
 }
 

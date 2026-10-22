@@ -10,8 +10,8 @@ use serde_json::{json, Value};
 use tokio::sync::{mpsc::UnboundedSender, oneshot};
 
 use super::{build_gatt_request, request, BleError, BleLink, GATT_WAIT};
-use crate::device::echomuse::{self as em, admin, frames, registry, ControlOut, DataOut};
 use crate::config::Config;
+use crate::device::echomuse::{self as em, admin, frames, registry, ControlOut, DataOut};
 use crate::runtime::Engines;
 
 impl BleError {
@@ -23,11 +23,6 @@ impl BleError {
                 422,
                 "unsupported_capability",
                 "device does not declare ble_connect",
-            ),
-            Self::MissingToken => (
-                503,
-                "token_required",
-                "configure both server.expected_token and echomuse.token",
             ),
             Self::Unauthorized => (401, "unauthorized", "authenticated control required"),
             Self::Offline => (409, "offline", "device control is offline"),
@@ -114,9 +109,9 @@ fn gate<S: Context>(
             json!({"error":"ble proxy disabled"}),
         ));
     }
-    if config.server.expected_token.is_empty() || config.echomuse.token.is_empty() {
-        return Err(BleError::MissingToken.response());
-    }
+    // 产品决策（局域网默认可管理）：不再要求双 token 非空。管理面鉴权由上方
+    // `context.gate`（= auth_ok：expected_token 非空才要求 token）承担；
+    // 设备侧鉴权看 echomuse.token（空 = 局域网信任，非空 = 必须带 X-Em-Token）。
     Ok(())
 }
 

@@ -45,9 +45,9 @@
 
 use std::sync::atomic::Ordering;
 
+use crate::plugins::skill::{SkillAction, SkillInvocation};
 use crate::workflow::mcp::STOP_LISTENING_TOOL;
 use crate::workflow::protocol::Transport;
-use crate::plugins::skill::{SkillAction, SkillInvocation};
 
 use super::Session;
 

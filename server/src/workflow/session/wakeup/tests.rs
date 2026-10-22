@@ -10,8 +10,8 @@
 use std::path::PathBuf;
 
 use super::*;
-use crate::media::media::{AudioCodec, AudioFormat};
 use crate::config::Config;
+use crate::media::media::{AudioCodec, AudioFormat};
 
 fn tmp_dir() -> PathBuf {
     std::env::temp_dir().join(format!("xz-wake-{}", uuid::Uuid::new_v4()))

@@ -7,13 +7,13 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use crate::media::opus::OpusFrameDecoder;
-use crate::workflow::downlink::DownlinkPacer;
 use crate::observability::events::ServerEvent;
-use crate::workflow::protocol::Transport;
-use crate::runtime::Engines;
 use crate::plugins::aiui::{AiuiSession, FullChainEngine};
 use crate::plugins::skill::SkillRegistry;
 use crate::plugins::wakeup::WakeGreeting;
+use crate::runtime::Engines;
+use crate::workflow::downlink::DownlinkPacer;
+use crate::workflow::protocol::Transport;
 
 use super::{Session, SessionParams};
 
@@ -142,7 +142,8 @@ pub async fn run_session<T: Transport>(
     // 测试台走独立请求-响应（asr_test 等）、AIUI 全链路输入是 PCM（识别在云端闭环），
     // "文本进 LLM"对两者语义不通，不注册（HTTP 侧查无通道即报"该会话不支持注入"）。
     // guard 与 `_registry_guard` 同一 RAII 模式：`run_session` 返回即自动摘除。
-    let (inject_tx, inject_rx) = tokio::sync::mpsc::channel(crate::workflow::pipeline::inject::CHANNEL_CAPACITY);
+    let (inject_tx, inject_rx) =
+        tokio::sync::mpsc::channel(crate::workflow::pipeline::inject::CHANNEL_CAPACITY);
     let _inject_guard = if !is_test && aiui.is_none() {
         Some(engines.inject.register(&session_id, inject_tx))
     } else {

@@ -34,7 +34,8 @@
 //! ## 生效时机
 //!
 //! `HotReload::NextSession`：会话开始时按配置快照构造 [`WakeGreeting`]（与 `[command]`
-//! 同语义）。默认 `enabled = false`，关闭时**零开销、行为与加它之前完全一致**。
+//! 同语义）。默认 `enabled = true`——问候语是「开机即用」的标准体验；不需要的用户可
+//! 显式关闭，关闭时零开销、行为与加它之前完全一致。
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -52,8 +53,9 @@ pub const GREETING_SOFT_LIMIT: usize = 30;
 /// `[wakeup]` 段：唤醒问候语的配置。
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct WakeConfig {
-    /// 总开关。默认 **false**：不启用时行为与加本插件之前完全一致（唤醒后静默等待）。
-    #[serde(default)]
+    /// 总开关。默认 **true**：问候语是「开机即用」的标准体验（唤醒后立刻回一句「我在」，
+    /// 不再静默等待）；不需要的用户可显式改为 false——关闭时零开销、行为与加本插件之前完全一致。
+    #[serde(default = "default_true")]
     pub enabled: bool,
     /// 唤醒后立刻说的话（跳过 LLM 与正常回复）。支持**多句**：换行分隔，
     /// 每次唤醒随机选一句说（「我在 / 在呢 / 你好呀」轮着来，不像录音）；单行 = 单句，
@@ -72,6 +74,10 @@ fn default_greeting() -> String {
     DEFAULT_GREETING.to_string()
 }
 
+fn default_true() -> bool {
+    true
+}
+
 fn default_persist() -> bool {
     true
 }
@@ -79,7 +85,7 @@ fn default_persist() -> bool {
 impl Default for WakeConfig {
     fn default() -> Self {
         WakeConfig {
-            enabled: false,
+            enabled: true,
             greeting: default_greeting(),
             persist: true,
         }

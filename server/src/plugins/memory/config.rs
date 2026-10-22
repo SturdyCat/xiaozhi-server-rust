@@ -140,8 +140,10 @@ fn default_rag_top_k() -> u32 {
 /// 记忆配置（`[memory]`）。
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MemoryConfig {
-    /// 总开关。`false`（默认）= [`NoopMemory`]，零依赖零成本。
-    #[serde(default)]
+    /// 总开关。默认 **true**：图记忆是「开机即用」的标准能力（对话自动积累、召回注入）；
+    /// 提取依赖 LLM 时未配路由会给出降级提示（见 [`Self::warning`]），不会阻断会话。
+    /// 不需要的用户可显式改为 `false` = [`NoopMemory`]，零依赖零成本。
+    #[serde(default = "default_true")]
     pub enabled: bool,
     /// 引擎 id（P4 约定，见 `docs/plugin-architecture-unification.md` §3.3）：
     /// `graph`（默认，内置图记忆）| `store`（纯存储：只落原文，零 LLM 零召回，P1-7）|
@@ -199,7 +201,7 @@ pub struct MemoryConfig {
 impl Default for MemoryConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             engine: MemoryBackend::Graph,
             db_path: default_db_path(),
             db_busy_timeout_ms: default_busy_timeout(),

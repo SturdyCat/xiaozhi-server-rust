@@ -30,7 +30,6 @@ pub(super) enum ShellError {
     MissingSpeaker,
     Offline,
     Busy,
-    MissingToken,
     PeerUnavailable,
     Unauthorized,
     Unsolicited,
@@ -54,11 +53,6 @@ impl ShellError {
             ),
             Self::Offline => (409, "offline", "device control is offline or replaced"),
             Self::Busy => (409, "busy", "another system operation is active"),
-            Self::MissingToken => (
-                503,
-                "token_required",
-                "configure both server.expected_token and echomuse.token",
-            ),
             Self::PeerUnavailable => (
                 503,
                 "peer_unavailable",
@@ -229,22 +223,23 @@ pub(super) async fn upgrade(
         &id,
         peer.ip(),
         super::registry::global(cfg),
-        (&cfg.server.expected_token, &cfg.echomuse.token),
+        &cfg.echomuse.token,
     )
 }
 
+/// 设备 shell 通道准入（产品决策：**局域网默认可管理**）：`echomuse.token` 为空（默认）=
+/// 信任局域网设备、不做设备鉴权；非空 = 设备必须带正确 `X-Em-Token`。
+/// （`server.expected_token` 只管管理面鉴权，不再参与设备通道准入——旧口径要求双 token
+/// 都非空才准入并 503，已按局域网默认语义移除。）
 fn admit(
     ws: WebSocketUpgrade,
     headers: &HeaderMap,
     id: &str,
     peer: IpAddr,
     reg: &Registry,
-    tokens: (&str, &str),
+    device_token: &str,
 ) -> Response {
-    if tokens.0.is_empty() || tokens.1.is_empty() {
-        return ShellError::MissingToken.response();
-    }
-    if !device_auth(headers, tokens.1) {
+    if !device_token.is_empty() && !device_auth(headers, device_token) {
         return ShellError::Unauthorized.response();
     }
     if let Err(err) = approved_emos(reg, id) {

@@ -70,8 +70,9 @@ fn default_true() -> bool {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SoulConfig {
     /// 启用后 LLM 的 `instructions` 由本模块按段组装；关闭时完全退回
-    /// `[llm].system_prompt`（可无痛回滚）。
-    #[serde(default)]
+    /// `[llm].system_prompt`（可无痛回滚）。默认 **true**：内置「xiaozhi」预设让全新部署
+    /// 开箱即有一份像样的人格；不想要人格定制的用户可显式关闭。
+    #[serde(default = "default_true")]
     pub enabled: bool,
     /// 内置人格预设：提供**默认灵魂**的基线内容（`"none"` = 不用预设，完全自定义）。
     ///
@@ -145,7 +146,7 @@ pub struct SoulConfig {
 impl Default for SoulConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             preset: default_soul_preset(),
             name: default_soul_name(),
             self_intro: String::new(),

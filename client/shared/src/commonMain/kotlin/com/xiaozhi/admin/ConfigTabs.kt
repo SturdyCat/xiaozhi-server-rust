@@ -28,21 +28,18 @@ fun ViewContainer<*, *>.renderConfigLayout(
         View {
             attr { height(1f); backgroundColor(AdminColors.divider) }
         }
-        View {
-            attr { flex(1f); flexDirectionRow() }
-            View {
-                attr {
-                    width(if (workspaceIsCompact(ctx)) 92f else 192f)
-                    backgroundColor(AdminColors.sidebarBg); flexDirectionColumn()
-                }
+        // 左菜单 │ 1px 分隔线 │ 右面板：与 EchoMuse 设备卡共用 menuPaneRow 原语
+        menuPaneRow(
+            menuWidth = if (workspaceIsCompact(ctx)) 92f else 192f,
+            fillHeight = true,
+            menuBackground = AdminColors.sidebarBg,
+            menu = {
                 // Rebuild menu structure only when changing tab or workflow position.
                 vbind({ "${form.workflowPosition?.id ?: "global"}@${form.workspaceTab}" }) {
                     workspaceMenu(form, meta, ctx)
                 }
-            }
-            View { attr { width(1f); backgroundColor(AdminColors.divider) } }
-            View {
-                attr { flex(1f); flexDirectionColumn() }
+            },
+            panel = {
                 Scroller {
                     attr {
                         flex(1f); showScrollerIndicator(false)
@@ -58,8 +55,8 @@ fun ViewContainer<*, *>.renderConfigLayout(
                         }
                     }
                 }
-            }
-        }
+            },
+        )
     }
 }
 

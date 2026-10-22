@@ -19,9 +19,11 @@ use anyhow::Result;
 
 use crate::media::media::{AudioChunk, AudioWrite};
 use crate::workflow::downlink::reservoir::{DownlinkItem, ReservoirSource, ReservoirStats};
-use crate::workflow::downlink::{poll_abort, send_sentence_start, start_tts_guarded, DownlinkPacer};
-use crate::workflow::session::SessionParams;
+use crate::workflow::downlink::{
+    poll_abort, send_sentence_start, start_tts_guarded, DownlinkPacer,
+};
 use crate::workflow::protocol::Transport;
+use crate::workflow::session::SessionParams;
 
 /// 一轮下行的发送观测（与 [`crate::workflow::downlink::PacerStats`] 一起打印）。
 #[derive(Debug, Clone, Copy, Default)]
@@ -115,7 +117,8 @@ pub(crate) async fn drain_reservoir<T: Transport>(
                 if first_frame_at.is_none() {
                     let now = Instant::now();
                     *first_frame_at = Some(now);
-                    tracing::info!(
+                    // debug（降噪）：TTFA/起跑闸是排障数据；"回复（…）：正文"行已证明音频在发。
+                    tracing::debug!(
                         "session {session_id} 首帧音频已下发（TTFA≈{}ms，起跑闸等待 {}ms / 水位 {}ms，水库峰值 {}ms）",
                         now.duration_since(t0).as_millis(),
                         out.reservoir.gate_ms,

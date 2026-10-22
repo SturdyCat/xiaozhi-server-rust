@@ -1,9 +1,9 @@
 //! 有界话语边界与播报期间的有序上行缓冲（只对支持此契约的承载启用）。
 use std::collections::VecDeque;
 
+use crate::plugins::vad::pool::VadGuard;
 use crate::workflow::protocol::ClientMessage;
 use crate::workflow::protocol::{IncomingFrame, Transport, UtteranceEnd};
-use crate::plugins::vad::pool::VadGuard;
 
 /// Speech 才把已切段及尾段交给 ASR；NoSpeech 丢弃两者。两种结束都重置 recurrent state。
 pub(super) fn finish_utterance(

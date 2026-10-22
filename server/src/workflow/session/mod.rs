@@ -24,17 +24,17 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crate::media::opus::OpusFrameDecoder;
-use crate::workflow::downlink::DownlinkPacer;
-use crate::observability::events::{TurnId, TurnTrace};
-use crate::workflow::protocol::{BinVersion, ClientMessage, ServerMessage};
-use crate::workflow::protocol::{IncomingFrame, Transport};
 use crate::config::Config;
-use crate::runtime::Engines;
+use crate::media::opus::OpusFrameDecoder;
+use crate::observability::events::{TurnId, TurnTrace};
 use crate::plugins::aiui::FullChainEngine;
 use crate::plugins::asr::AsrEngine;
 use crate::plugins::skill::SkillRegistry;
 use crate::plugins::wakeup::WakeGreeting;
+use crate::runtime::Engines;
+use crate::workflow::downlink::DownlinkPacer;
+use crate::workflow::protocol::{BinVersion, ClientMessage, ServerMessage};
+use crate::workflow::protocol::{IncomingFrame, Transport};
 
 /// 一条用户话语在进入 LLM 前的决策结果（文本侧管线 P0-4 的 Stop 信号，见
 /// `Session::decide_user_text`）。
@@ -393,11 +393,11 @@ impl<'a, T: Transport> Session<'a, T> {
                 continue;
             }
             trace.mark_asr_end();
+            // 对话内容入日志（用户侧）：默认 info 档的"用户说了什么"唯一出口。
             tracing::info!(
                 turn,
-                "session {session_id} 识别完成：耗时 {}ms（{} 字）",
-                t0.elapsed().as_millis(),
-                user_text.chars().count()
+                "session {session_id} 用户：{user_text}（识别 {}ms）",
+                t0.elapsed().as_millis()
             );
             // 文本侧优先级管线（P0-4）：记录 → 指令闸门 → LLM（统一入口，见 decide_user_text）
             match self.decide_user_text(&user_text, turn).await {
@@ -475,7 +475,9 @@ impl<'a, T: Transport> Session<'a, T> {
             ClientMessage::Listen { state, .. } if state == "start" => {
                 // ESP 正式流程：listening 状态由设备侧 VAD 上报触发，语音段经二进制帧上行，
                 // 服务端 VAD 切句后走 ASR → LLM → TTS 流水线（见 handle_binary）。
-                tracing::info!("session {session_id} 进入 listening");
+                // debug：唤醒/按键事件已在 detect 行打印（来源随 text 透传），本行只是
+                // 状态机细节，默认 info 档不重复刷屏（排障 `RUST_LOG=debug` 可见）。
+                tracing::debug!("session {session_id} 进入 listening");
                 // 观测：管理页「会话」里能看到"这台设备正在聆听"（只记录，不影响流水线）
                 self.note_phase(crate::device::registry::Phase::Listening);
             }
@@ -484,9 +486,12 @@ impl<'a, T: Transport> Session<'a, T> {
                 // `CONFIG_SEND_WAKE_WORD_DATA=y` 启用）：这是"用户刚叫醒我"最早、最可靠的
                 // 信号——比任何 ASR 结果都早。在加 `[wakeup]` 之前这条消息只打一行日志，
                 // 用户唤醒后面对的是完全静默的等待。处置见 [`wakeup`] 子模块。
+                // `text` 在 ESP 上是唤醒词；echomuse 合成 detect 时用它携带触发来源
+                // （"本地唤醒词"/"action 键"，见 device::echomuse::turn），故措辞用
+                // "唤醒词/来源"兼容两种承载。
                 tracing::info!(
-                    "session {session_id} 收到唤醒上报（唤醒词 {:?}）",
-                    text.as_deref().unwrap_or("")
+                    "session {session_id} 收到唤醒上报（唤醒词/来源：{:?}）",
+                    text.as_deref().filter(|t| !t.is_empty()).unwrap_or("未知")
                 );
                 self.handle_wake_greeting().await;
             }

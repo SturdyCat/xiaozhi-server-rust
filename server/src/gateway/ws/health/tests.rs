@@ -55,7 +55,10 @@ fn engines_health_returns_all_capabilities_with_full_keys() {
 /// 验收 2：memory.enabled=false → disabled、last_error null、probe null（显式关闭不是错误）。
 #[test]
 fn disabled_memory_has_no_probe_and_no_error() {
-    let host = PluginHost::plan(&Config::default()); // memory 默认 enabled=false
+    // memory 默认已改为 enabled=true（标准行为）；显式构造关闭态验证 disabled 语义。
+    let mut cfg = Config::default();
+    cfg.memory.enabled = false;
+    let host = PluginHost::plan(&cfg);
     let json = engines_health_json(&host);
     let mem = find_cap(&json, "memory");
     assert_eq!(mem["phase"], "disabled");

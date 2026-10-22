@@ -14,7 +14,7 @@ pub(super) const COMMAND_FIELDS: &[FieldSchema] = &[
         key: "enabled",
         label: "启用指令闸门",
         kind: FieldKind::Bool,
-        default_hint: "false",
+        default_hint: "true",
         help: "打开后，识别到指令词（默认「退下/闭嘴/关闭」）会先说告别语，再用 MCP 让设备\
                结束聆听（设备回到待唤醒、音频通道保留，下次唤醒不重连）。设备侧动作由会话开始时\
                发现的工具清单驱动：清单含 stop 工具则保持连接，明确不含则跳过调用直接断开重连\

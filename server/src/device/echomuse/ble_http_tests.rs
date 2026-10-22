@@ -124,25 +124,38 @@ async fn http_auth_flags_approval_capability_and_control_gate_all_ble_reads() {
         404
     );
     drop(srv);
-    for (field, expected) in [
-        ("enabled", 404),
-        ("ble_proxy", 404),
-        ("device_token", 503),
-        ("admin_token", 503),
-    ] {
+    for (field, expected) in [("enabled", 404), ("ble_proxy", 404)] {
         let mut ctx = base.clone();
         let config = Arc::make_mut(&mut ctx.config);
         match field {
             "enabled" => config.echomuse.enabled = false,
-            "ble_proxy" => config.echomuse.ble_proxy = false,
-            "device_token" => config.echomuse.token.clear(),
-            _ => config.server.expected_token.clear(),
+            _ => config.echomuse.ble_proxy = false,
         }
         let srv = server(ctx).await;
         for endpoint in ["adverts", "state"] {
             assert_eq!(
                 call(&srv, id, endpoint, None, "admin-secret").await.0,
                 expected
+            );
+        }
+    }
+    // 产品决策（局域网默认可管理）：清空任一 token 不再 503——请求越过 token 闸门继续
+    // 走业务链。用「设备不存在 → 404」证明闸门已放行（旧口径这里会被拦成 503）。
+    for field in ["device_token", "admin_token"] {
+        let mut ctx = base.clone();
+        let config = Arc::make_mut(&mut ctx.config);
+        match field {
+            "device_token" => config.echomuse.token.clear(),
+            _ => config.server.expected_token.clear(),
+        }
+        let srv = server(ctx).await;
+        for endpoint in ["adverts", "state"] {
+            assert_eq!(
+                call(&srv, "missing", endpoint, None, "admin-secret")
+                    .await
+                    .0,
+                404,
+                "{field} 清空后不得再被 token 闸门拦成 503"
             );
         }
     }

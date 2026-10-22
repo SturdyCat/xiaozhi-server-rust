@@ -86,9 +86,10 @@ pub struct IntentMatch {
 /// `[nlu]` 配置段：自定义意图 + 槽位表。
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct NluConfig {
-    /// 总开关。默认 **false**：关闭时本段不产生任何意图（end_session 仍由 `[command]` 决定），
-    /// 行为与加本插件之前完全一致（零开销、零行为变化）。
-    #[serde(default)]
+    /// 总开关。默认 **true**：本地意图识别是「开机即用」的标准行为（内置提醒技能 +
+    /// end_session 级联，命中即本地执行、零 LLM 成本）；不需要的用户可显式改为 false——
+    /// 关闭时本段不产生任何意图（end_session 仍由 `[command]` 决定），行为与加本插件之前完全一致。
+    #[serde(default = "default_true")]
     pub enabled: bool,
     #[serde(default)]
     pub intents: Vec<IntentDef>,
@@ -135,7 +136,7 @@ impl Default for NluConfig {
     /// 轻量模型层变成"沾边就执行"。默认值必须与 serde default 函数同源（单一权威）。
     fn default() -> Self {
         NluConfig {
-            enabled: false,
+            enabled: true,
             intents: Vec::new(),
             slots: Vec::new(),
             model_threshold: default_model_threshold(),
@@ -154,6 +155,10 @@ impl Default for NluConfig {
 
 fn default_model_threshold() -> f32 {
     0.9
+}
+
+fn default_true() -> bool {
+    true
 }
 fn default_model_margin() -> f32 {
     0.1

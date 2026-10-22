@@ -42,8 +42,8 @@ mDNS 广播地址**无配置项**：启动时动态探测部署机默认出口�
 | EchoMuse 事件 | 会话语义 | 说明 |
 |---|---|---|
 | data 面 Text identify（拨通后首帧） | 按 `device_id` 精确认领 data 出站口 | data 面唯一文本帧；此后恒为二进制，再收 Text 忽略不断链 |
-| `oww_wake`（设备本地唤醒词命中） | `listen state=detect` → `listen state=start` + 下发 `mic_start{lock_mic:true}` | bounded turn：设备自己做 VAD，结束发哨兵；`detect` 先投（`[wakeup]` 唤醒问候语的触发点，问候关闭时仅多一行会话日志） |
-| `button`（动作键） | 同上 | 无唤醒词模型时的兜底入口 |
+| `oww_wake`（设备本地唤醒词命中） | `listen state=detect` → `listen state=start` + 下发 `mic_start{lock_mic:true}` | bounded turn：设备自己做 VAD，结束发哨兵；`detect` 先投（`[wakeup]` 唤醒问候语的触发点，问候关闭时仅多一行会话日志）；detect 的 `text` 携带来源标签 `"本地唤醒词"`，echomuse 层同步打 `触发来源：本地唤醒词` 日志 |
+| `button`（动作键） | 同上 | 无唤醒词模型时的兜底入口；detect 的 `text` 携带 `"action 键"`，echomuse 层同步打 `触发来源：action 键` 日志——会话层日志（`收到唤醒上报（唤醒词/来源：…）`）据此区分"叫醒的"还是"按键开的" |
 | `0x01`/`0x07` mic PCM（16k S16LE） | 上行 Opus 二进制帧 | 服务端用同一 `OpusFrameEncoder` 编码，攒满 60ms 一包；`0x07` 会话头（session u32 + seq u16 BE）已剥离 |
 | `0x04`（VAD 结束） | 补齐残 PCM 后投 typed `EndOfUtterance(Speech)` | core 合并已切段与 VAD flush 尾段、reset 后识别；立即允许下次唤醒，不等回复 EOS |
 | `0x05`（无语音超时） | 丢弃残 PCM 后投 typed `EndOfUtterance(NoSpeech)` | core 丢弃已切段与尾段、reset，不触发 ASR/LLM；重复/空闲哨兵幂等 |
@@ -56,6 +56,19 @@ mDNS 广播地址**无配置项**：启动时动态探测部署机默认出口�
 能力协商：`ack.features` 只声明 `mic/speaker/leds/buttons/oww_trigger/oww_local_only`。**不声明** `listen_session`（不走 `0x07` 私听会话）、`audio_mix`（不做音乐面）——按协议"未声明即降级"静默关闭；未知帧型/未知 JSON 双向忽略。`ble_connect` + `ble_adverts_data` 仅在 `[echomuse].ble_proxy=true` **且**设备 register 声明 `ble_connect` 时条件追加（协议要求双向声明才启用）。
 
 **唤醒声音的分工**：设备唤醒时本地先播一声自带提示音（`wake_cue`，音量/开关走管理台「EchoMuse → 唤醒词设置」的 `wakeSoundLevel`）；服务器侧问候语由全局 `[wakeup]` 控制（默认「我在」，支持换行多句随机，EchoMuse 唤醒经 `detect` 代发触发）——两者可并存，嫌设备提示音刺耳就把它调 quiet/关掉，留服务器问候。
+
+### 会话日志口径（默认 `RUST_LOG` 未设 = info 档）
+
+一次"唤醒 → 对话 → 回复"在 info 档只有四类关键行，**收到什么事件、说了什么、下发了什么**一目了然：
+
+```
+[echomuse] device G090… 触发来源：本地唤醒词，开轮          （按键则显示 action 键）
+session … 收到唤醒上报（唤醒词/来源："本地唤醒词"）
+session … 用户：现在几点了（识别 213ms）
+session … 回复（耗时 1820ms / 音频 4100ms / LLM 87 字 / 工具 0 个，下发 2 句）：现在是下午三点二十分…
+```
+
+分段延迟/水库水位/下载缓冲/吞吐/首帧 TTFA/下行平顺等**每轮诊断明细已全部降为 debug**（异常时除外：断音与吞吐 <0.98× 恒为 warn）。排障时 `RUST_LOG=debug`（或 `RUST_LOG=xiaozhi_server_rust=workflow=debug`）恢复全量。
 
 ## 蓝牙代理（`ble_proxy=true`，EchoMuse `ble_connect` / `ble_adverts_data`）
 

@@ -1,6 +1,7 @@
 package com.xiaozhi.admin
 
 import com.tencent.kuikly.core.render.web.ktx.SizeI
+import com.tencent.kuikly.core.render.web.processor.KuiklyProcessor
 import com.tencent.kuikly.core.render.web.runtime.web.expand.setAutoUpdateRootViewSizeOnResize
 import com.xiaozhi.admin.KuiklyWebRenderViewDelegator
 import kotlinx.browser.document
@@ -44,6 +45,14 @@ fun main() {
     // Official throttled window/container forwarding keeps Pager breakpoints reactive
     // on desktop resize without recreating the page or losing drafts/IME state.
     setAutoUpdateRootViewSizeOnResize(true)
+
+    // Web 管理台允许划选/复制文本：渲染器默认 preventDefaultSelect=true，会在桌面浏览器把
+    // Scroller 内容的 selectstart 全部 preventDefault——整页只有 Scroller 外的顶部标题可选，
+    // 卡片里的设备号/板型/日志等全部无法选中复制。关掉 select 拦截（渲染器 click 处理已自带
+    // 「存在选区则忽略 click」防误触）；drag 拦截保持默认 true，防 HTML5 原生拖拽吞掉
+    // mouseup 把 PageList 滚动状态机卡死（上游 KuiklyProcessor 文档同口径）。
+    KuiklyProcessor.preventDefaultSelect = false
+
     val delegator = KuiklyWebRenderViewDelegator()
     delegator.init(containerId, pageName, paramMap, SizeI(containerWidth, containerHeight))
     delegator.resume()

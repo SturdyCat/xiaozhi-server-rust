@@ -9,16 +9,16 @@
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
+use crate::plugins::llm::build_llm;
+use crate::plugins::nlu::build_bert_checked;
+use crate::plugins::tts::build_xfyun;
 use crate::workflow::downlink::{
     drain_reservoir, new_reservoir, send_tts_state, spawn_single_sentence_filler,
 };
 use crate::workflow::pipeline::prefetch::PreparedAudio;
 use crate::workflow::protocol::ServerMessage;
-use crate::workflow::session::{send_text, Session};
 use crate::workflow::protocol::Transport;
-use crate::plugins::llm::build_llm;
-use crate::plugins::nlu::build_bert_checked;
-use crate::plugins::tts::build_xfyun;
+use crate::workflow::session::{send_text, Session};
 
 mod synth;
 
@@ -251,10 +251,12 @@ impl<'a, T: Transport> Session<'a, T> {
         // `cancelled` 是本条 tts_test 独立的取消标志（不复用会话级 abort——超时只应
         // 取消本次合成，不波及会话其他状态）：race_synth 超时即置位，producer 的
         // 下一个分片回调拿到 false 提前终止、permit 随闭包退出归还。
-        let download = crate::workflow::pipeline::prefetch::DownloadBudget::new(self.params.download_buffer_ms);
-        let (tx, chunk_rx) = tokio::sync::mpsc::channel::<crate::workflow::pipeline::prefetch::PcmChunk>(
-            crate::workflow::pipeline::prefetch::PREFETCH_PCM_SLOTS,
+        let download = crate::workflow::pipeline::prefetch::DownloadBudget::new(
+            self.params.download_buffer_ms,
         );
+        let (tx, chunk_rx) = tokio::sync::mpsc::channel::<
+            crate::workflow::pipeline::prefetch::PcmChunk,
+        >(crate::workflow::pipeline::prefetch::PREFETCH_PCM_SLOTS);
         let (done_tx, done_rx) = tokio::sync::oneshot::channel::<bool>();
         let text_c = text.clone();
         let cancelled = Arc::new(AtomicBool::new(false));
@@ -268,7 +270,13 @@ impl<'a, T: Transport> Session<'a, T> {
                 speaker,
                 Box::new(move |sr, chunk| {
                     // 下载缓冲按预算限速 + 本条合成取消感知（见 `prefetch::push_pcm` 文档）
-                    crate::workflow::pipeline::prefetch::push_pcm(&budget_c, &tx, chunk.to_vec(), sr, &cancelled_c)
+                    crate::workflow::pipeline::prefetch::push_pcm(
+                        &budget_c,
+                        &tx,
+                        chunk.to_vec(),
+                        sr,
+                        &cancelled_c,
+                    )
                 }),
             );
             // 合成是否正常结束：水库填充任务据此决定该句能否写结果缓存

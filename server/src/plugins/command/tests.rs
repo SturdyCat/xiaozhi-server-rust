@@ -2,7 +2,7 @@
 //!
 //! 外移自该文件（AGENTS.md §5.10：测试一律独立文件）。
 //! 断言锚在**行为**上：命中/不命中的边界（「退下吧」要命中，「关闭闹钟」不能命中）、
-//! **长度闸门**（超过 5 个字的长句一律放行）、默认关、词表归一化与去重、
+//! **长度闸门**（超过 5 个字的长句一律放行）、默认开（显式关闭=回到旧行为）、词表归一化与去重、
 //! 以及"空词表绝不拦截一切"这条安全底线。
 
 use super::*;
@@ -14,14 +14,14 @@ fn enabled_cfg() -> CommandConfig {
     }
 }
 
-/// 默认配置必须**不启用**：加插件不改变现有部署的任何行为。
+/// 默认配置必须**启用**（产品决策：语音指令是「开机即用」的标准行为），且默认词表可命中。
 #[test]
-fn disabled_by_default_never_matches() {
+fn enabled_by_default_and_hits() {
     let cfg = CommandConfig::default();
-    assert!(!cfg.enabled);
-    assert!(!cfg.active());
+    assert!(cfg.enabled, "默认必须启用（不需要的用户显式关闭）");
+    assert!(cfg.active());
     let gate = CommandGate::new(&cfg);
-    assert_eq!(gate.hit("退下"), None);
+    assert!(gate.hit("退下").is_some(), "默认词表必须能命中「退下」");
     // 默认词表就是需求里那三个
     assert_eq!(cfg.keywords, vec!["退下", "闭嘴", "关闭"]);
     assert!(!cfg.reply.trim().is_empty(), "默认应有一句告别语");
@@ -153,8 +153,9 @@ fn validate_rejects_keyword_longer_than_limit() {
         ..enabled_cfg()
     };
     unlimited.validate().unwrap();
-    // 没启用时只是"躺在配置里"，不该拦启动
+    // 显式关闭时只是"躺在配置里"，不该拦启动
     let off = CommandConfig {
+        enabled: false,
         keywords: vec!["关闭卧室的灯".into()],
         ..CommandConfig::default()
     };
@@ -229,7 +230,12 @@ fn normalize_is_idempotent_and_dedupes() {
 #[test]
 fn signature_changes_with_config() {
     let a = CommandConfig::default().signature();
-    let b = enabled_cfg().signature();
+    // enabled 参与签名：默认已启用，关闭态必须被视为另一种行为
+    let b = CommandConfig {
+        enabled: false,
+        ..CommandConfig::default()
+    }
+    .signature();
     assert_ne!(a, b);
     let c = CommandConfig {
         keywords: vec!["退下".into()],

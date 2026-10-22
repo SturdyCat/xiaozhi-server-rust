@@ -18,7 +18,7 @@ pub(super) const NLU_FIELDS: &[FieldSchema] = &[
         key: "enabled",
         label: "启用规则 NLU",
         kind: FieldKind::Bool,
-        default_hint: "false",
+        default_hint: "true",
         help: "打开后，识别文本先过本地规则引擎：命中已知意图即本地执行（**不再送大模型**），\
                只有未知意图才放行给 LLM。内置 `end_session`（退下/闭嘴/关闭）来自 `[command]` 段，\
                此处额外定义带槽位的自定义意图（如「把{room}的灯{action}」）。\

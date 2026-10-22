@@ -6,13 +6,13 @@
 
 use std::sync::Arc;
 
+use crate::plugins::aiui::FullChainTurn;
 use crate::workflow::downlink::{
     drain_reservoir, new_reservoir, send_tts_state, spawn_single_sentence_filler,
 };
 use crate::workflow::pipeline::prefetch::PreparedAudio;
 use crate::workflow::protocol::ServerMessage;
 use crate::workflow::protocol::Transport;
-use crate::plugins::aiui::FullChainTurn;
 
 use super::{blocking_result, f32_to_i16_16k, send_text, Session, UtteranceDecision};
 
@@ -25,7 +25,9 @@ impl<'a, T: Transport> Session<'a, T> {
     pub(super) async fn aiui_segments(&mut self, segments: Vec<Vec<f32>>) {
         let session_id = self.session_id.clone();
         for seg in segments {
-            let trace = crate::observability::events::TurnTrace::new(crate::observability::events::ANCHOR_AIUI);
+            let trace = crate::observability::events::TurnTrace::new(
+                crate::observability::events::ANCHOR_AIUI,
+            );
             let turn = trace.turn_id();
             let pcm_i16 = f32_to_i16_16k(&seg, self.params.uplink_sr);
             let Some(aiui) = self.aiui.as_ref().map(Arc::clone) else {
@@ -108,9 +110,9 @@ impl<'a, T: Transport> Session<'a, T> {
         // 避免在水库还没被消费时把会话任务阻塞在 `send` 上。
         // ⚠️ AIUI 是**一次性回传**（整段音频已在 `turn.audio` 里），没有"流式下载"可限速，
         // 故分片不占下载缓冲（`PcmChunk::unbudgeted`）——下载缓冲只服务逐句流式合成。
-        let (tx, chunk_rx) = tokio::sync::mpsc::channel::<crate::workflow::pipeline::prefetch::PcmChunk>(
-            crate::workflow::pipeline::prefetch::PREFETCH_PCM_CHUNKS,
-        );
+        let (tx, chunk_rx) = tokio::sync::mpsc::channel::<
+            crate::workflow::pipeline::prefetch::PcmChunk,
+        >(crate::workflow::pipeline::prefetch::PREFETCH_PCM_CHUNKS);
         tokio::spawn(async move {
             for c in chunks {
                 if tx

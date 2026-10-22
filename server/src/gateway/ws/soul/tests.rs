@@ -13,7 +13,10 @@ fn live_with_soul(soul: SoulConfig) -> crate::config::Config {
 
 #[test]
 fn preview_reports_system_prompt_when_soul_disabled() {
-    let cfg = live_with_soul(SoulConfig::default());
+    // soul 默认已改为 enabled=true（标准体验）；显式关闭时预览必须退回 system_prompt。
+    let mut off = SoulConfig::default();
+    off.enabled = false;
+    let cfg = live_with_soul(off);
     let body = preview_body(&cfg, &json!({})).unwrap();
     assert_eq!(body["ok"], true);
     assert_eq!(body["enabled"], false);

@@ -129,7 +129,11 @@ fn selection_follows_config() {
         active_impl(&cfg, Capability::FullChain),
         Some("fullchain.aiui")
     );
-    // 记忆/人格：默认关闭 → 没有选中实现；打开后各有一个
+    // 记忆/人格：默认开启（标准行为）→ 各有选中实现；显式关闭后为 None，再打开恢复
+    assert_eq!(active_impl(&cfg, Capability::Memory), Some("memory.graph"));
+    assert_eq!(active_impl(&cfg, Capability::Soul), Some("soul.profile"));
+    cfg.memory.enabled = false;
+    cfg.soul.enabled = false;
     assert_eq!(active_impl(&cfg, Capability::Memory), None);
     assert_eq!(active_impl(&cfg, Capability::Soul), None);
     cfg.memory.enabled = true;
@@ -351,13 +355,16 @@ fn schema_json_shape() {
 #[test]
 fn command_gate_is_optional_and_hot_reloadable() {
     let mut cfg = Config::default();
-    assert!(!cfg.command.enabled, "指令闸门默认必须关闭");
-    assert_eq!(active_impl(&cfg, Capability::Command), None);
+    // 默认已改为启用（产品决策：标准行为、开机即用）；显式关闭=回到旧行为，仍是可选能力。
+    assert!(cfg.command.enabled, "指令闸门默认必须启用");
+    assert_eq!(active_impl(&cfg, Capability::Command), Some("command.gate"));
     assert!(
         !Capability::Command.required() && !Capability::Command.fatal_if_enabled(),
         "可选能力：坏配置只降级，不阻止启动"
     );
 
+    cfg.command.enabled = false;
+    assert_eq!(active_impl(&cfg, Capability::Command), None);
     cfg.command.enabled = true;
     assert_eq!(active_impl(&cfg, Capability::Command), Some("command.gate"));
     let d = find("command.gate").expect("应注册 command.gate");
@@ -413,14 +420,17 @@ fn command_gate_is_optional_and_hot_reloadable() {
 #[test]
 fn nlu_rules_is_optional_and_hot_reloadable() {
     let mut cfg = Config::default();
-    assert!(!cfg.nlu.enabled, "规则 NLU 默认必须关闭");
-    assert_eq!(active_impl(&cfg, Capability::Nlu), None);
+    // 默认已改为启用（产品决策：标准行为、开机即用）；显式关闭=回到旧行为，仍是可选能力。
+    assert!(cfg.nlu.enabled, "规则 NLU 默认必须启用");
+    assert_eq!(active_impl(&cfg, Capability::Nlu), Some("nlu.rules"));
     assert!(
         !Capability::Nlu.required() && !Capability::Nlu.fatal_if_enabled(),
         "可选能力：坏配置只降级，不阻止启动"
     );
 
-    // 启用（无意图）即选中；默认无意图应通过校验（不静默失效）。
+    // 显式关闭后不选中；再打开即选中；默认无意图应通过校验（不静默失效）。
+    cfg.nlu.enabled = false;
+    assert_eq!(active_impl(&cfg, Capability::Nlu), None);
     cfg.nlu.enabled = true;
     assert_eq!(active_impl(&cfg, Capability::Nlu), Some("nlu.rules"));
     let d = find("nlu.rules").expect("应注册 nlu.rules");
@@ -546,13 +556,16 @@ fn memory_backend_values_match_registry_impls() {
 #[test]
 fn wake_greeting_is_optional_hot_reloadable_and_flags_cache_conflict() {
     let mut cfg = Config::default();
-    assert!(!cfg.wakeup.enabled, "唤醒问候语默认必须关闭");
-    assert_eq!(active_impl(&cfg, Capability::Wake), None);
+    // 默认已改为启用（产品决策：唤醒问候是「开机即用」的标准体验）；显式关闭=回到旧行为。
+    assert!(cfg.wakeup.enabled, "唤醒问候语默认必须启用");
+    assert_eq!(active_impl(&cfg, Capability::Wake), Some("wakeup.greeting"));
     assert!(
         !Capability::Wake.required() && !Capability::Wake.fatal_if_enabled(),
         "可选能力：坏配置只降级，不阻止启动"
     );
 
+    cfg.wakeup.enabled = false;
+    assert_eq!(active_impl(&cfg, Capability::Wake), None);
     cfg.wakeup.enabled = true;
     assert_eq!(active_impl(&cfg, Capability::Wake), Some("wakeup.greeting"));
     let d = find("wakeup.greeting").expect("应注册 wakeup.greeting");

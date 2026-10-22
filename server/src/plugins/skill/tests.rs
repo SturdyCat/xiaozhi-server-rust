@@ -187,7 +187,18 @@ fn tools_expose_single_execute_skill_spec() {
         "目录须包含全部技能名"
     );
     // 全关目录：无工具（会话层不传 tools，LLM 纯聊天）。
-    let empty = SkillRegistry::new(&CommandConfig::default(), &NluConfig::default(), None);
+    // command/nlu 默认均已改为启用（标准行为），这里显式构造关闭态验证「无技能 → 无工具」。
+    let empty = SkillRegistry::new(
+        &CommandConfig {
+            enabled: false,
+            ..CommandConfig::default()
+        },
+        &NluConfig {
+            enabled: false,
+            ..NluConfig::default()
+        },
+        None,
+    );
     assert!(empty.tools().is_empty());
 }
 

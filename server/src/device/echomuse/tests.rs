@@ -400,14 +400,14 @@ async fn 开轮聆听先detect再listen_start且重复唤醒零副作用() {
     // 丢弃 sink：mic_start 走 control 面不进 up_tx，这里只验证会话侧投帧顺序。
     let mut sink = futures_util::sink::drain::<axum::extract::ws::Message>();
     let turn = super::turn::BoundedTurn::default();
-    super::turn::start_turn(&turn, &mut sink, &up_tx)
+    super::turn::start_turn(&turn, &mut sink, &up_tx, "本地唤醒词")
         .await
         .expect("开轮不应失败");
     match up_rx.recv().await {
         Some(IncomingFrame::Text(t)) => {
             assert!(
-                t.contains(r#""state":"detect""#),
-                "首帧必须是 detect（唤醒问候语入口）: {t}"
+                t.contains(r#""state":"detect""#) && t.contains(r#""text":"本地唤醒词""#),
+                "首帧必须是 detect 且携带来源标签（唤醒问候语入口）: {t}"
             )
         }
         other => panic!("首帧应是文本帧: {other:?}"),
@@ -422,7 +422,7 @@ async fn 开轮聆听先detect再listen_start且重复唤醒零副作用() {
         other => panic!("次帧应是文本帧: {other:?}"),
     }
     // 已在聆听：重复唤醒零副作用（不重复 mic_start、不再投帧）。
-    super::turn::start_turn(&turn, &mut sink, &up_tx)
+    super::turn::start_turn(&turn, &mut sink, &up_tx, "本地唤醒词")
         .await
         .expect("重复开轮也不应失败");
     assert!(up_rx.try_recv().is_err(), "重复唤醒不得再投帧");

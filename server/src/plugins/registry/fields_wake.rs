@@ -14,7 +14,7 @@ pub(super) const WAKE_FIELDS: &[FieldSchema] = &[
         key: "enabled",
         label: "启用唤醒问候语",
         kind: FieldKind::Bool,
-        default_hint: "false",
+        default_hint: "true",
         help: "打开后，设备唤醒（固件上报 listen state=detect）时立刻说一句问候语，\
                跳过 LLM 与正常回复——唤醒是全系统最高频的动作，为一句固定的话付一次大模型调用\
                没有道理。成品音频按音色复用：进程内命中内存缓存，重启后命中磁盘（见 persist），\

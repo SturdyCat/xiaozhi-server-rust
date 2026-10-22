@@ -11,7 +11,6 @@ async fn shell_failures_have_distinct_non_success_http_contracts() {
         (ShellError::MissingSpeaker, 422, "unsupported_capability"),
         (ShellError::Offline, 409, "offline"),
         (ShellError::Busy, 409, "busy"),
-        (ShellError::MissingToken, 503, "token_required"),
         (ShellError::Timeout, 504, "shell_timeout"),
         (ShellError::Transport, 502, "shell_transport"),
         (ShellError::OutputLimit, 502, "output_limit"),

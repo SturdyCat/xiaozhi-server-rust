@@ -11,8 +11,10 @@ pub const DEFAULT_WELCOME: &str = "我已连接，喊我的唤醒词或按一下
 /// `[echomuse]` 配置段：EchoMuse 设备入口开关与凭据。
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct EchomuseConfig {
-    /// 总开关。默认 **false**：不启用时不挂路由、不广播 mDNS，行为与今天完全一致。
-    #[serde(default)]
+    /// 总开关。默认 **true**：EchoMuse 设备入口是「开机即用」的标准能力（mDNS 广播 +
+    /// `/em/*` 路由就绪，设备刷机后即连）；不用 EchoMuse 设备的用户可显式改为 false——
+    /// 关闭时不挂路由、不广播 mDNS，行为与没有这个入口完全一致。
+    #[serde(default = "default_true")]
     pub enabled: bool,
     /// 期望的设备 token（`X-Em-Token` 头）；为空字符串表示不校验。
     /// 对应 EchoMuse 设备凭据文件里的 token（配对时由 controller 下发）。
@@ -51,10 +53,14 @@ fn default_welcome() -> String {
     DEFAULT_WELCOME.to_string()
 }
 
+fn default_true() -> bool {
+    true
+}
+
 impl Default for EchomuseConfig {
     fn default() -> Self {
         EchomuseConfig {
-            enabled: false,
+            enabled: true,
             token: String::new(),
             ble_proxy: false,
             plain_port: default_plain_port(),

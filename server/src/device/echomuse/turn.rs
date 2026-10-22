@@ -20,7 +20,11 @@ struct State {
 pub(crate) struct BoundedTurn(Mutex<State>);
 
 impl BoundedTurn {
-    fn begin(&self, up: &UnboundedSender<IncomingFrame>) -> Option<u64> {
+    /// `source` = 触发来源的人类可读标签（`"本地唤醒词"` / `"action 键"`），随 detect 的
+    /// `text` 字段透传给会话层——ESP 协议里 detect 的 `text` 本就是唤醒词（见
+    /// `session::wakeup` 模块注释），echomuse 没有唤醒词文本，用它携带来源标签，
+    /// 会话日志因此能区分"叫醒的"还是"按键开的"（会话层不感知设备类型）。
+    fn begin(&self, up: &UnboundedSender<IncomingFrame>, source: &str) -> Option<u64> {
         let mut state = self.0.lock().expect("echomuse turn lock");
         if state.active {
             return None;
@@ -28,9 +32,12 @@ impl BoundedTurn {
         state.generation = state.generation.wrapping_add(1);
         state.active = true;
         state.token = Arc::new(AtomicBool::new(true));
-        let _ = up.send(IncomingFrame::Text(
-            r#"{"type":"listen","state":"detect"}"#.into(),
-        ));
+        let detect = serde_json::json!({
+            "type": "listen",
+            "state": "detect",
+            "text": source,
+        });
+        let _ = up.send(IncomingFrame::Text(detect.to_string()));
         Some(state.generation)
     }
 
@@ -87,15 +94,18 @@ impl BoundedTurn {
 
 /// Keep the firmware sequence detect -> mic_start -> listen start. A data end
 /// can race the awaited control write; never emit a stale start after that end.
+///
+/// `source` = 触发来源标签，随 detect 的 `text` 透传（见 [`BoundedTurn::begin`] 注释）。
 pub(super) async fn start_turn<S>(
     turn: &BoundedTurn,
     sink: &mut S,
     up: &UnboundedSender<IncomingFrame>,
+    source: &str,
 ) -> anyhow::Result<()>
 where
     S: futures_util::Sink<Message> + Unpin,
 {
-    let Some(generation) = turn.begin(up) else {
+    let Some(generation) = turn.begin(up, source) else {
         return Ok(());
     };
     if futures_util::SinkExt::send(

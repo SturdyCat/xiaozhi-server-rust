@@ -1,23 +1,25 @@
 //! [`super`]（`[wakeup]` 唤醒问候语）的回归测试。
 //!
-//! 两条主线：**默认关闭必须零行为变化**，以及**配置矛盾必须被拦下并给出修法**
-//!（空问候语、过长问候语）。后者是本仓库最忌讳的静默失败面。
+//! 两条主线：**默认开启即开箱可用**（产品决策：问候语是标准体验，不需要的用户显式关闭），
+//! 以及**配置矛盾必须被拦下并给出修法**（空问候语、过长问候语）。后者是本仓库最忌讳的
+//! 静默失败面。
 
 use super::*;
 
 #[test]
-fn 默认关闭且不问候() {
+fn 默认开启且问候() {
     let c = WakeConfig::default();
     assert!(
-        !c.enabled,
-        "默认必须关闭（否则升级即改变所有部署的唤醒行为）"
+        c.enabled,
+        "默认必须开启（产品决策：唤醒问候是「开机即用」的标准体验；不需要的用户显式关闭）"
     );
     assert_eq!(c.greeting, "我在");
     assert!(c.persist, "默认允许落盘复用（启用后才有意义）");
-    assert!(!c.active(), "关闭时不得问候");
+    assert!(c.active(), "默认配置必须真的会问候");
 
     let g = WakeGreeting::new(&c);
-    assert!(!g.active());
+    assert!(g.active());
+    assert_eq!(g.text(), "我在", "单句池恒返回它");
 }
 
 #[test]
@@ -101,7 +103,7 @@ fn signature_覆盖全部行为项() {
     let base = WakeConfig::default().signature();
     for changed in [
         WakeConfig {
-            enabled: true,
+            enabled: false,
             ..Default::default()
         },
         WakeConfig {

@@ -124,8 +124,12 @@ fn end_session_backward_compat_short_hit() {
 
 #[test]
 fn end_session_long_utterance_passes_to_llm() {
-    // command 关闭时，连退下都不该拦。
-    let eng = NluEngine::new(&CommandConfig::default(), &NluConfig::default());
+    // command 显式关闭时，连退下都不该拦（默认已启用=标准行为；这里验证关闭态语义）。
+    let cmd_off = CommandConfig {
+        enabled: false,
+        ..Default::default()
+    };
+    let eng = NluEngine::new(&cmd_off, &NluConfig::default());
     assert_eq!(eng.parse("退下"), None);
 
     // contains 模式下，长句含指令词仍被长度闸门挡住（避免误断会话）。
@@ -148,10 +152,18 @@ fn unknown_intent_returns_none() {
 
 #[test]
 fn inactive_engine_never_matches() {
-    // command 关闭 且 无自定义意图 → 完全不拦。
+    // command 显式关闭 且 无自定义意图 → 完全不拦。
     // 「是否有技能可拦」由 `SkillRegistry::active`（目录非空）判定；引擎层的可观测契约：
     // 全关时任何文本都不命中（包括高危的 end_session 词）。
-    let eng = NluEngine::new(&CommandConfig::default(), &NluConfig::default());
+    let cmd_off = CommandConfig {
+        enabled: false,
+        ..Default::default()
+    };
+    let nlu_off = NluConfig {
+        enabled: false,
+        ..NluConfig::default()
+    };
+    let eng = NluEngine::new(&cmd_off, &nlu_off);
     assert_eq!(eng.parse("退下"), None);
     assert_eq!(eng.parse("把卧室的灯关闭"), None);
 }

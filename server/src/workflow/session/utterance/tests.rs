@@ -1,6 +1,6 @@
 use super::*;
-use crate::workflow::downlink::poll_abort;
 use crate::plugins::vad::{pool::VadPool, VadEngine};
+use crate::workflow::downlink::poll_abort;
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc,

@@ -5,6 +5,7 @@
 - UI 修改前查仓库 Kuikly 技能与官方组件；优先复用既有组件层，不手搓官方已有的 Switch、AlertDialog、Tabs/PageList 或 Button。
 - commonMain 管理台跨端复用，web 与 macOS 共用单一 `@Page("admin")` 壳（原 macOS 双壳 AdminShell 已废除，平台差异走 AdminPlatform expect/actual）；麦克风/Opus 语音测试只在 macosArm64Main 与 macOS 原生桥，不把测试依赖带进 Web/Android/iOS/OHOS。
 - Web 双 bundle：shared 持有 JS 目标产业务包 nativevue2.js，h5App 壳产 h5App.js，入口先业务后壳。不要移走 shared 的 JS 目标。
+- Web 管理台文本须可划选复制：h5App [Main](<apps/h5App/src/jsMain/kotlin/com/xiaozhi/admin/Main.kt>) 设 `KuiklyProcessor.preventDefaultSelect = false`（渲染器默认在桌面浏览器把 Scroller 内 selectstart 全部拦截，整页只剩 Scroller 外的顶部标题可选）；drag 拦截保持 true 防 HTML5 原生拖拽卡死 PageList，不要回退。
 - 渲染器坐标/版本以[Gradle 配置](<apps/h5App/build.gradle.kts>)与[版本配置](<gradle.properties>)为准；升级同步根 buildscript，保留[JS 依赖锁](<kotlin-js-store/yarn.lock>)。
 - 不设 PREFER_SETTINGS，不加入多余项目级 repositories，避免丢 Kotlin/JS 自动注入的 Node 下载源。
 

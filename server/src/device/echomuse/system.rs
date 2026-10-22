@@ -40,8 +40,14 @@ pub(super) fn routes() -> axum::Router<Arc<Engines>> {
         .route("/api/echomuse/devices/{id}/system/reboot", post(reboot))
 }
 
-/// All system endpoints are opt-in: an empty default admin token must not make
-/// root operations accessible to arbitrary LAN clients, even with device auth.
+/// 系统操作鉴权（产品决策：**局域网默认可管理**）：
+///
+/// - `server.expected_token` 为空（默认）→ 管理台免 token 直接可用（[`admin::gate`] 放行）；
+///   配置了 token 即**收紧**为必须鉴权（`?token=` / Bearer）——这就是"关闭默认可管理"的开关，
+///   不再要求双 token 都非空才允许系统操作（旧口径会 503 并提示配置双 token，已按局域网
+///   默认可管理的语义移除）。
+/// - 设备侧继续看 `echomuse.token`（空 = 局域网信任设备；非空 = 设备必须带 `X-Em-Token`），
+///   与 shell/BLE 闸门同一口径。
 fn system_gate(
     engines: &Engines,
     headers: &HeaderMap,
@@ -50,9 +56,6 @@ fn system_gate(
 ) -> Result<(), Response> {
     if let Some(r) = admin::gate(engines, headers, query) {
         return Err(r);
-    }
-    if engines.config.server.expected_token.is_empty() || engines.config.echomuse.token.is_empty() {
-        return Err(ShellError::MissingToken.response());
     }
     shell::approved_emos(registry::global(&engines.config), id).map_err(|e| e.response())?;
     let Some((ctl, live)) = super::hub_live(id).filter(|(c, _)| !c.is_closed()) else {

@@ -114,7 +114,7 @@ async fn owning_data_restore_rearms_capture_but_old_restore_cannot_cancel_new_co
     let (up, mut rx) = mpsc::unbounded_channel();
     // Use the same captured LiveControl that production data_loop uses.
     let mut sink = futures_util::sink::drain::<axum::extract::ws::Message>();
-    super::turn::start_turn(&old.management.turn, &mut sink, &up)
+    super::turn::start_turn(&old.management.turn, &mut sink, &up, "action 键")
         .await
         .unwrap();
     rx.try_recv().unwrap();
@@ -122,7 +122,7 @@ async fn owning_data_restore_rearms_capture_but_old_restore_cannot_cancel_new_co
     hub_restore_data(id, old.data_rx, &old.data_tx);
     let again = hub_claim_data(id).unwrap();
     assert!(Arc::ptr_eq(&old.management, &again.management));
-    super::turn::start_turn(&again.management.turn, &mut sink, &up)
+    super::turn::start_turn(&again.management.turn, &mut sink, &up, "action 键")
         .await
         .unwrap();
     assert!(matches!(rx.try_recv().unwrap(), IncomingFrame::Text(t) if t.contains("detect")));
@@ -131,14 +131,14 @@ async fn owning_data_restore_rearms_capture_but_old_restore_cannot_cancel_new_co
     let _new_ctl = insert_online(id);
     let fresh = hub_claim_data(id).unwrap();
     assert!(!Arc::ptr_eq(&again.management, &fresh.management));
-    super::turn::start_turn(&fresh.management.turn, &mut sink, &up)
+    super::turn::start_turn(&fresh.management.turn, &mut sink, &up, "action 键")
         .await
         .unwrap();
     rx.try_recv().unwrap();
     rx.try_recv().unwrap();
     // Stale data claim cannot clear replacement's turn or return its receiver.
     hub_restore_data(id, again.data_rx, &again.data_tx);
-    super::turn::start_turn(&fresh.management.turn, &mut sink, &up)
+    super::turn::start_turn(&fresh.management.turn, &mut sink, &up, "action 键")
         .await
         .unwrap();
     assert!(rx.try_recv().is_err());

@@ -70,8 +70,10 @@ pub const DEFAULT_MAX_CHARS: usize = 5;
 /// `[command]` 段：语音指令闸门的配置。
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct CommandConfig {
-    /// 总开关。默认 **false**：不启用时行为与加本插件之前完全一致（零开销、零行为变化）。
-    #[serde(default)]
+    /// 总开关。默认 **true**：语音指令是「开机即用」的标准行为（说「退下/闭嘴/关闭」即
+    /// 退出聆听，不必等 LLM 回复）；不需要的用户可显式改为 false——关闭时零开销、
+    /// 行为与加本插件之前完全一致。
+    #[serde(default = "default_true")]
     pub enabled: bool,
     /// 指令词表（归一化后比较，重复项在 [`Self::normalize`] 里去掉）。
     #[serde(default = "default_keywords")]
@@ -94,13 +96,17 @@ pub struct CommandConfig {
 impl Default for CommandConfig {
     fn default() -> Self {
         CommandConfig {
-            enabled: false,
+            enabled: true,
             keywords: default_keywords(),
             match_mode: MatchMode::Exact,
             max_chars: DEFAULT_MAX_CHARS,
             reply: default_reply(),
         }
     }
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl CommandConfig {

@@ -8,8 +8,8 @@ use super::*;
 use crate::workflow::downlink::reservoir::DownlinkItem;
 use crate::workflow::downlink::{new_reservoir, DownlinkPacer};
 use crate::workflow::protocol::BinVersion;
-use crate::workflow::session::SessionParams;
 use crate::workflow::protocol::{IncomingFrame, Transport};
+use crate::workflow::session::SessionParams;
 
 fn params(buffer_ms: u32, start_ms: u32, start_max_ms: u32) -> SessionParams {
     SessionParams {

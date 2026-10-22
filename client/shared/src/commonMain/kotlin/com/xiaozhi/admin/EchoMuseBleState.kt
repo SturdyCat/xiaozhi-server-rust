@@ -130,7 +130,7 @@ class EchoMuseBleState(scope: PagerScope) {
             !capable -> "设备未声明 ble_connect 能力，不能使用蓝牙代理"
             sessionId.isEmpty() -> "缺少当前 control session_id：请更新服务端并刷新列表；禁止危险写入"
             !savedEnabled || !savedConnections -> "每设备 BLE 开关尚未同时开启；可读取广播/状态，GATT 不可用"
-            else -> "需服务端开启 echomuse.ble_proxy 并配置管理/设备令牌；在线仅指控制连接存在"
+            else -> "需服务端开启 echomuse.ble_proxy；在线仅指控制连接存在"
         }
         if (row == null) target = ""
     }
@@ -340,7 +340,7 @@ class EchoMuseBleState(scope: PagerScope) {
                     409 -> "会话已变化、设备离线、BLE设置未启用或data链路不可用；刷新列表后重新操作"
                     422 -> "设备未声明 ble_connect 能力，或参数不受支持"
                     429 -> "设备已有 BLE 请求正在执行，请等待后重试"
-                    503 -> "BLE代理需非空 server.expected_token 与 echomuse.token，并开启 ble_proxy"
+                    503 -> "BLE 代理控制连接不可用，请唤醒设备后重试"
                     504 -> "BLE请求超时，未确认执行结果；先查询槽位/读回，勿盲目重复写入"
                     else -> "BLE请求失败 HTTP $code：${data.text("error").ifEmpty { errorMsg }}"
                 }

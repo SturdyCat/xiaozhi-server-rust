@@ -10,14 +10,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::observability::events::{TurnId, TurnTrace};
+use crate::plugins::prompt::TurnPrompt;
 use crate::workflow::downlink::{
     drain_reservoir, new_reservoir, send_tts_state, spawn_reservoir_filler,
 };
-use crate::observability::events::{TurnId, TurnTrace};
 use crate::workflow::pipeline::prefetch::{PreparedSentence, SentenceSource};
 use crate::workflow::protocol::ServerMessage;
 use crate::workflow::protocol::Transport;
-use crate::plugins::prompt::TurnPrompt;
 
 use super::producer::{spawn_llm_producer, LlmProducer};
 use super::{send_text, Session, FALLBACK_REPLY};
@@ -344,9 +344,12 @@ impl<'a, T: Transport> Session<'a, T> {
                 interrupted,
                 audio_ms,
             });
+        // 对话内容入日志（助手侧）：回复正文直接进默认 info 档——用户排障最关心的
+        // "下发了什么"不用再翻管理页（打断/取消轮也照实打印，正文为空则省略）。
+        let reply = llm_out.text.trim();
         tracing::info!(
             turn,
-            "session {session_id} 本轮完成：耗时 {}ms / 音频 {audio_ms}ms（{frames_total} 帧）/ LLM 输出 {} 字 / {} 个工具调用，下发 {sentences_done} 句{}",
+            "session {session_id} 回复（耗时 {}ms / 音频 {audio_ms}ms / LLM {} 字 / 工具 {} 个，下发 {sentences_done} 句{}）{}",
             t0.elapsed().as_millis(),
             llm_out.text.chars().count(),
             //取消轮恒为 0（引擎按取消契约丢弃，见 `LlmTurnResult`）：这里只反映"真正要执行的工具调用"。
@@ -355,6 +358,11 @@ impl<'a, T: Transport> Session<'a, T> {
                 "（被打断）"
             } else {
                 ""
+            },
+            if reply.is_empty() {
+                "：".to_string()
+            } else {
+                format!("：{reply}")
             }
         );
         if !interrupted && !llm_out.text.trim().is_empty() {
@@ -497,7 +505,9 @@ impl<'a, T: Transport> Session<'a, T> {
     ) {
         let lease = self.tts_lease.clone();
         let params = self.params;
-        let download = crate::workflow::pipeline::prefetch::DownloadBudget::new(self.params.download_buffer_ms);
+        let download = crate::workflow::pipeline::prefetch::DownloadBudget::new(
+            self.params.download_buffer_ms,
+        );
         // 首个非缓存句的首个 PCM 分片 → mark_tts_first_pcm（first-only 用原子标志，
         // 避免每分片加锁；缓存命中句不走合成回调，天然不触发——与"缓存轮该阶段为
         // None"的口径一致）
