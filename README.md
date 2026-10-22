@@ -83,8 +83,8 @@ curl http://127.0.0.1:8000/api/health              # => {"status":"ok",...}
 | [`docs/architecture.md`](<docs/architecture.md>) | 模块划分、会话流水线、协议设计、部署架构与扩展指引 |
 | [`docs/README.md`](<docs/README.md>) | 文档索引：功能、配置、协议、管理台与模块维护入口 |
 | [`server/config.example.toml`](<server/config.example.toml>) | 全部配置字段的行内注释（权威） |
-| [`docs/overall-implementation-plan.md`](<docs/overall-implementation-plan.md>) | 路线图与交付状态 |
-| [`docs/p1-features-prd.md`](<docs/p1-features-prd.md>) | 本期功能需求与验收标准 |
+| [`docs/plans/overall-implementation-plan.md`](<docs/plans/overall-implementation-plan.md>) | 路线图与交付状态 |
+| [`docs/plans/p1-features-prd.md`](<docs/plans/p1-features-prd.md>) | 本期功能需求与验收标准 |
 
 ---
 

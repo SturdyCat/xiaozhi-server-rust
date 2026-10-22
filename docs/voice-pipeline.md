@@ -1,6 +1,6 @@
 # 语音主流程重组、节点测试与公共 UI
 
-> 当前实施记录。信息架构和接口已接线；最终验证状态见末节，不将编译、合成接口响应或测试夹具等同于模型/真机验收。旧 UI 设计记录保留在[历史文档](<admin-ui-design.md>)。
+> 当前实施记录。信息架构和接口已接线；最终验证状态见末节，不将编译、合成接口响应或测试夹具等同于模型/真机验收。旧 UI 设计记录保留在[历史文档](<designs/admin-ui-design.md>)。
 
 ## 1. 主流程是入口，不是插件平铺
 
@@ -35,14 +35,14 @@
 
 ### 保存态快照与 API
 
-[测试服务](<../server/src/app/bench_api.rs>)从 SQLite `ConfigStore` 取一个保存态快照及字符串 revision；不从启动配置或磁盘 TOML 回退，不保存、发布生产引擎、写入历史、写记忆或发送设备动作。
+[测试服务](<../server/src/benchmark/mod.rs>)从 SQLite `ConfigStore` 取一个保存态快照及字符串 revision；不从启动配置或磁盘 TOML 回退，不保存、发布生产引擎、写入历史、写记忆或发送设备动作。
 
 - `GET /api/test/capabilities`：`source`、`revision`、动作可用性/原因/就绪口径/输入类型、样本目录和资源边界。`configured` 仅表示允许调用，不等于已推理成功。
 - `POST /api/test/run`：稳定 `action_id`、可选 `text`/`sample_id`/受限 PCM16、`expected_revision`。不接收任意路径/URL，不接受草稿或设备 overlay 冒充已保存快照。
 - 结果保留阶段原有字段，并附 `request_id`、`action_id`、`source`、`revision`、`context_mode`、阶段数组和明确错误码。未知状态不能升级成成功。
 - 文本串联显式跳过 VAD/ASR；本地级联预览标为 `pipeline_preview`，不是生产托管全链路的复刻。
 - 旧 `/api/test/{llm,tts,vad}` 与模型目录保留；请求级兼容覆盖只影响本次调用，并用不同 `source` 说明，公共新面板不发送这些覆盖。
-- 旧、新测试 HTTP 端点均经过同一管理鉴权，不因「只是测试」开放模型资源。精确上限、请求形状与样本来源见[样本和测试契约](<node-test-samples.md>)及[契约实现](<../server/src/app/bench_api/contracts.rs>)。
+- 旧、新测试 HTTP 端点均经过同一管理鉴权，不因「只是测试」开放模型资源。精确上限、请求形状与样本来源见[样本和测试契约](<node-test-samples.md>)及[契约实现](<../server/src/benchmark/contracts.rs>)。
 
 提供方首 token/首 PCM、socket 完成写入和设备真正播放是三个不同观测点。公共面板标明实际测量范围，不把合成完成说成播放成功。
 
@@ -66,9 +66,9 @@
 
 SQLite 与注册表仍是配置和热生效元数据的唯一权威。草稿只维护一次，密钥 presence/空白不发送语义不变；overlay 仍提交白名单差量，保存不会覆盖基线。
 
-[TTS 引擎租约](<../server/src/engine/tts.rs>)将实际实例、构造配置、指纹和 generation 一起发布；失败或过期构建不能发布未经构建的身份。会话和缓存取实际租约，而非最新请求配置。语言模型按 generation/语言单飞构建，不在全局锁内阻塞构造；失败可重试。
+[TTS 引擎租约](<../server/src/runtime/tts.rs>)将实际实例、构造配置、指纹和 generation 一起发布；失败或过期构建不能发布未经构建的身份。会话和缓存取实际租约，而非最新请求配置。语言模型按 generation/语言单飞构建，不在全局锁内阻塞构造；失败可重试。
 
-[语音段处理](<../server/src/app/session/utterance.rs>)区分 Speech 与 NoSpeech：前者 flush/reset 后识别，后者丢弃/reset，不把噪声或旧残留送 ASR。EchoMuse 显式结束后重备下一轮，重复结束幂等、旧 control/data 代际不能结束新轮次。ESP 协议边界保持独立。
+[语音段处理](<../server/src/workflow/session/utterance.rs>)区分 Speech 与 NoSpeech：前者 flush/reset 后识别，后者丢弃/reset，不把噪声或旧残留送 ASR。EchoMuse 显式结束后重备下一轮，重复结束幂等、旧 control/data 代际不能结束新轮次。ESP 协议边界保持独立。
 
 播放场景配置是独立 `[playback]`，输出节点复用[公共播放配置卡](<../client/shared/src/commonMain/kotlin/com/xiaozhi/admin/ConfigPlaybackCard.kt>)。交互保持既有协商与起播策略，播报只加深有上限的服务端起播蓄水，不扩充固件队列。具体生效档位取服务端 schema，不在客户端另建热配置表。
 

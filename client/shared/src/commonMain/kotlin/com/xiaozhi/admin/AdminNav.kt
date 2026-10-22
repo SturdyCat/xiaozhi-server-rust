@@ -34,9 +34,10 @@ class NavDescriptor(
 /** 管理台一级导航（order 升序即展示顺序）。 */
 object AdminNav {
 
-    /** 侧边栏分组标题（P1-4）：项数多了以后按"观测 / 配置"两段分区，渲染时 group 变化处插标题。 */
+    /** 侧边栏分组标题（P1-4）：项数多了以后按"观测 / 配置 / 存储"分段，渲染时 group 变化处插标题。 */
     const val GROUP_OBSERVE = "观测"
     const val GROUP_CONFIG = "配置"
+    const val GROUP_STORAGE = "存储"
 
     val all: List<NavDescriptor> = listOf(
         // order 以 10 为步长：留出插入空间，避免每次新增都要重排既有值
@@ -51,6 +52,8 @@ object AdminNav {
         NavDescriptor("usage", 40, "用量", GROUP_OBSERVE),
         NavDescriptor("metrics", 45, "延迟", GROUP_OBSERVE),
         NavDescriptor("config", 50, "语音流程与配置", GROUP_CONFIG),
+        // 文件（服务端存储目录：新建/上传/删除；EchoMuse 自定义唤醒词模型放 oww-models/）
+        NavDescriptor("files", 60, "文件", GROUP_STORAGE),
     )
 
     /** 默认进入主流程；设备、运行观测与基础设施仍保留稳定导航 ID。 */

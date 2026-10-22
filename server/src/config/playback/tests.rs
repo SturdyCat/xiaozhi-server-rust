@@ -22,8 +22,8 @@ fn normalize_is_bounded_and_idempotent() {
 
 #[test]
 fn policy_is_session_pinned_and_never_expands_reservoir_or_device_queues() {
-    use crate::app::audio::media::AudioCodec;
-    use crate::app::session::SessionParams;
+    use crate::media::media::AudioCodec;
+    use crate::workflow::session::SessionParams;
     let mut cfg = crate::config::Config::default();
     cfg.audio.downlink_buffer_ms = 800;
     cfg.audio.downlink_buffer_start_ms = 400;

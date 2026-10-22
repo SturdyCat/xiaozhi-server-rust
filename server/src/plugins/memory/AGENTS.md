@@ -11,14 +11,14 @@
 - RAG 后台重建文档索引，不阻塞对话，零 embedding/零外网；索引数据与对话表分离。
 - db_path 必须落可写持久卷。当前工程与 DSH 共库兼容尚未验收，不能由“设计同 schema”推断可直接共库读写。
 
-回归：[记忆测试](<tests.rs>)。集成、尽调与实施路线见[人格与记忆集成](<../../../../docs/soul-and-graph-memory-plan.md>)。
+回归：[记忆测试](<tests.rs>)。集成、尽调与实施路线见[人格与记忆集成](<../../../../docs/designs/soul-and-graph-memory-plan.md>)。
 
 ---
 
 ## 记忆数据流、存储与召回设计（历史记录）
 
 > **历史设计 / 实施记录**：由原《人格与图记忆》长文按职责抽取，保留原章节编号及当时的结论，不代表所有提案均已落地。
-> 原章节中的 `§N` 请通过[完整章节索引](<../../../../docs/soul-and-graph-memory-plan.md>)定位；当前行为先读本文件上半部分、源码与测试。
+> 原章节中的 `§N` 请通过[完整章节索引](<../../../../docs/designs/soul-and-graph-memory-plan.md>)定位；当前行为先读本文件上半部分、源码与测试。
 > 下文 §5.6 的配置示例是设计稿，实际字段以 `server/config.example.toml` 与 `GET /api/config/schema` 为准。
 
 ## 5. 「记忆」（graph memory）设计
@@ -45,7 +45,7 @@ pub fn build_memory(cfg: &MemoryConfig) -> anyhow::Result<Arc<dyn MemoryProvider
 
 - 默认 `MemoryProvider = NoopMemory`（`[memory].enabled=false`），**零成本、零依赖**，与今天行为一致。
 - `Engines` 增加 `memory: Arc<dyn MemoryProvider>` + `memory_sig: RwLock<String>`；`Engines::refresh_memory_from_disk()` 复制 TTS 范式。
-- 磁盘 IO/CPU 密集部分必须 `spawn_blocking` 隔离（`engine.rs:1-19` 的线程预算铁律）。
+- 磁盘 IO/CPU 密集部分必须 `spawn_blocking` 隔离（`runtime/mod.rs:1-19` 的线程预算铁律）。
 
 ### 5.2 数据流（关键路径 vs 后台路径）
 
@@ -178,13 +178,13 @@ timeout_s = 30
 ## 纯存储后端与注册表设计
 
 > **历史设计 / 实施记录**：由原长文按职责抽取，保留原章节编号及当时的结论，不代表所有提案均已落地。
-> 原章节中的 `§N` 请通过[完整章节索引](<../../../../docs/p1-round1-design.md>)定位；当前行为先读本目录维护文档与源码。
+> 原章节中的 `§N` 请通过[完整章节索引](<../../../../docs/plans/p1-round1-design.md>)定位；当前行为先读本目录维护文档与源码。
 
 ### 1.2 P1-7 记忆多后端注册表
 
 #### 1.2.1 设计目标与不变量
 
-- `MemoryProvider` trait（`memory/mod.rs:60-85`）**一行不改**——保住 NoopMemory/GraphMemory 两个既有实现与 `refresh_memory`（engine.rs:283-327）的热切换契约；
+- `MemoryProvider` trait（`memory/mod.rs:60-85`）**一行不改**——保住 NoopMemory/GraphMemory 两个既有实现与 `refresh_memory`（runtime/mod.rs:283-327）的热切换契约；
 - `[memory].engine` 保持闭枚举口径：未知值反序列化即报错（但报错文案要中文化，见 1.2.3）；
 - 默认零成本契约不破：不写 `engine` → `graph`；`enabled=false`（默认）→ `NoopMemory`；
 - graph 与 store 共用同一 `db_path`，切来切去数据不丢、互不污染；
@@ -320,8 +320,8 @@ pub const MEMORY_STORE: PluginDescriptor = PluginDescriptor {
 **兼容性核实结论（均已对代码逐条确认）**：
 
 - `unknown_engine_of`：`impls_of(Memory)` = {graph, store}，engine="store" 命中；"none" 的合法停用特判（mod.rs:485-488）保留；
-- `PluginHost::boot` 步骤 3（`build_optional(Memory)`，host.rs:250-260）：按 selected 找到 store 描述符 → validate → build → `Built::Memory`，**engine.rs 零改动**；
-- `refresh_memory`（engine.rs:283-327）：`active_impl` 找到 `memory.store` → validate → 签名比对（`sig_memory` = `cfg.memory.signature()` = 全量 serde，含 engine → 必不相等）→ **`build_memory` 分发**（engine.rs:309 直接调 `crate::plugins::memory::build_memory`，不走 `d.build`——工厂分发正好是唯一收口点，两处共用）→ RwLock 替换 → `mark_capability` 标 memory.store；
+- `PluginHost::boot` 步骤 3（`build_optional(Memory)`，host.rs:250-260）：按 selected 找到 store 描述符 → validate → build → `Built::Memory`，**runtime/mod.rs 零改动**；
+- `refresh_memory`（runtime/mod.rs:283-327）：`active_impl` 找到 `memory.store` → validate → 签名比对（`sig_memory` = `cfg.memory.signature()` = 全量 serde，含 engine → 必不相等）→ **`build_memory` 分发**（runtime/mod.rs:309 直接调 `crate::plugins::memory::build_memory`，不走 `d.build`——工厂分发正好是唯一收口点，两处共用）→ RwLock 替换 → `mark_capability` 标 memory.store；
 - plan/`/api/plugins`：memory capability phase = 两实现取最坏（store 选中时 graph=Disabled、store=Active → capability Active）；
 - 会话侧 `spawn_memory_write`（reply.rs:82-120）：store 下 record 落库 → `extract_pending(1)` 返回默认值（`o.attempted == 0`，不进日志分支）→ `maintain(periodic)` 按 `maintenance_interval` 周期跑 retention——**链路一行不改**；
 - `GET /api/memory/status`（ws/memory.rs:26-57）：`stats().engine == "store"` 自动出现（PRD 验收 6 后半句），`config.engine` 摘要同源。

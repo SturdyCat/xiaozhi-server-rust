@@ -5,7 +5,7 @@
 //! VAD 切出语音段后逐段送入识别（非 `OnlineRecognizer` 流式）。
 //!
 //! ⚠️ [`AsrEngine::recognize`] 是**同步阻塞的 CPU 密集调用**（SenseVoice 推理）。
-//! 调用方（[`crate::app::session`]）必须用 `tokio::task::spawn_blocking` 隔离，
+//! 调用方（[`crate::workflow::session`]）必须用 `tokio::task::spawn_blocking` 隔离，
 //! 否则独占 tokio worker，期间同 runtime 的其他会话/HTTP 全部卡死。
 
 #[cfg(feature = "sherpa")]
@@ -64,7 +64,7 @@ impl AsrConfig {
     }
     pub fn normalize(&mut self) {
         self.engine = self.engine_id();
-        // 0 许可会把识别永久堵死，clamp ≥ 1（见 app::inference 模块注释）。
+        // 0 许可会把识别永久堵死，clamp ≥ 1（见 workflow::pipeline::inference 模块注释）。
         self.max_concurrent = self.max_concurrent.max(1);
     }
 }
@@ -92,7 +92,7 @@ fn default_provider() -> String {
     "cpu".into()
 }
 
-/// `[asr].max_concurrent` 默认 1（推理闸门许可数，见 `app::inference`）。
+/// `[asr].max_concurrent` 默认 1（推理闸门许可数，见 `workflow::pipeline::inference`）。
 fn default_one() -> u32 {
     1
 }

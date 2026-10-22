@@ -36,7 +36,7 @@ impl PlaybackConfig {
     }
     /// Only startup gating changes; reservoir capacity and device queue safety
     /// never grow as a side effect of selecting announcement playback.
-    pub fn apply(&self, params: &mut crate::app::session::SessionParams) {
+    pub fn apply(&self, params: &mut crate::workflow::session::SessionParams) {
         if self.mode == PlaybackMode::Announcement {
             params.downlink_buffer_start_ms =
                 self.announcement_start_ms.min(params.downlink_buffer_ms);

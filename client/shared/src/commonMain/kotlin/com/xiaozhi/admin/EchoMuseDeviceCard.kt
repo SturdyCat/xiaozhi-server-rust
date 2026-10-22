@@ -45,6 +45,7 @@ internal fun ViewContainer<*, *>.echoMuseDeviceCard(
     state: EchoMuseState,
     toast: ToastState,
     ctx: Pager,
+    onOpenModelFiles: () -> Unit = {},
 ) {
     // 自绘等价 groupedCard 的容器（cardBg/radiusLg/1px divider/cardPadding/marginBottom gutter）
     View {
@@ -89,7 +90,7 @@ internal fun ViewContainer<*, *>.echoMuseDeviceCard(
                     flexDirectionColumn()
                     paddingLeft(AdminSpace.md)
                 }
-                echoMusePanel(row, state, toast, ctx)
+                echoMusePanel(row, state, toast, ctx, onOpenModelFiles)
             }
         }
     }
@@ -277,11 +278,14 @@ private fun ViewContainer<*, *>.echoMusePanel(
     state: EchoMuseState,
     toast: ToastState,
     ctx: Pager,
+    onOpenModelFiles: () -> Unit = {},
 ) {
     vif({ state.activeMenuItem(row) == ECHOMUSE_MENU_OVERVIEW }) { echoMuseOverviewPanel(row, state, toast) }
     vif({ state.activeMenuItem(row) == ECHOMUSE_MENU_APPROVE }) { echoMuseApprovePanel(row, state, toast, ctx) }
     vif({ state.activeMenuItem(row) == ECHOMUSE_MENU_WIFI }) { echoMuseWifiPanel(row, state, toast, ctx) }
-    vif({ state.activeMenuItem(row) == ECHOMUSE_MENU_WAKE }) { echoMuseWakeSettings(row.deviceId, state, toast, ctx) }
+    vif({ state.activeMenuItem(row) == ECHOMUSE_MENU_WAKE }) {
+        echoMuseWakeSettings(row.deviceId, state, toast, ctx, onOpenModelFiles)
+    }
     vif({ state.activeMenuItem(row) == ECHOMUSE_MENU_MANAGE }) { echoMuseManagementPanel(row, state, toast, ctx) }
     vif({ state.activeMenuItem(row) == ECHOMUSE_MENU_BLE }) { echoMuseBlePanel(row, state, ctx) }
 }
@@ -408,26 +412,71 @@ private fun ViewContainer<*, *>.echoMuseWifiPanel(
  * 唤醒词设置面板（草稿在 [EchoMuseState]，进入面板时按设备快照重填）。
  *
  * 与 WiFi 不同：本表单**离线也可用**——服务端持久化后设备下次接入自动推送，
- * 202 = 设备在线已即时下发，200 = 已保存待上线。枚举档位下拉（固件协议值），
- * 阈值滑杆 0.05~1、步进 0.05（官方 Slider 无 step，拖动时量化）。
+ * 202 = 设备在线已即时下发，200 = 已保存待上线。枚举档位下拉（固件协议值）。
+ *
+ * 信息面按官方 dashboard.jsx（wilbowes/EchoMuse HEAD e2f2f4e）Wake word 卡移植：
+ * - 「唤醒词检测位置」三档官方文案，shadow 为诊断档、仅当前已处于该档时显示；
+ * - 灵敏度滑杆用官方量程 0.1~0.975、步进 0.025、Precise↔Eager 反向方向，
+ *   轨外存储值把手钉在端点、读数保真（[EchoMuseWakeWord.trackProgress]）；
+ * - 唤醒提示音附官方语义（听到唤醒词播放短促上升音），档位仅开启时显示。
+ *
+ * 唤醒词模型下拉（[EchoMuseWakeWord]）：存储为空也显示设备默认 hey jarvis；
+ * 选项 = 官方四款 + 服务端 `oww-models/` 已上传的自定义模型 + 已存自定义值
+ * （[EchoMuseWakeWord.buildOwwOptions]）。上传 ≠ 安装：设备端 config 对空
+ * owwModel 不生效、设备只认本地已装模型，所以保存恒发非空生效模型名，
+ * 「管理模型文件」入口经 [onOpenModelFiles] 跳「文件」页上传/清理模型。
  */
 private fun ViewContainer<*, *>.echoMuseWakeSettings(
     deviceId: String,
     state: EchoMuseState,
     toast: ToastState,
     ctx: Pager,
+    onOpenModelFiles: () -> Unit = {},
 ) {
     switchRow("响应唤醒词（关闭后按键仍可用）", state.wakeWordEnabled) { state.wakeWordEnabled = !state.wakeWordEnabled }
     dropdownField(
-        "设备本地唤醒识别模式",
+        "唤醒词检测位置",
         { state.owwModes.firstOrNull { it.first == state.owwOnDevice }?.second ?: "未知" },
         { state.owwModes }, { state.owwOnDevice }, { state.owwModeOpen },
         { state.owwModeOpen = !state.owwModeOpen }, { state.owwOnDevice = it },
     )
-    labeledField("唤醒词模型", { state.owwModel }, { state.owwModel = it }, "如 alexa")
+    Text {
+        attr {
+            fontSize(AdminType.caption)
+            color(AdminColors.textTertiary)
+            text(EchoMuseWakeWord.modeNote(state.owwOnDevice))
+        }
+    }
+    dropdownField(
+        "唤醒词模型",
+        { state.owwModelOptions.firstOrNull { it.first == state.owwModel }?.second ?: state.owwModel },
+        { state.owwModelOptions }, { state.owwModel }, { state.owwModelOpen },
+        { state.owwModelOpen = !state.owwModelOpen }, { state.owwModel = it },
+    )
+    Text {
+        attr {
+            fontSize(AdminType.caption)
+            color(AdminColors.textTertiary)
+            text("当前唤醒词：「${EchoMuseWakeWord.displayName(state.owwModel)}」（模型 ${state.owwModel}${if (state.owwModelStored.isBlank()) "，设备默认" else ""}）。官方内置共 4 款：hey jarvis、alexa、hey mycroft、hey rhasspy。")
+        }
+    }
+    Text {
+        attr {
+            fontSize(AdminType.caption)
+            color(AdminColors.textTertiary)
+            text("保存后服务端把 owwModel 随 config 下发，设备立即换用新模型本地评分。设备只认本地已装的模型（开通时已带全部 4 款官方模型）；自定义模型可先上传到服务端 oww-models/ 供这里选择，但上传 ≠ 安装——设备没装过的模型选了也听不到唤醒词，按键仍可唤醒。")
+        }
+    }
+    // 服务端模型文件入口：上传/清理 oww-models/ 下的自定义模型（跳「文件」页对应目录）
+    actionRow {
+        secondaryButton("管理模型文件（oww-models/）", icon = IconToken.Folder) { onOpenModelFiles() }
+    }
 
-    // 灵敏度滑杆：0.05~1，步进 0.05（官方 Slider 无 step，拖动时量化）
-    fieldLabel("唤醒灵敏度阈值（0.05～1，越大越不易误触）")
+    // 灵敏度滑杆：移植官方 dashboard.jsx 量程/步进/方向——左「Precise（阈值高，
+    // 少误触易漏唤）」右「Eager（阈值低，易触发易误触）」，与阈值反向。轨外
+    // 存储值（旧面板可写 0.05 或 1.0）把手钉在端点、读数保持存储值，拖动才
+    // 写入官方量程内的新值（官方 wakeTrackFor 行为）。
+    fieldLabel("唤醒灵敏度（官方量程 0.10～0.975，步进 0.025）")
     View {
         attr {
             flexDirectionRow()
@@ -438,14 +487,14 @@ private fun ViewContainer<*, *>.echoMuseWakeSettings(
             attr {
                 flex(1f)
                 height(28f)
-                currentProgress(state.owwThreshold.toFloat())
+                currentProgress(EchoMuseWakeWord.trackProgress(state.owwThreshold))
                 progressColor(AdminColors.accent)
                 trackColor(AdminColors.divider)
                 thumbColor(AdminColors.accent)
             }
             event {
                 progressDidChanged { p ->
-                    state.owwThreshold = (p * 20).let { kotlin.math.round(it) / 20.0 }.coerceIn(0.05, 1.0)
+                    state.owwThreshold = EchoMuseWakeWord.quantizeTrack(p)
                 }
             }
         }
@@ -455,18 +504,57 @@ private fun ViewContainer<*, *>.echoMuseWakeSettings(
                 width(48f)
                 fontSize(AdminType.caption)
                 color(AdminColors.textSecondary)
-                text((kotlin.math.round(state.owwThreshold * 100) / 100.0).toString())
+                text((kotlin.math.round(state.owwThreshold * 1000) / 1000.0).toString())
             }
+        }
+    }
+    View {
+        attr {
+            flexDirectionRow()
+            marginTop(AdminSpace.xs)
+        }
+        Text {
+            attr {
+                fontSize(AdminType.caption)
+                color(AdminColors.textTertiary)
+                text("Precise（严格）")
+            }
+        }
+        View { attr { flex(1f) } }
+        Text {
+            attr {
+                fontSize(AdminType.caption)
+                color(AdminColors.textTertiary)
+                text("Eager（积极）")
+            }
+        }
+    }
+    Text {
+        attr {
+            fontSize(AdminType.caption)
+            color(AdminColors.textTertiary)
+            marginTop(AdminSpace.xs)
+            text("官方语义：唤醒所需置信度——普通对话会误唤醒就向 Precise 调高，很少响应就向 Eager 调低。上限 0.975 而非 1.0：openWakeWord 分数低于 1.0 即饱和、判定为 score≥阈值，1.0 意味着永不唤醒（官方实测 18,021 帧峰值 0.999）。")
         }
     }
 
     switchRow("唤醒提示音", state.wakeSound) { state.wakeSound = !state.wakeSound }
-    dropdownField(
-        "提示音档位",
-        { state.wakeLevels.firstOrNull { it.first == state.wakeSoundLevel }?.second ?: "未知" },
-        { state.wakeLevels }, { state.wakeSoundLevel }, { state.wakeLevelOpen },
-        { state.wakeLevelOpen = !state.wakeLevelOpen }, { state.wakeSoundLevel = it },
-    )
+    Text {
+        attr {
+            fontSize(AdminType.caption)
+            color(AdminColors.textTertiary)
+            text("听到唤醒词时播放短促上升提示音（官方 wake sound）。")
+        }
+    }
+    // 官方行为：提示音档位只在开关打开时显示
+    vif({ state.wakeSound }) {
+        dropdownField(
+            "提示音档位",
+            { state.wakeLevels.firstOrNull { it.first == state.wakeSoundLevel }?.second ?: "未知" },
+            { state.wakeLevels }, { state.wakeSoundLevel }, { state.wakeLevelOpen },
+            { state.wakeLevelOpen = !state.wakeLevelOpen }, { state.wakeSoundLevel = it },
+        )
+    }
     labeledIntField("麦克风编号（0=中心，0~6）", { state.wakeMic }, { state.wakeMic = it }, "0")
 
     actionRow {

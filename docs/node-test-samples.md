@@ -2,7 +2,7 @@
 
 ## 实现边界
 
-服务端统一入口为[节点测试服务](<../server/src/app/bench_api.rs>)，HTTP 接线为[测试路由](<../server/src/app/ws/bench_api.rs>)。
+服务端统一入口为[节点测试服务](<../server/src/benchmark/mod.rs>)，HTTP 接线为[测试路由](<../server/src/gateway/ws/bench_api.rs>)。
 该服务只诊断 **SQLite 已保存配置**；不更新配置、不刷新/发布生产引擎、不共享设备会话历史、不执行设备动作、不写记忆、不读写成品音频缓存。
 
 - `GET /api/test/capabilities`：只读配置、纯校验与音频模型文件存在性检查；不构造引擎、不联网、不调用会写临时文件的记忆健康探针。
@@ -16,7 +16,7 @@
 
 ## 动作与诚实的结果语义
 
-[能力投影](<../server/src/app/bench_api/capabilities.rs>)覆盖客户端的所有标准及功能节点动作。
+[能力投影](<../server/src/benchmark/capabilities.rs>)覆盖客户端的所有标准及功能节点动作。
 
 | 动作 | 输入及含义 |
 |---|---|
@@ -110,6 +110,6 @@ SOFTWARE.
 
 ## 验证边界
 
-[外置服务回归](<../server/src/app/bench_api/tests.rs>)及[HTTP 回归](<../server/src/app/bench_api/tests/http.rs>)运行真实 SQLite snapshot/共享 orchestrator/实际 Axum 路由，provider 用显式注入 fake；NLU 规则和本地轻量级联复用真实 `SkillRegistry`。这些测试不证明原生模型可加载、真实 TTS 音色可用、设备收到数据或扬声器播放。
+[外置服务回归](<../server/src/benchmark/tests.rs>)及[HTTP 回归](<../server/src/benchmark/tests/http.rs>)运行真实 SQLite snapshot/共享 orchestrator/实际 Axum 路由，provider 用显式注入 fake；NLU 规则和本地轻量级联复用真实 `SkillRegistry`。这些测试不证明原生模型可加载、真实 TTS 音色可用、设备收到数据或扬声器播放。
 
 默认编译测试和 `DOCS_RS=1 cargo check --features sherpa,nlu` 仅是逻辑/类型证据；真实 native link、真实音频推理及 ESP/EchoMuse 设备体验需有模型/原生库的环境单独验收。

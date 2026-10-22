@@ -7,7 +7,7 @@
 //! （入参增量）；`response.completed` 结束。
 //! 非 SSE 回退：响应非 `text/event-stream`（或 `[llm].stream=false`）时整段解析 `output[]`。
 //!
-//! 多轮历史由调用方（[`crate::app::session`]）维护；本模块只负责单次请求。
+//! 多轮历史由调用方（[`crate::workflow::session`]）维护；本模块只负责单次请求。
 //! 异步 HTTP（`reqwest` + `rustls`），不占用 tokio worker 计算线程，无需 `spawn_blocking`。
 //!
 //! ## 超时与失败分类（护栏，见 `docs/plugin-architecture-unification.md` §4.1）
@@ -26,7 +26,7 @@
 //!
 //! 取消**不是故障**：不归入 [`LlmFailure`]、不触发重试（重试一条被用户放弃的请求＝白烧 token）。
 
-use crate::app::sse::SseParser;
+use crate::gateway::sse::SseParser;
 use anyhow::Result;
 use futures_util::StreamExt;
 use serde_json::{json, Value};

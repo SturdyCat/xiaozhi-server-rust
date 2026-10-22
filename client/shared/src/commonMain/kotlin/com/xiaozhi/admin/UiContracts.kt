@@ -49,7 +49,7 @@ enum class OverrideChoice {
 enum class IconToken {
     Save, Delete, Menu, ChevronDown, ChevronUp, ChevronRight, Play, Stop, Refresh,
     Check, Close, Settings, Microphone, Waveform, Text, Intent, Model, Speaker, Info,
-    Wifi, Bluetooth, Power, Copy, Funnel,
+    Wifi, Bluetooth, Power, Copy, Funnel, Folder, Document,
 }
 
 /** Read-only node tests only. Does not replace BLE write/session replay protections. */

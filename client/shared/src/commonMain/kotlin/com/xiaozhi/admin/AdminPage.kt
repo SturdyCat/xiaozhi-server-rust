@@ -83,6 +83,9 @@ class AdminPage : Pager() {
     /** 「OTA 固件」（`GET /api/ota/firmware` + 上传/删除）。 */
     val ota = OtaState(this)
 
+    /** 「文件」（服务端存储目录 `GET /api/files` + 新建/上传/删除）。 */
+    val files = FilesState(this)
+
     /** 顶部 toast（跨端统一实现，见 [ToastHost]）。 */
     val toast = ToastState(this)
 
@@ -138,6 +141,8 @@ class AdminPage : Pager() {
         plugins.load(this, base)
         mcpTools.load(this, base)
         ota.load(this, base, token)
+        files.configureAccess(token, base)
+        files.load(this)
         // 运维面多路数据：并行发出，各自的 loading/loadError 独立（一个端点挂了不影响其他页面）
         stats.load(this, base)
         devices.load(this, base)
@@ -294,6 +299,11 @@ class AdminPage : Pager() {
                                 ctx.toast,
                                 ctx,
                                 isActive = { ctx.selectedSection == "echomuse" },
+                                // 唤醒词面板的「管理模型文件」入口：跳「文件」页的 oww-models/ 目录
+                                onOpenModelFiles = {
+                                    ctx.files.openPath(ctx, OWW_MODELS_DIR)
+                                    ctx.selectedSection = "files"
+                                },
                             )
                         }
                     }
@@ -308,6 +318,9 @@ class AdminPage : Pager() {
                     }
                     vif({ ctx.selectedSection == "metrics" }) {
                         opsScroller { renderOpsMetrics(ctx.metrics, ctx) }
+                    }
+                    vif({ ctx.selectedSection == "files" }) {
+                        opsScroller { renderFilesSection(ctx.files, ctx.toast, ctx) }
                     }
                     vif({ ctx.selectedSection == "config" }) {
                         // Workflow sits at the top of the voice config content area only,

@@ -26,7 +26,7 @@
 - 人格预览 effective 全段 fill，客户端不复制预设合并。能力 enabled 与 phase 分开，异常/降级须显示原因与修复指引。
 - 设备/会话/最近对话/延迟注明进程内口径，online 非心跳，不呈现为完整历史。
 
-本级说明 · [客户端构建](<../../../../../../../AGENTS.md>) · [管理台界面设计与验收记录](<../../../../../../../../docs/admin-ui-design.md>)
+本级说明 · [客户端构建](<../../../../../../../AGENTS.md>) · [管理台界面设计与验收记录](<../../../../../../../../docs/designs/admin-ui-design.md>)
 
 
 ---
@@ -52,6 +52,7 @@
 | 用量 | `GET /api/usage` | 令牌去向、记忆/人格把上下文撑大了多少 |
 | 延迟 | `GET /api/metrics` | 整轮与各段首包延迟 p50/p95、错误率（内存态） |
 | 配置 | `/api/config` 等 | 全部参数 + 预设 + 每设备 overlay + 能力健康卡 + 内联连通性测试 |
+| 文件 | `GET /api/files` + POST mkdir/upload/delete | 服务端存储目录浏览与管理：新建文件夹、上传模型/文件（`oww-models/` 即 EchoMuse 自定义唤醒词模型的存放处）、删除（二次确认，受保护文件拒绝） |
 
 > ⚠️ 设备/会话/对话记录/延迟是**进程内存态**：重启清零、`online` 由会话生命周期派生、对话只留最近若干轮。长期留存请开启 `[memory]`。
 > 单页模式：`?page_name=config`（支持 `&edit_device=<id>` 直接进入某设备个性化编辑）。
@@ -75,12 +76,19 @@
 | `GET .../devices/{id}/system/{info,logs}`、`POST .../system/reboot` | 仅 approved + emos + online；固定日志源 messages/messages_last/last_kmsg_prev/supervisor，重启必须 confirm:true；响应仅确认发送，不能断言重启完成；不提供任意 shell/OTA |
 | `GET .../devices/{id}/ble/{adverts,state}`、`POST .../ble/gatt` | 独立通用 BLE 面板：广播快照/槽位/连接/发现/读/确认写/手动事件；GET 带 session_id 查询、GATT 带 session_id 元数据，三类成功回包严格核对 device_id/session_id；都走 Bearer，客户端超时45s |
 | `GET /api/metrics`、`GET /api/usage` | 延迟大盘 / 令牌用量（内存态） |
+| `GET /api/files?path=`、`POST /api/files/{mkdir,upload,delete}` | 服务端存储目录浏览与管理：列目录（服务端目录优先排序）/ 建目录（409=同名文件占用）/ 原始字节上传（409 需显式覆盖、413 超限）/ 删除（目录递归；data.db 等受保护文件 403）；GET token 走查询串、POST 走 Bearer，错误统一 `{"error":"..."}` |
 
 EchoMuse 实现按职责分为 [列表与配置状态](<EchoMuseState.kt>)（含卡内菜单状态机与管理台 WS 订阅 [AdminRealtime](<AdminRealtime.kt>)）、[设备卡（标题行+卡内左菜单/右面板）](<EchoMuseDeviceCard.kt>)、[页面壳体](<EchoMusePage.kt>)、[管理状态](<EchoMuseManagementState.kt>)、[管理面板](<EchoMuseManagementCard.kt>)、[鉴权与编码](<EchoMuseAccess.kt>)：
 - 进入管理区不自动读设备；加载/失败/操作结果就地呈现，日志与系统输出可滚动及复制诊断内容。断线标历史；列表/详情/runtime 的 `session_id` 是当前 control 的观测身份，变化时清旧请求代际、busy、重启确认并标旧诊断为历史；runtime 仅设备号与会话都匹配时视为当前快照，双空兼容旧服务端、不将空当通配符。
 - `configureAccess(token, base)` 在加载前传入；切 base 或 token 清管理目标和输出，列表/长挂/写操作通过代际丢弃旧连接回包。
 - 系统操作要求服务端同时配置非空 `server.expected_token` 和 `echomuse.token`；web 用 `?token=URL编码后的管理令牌` 进入，不附裸查询参数，不在诊断内容中复制 token；macOS 服务器设置提供密码型管理令牌输入，只保留在当前 Pager 会话，不落 SP/配置。请求凭据由 [AdminAccess](<AdminAccess.kt>)统一读取，不得复用配置草稿 expectedToken；受保护真实服务仍需独立联调。
-- 唤醒设置以固件类型发送：`owwOnDevice=off|shadow|on`、`wakeSoundLevel=quiet|medium|loud`，旧 bool/number 只在读取时迁移（旧数字统一 medium）；阈值 UI 为 0.05～1，保存拒绝非正数；只发送本表单字段，服务端按部分更新合并，保留 BLE 等其他设置。
+- 唤醒设置以固件类型发送：`owwOnDevice=off|shadow|on`、`wakeSoundLevel=quiet|medium|loud`，旧 bool/number 只在读取时迁移（旧数字统一 medium）；阈值滑杆按官方量程 0.1～0.975、步进 0.025、Precise↔Eager 反向（常量与映射在 [EchoMuseWakeWord](<EchoMuseWakeWord.kt>)），轨外历史值读数保真、把手钉端点、拖动才落轨，保存仍拒非正数（服务端 `(0,1]`）；shadow 为官方诊断档、仅当前已处于该档时显示为选项，保存/重填后按当前值重建选项；提示音档位仅开关打开时显示；只发送本表单字段，服务端按部分更新合并，保留 BLE 等其他设置。唤醒词模型显示与选择规则在 [EchoMuseWakeWord](<EchoMuseWakeWord.kt>)（锚定上游默认 `hey_jarvis_v0.1`、官方四款与 display_name 规则）：存储为空即设备默认 hey jarvis 并明示，下拉列官方四款 + 服务端 `oww-models/` 已上传自定义模型 + 已存自定义值（[buildOwwOptions] 纯函数去重），保存恒发非空生效模型名（设备 config 对空 `owwModel` 不生效，恢复默认须显式发默认模型名）。卡片唤醒面板提供「管理模型文件」入口跳「文件」页 `oww-models/` 目录；**上传 ≠ 安装**——设备只认本地已装模型，未安装的模型选了也听不到唤醒词。
+
+「文件」实现按职责分为 [纯逻辑](<FilesModel.kt>)（相对路径校验与服务端同规则镜像、清单解析安全兜底、尺寸/`yyyy-MM-dd HH:mm` 本地时间格式化——零 Kuikly 依赖，由普通 JVM 测试模块 `:adminCoreTests` 直接回归）、[目录状态](<FilesState.kt>)、[页面](<FilesPage.kt>) 与 [平台选文件桥](<UploadFilePicker.kt>)：
+- 写动作只走服务端 POST 端点（`mkdir`/`upload`/`delete`，即 NetworkModule GET/POST 约束下的别名）；GET 把 token 编进查询串、POST 走 Bearer；`{"error":"..."}` 文案就地透出（409 同名不静默覆盖、403 受保护、413 超限）。
+- 删除一律**行内二次确认**（先点武装「再次点击确认删除」，换目录/刷新即复位）；目录删除由服务端递归，受保护文件不给删除按钮。
+- 上传平台矩阵：**web（隐藏 `<input type=file>` + fetch 流式，独立 `window.__xzAdminUploadFile` 槽位）与 macOS（复用 XiaoZhiModule 通用文档选择器 + `httpRequestBinary`，180s 超时）可用；android/ios 回调"当前平台不支持上传"**。选文件桥与 OTA 固件选包同型但完全独立（槽位/字节缓存分离，互不串包）。
+- EchoMuse 设备列表加载成功后顺带静默拉取 `oww-models/` 的 `.onnx` 文件名（`modelFilesRefresh`，失败保持现状），唤醒词下拉据此追加自定义模型。
 
 BLE 独立分为 [纯校验/codec/确认指纹](<EchoMuseBleCodec.kt>)、[请求与状态](<EchoMuseBleState.kt>)、[面板](<EchoMuseBleCard.kt>)：
 - 已批准设备可展开单设备面板；在线、`ble_connect` 和非空当前会话才可请求，GATT 还要求每设备扫描/连接都开启；服务端 `ble_proxy` 与双 token 是额外门控，不能由页面开启。无 session 的旧服务端失败关闭，不复用 emOS runtime 双空兼容策略。
@@ -106,4 +114,4 @@ cd server && ~/.cargo/bin/cargo run --features sherpa -- --config-db ./data/data
 
 ## 本级资料
 
-- [管理台界面设计与验收记录](<../../../../../../../../docs/admin-ui-design.md>)：信息架构、上下文页面、健康与记忆验收的历史记录。
+- [管理台界面设计与验收记录](<../../../../../../../../docs/designs/admin-ui-design.md>)：信息架构、上下文页面、健康与记忆验收的历史记录。

@@ -1,18 +1,18 @@
 # 引擎健康自检维护
 
-[探测实现](<../health.rs>)按配置 plan 产出各能力状态，[宿主](<../host.rs>)聚合并上报，[健康端点](<../../app/ws/health.rs>)只做只读投影。探测只查本地文件与环境，不构建引擎、不请求外网，幂等无副作用；deviation 必须带原因与“怎么修”。回归见[测试](<tests.rs>)。
+[探测实现](<../health.rs>)按配置 plan 产出各能力状态，[宿主](<../host.rs>)聚合并上报，[健康端点](<../../gateway/ws/health.rs>)只做只读投影。探测只查本地文件与环境，不构建引擎、不请求外网，幂等无副作用；deviation 必须带原因与“怎么修”。回归见[测试](<tests.rs>)。
 
 ---
 
 ## 健康自检设计（历史记录）
 
 > **历史设计 / 实施记录**：由原《P1 第一轮设计》长文按职责抽取，保留原章节编号及当时的结论，不代表所有提案均已落地。
-> 原章节中的 `§N` 请通过[完整章节索引](<../../../../docs/p1-round1-design.md>)定位；当前行为先读本文件上半部分、源码与测试。
+> 原章节中的 `§N` 请通过[完整章节索引](<../../../../docs/plans/p1-round1-design.md>)定位；当前行为先读本文件上半部分、源码与测试。
 
 # P1 第一轮增量设计：P1-6 引擎健康自检 + P1-7 记忆多后端注册表
 
 > 作者：架构师 高见远　日期：2026-10-12
-> 上游输入：`docs/p1-features-prd.md` §3.2（P1-6）/ §3.3（P1-7）；`docs/overall-implementation-plan.md` §1 原则约束；`AGENTS.md` 工程约定。
+> 上游输入：`docs/plans/p1-features-prd.md` §3.2（P1-6）/ §3.3（P1-7）；`docs/plans/overall-implementation-plan.md` §1 原则约束；`AGENTS.md` 工程约定。
 > 代码现状已逐一核实（行号见文内），本设计为**增量设计**：不改既有 402 个测试的语义，不动 `MemoryProvider` trait 签名，不动 `Config::load` 核心链路（那是 P1-5 末轮的事）。
 
 ---
@@ -21,7 +21,7 @@
 
 | 项 | P1-6 健康自检 | P1-7 记忆注册表 |
 |---|---|---|
-| 服务端新文件 | `plugins/health.rs`（探测）、`app/ws/health.rs`（端点）+ 两个 tests | `plugins/memory/store_only.rs`（+tests） |
+| 服务端新文件 | `plugins/health.rs`（探测）、`gateway/ws/health.rs`（端点）+ 两个 tests | `plugins/memory/store_only.rs`（+tests） |
 | 服务端改动 | `host.rs`（聚合 helper 提取）、`ws/mod.rs`（路由） | `memory/config.rs`、`memory/mod.rs`、`memory/store.rs`、`memory/types.rs`、`registry/impls.rs`、`registry/mod.rs`、`registry/fields_context.rs` |
 | 前端 | 新 `EngineHealthState.kt` / `EngineHealthCard.kt` + 三壳接线 | `ConfigContextState.kt` / `ConfigSoulMemoryCards.kt` 各加一处 |
 | 新表/新列 | 无 | **无**（`gm_messages.extraction_state` 增加取值 `'stored'`，非 DDL） |
@@ -81,7 +81,7 @@ pub fn probe(cfg: &Config, cap: Capability) -> Option<ProbeReport>
 | Memory | `db_path` 父目录存在且可写（创建 `.health-probe` 临时文件 → 立即删除；`:memory:` 直接 Ok） | `[memory].db_path 所在目录不可写：…。请确认挂载卷权限（docker-compose 的 ./server-data 需可写）。` |
 | Llm / FullChain / Voices / Firmware / Soul / Command / Wake | 无本地探测（凭据/上游连通属配置级，网络探测被验收 6 禁止） | — |
 
-**新文件 `server/src/app/ws/health.rs`**（HTTP handler，薄）：
+**新文件 `server/src/gateway/ws/health.rs`**（HTTP handler，薄）：
 
 - `pub(super) async fn engines_health(State(engines)) -> Response`：
   1. `engines.host.snapshot()` 取**运行期真实状态**（含 boot 失败标记、热切换失败标记）——与 `/api/plugins` 完全同源；
@@ -112,7 +112,7 @@ impl PluginHost {
 
 `capabilities_json` 改为遍历调用该 helper（**行为逐字节不变**，既有测试 `capabilities_json_carries_every_key_the_overview_page_reads` 守护）。
 
-**改动 `server/src/app/ws/mod.rs`**：`mod health;` + 路由 `.route("/api/health/engines", get(health::engines_health))` + 模块注释路由表补一行。（ws/mod.rs 里已有内联 `async fn health()`（:176）——Rust 中函数与模块分属不同命名空间，共存无冲突；为可读性 handler 命名为 `engines_health`。）
+**改动 `server/src/gateway/ws/mod.rs`**：`mod health;` + 路由 `.route("/api/health/engines", get(health::engines_health))` + 模块注释路由表补一行。（ws/mod.rs 里已有内联 `async fn health()`（:176）——Rust 中函数与模块分属不同命名空间，共存无冲突；为可读性 handler 命名为 `engines_health`。）
 
 #### 1.1.4 前端设计
 

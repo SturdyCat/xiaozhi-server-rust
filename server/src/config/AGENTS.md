@@ -19,7 +19,7 @@
 - 新字段同步[配置样例](<../../config.example.toml>)、[注册表元数据](<../plugins/registry/AGENTS.md>)、客户端映射与往返测试；不要在文档复制默认值/热生效表。
 - [overlay](<overlay.rs>)只合并白名单会话参数，生效配置=全局规范化配置⊕设备增量；全局引擎构建不受影响。
 
-本级说明 · [HTTP 契约](<../app/ws/config/AGENTS.md>) · [配置测试](<tests.rs>) · [存储测试](<store/sqlite/tests.rs>)
+本级说明 · [HTTP 契约](<../gateway/ws/config/AGENTS.md>) · [配置测试](<tests.rs>) · [存储测试](<store/sqlite/tests.rs>)
 
 
 ---

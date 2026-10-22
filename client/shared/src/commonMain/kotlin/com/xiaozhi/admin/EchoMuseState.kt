@@ -153,6 +153,8 @@ class EchoMuseState(scope: PagerScope) {
             loading = false
             if (ok) {
                 apply(data)
+                // 顺带拉一次服务端 oww-models/ 的自定义模型清单（失败静默，见 modelFilesRefresh）
+                modelFilesRefresh(ctx)
             } else loadError = "EchoMuse 设备列表加载失败：$reason"
         }
     }
@@ -201,6 +203,34 @@ class EchoMuseState(scope: PagerScope) {
             val online = devices.count { it.online }
             "共 ${devices.size} 台 · $online 台在线"
         }
+
+    // ============================================================
+    // 服务端自定义唤醒词模型（oww-models/，经「文件」页上传）
+    // ============================================================
+
+    /**
+     * 服务端 `oww-models/` 目录里已上传的自定义唤醒词模型（`.onnx` 文件名）。
+     * 获取失败静默保持旧值/空——文件接口不可用（旧服务端/未部署）不应让设备页报错。
+     */
+    var uploadedOwwModels: List<String> = emptyList()
+        private set
+
+    /**
+     * 拉取 `GET /api/files?path=oww-models` 并收集 `.onnx` 文件名（唤醒词下拉选项用，
+     * 见 [EchoMuseWakeWord.buildOwwOptions]）。**刻意安静**：失败只保持现状，
+     * 不置 loadError、不弹 toast——模型清单是增强信息，不是设备管理的依赖。
+     */
+    fun modelFilesRefresh(ctx: Pager, baseUrl: String = base) {
+        getJson(ctx, echoMuseAuthenticatedUrl("$baseUrl/api/files?path=${echoMuseUrlComponent(OWW_MODELS_DIR)}", accessToken)) { ok, data, _ ->
+            if (!ok) return@getJson
+            val arr = data.array("entries") ?: return@getJson
+            uploadedOwwModels = (0 until arr.length()).mapNotNull { i ->
+                val e = arr.optJSONObject(i) ?: return@mapNotNull null
+                val name = e.text("name")
+                if (name.isNotEmpty() && !e.optBoolean("dir", false) && FilesModel.isModelFile(name)) name else null
+            }
+        }
+    }
 
     // ============================================================
     // 卡片内菜单（全局单选：左列菜单 + 右侧内容面板，渲染见 EchoMuseDeviceCard.kt）
@@ -378,18 +408,31 @@ class EchoMuseState(scope: PagerScope) {
     val wakeLevels by scope.observableList<Pair<String, String>>()
 
     init {
-        owwModes.addAll(listOf(
-            "off" to "关闭（off）",
-            "shadow" to "影子识别（shadow，仅观察）",
-            "on" to "启用识别（on）",
-        ))
+        rebuildModeOptions()
         wakeLevels.addAll(listOf(
             "quiet" to "轻柔（quiet）", "medium" to "适中（medium）", "loud" to "响亮（loud）",
         ))
     }
-    var owwModel by scope.observable("")
-    /** 唤醒灵敏度阈值 0~1（越大越不易误触）。 */
-    var owwThreshold by scope.observable(0.5)
+    /**
+     * 模式下拉选项：shadow 为官方诊断档，仅当前值已是 shadow 时显示（官方
+     * dashboard.jsx 同规则）；保存成功或重填草稿后按最新值重建，保证选中项
+     * 总能找到标签（否则下拉显示「未知」）。
+     */
+    private fun rebuildModeOptions() {
+        owwModes.clear()
+        for ((value, label) in EchoMuseWakeWord.buildModeOptions(owwOnDevice)) {
+            owwModes.add(value to label)
+        }
+    }
+    var owwModelOpen by scope.observable(false)
+    /** 唤醒词模型下拉选项：官方四款 + oww-models/ 已上传模型 + 已存自定义值，进面板时重建。 */
+    val owwModelOptions by scope.observableList<Pair<String, String>>()
+    /** 管理面存储的原始 owwModel；空 = 设备默认（hey jarvis），展示时要标出来。 */
+    var owwModelStored by scope.observable("")
+    /** 下拉草稿：恒为生效模型名（存储空时解析为设备默认，见 [EchoMuseWakeWord]）。 */
+    var owwModel by scope.observable(EchoMuseWakeWord.DEFAULT_MODEL)
+    /** 唤醒灵敏度阈值（读数保真：轨外历史值原样保留，滑杆端点钉扎见官方 wakeTrackFor）。 */
+    var owwThreshold by scope.observable(EchoMuseWakeWord.DEFAULT_THRESHOLD)
     var wakeSound by scope.observable(true)
     /** 固件提示音档位（不是输出音量 0～127）。 */
     var wakeSoundLevel by scope.observable("medium")
@@ -406,10 +449,26 @@ class EchoMuseState(scope: PagerScope) {
             "off", "shadow", "on" -> raw.toString()
             else -> "on"
         }
+        rebuildModeOptions()
         owwModeOpen = false
         wakeLevelOpen = false
-        owwModel = s.optString("owwModel", "")
-        owwThreshold = s.optDouble("owwThreshold", 0.5).coerceIn(0.05, 1.0)
+        // 存储空 = 设备默认 hey jarvis（上游 OWW_MODEL 缺省），面板必须显示真实生效值。
+        owwModelStored = s.optString("owwModel", "").trim()
+        owwModel = EchoMuseWakeWord.effectiveModel(owwModelStored)
+        owwModelOpen = false
+        // 官方四款 + oww-models/ 已上传自定义模型 + 已存自定义值（去重），纯函数可测
+        //（EchoMuseWakeWord.buildOwwOptions）。自定义值可点 ≠ 设备已装：上传/选择只是
+        // 管理面配置，设备只认本地已装模型，说明文案保留该警告。
+        owwModelOptions.clear()
+        for ((value, label) in EchoMuseWakeWord.buildOwwOptions(owwModelStored, uploadedOwwModels)) {
+            owwModelOptions.add(value to label)
+        }
+        // 官方读数保真：轨外历史值（旧面板可写 0.05 或 1.0）不静默改写，
+        // 滑杆把把手钉在端点、数值显示存储值，拖动才写入官方量程内的新值。
+        owwThreshold = when (val raw = s.opt("owwThreshold")) {
+            is Number -> raw.toDouble().takeIf { it.isFinite() } ?: EchoMuseWakeWord.DEFAULT_THRESHOLD
+            else -> EchoMuseWakeWord.DEFAULT_THRESHOLD
+        }
         wakeSound = s.optBoolean("wakeSound", true)
         wakeSoundLevel = when (val raw = s.opt("wakeSoundLevel")) {
             "quiet", "medium", "loud" -> raw.toString()
@@ -454,6 +513,8 @@ class EchoMuseState(scope: PagerScope) {
                 val delivered = data?.optBoolean("delivered", false) == true ||
                     data?.optBoolean("queued", false) == true
                 val msg = if (delivered) "设置已保存并排队下发，实际生效请在设备上核对" else "设置已保存，设备下次接入时自动推送"
+                // 模式切到/离开 shadow 后选项集合随当前值变化，按新值重建（官方同规则）。
+                rebuildModeOptions()
                 onDone(true, msg)
             } else {
                 onDone(false, when (code) {

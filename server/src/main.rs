@@ -1,6 +1,6 @@
 //! xiaozhi-server-rust 入口（单二进制、单进程）。
 //!
-//! 启动流程：[`load_config`] 加载配置 → 构建进程级共享引擎 [`crate::engine::Engines`]
+//! 启动流程：[`load_config`] 加载配置 → 构建进程级共享引擎 [`crate::runtime::Engines`]
 //! （ASR/TTS/LLM，模型重、只加载一次）→ 启动 tokio 多线程 runtime（worker 数由
 //! `[server].worker_threads` 控制，默认 2，避免占满低功耗主机）→ `axum::serve` 监听。
 //!
@@ -14,9 +14,14 @@
 //! 环境变量覆盖（**仅影响本次运行，不写回**）：
 //! - `XIAOZHI_ADMIN_DIR`：覆盖 `[server].admin_dir`（Docker 镜像内置 `/app/web` 即此机制）。
 
-mod app;
+mod workflow;
+mod device;
+mod gateway;
 mod config;
-mod engine;
+mod benchmark;
+mod media;
+mod observability;
+mod runtime;
 mod plugins;
 
 #[cfg(test)]
@@ -30,11 +35,11 @@ use tokio::net::TcpListener;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::EnvFilter;
 
-use crate::app::ws::router;
+use crate::gateway::ws::router;
 use crate::config::store::sqlite::SqliteConfigStore;
 use crate::config::store::ConfigStore;
 use crate::config::Config;
-use crate::engine::Engines;
+use crate::runtime::Engines;
 
 fn main() -> Result<()> {
     // 配置在 runtime 构建前加载（worker_threads 需要它）。
@@ -62,10 +67,10 @@ async fn run(config: Config, config_store: Arc<dyn ConfigStore>) -> Result<()> {
     let subscriber = tracing_subscriber::registry()
         .with(filter) // 全局日志采集层：每条 INFO+ 事件进入环形缓冲 + 广播，
         // 供 `GET /api/logs` WS 客户端（macApp / AI 调试）实时读取。
-        .with(crate::app::ws::log_stream::layer())
-        // 时间戳统一本地 `YYYY-MM-DD HH:MM:SS`（app::logtime 是唯一时间出口，
+        .with(crate::gateway::ws::log_stream::layer())
+        // 时间戳统一本地 `YYYY-MM-DD HH:MM:SS`（observability::logtime 是唯一时间出口，
         // /api/logs 日志流与控制台两处同格式；Docker 镜像默认 TZ=Asia/Shanghai）
-        .with(tracing_subscriber::fmt::layer().with_timer(crate::app::logtime::LocalDatetime));
+        .with(tracing_subscriber::fmt::layer().with_timer(crate::observability::logtime::LocalDatetime));
     tracing::subscriber::set_global_default(subscriber)?;
 
     tracing::info!(
@@ -77,7 +82,7 @@ async fn run(config: Config, config_store: Arc<dyn ConfigStore>) -> Result<()> {
     let engines = Engines::new(&config, config_store)?;
     // 延迟/事件聚合（P1-1）：进程最早的订阅者——spawn 越早，broadcast 环形缓冲越不丢
     // 早期事件（LAGGED 只告警；聚合口径是近似值，见 app/metrics 模块注释）。
-    tokio::spawn(crate::app::metrics::subscriber(
+    tokio::spawn(crate::observability::metrics::subscriber(
         engines.metrics.clone(),
         engines.event_bus.subscribe(),
     ));
@@ -85,7 +90,7 @@ async fn run(config: Config, config_store: Arc<dyn ConfigStore>) -> Result<()> {
     match engines.config_store.location() {
         Some(p) => {
             let kind = engines.config_store.backend();
-            if crate::app::ws::config_is_persistent(p) {
+            if crate::gateway::ws::config_is_persistent(p) {
                 tracing::info!("{kind} 配置存放于：{p}（挂载卷上，持久化 ✓）");
             } else {
                 tracing::warn!(
@@ -96,8 +101,8 @@ async fn run(config: Config, config_store: Arc<dyn ConfigStore>) -> Result<()> {
         None => tracing::warn!("配置库路径不可见（location() == None）：配置将无法持久化"),
     }
     // 发音人目录：读盘缓存/离线兜底 + 配置了控制台会话时后台刷新一次（失败非致命）
-    crate::app::voices::init();
-    crate::app::voices::spawn_startup_probe(engines.clone());
+    crate::device::voices::init();
+    crate::device::voices::spawn_startup_probe(engines.clone());
     // 唤醒问候语的音频复用是否可用（"为什么重启后又要重新合成"的第一现场）：
     // 只有加载了配置文件才有落盘目录（与 PUT /api/config 的持久化前提同源）。
     match (engines.hot_audio.is_persistent(), engines.hot_audio.dir()) {
@@ -110,7 +115,7 @@ async fn run(config: Config, config_store: Arc<dyn ConfigStore>) -> Result<()> {
         ),
     }
     // 旧格式遗留（`.hot` 容器 / `managed.json` 登记表）不做自动清理：内容寻址缓存
-    // 永远不会再命中它们，磁盘占用由使用者手动处理（见 `app::hot_audio` 模块文档）。
+    // 永远不会再命中它们，磁盘占用由使用者手动处理（见 `media::hot_audio` 模块文档）。
     // 运行端口落盘（HEALTHCHECK 消费）：镜像 HEALTHCHECK 无法读 SQLite 配置库，
     // 启动时把实际监听端口写到配置库同目录的 `.runtime_port`，健康检查读它——
     // 改 [server].port 后无需再同步改 Dockerfile（读不到文件时健康检查兜底 8000）。
@@ -141,7 +146,7 @@ async fn run(config: Config, config_store: Arc<dyn ConfigStore>) -> Result<()> {
     tracing::info!("xiaozhi-server-rust 监听于 {addr}");
     // 把用户真正要填的连接地址打出来：macApp/设备需要 IP:port（监听永远 0.0.0.0，
     // 打 bind 地址没意义）。IP 无配置项，动态探测部署机默认出口。
-    match crate::app::local_ipv4() {
+    match crate::device::local_ipv4() {
         Some(ip) => tracing::info!(
             "局域网连接地址（macApp / 设备填写）: ws://{ip}:{}",
             config.server.port
@@ -157,17 +162,17 @@ async fn run(config: Config, config_store: Arc<dyn ConfigStore>) -> Result<()> {
     // 端口——上游固件 tcp_peer() 只认远端 8767/8770 的连接为 controller）额外监听
     // 成功则指向专用端口；绑定失败或 plain_port=0 时回退主端口（/em/* 两边都在）。
     if config.echomuse.enabled {
-        let mdns_port = match crate::app::echomuse::listen::dedicated_port(&config.echomuse) {
-            Some(p) => crate::app::echomuse::listen::spawn_dedicated(engines.clone(), p)
+        let mdns_port = match crate::device::echomuse::listen::dedicated_port(&config.echomuse) {
+            Some(p) => crate::device::echomuse::listen::spawn_dedicated(engines.clone(), p)
                 .await
                 .unwrap_or(config.server.port),
             None => config.server.port,
         };
-        crate::app::echomuse::spawn_mdns(mdns_port);
+        crate::device::echomuse::spawn_mdns(mdns_port);
     }
     // 管理客户端发现（常驻、无配置项）：广播 `_xiaozhi-admin._tcp`，macApp 等
     // 非 web 客户端经 Bonjour 浏览后自动连接，免手填 IP（见 app/discovery.rs）。
-    crate::app::discovery::spawn_admin_mdns(config.server.port);
+    crate::device::discovery::spawn_admin_mdns(config.server.port);
     // 设备主动拨回的受限 shell 面必须绑定当前 control 的真实对端地址；
     // ConnectInfo 来自 TCP 连接，不信任可伪造的转发头。
     serve(

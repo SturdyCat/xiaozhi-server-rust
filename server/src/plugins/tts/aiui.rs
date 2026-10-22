@@ -32,7 +32,7 @@ const SCENE_TTS: &str = "IFLYTEK.tts";
 /// 单次合成**活跃**超时（连接 + 收完整段音频）。
 ///
 /// ⚠️ 这是"**上游不给数据**"的预算，**不含**服务端**故意**等待的时间：
-/// 下载缓冲（`app::prefetch::DownloadBudget`）到预算后会在回调里把下载暂停，
+/// 下载缓冲（`workflow::pipeline::prefetch::DownloadBudget`）到预算后会在回调里把下载暂停，
 /// 那是我们主动的流控，不是上游慢。若把它算进总超时，**缓冲越深越容易"合成超时"**
 /// ——表现是长回复中间整句丢失（比断续更难排查）。故用 [`ActiveDeadline`] 记账。
 const TOTAL_TIMEOUT: Duration = Duration::from_secs(30);

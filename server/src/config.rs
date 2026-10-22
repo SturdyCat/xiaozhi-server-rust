@@ -34,7 +34,7 @@
 use serde::{Deserialize, Serialize};
 
 // 引擎子配置段随插件走（定义在各插件 mod.rs），此处转发以维持 `crate::config::*` 路径稳定：
-pub use crate::app::echomuse::EchomuseConfig;
+pub use crate::device::echomuse::EchomuseConfig;
 pub use crate::plugins::aiui::AiuiConfig;
 pub use crate::plugins::asr::AsrConfig;
 pub use crate::plugins::command::CommandConfig;
@@ -64,7 +64,7 @@ pub mod store;
 /// ⚠️ 必须在**解析成 `Config` 之前**于 JSON 层完成：`Config` 每个字段都带 serde default，
 /// 先解析就无法区分"客户端发了默认值"与"客户端根本没发"。
 ///
-/// `app::ws::config::merge_client_patch`（PUT /api/config 管线）与 `config::overlay`
+/// `gateway::ws::config::merge_client_patch`（PUT /api/config 管线）与 `config::overlay`
 /// （设备 overlay 合并）共用本函数，保证「出现即覆盖 / 显式 null 即清除」语义一致。
 pub(crate) fn merge_patch(base: &mut serde_json::Value, patch: &serde_json::Value) {
     match (base.as_object_mut(), patch) {
@@ -294,7 +294,7 @@ impl AudioConfig {
     }
 
     /// **下载缓冲预算**（毫秒）：TTS 流下载在积压达到它时暂停（见
-    /// `app::prefetch::DownloadBudget`），消费（编码入水库）释放额度后恢复。
+    /// `workflow::pipeline::prefetch::DownloadBudget`），消费（编码入水库）释放额度后恢复。
     ///
     /// 为什么由水库容量**派生**而不是独立开关：两者的"多秒"是同一个运维意图
     ///（用服务器内存换下行连续），分两个旋钮只会让人调错；而两者又**不能等深**——
@@ -454,7 +454,7 @@ impl Config {
     /// **配置规范化**（P4）：`engine` 键补全 + 旧位置字段搬到 `[<cap>.<id>]` 私有段。
     ///
     /// 幂等，且**只在配置入口调用**（[`Self::load`] / [`Self::default`] /
-    /// `app::ws::config::merge_client_patch`），因此：
+    /// `gateway::ws::config::merge_client_patch`），因此：
     /// - 运行期读到的一定是规范形状（GET /api/config、`signature`、`build` 都能直接取字段）；
     /// - 保存时只写新结构（旧字段标了 `skip_serializing`），文件随一次保存完成迁移。
     pub fn normalize(&mut self) {
