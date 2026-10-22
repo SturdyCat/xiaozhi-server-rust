@@ -9,14 +9,14 @@
 - schema 的 common_fields 是 `[{fields_path, fields}]` 数组；改形状同步客户端，不是自动布局契约。
 - enabled 与 phase 分离；校验文案含合法值和“怎么修”，多问题一次汇总。未知 engine 不静默回退，memory none 显式豁免。
 
-回归：[注册表测试](<tests.rs>)、[保存影响测试](<../../app/ws/config/tests/impact.rs>)。
+回归：[注册表测试](<tests.rs>)、[保存影响测试](<../../gateway/ws/config/tests/impact.rs>)。
 
 ---
 
 ## 描述符与宿主设计（历史记录）
 
 > **历史设计 / 实施记录**：由原《插件架构统一》长文按职责抽取，保留原章节编号及当时的结论，不代表所有提案均已落地。
-> 原章节中的 `§N` 请通过[完整章节索引](<../../../../docs/plugin-architecture-unification.md>)定位；当前行为先读本文件上半部分、源码与测试。
+> 原章节中的 `§N` 请通过[完整章节索引](<../../../../docs/designs/plugin-architecture-unification.md>)定位；当前行为先读本文件上半部分、源码与测试。
 
 ## 2. DSH 插件理念 → 我们要借的 6 条（机制层，非 Node 实现层）
 
@@ -87,7 +87,7 @@ pub struct PluginDescriptor {
     pub hot: HotReload,
     pub requires: &'static [Requirement],
     pub fields: &'static [FieldSchema],          // 该实现的私有字段（含 secret）
-    /// 热切换判定：由**该实现自己**声明哪些字段影响成败（取代 engine.rs 手写的 tts_sig）
+    /// 热切换判定：由**该实现自己**声明哪些字段影响成败（取代 runtime/mod.rs 手写的 tts_sig）
     pub signature: fn(&Config) -> String,
     pub build: fn(&Config) -> Result<Built>,
 }
@@ -125,7 +125,7 @@ impl PluginHost {
 四条硬规则：
 
 1. **required vs optional 分级**：`Asr/Vad/Tts/Llm` 属 required（对齐现状：`Engines::new` 失败即退出）；`Voices/Firmware/Memory/Soul` 属 optional → **一个可选插件坏掉不能拖垮语音服务**（DSH 的"插件失败不致命"）。例：记忆库文件损坏 → `Phase::Degraded{reason:"记忆库不可写，已禁用记忆"}`，语音对话照常。
-2. **校验前移**：把现在散落的硬编码校验（`engine.rs:60-63` VAD 路径、`:65-71` AIUI 三要素）统一成 `required` 字段 + `Requirement::{ModelFiles, Credentials}`，错误文案统一含"怎么修"（例：`[vad].model 文件不存在：/data/models/silero_vad.onnx（容器内缺失模型时入口脚本会自动下载；离线环境请预置）`）。
+2. **校验前移**：把现在散落的硬编码校验（`runtime/mod.rs:60-63` VAD 路径、`:65-71` AIUI 三要素）统一成 `required` 字段 + `Requirement::{ModelFiles, Credentials}`，错误文案统一含"怎么修"（例：`[vad].model 文件不存在：/data/models/silero_vad.onnx（容器内缺失模型时入口脚本会自动下载；离线环境请预置）`）。
 3. **热切换覆盖 LLM/记忆**：`Engines.llm` 由 `pub llm: Llm` 改为 `RwLock<Llm>`（与既有 `tts: RwLock<...>` 同模式，**不引新依赖**），`refresh_from_disk` 在**会话开始 / 测试台请求前**调用（现有 TTS 的调用点），从此改 `[llm].model` 不再需要重启。
 4. **清理登记**：记忆库句柄、探测任务、后台抽取任务在构建时 `register_disposer(...)`；热切换与进程退出共用同一路径（避免"换了引擎旧连接泄漏"）。
 
@@ -202,7 +202,7 @@ embedding = "bge-m3"
 ## 配置约定落地记录
 
 > **历史设计 / 实施记录**：由原长文按职责抽取，保留原章节编号及当时的结论，不代表所有提案均已落地。
-> 原章节中的 `§N` 请通过[完整章节索引](<../../../../docs/plugin-architecture-unification.md>)定位；当前行为先读本目录维护文档与源码。
+> 原章节中的 `§N` 请通过[完整章节索引](<../../../../docs/designs/plugin-architecture-unification.md>)定位；当前行为先读本目录维护文档与源码。
 
 ### 0.10 第六批：P4 配置约定统一（本文件 §3.3 的落地）
 
@@ -223,9 +223,9 @@ embedding = "bge-m3"
 | 规范化 | `Config::normalize()`（幂等）在**三个入口**调用：`load()` / `Default` / `merge_client_patch()`；`persist_config()` 再兜一次（防手搓 `Config` 直接落盘写成空 `engine`） |
 | 旧写法双读 | `[tts] backend="sherpa"` → `engine="kokoro"`（`EngineSpec.aliases`）；`[tts].model/voices/tokens/data_dir/dict_dir/lexicon/lang/num_threads` → `[tts.kokoro].*`（旧字段 `#[serde(default, skip_serializing)]`，**保存只写新结构**）；`[memory].backend` → `[memory].engine`（serde `alias`） |
 | 新位置优先 | 同一字段两处并存时新位置胜出（避免旧键覆盖新键）；与默认值等价的旧值不产生迁移噪音 |
-| 旧客户端补丁 | `app/ws/config.rs::rewrite_legacy_paths`（在 `sanitize_patch` 内、merge 之前）：`tts.backend→engine`、`tts.<旧扁平字段>→tts.kokoro.<字段>`、`memory.backend→engine`；**同一补丁里显式的新位置优先**。没有这一步，旧 macApp 改 `model` 会被"新位置优先"静默丢弃 |
+| 旧客户端补丁 | `gateway/ws/config.rs::rewrite_legacy_paths`（在 `sanitize_patch` 内、merge 之前）：`tts.backend→engine`、`tts.<旧扁平字段>→tts.kokoro.<字段>`、`memory.backend→engine`；**同一补丁里显式的新位置优先**。没有这一步，旧 macApp 改 `model` 会被"新位置优先"静默丢弃 |
 | 未知值不静默回退 | `registry::{unknown_engine_of, unknown_engine_hint}`：`PluginHost::plan` 把该能力全部实现标 `Failed` + 可选值原因；`boot` 汇总报错；`decide_refresh` 返回 `Err`（否则保存一个新 engine 值后热刷新会静默保留旧引擎） |
-| 去中心化 | **删除** `TtsBackendKind` 枚举、`TtsConfig::engine_signature()`、`build_tts()` 中心分发；选择走描述符 `selected`、构建走描述符 `build`、签名走描述符 `signature`（`engine.rs::refresh_tts` 改为按描述符构建） |
+| 去中心化 | **删除** `TtsBackendKind` 枚举、`TtsConfig::engine_signature()`、`build_tts()` 中心分发；选择走描述符 `selected`、构建走描述符 `build`、签名走描述符 `signature`（`runtime/mod.rs::refresh_tts` 改为按描述符构建） |
 | `asr`/`vad`/`llm`/`memory` | 也补上 `engine` 键（`sensevoice`/`silero`/`openai`/`graph|none`）；`<CAP>_ENGINES` 表是配置层权威，`config/tests.rs` 守"声明 id ↔ 注册表实现"一致 |
 | 字段元数据 | `registry/fields.rs`：`engine` 进入各能力**公共字段**（含 enum 可选值），TTS 的 `speed`/`speaker` 从 Kokoro 私有表移入公共表（与约定③一致）；漂移护栏测试当场抓到过这次不一致（`tts.kokoro 的字段 speaker 在 Config 路径中不存在`） |
 | 客户端 | `[tts]` 写 `engine` + `kokoro` 子段；`fill()` 读 `engine`（回落 `backend`）与 `kokoro`（回落旧扁平位置）；本地引擎 id 统一为 `kokoro`（`canonicalTtsEngine()` 兼容旧值 `sherpa`）；记忆卡读 `engine`、状态卡显示"引擎" |

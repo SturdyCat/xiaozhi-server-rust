@@ -6,8 +6,10 @@ import com.tencent.kuikly.core.pager.Pager
 import platform.Foundation.NSDate
 import platform.Foundation.NSDateFormatter
 import platform.Foundation.NSLocale
+import platform.Foundation.NSTimeZone
 import platform.Foundation.dateWithTimeIntervalSince1970
 import platform.Foundation.localeWithLocaleIdentifier
+import platform.Foundation.localTimeZone
 import platform.UIKit.UIPasteboard
 
 /** iOS（真机 + Apple Silicon 模拟器共用）：无 macOS 专属能力（测试台与「切换服务器」为 mac-only）。 */
@@ -48,6 +50,10 @@ actual fun formatEpochSeconds(secs: Long): String {
     }
     return fmt.stringFromDate(NSDate.dateWithTimeIntervalSince1970(secs.toDouble()))
 }
+
+/** 本地时区当前 UTC 偏移（秒）。 */
+actual fun localZoneOffsetSeconds(): Int =
+    NSTimeZone.localTimeZone.secondsFromGMTForDate(NSDate()).toInt()
 
 actual fun copyToClipboard(text: String): Boolean = try {
     UIPasteboard.generalPasteboard.string = text

@@ -49,7 +49,7 @@ pub trait BertClassify: Send + Sync {
 }
 
 /// TinyBERT 层的配置签名：路径 / 阈值 / 线程 / 截断 / 标签映射任一变化即重建
-/// （跨会话缓存的失效键，见 [`crate::engine::Engines`]）。
+/// （跨会话缓存的失效键，见 [`crate::runtime::Engines`]）。
 pub fn bert_signature(nlu: &NluConfig) -> String {
     let mut pairs: Vec<String> = nlu
         .bert_label_map

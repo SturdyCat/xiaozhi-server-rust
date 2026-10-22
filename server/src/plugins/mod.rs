@@ -2,7 +2,7 @@
 //!
 //! 每个能力目录 = trait 定义 + 配置段 + 各厂商实现文件 + 工厂（`build_*`）。
 //! 新增厂商：在对应能力目录加实现文件、实现 trait、工厂加一行注册即可，
-//! 会话编排（[`crate::app::session`]）与装配器（[`crate::engine::Engines`]）不动。
+//! 会话编排（[`crate::workflow::session`]）与装配器（[`crate::runtime::Engines`]）不动。
 //!
 //! ## 能力清单（[`registry`] / [`host`]）
 //!

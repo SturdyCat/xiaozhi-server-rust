@@ -16,7 +16,7 @@
 ## 人格档案与内置预设设计（历史记录）
 
 > **历史设计 / 实施记录**：由原《人格与图记忆》长文按职责抽取，保留原章节编号及当时的结论，不代表所有提案均已落地。
-> 原章节中的 `§N` 请通过[完整章节索引](<../../../../docs/soul-and-graph-memory-plan.md>)定位；当前行为先读本文件上半部分、源码与测试。
+> 原章节中的 `§N` 请通过[完整章节索引](<../../../../docs/designs/soul-and-graph-memory-plan.md>)定位；当前行为先读本文件上半部分、源码与测试。
 
 ## 4. 「灵魂」（persona / soul）设计
 
@@ -47,13 +47,13 @@
 [本轮]      用户输入（现有 user_text）
 ```
 
-> ⚠️ **顺序已按 [`plugin-architecture-unification.md`](<../../../../docs/plugin-architecture-unification.md>) §4.4 修订**（本节保留原设计以便对照）：`[记忆]` 建议放到 `[近况]` **之后**（开关 `[memory].inject_position`，默认 `after_history`），以保住「灵魂 + 历史」这段 append-only 前缀的 **prompt cache** 命中；代价是召回内容离用户问题更远（recency 变弱）。这是权衡而非定论——用该文档 §4.3 的 `cache_read` 读数验证后再定。另：召回预算建议改用 **token** 计（`recall_max_tokens` + `context_share`，与 `[llm.context].window_tokens` 联动），取代本文 §5.6 的 `recall_max_chars`。
+> ⚠️ **顺序已按 [`plugin-architecture-unification.md`](<../../../../docs/designs/plugin-architecture-unification.md>) §4.4 修订**（本节保留原设计以便对照）：`[记忆]` 建议放到 `[近况]` **之后**（开关 `[memory].inject_position`，默认 `after_history`），以保住「灵魂 + 历史」这段 append-only 前缀的 **prompt cache** 命中；代价是召回内容离用户问题更远（recency 变弱）。这是权衡而非定论——用该文档 §4.3 的 `cache_read` 读数验证后再定。另：召回预算建议改用 **token** 计（`recall_max_tokens` + `context_share`，与 `[llm.context].window_tokens` 联动），取代本文 §5.6 的 `recall_max_chars`。
 
 实现落点：`ContextAssembler::instructions(&self, session_ctx) -> String`，替换 `openai.rs:130` 处的 `self.cfg.system_prompt`。为了不破坏现有配置语义，保留：`[llm].system_prompt` 作为**兜底/附加约束**（当 `[soul].enabled=false` 时行为与今天完全一致 → 可无痛回滚）。
 
 ### 4.4 热切换与多人格
 
-- 签名热切换：`[soul]` 的 `signature()`（enabled + 关键字段 hash）变化 → 重建 assembler（照抄 `engine.rs:139-166` 的 `tts_sig` 模式），**新会话/测试台生效**，与 TTS 的既有语义一致。
+- 签名热切换：`[soul]` 的 `signature()`（enabled + 关键字段 hash）变化 → 重建 assembler（照抄 `runtime/mod.rs:139-166` 的 `tts_sig` 模式），**新会话/测试台生效**，与 TTS 的既有语义一致。
 - 多人格（可选）：`[soul].profiles_dir` 下多个 `.md` 档案 + `[soul].active` 选择；设备绑定用 `hello` 的 `Device-Id` 映射到人格（后续阶段）。首版建议只做单人格，降低复杂度。
 
 ### 4.5 内置默认灵魂（`preset`）：开箱可用 + 可改可覆盖（2026-10 实施）

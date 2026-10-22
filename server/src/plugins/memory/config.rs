@@ -318,7 +318,7 @@ impl MemoryConfig {
     /// 记忆是否真正生效（启用 + 后端非 none）。
     ///
     /// P1-7 语义扩展：原为 `enabled && engine == Graph`，多后端后改为**任何非 none 后端
-    /// 都算生效**——store 也要通过 [`crate::app::session::reply`] 的 `spawn_memory_write`
+    /// 都算生效**——store 也要通过 [`crate::workflow::session::reply`] 的 `spawn_memory_write`
     /// 门落原文（这正是"纯存储仍要记录"的本意）；召回门是 `recall_enabled`，
     /// store 后端由 `StoreOnlyMemory::recall` 恒返空兜底，不依赖该开关。
     pub fn active(&self) -> bool {

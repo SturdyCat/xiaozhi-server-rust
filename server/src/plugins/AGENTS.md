@@ -4,11 +4,11 @@
 
 - 新实现遵守[注册表规范](<registry/AGENTS.md>)，同步 engine 声明、描述符、字段元数据和一致性测试；不复活已删除的中心 TTS 枚举/match 分发。
 - enabled 是配置意图，phase 是运行状态，两者不能合并。必需能力构建失败快速失败，可选能力降级；热重建失败保留旧实例并报告原因。
-- 历史设计见[插件统一导航](<../../../docs/plugin-architecture-unification.md>)；设计中的统一 action/job、动态 UI 等未实现提案不当作扩展要求。
+- 历史设计见[插件统一导航](<../../../docs/designs/plugin-architecture-unification.md>)；设计中的统一 action/job、动态 UI 等未实现提案不当作扩展要求。
 
 ## 插件装配与扩展
 
-[registry](<registry/AGENTS.md>)声明能力/实现/字段，[host](<host.rs>)校验与上报，[Engines](<../engine.rs>)持共享实例与刷新逻辑。不要把三者职责合为一个中心分发器。
+[registry](<registry/AGENTS.md>)声明能力/实现/字段，[host](<host.rs>)校验与上报，[Engines](<../runtime/mod.rs>)持共享实例与刷新逻辑。不要把三者职责合为一个中心分发器。
 
 - 本地模型跨会话共享，有状态 VAD 每会话借独立实例并通过[实例池](<vad/pool.rs>)复用；“每会话新建”不等于每次都重新加载模型。
 - 描述符负责 selected/signature/validate/build；签名含凭据，绝不打印。先构建成功再替换，不能先拆旧实例。
@@ -37,7 +37,7 @@
 
 - [registry](<registry/AGENTS.md>)：能力/实现/字段元数据、描述符与宿主、配置约定。
 - [llm](<llm/AGENTS.md>)：Responses API 请求、失败分类与重试、用量口径。
-- [memory](<memory/AGENTS.md>)：graph/store/rag 后端、召回预算与保留策略；集成、尽调与路线见[人格与记忆集成](<../../../docs/soul-and-graph-memory-plan.md>)。
+- [memory](<memory/AGENTS.md>)：graph/store/rag 后端、召回预算与保留策略；集成、尽调与路线见[人格与记忆集成](<../../../docs/designs/soul-and-graph-memory-plan.md>)。
 - [soul](<soul/AGENTS.md>)：人格档案、预设覆盖与 preview 语义。
 - [tts](<tts/AGENTS.md>)：流式 PCM 契约、Kokoro 与讯飞 AIUI。
 - [health](<health/AGENTS.md>)：运行期探测与能力状态聚合。
@@ -45,8 +45,8 @@
 
 ## 历史设计与实施资料
 
-- [统一插件化背景、改造前盘点与实施风险](<../../../docs/plugin-architecture-unification.md>)
-- [P1 健康与记忆接口、实施及共享护栏](<../../../docs/p1-round1-design.md>)
+- [统一插件化背景、改造前盘点与实施风险](<../../../docs/designs/plugin-architecture-unification.md>)
+- [P1 健康与记忆接口、实施及共享护栏](<../../../docs/plans/p1-round1-design.md>)
 - [文件规模与测试分离记录](<AGENTS.md#文件规模与测试分离记录历史>)
 
 以上历史记录保留原章节编号与当时结论；当前维护约束以各能力目录 `AGENTS.md`、源码与测试为准。
@@ -65,8 +65,8 @@
 | 整改前 | 行数 | 整改后 | 行数 |
 |---|---|---|---|
 | `plugins/registry.rs` | 989 | `registry/{mod,fields,impls,tests}.rs` | 399 / 450 / 314 / 212 |
-| `app/ws/config.rs`（逻辑 422 + 测试 553） | 975 | `config.rs` + `config/tests.rs` | 424 / 550 |
-| `app/session.rs`（逻辑 695） | 733 | `session.rs` + `session/reply.rs` | 443 / 310 |
+| `gateway/ws/config.rs`（逻辑 422 + 测试 553） | 975 | `config.rs` + `config/tests.rs` | 424 / 550 |
+| `workflow/session/mod.rs`（逻辑 695） | 733 | `session.rs` + `session/reply.rs` | 443 / 310 |
 | `ConfigFormState.kt` | 652 | `ConfigFormState.kt` + `ConfigFormFill.kt` | 548 / 116 |
 
 **拆分口径**：按**职责**而非按行数均分——注册表拆成「类型/注册表/JSON」「字段表」「实现接线」「测试」；
@@ -103,19 +103,19 @@ find server/src client/shared \( -name '*.rs' -o -name '*.kt' \) -exec wc -l {} 
 | 处置 | 数量 | 说明 |
 |---|---|---|
 | 内联测试外移 | 19 | `foo.rs` → `foo/tests.rs`；`foo/mod.rs` → `foo/tests.rs`；外层只留 `#[cfg(test)] mod tests;` |
-| 空测试块删除 | 1 | `app/session.rs` 的 `mod tests {}`（零断言占位），连同多余空行一并删除 |
-| 已合规 | 2 | `app/ws/config/tests.rs`、`plugins/registry/tests.rs`（第三批已外移） |
+| 空测试块删除 | 1 | `workflow/session/mod.rs` 的 `mod tests {}`（零断言占位），连同多余空行一并删除 |
+| 已合规 | 2 | `gateway/ws/config/tests.rs`、`plugins/registry/tests.rs`（第三批已外移） |
 
 **规模对比**（行数取本批开始前的实测值；"测试"含外移后新增的 `//!` 文件头）：
 
 | 文件 | 前（逻辑+测试） | 后（逻辑 / 测试） |
 |---|---|---|
-| `app/downlink.rs` | 591 | 331 / 264 |
-| `app/voices.rs` | 576 | 508 / 72 |
+| `workflow/downlink/mod.rs` | 591 | 331 / 264 |
+| `device/voices.rs` | 576 | 508 / 72 |
 | `plugins/aiui/mod.rs` | 498 | 335 / 167 |
 | `plugins/host.rs` | 490 | 338 / 167 |
-| `app/protocol.rs` | 441 | 341 / 103 |
-| `engine.rs` | 433 | 340 / 101 |
+| `workflow/protocol/protocol.rs` | 441 | 341 / 103 |
+| `runtime/mod.rs` | 433 | 340 / 101 |
 | 其余 13 个 | 均 ≤ 356 | 均 ≤ 340 |
 | **合计** | **6022** | **4326 / 1805** |
 
@@ -131,7 +131,7 @@ find server/src -name tests.rs | wc -l                                     # => 
 ```
 
 **格式漂移的归属（逐文件证明不是本次引入的）**：新测试文件里仍有 rustfmt 漂移（`plugins/aiui/tests.rs` 8 处、
-`app/downlink/tests.rs` 7 处等）。用 `git show HEAD:<file>` 重建"原始内联块"后逐文件对比漂移计数：
+`workflow/downlink/tests.rs` 7 处等）。用 `git show HEAD:<file>` 重建"原始内联块"后逐文件对比漂移计数：
 **14 个文件搬移前后完全一致**（7→7、4→4、3→3…，另有 `ws/config.rs` 由 3→0，因该测试文件第三批已格式化），
 证明搬移是**纯位移**；剩下 5 个测试块是本项目前几批**新写的代码**，按"新增代码保持 fmt-clean"的既定口径
 已对其执行 `rustfmt`。全库统一格式仍留作独立提交（本 crate 约 30 个文件有既有漂移，本批刻意不动）。

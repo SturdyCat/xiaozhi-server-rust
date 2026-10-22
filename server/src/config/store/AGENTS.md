@@ -26,12 +26,12 @@
 | 关注点 | 现状 | 权威位置 |
 |---|---|---|
 | 配置从哪来 | `XIAOZHI_CONFIG`（env）→ `--config <path>` → 内置 `Config::default()`（`/data/models` 生产默认值） | `server/src/main.rs:121`、`:134`；[配置说明](<../AGENTS.md>)（原 `agents.md` §8） |
-| 读（HTTP） | 每次请求**实时读盘**（坏文件则回退内存快照，保证管理页打得开） | `server/src/app/ws/config.rs:39` |
-| 读（会话/测试台） | 每次会话开始 `refresh_from_disk()` 读盘 → 签名比对 → 热重建 TTS/LLM/Memory + 刷新会话级快照 | `server/src/engine.rs:293`、`:267`、`:191` |
-| 写 | `persist_config()`：临时文件 `rename` 原子写；**单文件 bind mount 下 `rename` 必然 EBUSY** → 回退原地覆写（非原子） | `server/src/app/ws/config.rs:271` |
-| HTTP 契约 | 部分更新（缺失=保持 / 显式 `null`=清除）、密钥空串=保留、密钥打码只回 `has_*`、内容指纹 `revision` + 409 乐观并发、`hot/hot_hint/changed_sections` | `server/src/app/ws/config.rs:311`、`:100`、`:212`、`impact.rs` |
+| 读（HTTP） | 每次请求**实时读盘**（坏文件则回退内存快照，保证管理页打得开） | `server/src/gateway/ws/config.rs:39` |
+| 读（会话/测试台） | 每次会话开始 `refresh_from_disk()` 读盘 → 签名比对 → 热重建 TTS/LLM/Memory + 刷新会话级快照 | `server/src/runtime/mod.rs:293`、`:267`、`:191` |
+| 写 | `persist_config()`：临时文件 `rename` 原子写；**单文件 bind mount 下 `rename` 必然 EBUSY** → 回退原地覆写（非原子） | `server/src/gateway/ws/config.rs:271` |
+| HTTP 契约 | 部分更新（缺失=保持 / 显式 `null`=清除）、密钥空串=保留、密钥打码只回 `has_*`、内容指纹 `revision` + 409 乐观并发、`hot/hot_hint/changed_sections` | `server/src/gateway/ws/config.rs:311`、`:100`、`:212`、`impact.rs` |
 | 旁路落盘 | 设备 overlay → `overlays/devices/<id>.toml`；预设 → `presets/<name>.toml`（文件名 sanitize 防穿越 + 读时裁剪越界字段） | `server/src/config/overlay.rs:135`、`:142`、`:57` |
-| 无配置文件时 | `PUT /api/config` 直接 **400**（不可持久化）；热句音频落盘同时禁用 | `server/src/app/ws/config.rs:385`；`server/src/engine.rs:126` |
+| 无配置文件时 | `PUT /api/config` 直接 **400**（不可持久化）；热句音频落盘同时禁用 | `server/src/gateway/ws/config.rs:385`；`server/src/runtime/mod.rs:126` |
 | 客户端 | web 与 mac app 共用 `commonMain` 管理台，走 `/api/config`、`/api/config/meta`、`/api/config/schema`、`/api/config/presets` | `client/shared/src/commonMain/kotlin/com/xiaozhi/admin/ConfigFormState.kt` |
 
 **结论（落地前盘点）：** 配置的"接口"已经存在且跨端可用；缺的是存储形态——该缺口已于 2026-10-14 由 `SqliteConfigStore` 补齐（见 §5/§7）。下表为落地前的原始盘点，保留作设计动机参考；落地后的存储形态为 SQLite，文件/默认后端仅为降级路径。
@@ -57,7 +57,7 @@ DB 化后一次事务搞定，且天然获得历史/回滚/审计。
 事实链：
 
 - 本项目 `server/src/plugins/memory/schema.rs:25` `LATEST_VERSION = 2`，`:45` `migrate()` 读 `SELECT MAX(version) FROM _migrations`，只跑 `(applied+1)..=LATEST_VERSION`。
-- 上游 DSH 的 graph-memory 同一张 `_migrations` 编号是 **1..16**（`docs/soul-and-graph-memory-plan.md:349-367`），本项目把上游 m15/m16 两层的表**重编号成了 m1/m2**。
+- 上游 DSH 的 graph-memory 同一张 `_migrations` 编号是 **1..16**（`docs/designs/soul-and-graph-memory-plan.md:349-367`），本项目把上游 m15/m16 两层的表**重编号成了 m1/m2**。
 - 而"与 DSH 同库直读"是本仓库已立项的 P3 目标（`schema.rs` 文件头、`soul-and-graph-memory-plan.md:598`）。
 
 后果矩阵：
@@ -94,7 +94,7 @@ DB 化后一次事务搞定，且天然获得历史/回滚/审计。
 
 边界：`[memory].db_path = ":memory:"`（本仓库单测/dev 常见）时不能把配置塞进进程内临时库 → 回退到 1/2/4 的文件路径，并 `tracing::warn!` 一行说明。
 
-并发纪律：`rusqlite` 是同步阻塞 → HTTP 侧一律 `spawn_blocking`（对齐 `app/ws/memory.rs:28` 既有写法）；写事务用 `BEGIN IMMEDIATE` 抢占写锁 + `busy_timeout`（默认 5000ms，与 memory 同值）。
+并发纪律：`rusqlite` 是同步阻塞 → HTTP 侧一律 `spawn_blocking`（对齐 `gateway/ws/memory.rs:28` 既有写法）；写事务用 `BEGIN IMMEDIATE` 抢占写锁 + `busy_timeout`（默认 5000ms，与 memory 同值）。
 
 ### 3.3 部署形态变了（必须同步改文档与入口脚本）
 
@@ -191,11 +191,11 @@ CREATE TABLE IF NOT EXISTS cfg_presets (
 | `server/src/config/store/sqlite.rs`（新增） | `SqliteConfigStore`：本设计 §4 的实现（`_cfg_migrations` + `cfg_documents`/`cfg_revisions`/`cfg_device_overlays`/`cfg_presets` + `BEGIN IMMEDIATE` 写 + `VACUUM INTO` 备份 + 只读 SQL 护栏）；自持 `Mutex<Connection>`，WAL + busy_timeout=5000，对齐 memory 范式 | ✅ 已完成 |
 | `server/src/config/store/sqlite/tests.rs`（新增） | 7 个单测：load/persist 往返、空库取默认、bootstrap 导入后 load、overlay CRUD、preset CRUD、query 只读护栏、backup 产物 | ✅ 已完成 |
 | `server/src/main.rs::load_config_inner` | DB 路径解析（`XIAOZHI_CONFIG_DB` → `--config-db` → `[memory].db_path`非 `:memory:` → 兜底 `/data/data.db`）→ `SqliteConfigStore::open` → 空库+旧 TOML 导入 → 失败降级文件/默认；`load_config()` 保留 admin_dir 覆盖 | ✅ 已完成 |
-| `server/src/engine.rs::effective_config` | 改用 `config_store.load_overlay(device_id)` 替代原 `device_overlay_path`/`read_device_overlay_value` 文件读取；`prune_disallowed`/`merge_overlay` 不变 | ✅ 已完成 |
-| `server/src/app/ws/config/device_overlay.rs` | 三 handler（get/put/delete）改调 `load_overlay`/`save_overlay`/`delete_overlay`；`validate_overlay` 白名单校验保留；移除 `std::fs` 直接操作 | ✅ 已完成 |
-| `server/src/app/ws/config/presets.rs` | 四 handler（list/save/apply/delete）改调 `list_presets`/`save_preset`/`load_preset`/`delete_preset`；`preset_apply` 复用 `merge_client_patch`+`persist` | ✅ 已完成 |
-| `server/src/app/ws/config.rs` | `config_meta` 增加 `backend` 字段（`loaded_from` 取 backend）；新增 `db_query`（POST，token 鉴权，只读 SQL）、`db_backup`（POST，`VACUUM INTO` 生成 `xiaozhi-config-backup-<unix秒>.db`）、`db_auth_ok`、`now_ts` | ✅ 已完成 |
-| `server/src/app/ws/mod.rs` | 路由新增 `.route("/api/config/db/query", post(db_query))` 与 `.route("/api/config/db/backup", post(db_backup))` | ✅ 已完成 |
+| `server/src/runtime/mod.rs::effective_config` | 改用 `config_store.load_overlay(device_id)` 替代原 `device_overlay_path`/`read_device_overlay_value` 文件读取；`prune_disallowed`/`merge_overlay` 不变 | ✅ 已完成 |
+| `server/src/gateway/ws/config/device_overlay.rs` | 三 handler（get/put/delete）改调 `load_overlay`/`save_overlay`/`delete_overlay`；`validate_overlay` 白名单校验保留；移除 `std::fs` 直接操作 | ✅ 已完成 |
+| `server/src/gateway/ws/config/presets.rs` | 四 handler（list/save/apply/delete）改调 `list_presets`/`save_preset`/`load_preset`/`delete_preset`；`preset_apply` 复用 `merge_client_patch`+`persist` | ✅ 已完成 |
+| `server/src/gateway/ws/config.rs` | `config_meta` 增加 `backend` 字段（`loaded_from` 取 backend）；新增 `db_query`（POST，token 鉴权，只读 SQL）、`db_backup`（POST，`VACUUM INTO` 生成 `xiaozhi-config-backup-<unix秒>.db`）、`db_auth_ok`、`now_ts` | ✅ 已完成 |
+| `server/src/gateway/ws/mod.rs` | 路由新增 `.route("/api/config/db/query", post(db_query))` 与 `.route("/api/config/db/backup", post(db_backup))` | ✅ 已完成 |
 | `server/src/config/overlay.rs` | `device_overlay_path`/`read_device_overlay_value`/`json_to_toml`/`presets_dir`/`preset_path` 仍被 `FileConfigStore` 复用；`overlay_allowed`/`validate_overlay`/`prune_disallowed`/`merge_overlay` **不动** | ✅ 已完成（文件后端路径保留） |
 | `server/src/plugins/memory/schema.rs` | **未动**（共用 `_cfg_migrations` 命名空间隔离，见 §3.1） | — |
 | `docker-entrypoint.sh`、`docker-compose.yml`、`README.md`、[配置说明](<../AGENTS.md>) | 部署层已兼容：目录卷不变量；`config.toml` 退化为引导/导入源（见 §3.3 落地说明） | ✅ 已完成 |

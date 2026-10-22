@@ -13,6 +13,8 @@ kotlin {
         val commonMain by getting {
             kotlin.srcDir(rootProject.file("shared/src/commonMain/kotlin"))
             kotlin.include("com/xiaozhi/admin/UiContracts.kt")
+            kotlin.include("com/xiaozhi/admin/EchoMuseWakeWord.kt")
+            kotlin.include("com/xiaozhi/admin/FilesModel.kt")
             kotlin.include("com/xiaozhi/admin/PipelinePanels.kt")
             kotlin.include("com/xiaozhi/admin/PipelineFlow.kt")
             kotlin.include("com/xiaozhi/admin/PipelineWorkflow.kt")

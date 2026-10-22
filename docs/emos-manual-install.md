@@ -1,7 +1,7 @@
 # Echo Dot 2 手动安装 emOS（不依赖官方控制器/docker）
 
 来源核实：EchoMuse `emos/README.md`（Build and install / Flashing safely / Rollback 各节）。
-运行期接入（设备 → 我们 server）由 `server/src/app/echomuse/` 承担，见 [echomuse.md](echomuse.md)；本文只覆盖硬件侧一次性安装。
+运行期接入（设备 → 我们 server）由 `server/src/device/echomuse/` 承担，见 [echomuse.md](echomuse.md)；本文只覆盖硬件侧一次性安装。
 
 ## 总览
 

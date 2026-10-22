@@ -13,7 +13,7 @@
 //!
 //! 与 ASR/TTS/VAD 不同，LLM 是**异步 HTTP 调用**（`reqwest` + `rustls`），
 //! 不占用 tokio worker 计算线程，无需 `spawn_blocking` 隔离。
-//! 多轮历史由调用方（[`crate::app::session`]）维护；本模块只负责单次请求。
+//! 多轮历史由调用方（[`crate::workflow::session`]）维护；本模块只负责单次请求。
 
 use serde::{Deserialize, Serialize};
 
@@ -189,7 +189,7 @@ pub struct LlmTurnResult {
 }
 
 /// LLM 提供方 trait：文本对话 + 可选工具规格，流式回传 [`LlmEvent`]。
-/// 手动装箱 future（与 [`crate::app::transport::Transport`] 同风格，不引 async-trait）。
+/// 手动装箱 future（与 [`crate::workflow::protocol::Transport`] 同风格，不引 async-trait）。
 ///
 /// `prompt` 是**本轮组装好的上下文**（稳定 `instructions` + 可选记忆块，见
 /// [`crate::plugins::prompt::TurnPrompt`]）：把"系统提示词怎么来"从 provider 里摘出去，

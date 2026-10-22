@@ -39,5 +39,9 @@ actual fun formatEpochSeconds(secs: Long): String {
         .format(java.util.Date(secs * 1000L))
 }
 
+/** 系统默认时区当前 UTC 偏移（毫秒 → 秒）。 */
+actual fun localZoneOffsetSeconds(): Int =
+    java.util.TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 1000
+
 /** Android 宿主未接 Context 桥，暂不支持一键复制（调用方 toast 提示）。 */
 actual fun copyToClipboard(text: String): Boolean = false

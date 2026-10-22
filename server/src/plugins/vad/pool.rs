@@ -47,7 +47,7 @@ struct PoolState {
     sem: Arc<Semaphore>,
 }
 
-/// VAD 实例池。挂在 [`crate::engine::Engines`] 上，跨会话共享。
+/// VAD 实例池。挂在 [`crate::runtime::Engines`] 上，跨会话共享。
 pub struct VadPool {
     state: Arc<PoolState>,
 }

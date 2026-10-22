@@ -44,7 +44,7 @@ pub struct SqliteConfigStore {
 
 impl SqliteConfigStore {
     /// 打开（或创建）配置库并完成初始化：父目录创建 → `busy_timeout` → `WAL` → `foreign_keys`
-    /// → `_cfg_migrations` → 迁移建表。返回 `Arc`（与 [`crate::engine::Engines`] 共享）。
+    /// → `_cfg_migrations` → 迁移建表。返回 `Arc`（与 [`crate::runtime::Engines`] 共享）。
     pub fn open(path: &str) -> Result<Arc<Self>> {
         if path != ":memory:" {
             if let Some(dir) = std::path::Path::new(path).parent() {

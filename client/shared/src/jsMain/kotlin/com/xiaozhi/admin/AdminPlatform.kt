@@ -44,6 +44,9 @@ actual fun formatEpochSeconds(secs: Long): String {
         "${p(d.getHours().toInt())}:${p(d.getMinutes().toInt())}:${p(d.getSeconds().toInt())}"
 }
 
+/** 浏览器本地时区偏移（getTimezoneOffset 返回 UTC−当地的分钟数，取负转成秒）。 */
+actual fun localZoneOffsetSeconds(): Int = -kotlin.js.Date().getTimezoneOffset().toInt() * 60
+
 /**
  * 优先 async Clipboard API（https/localhost）；管理台常以 `http://LAN-IP` 访问，
  * 非 secure context 下 API 不存在，回落隐藏 textarea + `execCommand('copy')`。

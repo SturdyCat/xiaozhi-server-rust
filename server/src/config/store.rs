@@ -34,7 +34,7 @@ pub mod sqlite;
 
 /// 配置存储后端。
 ///
-/// 实现必须 `Send + Sync`：`Arc<dyn ConfigStore>` 存于 [`crate::engine::Engines`]，
+/// 实现必须 `Send + Sync`：`Arc<dyn ConfigStore>` 存于 [`crate::runtime::Engines`]，
 /// 被 axum handler（多线程 runtime）共享。
 ///
 /// **落点抽象的唯一入口**：主配置（`load`/`persist`）、每设备 overlay、配置预设、

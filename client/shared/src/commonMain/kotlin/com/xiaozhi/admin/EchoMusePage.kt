@@ -27,6 +27,8 @@ fun ViewContainer<*, *>.renderEchoMuse(
     toast: ToastState,
     ctx: Pager,
     isActive: () -> Boolean,
+    /** 唤醒词面板「管理模型文件（oww-models/）」入口（跳「文件」页对应目录，AdminPage 接线）。 */
+    onOpenModelFiles: () -> Unit = {},
 ) {
     state.ensureLiveUpdates(ctx, isActive)
     opsHeader(
@@ -66,7 +68,7 @@ fun ViewContainer<*, *>.renderEchoMuse(
         }
 
         vfor({ state.devices }) { row ->
-            echoMuseDeviceCard(row, state, toast, ctx)
+            echoMuseDeviceCard(row, state, toast, ctx, onOpenModelFiles)
         }
 
         textNote(

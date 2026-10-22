@@ -35,7 +35,7 @@
 //! [`TtsEngine::synthesize`] 保留给需要整段的场景，默认按流式收集实现（反之亦然）。
 //!
 //! ⚠️ 两者都是**同步阻塞调用**（本地推理实测 8~20s；在线为网络等待），调用方
-//!（[`crate::app::session`]）必须用 `spawn_blocking` 隔离，否则独占 tokio worker，
+//!（[`crate::workflow::session`]）必须用 `spawn_blocking` 隔离，否则独占 tokio worker，
 //! 期间同 runtime 的其他会话/HTTP 全部卡死。
 
 use serde::{Deserialize, Serialize};
@@ -203,7 +203,7 @@ impl TtsConfig {
         }
         self.engine = canonical;
 
-        // (2) 推理闸门许可数：0 会把合成永久堵死，clamp ≥ 1（见 app::inference）。
+        // (2) 推理闸门许可数：0 会把合成永久堵死，clamp ≥ 1（见 workflow::pipeline::inference）。
         self.max_concurrent = self.max_concurrent.max(1);
 
         // (3) 旧扁平字段 → [tts.kokoro]
@@ -240,7 +240,7 @@ fn default_cache_entries() -> u32 {
     256
 }
 
-/// `[tts].max_concurrent` 默认 1（推理闸门许可数，见 `app::inference`）。
+/// `[tts].max_concurrent` 默认 1（推理闸门许可数，见 `workflow::pipeline::inference`）。
 fn default_max_concurrent() -> u32 {
     1
 }

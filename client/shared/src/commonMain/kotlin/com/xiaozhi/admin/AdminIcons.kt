@@ -74,6 +74,12 @@ internal object AdminIconVectors {
 
     /** 漏斗（筛选） */
     internal val Funnel = listOf(stroke("M3.5 4.5h17l-6.7 7.8v7.2l-3.6-2.3v-4.9Z"))
+
+    /** 文件夹（文件管理页目录行 / 新建文件夹入口） */
+    internal val Folder = listOf(stroke("M3.5 18.5V7A1.5 1.5 0 0 1 5 5.5h4l2 2h8A1.5 1.5 0 0 1 20.5 9v9.5A1.5 1.5 0 0 1 19 20H5A1.5 1.5 0 0 1 3.5 18.5Z"))
+
+    /** 文档（文件管理页文件行；折角页 + 两行示意文字） */
+    internal val Document = listOf(stroke("M6 3.5h8l4 4v13H6ZM14 3.5v4h4M9 12.5h6M9 16h6"))
 }
 
 /** [IconToken] 的图层序列；与枚举的一一对应由 shared 构建护栏 `verifyAdminIcons` 锁定 */
@@ -102,6 +108,8 @@ internal fun IconToken.vectors(): List<IconLayer> = when (this) {
     IconToken.Power -> AdminIconVectors.Power
     IconToken.Copy -> AdminIconVectors.Copy
     IconToken.Funnel -> AdminIconVectors.Funnel
+    IconToken.Folder -> AdminIconVectors.Folder
+    IconToken.Document -> AdminIconVectors.Document
 }
 
 /**

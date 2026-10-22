@@ -23,8 +23,10 @@ import platform.AppKit.NSPasteboardTypeString
 import platform.Foundation.NSDate
 import platform.Foundation.NSDateFormatter
 import platform.Foundation.NSLocale
+import platform.Foundation.NSTimeZone
 import platform.Foundation.dateWithTimeIntervalSince1970
 import platform.Foundation.localeWithLocaleIdentifier
+import platform.Foundation.localTimeZone
 
 /** macOS 客户端：测试台、XiaoZhiModule 原生桥与「服务器设置」仅此平台启用。 */
 actual val IS_MACOS: Boolean = true
@@ -480,6 +482,10 @@ actual fun formatEpochSeconds(secs: Long): String {
     }
     return fmt.stringFromDate(NSDate.dateWithTimeIntervalSince1970(secs.toDouble()))
 }
+
+/** 本地时区当前 UTC 偏移（秒）。 */
+actual fun localZoneOffsetSeconds(): Int =
+    NSTimeZone.localTimeZone.secondsFromGMTForDate(NSDate()).toInt()
 
 actual fun copyToClipboard(text: String): Boolean = try {
     val pb = NSPasteboard.generalPasteboard
