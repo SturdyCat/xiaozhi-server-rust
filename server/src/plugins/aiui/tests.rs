@@ -33,7 +33,7 @@ fn first_frame_carries_full_params_and_base64_audio() {
     // parameter 仅首帧携带：tts 音色/语速与 payload 音频参数
     assert_eq!(f["parameter"]["tts"]["vcn"], "x6_dongmanshaonv_pro");
     assert_eq!(f["parameter"]["tts"]["speed"], 60);
-    // 下行合成请求 24k（与 Kokoro 对齐）；上行识别音频仍 16k
+    // 下行合成请求 16k（AIUI 实测只回 16k，请求 24k 会被忽略）；上行识别音频同样 16k
     assert_eq!(
         f["parameter"]["tts"]["tts"]["sample_rate"],
         super::TTS_SAMPLE_RATE
@@ -42,11 +42,11 @@ fn first_frame_carries_full_params_and_base64_audio() {
         f["payload"]["audio"]["sample_rate"],
         super::UPLINK_SAMPLE_RATE
     );
-    assert_ne!(
-        super::TTS_SAMPLE_RATE,
-        super::UPLINK_SAMPLE_RATE,
-        "上下行采样率是两个契约，写成同一个值即失去收敛意义"
-    );
+    // 两个契约当前数值相同（都受 AIUI 只支持 16k 的限制），但必须各自独立声明：
+    // 断言数值等于真实率，而不是断言两者不相等——否则「把实为 16k 的内容标成 24k」
+    // 这种错误反而能通过测试（2026-10-22 的 1.5× 提速就是这么漏出去的）。
+    assert_eq!(super::TTS_SAMPLE_RATE, 16_000, "下行必须声明 AIUI 的真实输出率");
+    assert_eq!(super::UPLINK_SAMPLE_RATE, 16_000, "上行 AIUI 只接受 16k");
     assert_eq!(f["parameter"]["nlp"]["prompt"], "你是测试助手");
     let audio = base64::engine::general_purpose::STANDARD
         .decode(f["payload"]["audio"]["audio"].as_str().unwrap())

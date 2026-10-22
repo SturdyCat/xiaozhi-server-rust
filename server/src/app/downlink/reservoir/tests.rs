@@ -331,14 +331,14 @@ async fn filler_returns_download_quota_per_chunk() {
 #[test]
 fn cache_collection_is_bounded_without_stopping_streaming() {
     // 超限：任一上限（PCM 字节）触顶 → 整句放弃收集（帧照发，缓存不收）
-    let mut c = SentenceCollector::new(24_000);
+    let mut c = SentenceCollector::new();
     c.on_frame(&[1]);
     c.on_chunk(&vec![0f32; MAX_ENTRY_BYTES / 2 + 1]);
     c.on_frame(&[2]);
     assert!(c.take().is_none(), "超限后整句不入缓存");
 
-    // 正常路径：24k 透传，帧与 PCM 都收集
-    let mut c = SentenceCollector::new(24_000);
+    // 正常路径：PCM 原样落盘（不重采样），帧与 PCM 都收集
+    let mut c = SentenceCollector::new();
     c.on_chunk(&[0.1f32; 2400]);
     c.on_frame(&[1, 2]);
     let (frames, stored) = c.take().expect("正常句应收集");
@@ -346,7 +346,7 @@ fn cache_collection_is_bounded_without_stopping_streaming() {
     assert_eq!(
         stored.len(),
         2400 * 2,
-        "24k 透传 → 样本数不变（S16LE 双字节）"
+        "原样落盘 → 样本数不变（S16LE 双字节）"
     );
 }
 
@@ -356,7 +356,7 @@ async fn abort_while_waiting_for_synthesis_result_never_caches() {
     let dir = std::env::temp_dir().join(format!("xz-reservoir-{}", uuid::Uuid::new_v4()));
     let store = Arc::new(HotAudioStore::new(Some(dir.clone())));
     let cache = Arc::new(TtsCache::with_store(8, store.clone()));
-    let key = HotAudioKey::from_session(&crate::config::Config::default(), "晚到打断");
+    let key = HotAudioKey::from_session(&crate::config::Config::default(), "晚到打断", 24_000);
     cache.register_identity(key.clone(), mem(&key));
     let abort = abort_flag();
     let (sink, mut source) = new_reservoir(600, 60);
@@ -403,7 +403,7 @@ async fn complete_production_sentence_persists_and_restarts() {
     let dir = std::env::temp_dir().join(format!("xz-reservoir-{}", uuid::Uuid::new_v4()));
     let store = Arc::new(HotAudioStore::new(Some(dir.clone())));
     let cache = Arc::new(TtsCache::with_store(8, store.clone()));
-    let key = HotAudioKey::from_session(&crate::config::Config::default(), "完整普通回答");
+    let key = HotAudioKey::from_session(&crate::config::Config::default(), "完整普通回答", 24_000);
     cache.register_identity(key.clone(), mem(&key));
     let (sink, mut source) = new_reservoir(600, 60);
     let (chunk_tx, chunk_rx) = mpsc::channel(1);
@@ -446,7 +446,7 @@ async fn failed_synthesis_never_creates_persistent_entry() {
     let dir = std::env::temp_dir().join(format!("xz-reservoir-{}", uuid::Uuid::new_v4()));
     let store = Arc::new(HotAudioStore::new(Some(dir.clone())));
     let cache = Arc::new(TtsCache::with_store(8, store.clone()));
-    let key = HotAudioKey::from_session(&crate::config::Config::default(), "失败句");
+    let key = HotAudioKey::from_session(&crate::config::Config::default(), "失败句", 24_000);
     cache.register_identity(key.clone(), mem(&key));
     let (sink, mut source) = new_reservoir(600, 60);
     let (chunk_tx, chunk_rx) = mpsc::channel(1);

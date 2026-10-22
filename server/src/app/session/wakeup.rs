@@ -25,7 +25,7 @@
 //!
 //! ```text
 //! ① 内存 TtsCache（跨会话，进程内）     命中 → 零合成，直接投递已编码帧
-//! ② 磁盘 HotAudioStore（跨进程重启）    命中 → 读盘裸 24k PCM → 暖进 ① → 零合成
+//! ② 磁盘 HotAudioStore（跨进程重启）    命中 → 读盘裸 PCM（引擎原样）→ 暖进 ① → 零合成
 //! ③ 真合成（首次部署 / 换了音色）       合成一次 → 自动落盘 → 之后永久走 ①②
 //! ```
 //!
@@ -158,7 +158,7 @@ impl<'a, T: Transport> Session<'a, T> {
         }
 
         // ③ 走既有下行链路（命中即零合成：预取 worker 直接投递已编码帧）。落盘不需要
-        // 会话层参与：完整句合成成功时预取/水库链路已经把 24k PCM 写进 hot-audio/。
+        // 会话层参与：完整句合成成功时预取/水库链路已经把引擎原样 PCM 写进 hot-audio/。
         if let Err(e) = self.speak_canned(&text).await {
             tracing::warn!(
                 "session {} 唤醒问候下发失败（不影响后续对话）: {e}",

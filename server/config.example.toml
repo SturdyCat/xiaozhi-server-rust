@@ -20,9 +20,11 @@ admin_dir = "../client/apps/h5App/web"
 # 设备上行默认 16k，跟随设备 hello 的 audio_params。
 # 只允许 16000 / 24000 / 48000（其它值会被 normalize 回落 24000 并告警：
 # 非法率会让 Opus 编码器建不起来、每句音频被静默丢弃）。
-# 24000 是推荐锚点：Kokoro 原生 24k（零重采样）、AIUI 按 24k 请求、Opus 原生支持。
+# 24000 是推荐锚点：Kokoro 原生 24k（零重采样）、Opus 原生支持。
+# 注意 AIUI（讯飞）实测只回 16k、且忽略请求里的 sample_rate：用它时选 24000 意味着
+# 每句多做一次 1.5× 升采样，选 16000 则零重采样（音质更好、带宽减半）。
 # EchoMuse 例外：下行固定 48k（设备 DAC 48k 且不重采样，协议常量），
-# 由服务端从 24k 做一次整数倍 2× 升采样。
+# 由服务端从 TTS 真实率升采样（16k→48k 为 3×，24k→48k 为 2×）。
 downlink_sample_rate = 24000
 downlink_frame_duration_ms = 60
 channels = 1

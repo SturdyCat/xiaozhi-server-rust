@@ -36,6 +36,10 @@ pub const FRAME_SPEAKER: u8 = 0x02;
 pub const FRAME_SPEAKER_EOS: u8 = 0x03;
 
 /// 设备 mic 音频固定 16 kHz 单声道（协议常量，不随配置变）。
+///
+/// 生产侧用 [`crate::app::audio::media::AudioFormat::echo_mic`] 表达同一事实；本常量
+/// 是**独立锚点**，供上行断言与文档引用——两处不一致即为协议适配 bug。
+#[allow(dead_code)]
 pub const MIC_SAMPLE_RATE: u32 = 16_000;
 
 /// 设备 speaker 线缆采样率：**48 kHz 单声道 S16_LE**（协议常量，不随配置变）。

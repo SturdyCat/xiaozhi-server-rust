@@ -136,7 +136,7 @@ impl TtsEngine for AiuiTts {
     }
 
     fn output_sample_rate(&self) -> u32 {
-        // 请求参数与回调采样率同源（`TTS_SAMPLE_RATE` = 24k），勿在此另写字面量
+        // 请求参数与回调采样率同源（`TTS_SAMPLE_RATE` = AIUI 真实 16k），勿在此另写字面量
         crate::plugins::aiui::TTS_SAMPLE_RATE
     }
 

@@ -1,9 +1,9 @@
-//! 两级 TTS 成品缓存：内存 LRU（已编码下行帧）+ [`HotAudioStore`] 持久化（原始
-//! 24k PCM，见 [`crate::app::hot_audio`]）。
+//! 两级 TTS 成品缓存：内存 LRU（已编码下行帧）+ [`HotAudioStore`] 持久化（**引擎原样
+//! PCM，速率记在身份键上**，见 [`crate::app::hot_audio`]）。
 //!
 //! 两级**键口径刻意不同**：内存键含下行参数（帧按会话格式编码，格式变了帧就不同）；
-//! 磁盘身份只含引擎/音色/语速/文本（PCM 是合成产物，与投递格式无关）。因此
-//! `get_async` 需要会话的下行格式：内存命中直接给帧；磁盘命中读 PCM → 按该格式
+//! 磁盘身份只含引擎/音色/语速/文本/源采样率（PCM 是合成产物，与投递格式无关）。因此
+//! `get_async` 需要会话的下行格式：内存命中直接给帧；磁盘命中读 PCM → **按源真实率**
 //! 重采样 + 编码（与流式合成同一分帧链路）→ 暖进内存后交付。
 //!
 //! 所有生产文本都可登记身份；`get_async` 先查内存，再在 `spawn_blocking` 读盘
@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex};
 use crate::app::audio::media::AudioFormat;
 use crate::app::downlink::framer::StreamingFramer;
 use crate::app::hot_audio::{
-    pcm_bytes_to_f32, HotAudioKey, HotAudioStore, MAX_ENTRY_BYTES, MAX_FRAMES, PCM_SAMPLE_RATE,
+    pcm_bytes_to_f32, HotAudioKey, HotAudioStore, MAX_ENTRY_BYTES, MAX_FRAMES,
 };
 
 /// 一句缓存音频：已编码的下行 Opus 帧负载序列（不含二进制协议头）。
@@ -72,6 +72,7 @@ impl TtsCache {
         engine_signature: &str,
         speaker: i32,
         speed: f32,
+        tts_sr: u32,
         format: AudioFormat,
         text: &str,
     ) -> u64 {
@@ -79,6 +80,8 @@ impl TtsCache {
         engine_signature.hash(&mut h);
         speaker.hash(&mut h);
         speed.to_bits().hash(&mut h);
+        // 源采样率决定重采样比，进而决定编码出的帧字节，必须进键
+        tts_sr.hash(&mut h);
         format.codec.hash(&mut h);
         format.codec_version.hash(&mut h);
         format.sample_rate.hash(&mut h);
@@ -139,8 +142,10 @@ impl TtsCache {
         }
         let frames = tokio::task::spawn_blocking(move || {
             let _permit = permit;
-            // 磁盘 miss（None）与编码失败（Err）都按 miss 处理。
-            store.get(&hot_key).map(|pcm| encode_pcm(pcm, format))
+            // 磁盘 miss（None）与编码失败（Err）都按 miss 处理；读盘按**源真实率**还原
+            store
+                .get(&hot_key)
+                .map(|pcm| encode_pcm(pcm, hot_key.tts_sr, format))
         })
         .await
         .ok()
@@ -167,8 +172,9 @@ impl TtsCache {
     /// 完整成功句的唯一生产写入入口。保留 Arc 帧序列，落盘不再复制整句；等待
     /// blocking 写入结束，不留 detached 任务。磁盘不可写仍保留内存成品。
     ///
-    /// `pcm` = 该句的原始 24k S16LE 字节（由水库在编码下行帧时顺带收集）；`None`
-    /// 或超限时只暖内存、不写盘（磁盘身份没有帧序号可重建，宁缺勿错）。
+    /// `pcm` = 该句的引擎原样 S16LE 字节（水库在编码下行帧时顺带收集，未做任何
+    /// 重采样；其采样率随身份键记录）；`None` 或超限时只暖内存、不写盘（磁盘身份
+    /// 没有帧序号可重建，宁缺勿错）。
     pub async fn insert_async(&self, key: u64, frames: Vec<Vec<u8>>, pcm: Option<Vec<u8>>) {
         let audio = CachedAudio {
             opus_frames: Arc::new(frames),
@@ -249,11 +255,12 @@ impl TtsCache {
     }
 }
 
-/// 磁盘 PCM → 当前会话格式的下行帧：与流式合成**完全同一分帧链路**（重采样 + Opus
-/// 编码，`framer` 内跨片复用同一编解码器），保证缓存命中句与真合成句听感口径一致。
-fn encode_pcm(pcm: Vec<u8>, format: AudioFormat) -> anyhow::Result<Vec<Vec<u8>>> {
+/// 磁盘 PCM（引擎原样，`from_sr` 为其真实率）→ 当前会话格式的下行帧：与流式合成
+/// **完全同一分帧链路**（重采样 + Opus 编码，`framer` 内跨片复用同一编解码器），
+/// 保证缓存命中句与真合成句听感口径一致。
+fn encode_pcm(pcm: Vec<u8>, from_sr: u32, format: AudioFormat) -> anyhow::Result<Vec<Vec<u8>>> {
     let samples = pcm_bytes_to_f32(&pcm);
-    let mut framer = StreamingFramer::new_format(PCM_SAMPLE_RATE, format)?;
+    let mut framer = StreamingFramer::new_format(from_sr, format)?;
     let mut frames = framer.push(&samples)?;
     if let Some(tail) = framer.finish()? {
         frames.push(tail);

@@ -135,7 +135,7 @@ impl<'a, T: Transport> Session<'a, T> {
             sink,
             turn.stt.clone(),
             PreparedAudio::Stream {
-                // AIUI 全链路回传音频的采样率 = 请求参数（24k），与级联 TTS 同源常量
+                // AIUI 全链路回传音频的采样率 = 引擎真实输出率（16k），与请求参数同源常量
                 sr: crate::plugins::aiui::TTS_SAMPLE_RATE,
                 chunks: chunk_rx,
                 done: done_rx,

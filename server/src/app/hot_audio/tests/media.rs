@@ -1,14 +1,17 @@
 //! 下行编码参数与磁盘身份的关系（v3 PCM 存储的核心收益）。
 //!
 //! v2 时代 codec/版本/采样率/帧长都参与磁盘身份，换设备档位 = 全部重合成；v3 起磁盘
-//! 只存 24k PCM，下行参数只影响**内存键**（帧按会话格式编码）。
+//! 只存**引擎原样 PCM**（不重采样），下行参数只影响**内存键**（帧按会话格式编码）。
 
 use super::*;
+
+/// 测试用源采样率（磁盘 PCM 的原样率）：身份与内存键都必须带上它。
+const SRC_SR: u32 = 16_000;
 use crate::app::audio::media::{AudioCodec, AudioFormat};
 
 #[test]
 fn downlink_format_changes_keep_disk_entry_and_split_memory_only() {
-    let k = HotAudioKey::from_session(&Config::default(), "same speech");
+    let k = HotAudioKey::from_session(&Config::default(), "same speech", SRC_SR);
     // 同一句的三种下行档位：磁盘身份完全相同；内存键各不相同。
     let opus_16k_40 = AudioFormat::new(AudioCodec::Opus, 16_000, 40);
     let opus_16k_60 = AudioFormat::new(AudioCodec::Opus, 16_000, 60);

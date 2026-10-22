@@ -10,6 +10,9 @@ use std::path::PathBuf;
 
 use super::*;
 
+/// 测试用源采样率（磁盘 PCM 的原样率）：身份与内存键都必须带上它。
+const SRC_SR: u32 = 16_000;
+
 /// 独立的临时目录（并发跑测试不会互相踩）。
 fn tmp_dir() -> PathBuf {
     std::env::temp_dir().join(format!("xz-hot-{}", uuid::Uuid::new_v4()))
@@ -17,7 +20,7 @@ fn tmp_dir() -> PathBuf {
 
 /// 默认配置下的键（TTS 引擎为内置默认）。磁盘身份**不含**下行参数。
 fn key_of(text: &str) -> HotAudioKey {
-    HotAudioKey::from_session(&Config::default(), text)
+    HotAudioKey::from_session(&Config::default(), text, SRC_SR)
 }
 
 /// 造 `n` 字节可区分的 PCM 负载（保持偶数字节 = 整 S16LE 样本）。
@@ -169,11 +172,12 @@ fn mem_key_与_tts_cache_同口径() {
     // 这条是"暖进内存缓存后能命中"的前提：两处必须算出同一个键。
     let live = Config::default();
     let fmt = AudioFormat::new(AudioCodec::Opus, 24_000, 60);
-    let k = HotAudioKey::from_session(&live, "我在");
+    let k = HotAudioKey::from_session(&live, "我在", SRC_SR);
     let expect = TtsCache::make_key(
         &crate::plugins::registry::signature_of(&live, crate::plugins::registry::Capability::Tts),
         live.tts.speaker,
         live.tts.speed,
+        SRC_SR,
         fmt,
         "我在",
     );
@@ -182,7 +186,7 @@ fn mem_key_与_tts_cache_同口径() {
     // 换音色 → 内存键也必须变（否则会命中上一个音色的音频）
     let mut other_live = Config::default();
     other_live.tts.speaker = live.tts.speaker + 1;
-    let k2 = HotAudioKey::from_session(&other_live, "我在");
+    let k2 = HotAudioKey::from_session(&other_live, "我在", SRC_SR);
     assert_ne!(k.mem_key(fmt), k2.mem_key(fmt));
 
     // 下行格式变（采样率/帧长/编解码档）→ 内存键变（帧按会话格式编码），但磁盘身份不受影响
@@ -285,15 +289,30 @@ fn 目录跟随配置来源或记忆库() {
 
 #[test]
 fn 文件名投影保持稳定() {
-    // 裸 .pcm 起的身份投影 = FNV(签名) | speaker | speed bits | FNV(文本) 打包再 FNV。
+    // 裸 .pcm 起的身份投影 =
+    //   PCM_FORMAT_VERSION | FNV(签名) | speaker | speed bits | tts_sr | FNV(文本)。
     // 改任何一项打包口径都会让既有部署的缓存全部失效，必须显式换版本号。
+    // v2：修正「引擎实为 16k 却被标成 24k」后弃用全部旧成品（旧文件内容与声明不符，
+    //     继续命中会保持 1.5× 提速且重启不自愈），故整体换名强制重新合成。
+    // v3：改为引擎原样落盘（不再统一重采样到 24k），并让源采样率参与身份。
     let key = HotAudioKey {
         engine_sig: "sig".into(),
         speaker: 0,
         speed: 1.0,
+        tts_sr: SRC_SR,
         text: "我在".into(),
     };
-    assert_eq!(key.file_id(), 0x5f3d_e7b3_c54e_e881);
+    assert_eq!(key.file_id(), 0x522d_bafd_3eea_39a0);
+}
+
+#[test]
+fn 落盘与读回逐字节一致() {
+    // 「引擎给什么就存什么」：i16 源样本 → f32 → 落盘 → 读回，必须逐字节相同。
+    // 覆盖正负极值：32768 标度下 f32 运算精确，任何 1 LSB 偏差都说明标度选错（32767）。
+    let src: Vec<i16> = vec![0, 1, -1, 1000, -1000, 32_767, -32_768, 12_345, -23_456];
+    let bytes: Vec<u8> = src.iter().flat_map(|v| v.to_le_bytes()).collect();
+    let back = f32_to_pcm16_bytes(&pcm_bytes_to_f32(&bytes));
+    assert_eq!(back, bytes, "落盘必须原样保留引擎字节（1 LSB 都不许丢）");
 }
 
 #[test]

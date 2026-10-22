@@ -1,10 +1,12 @@
 //! 所有生产 TTS 文本共用的有界持久化音频库。
 //!
-//! **磁盘存的就是可直接播放的裸音频文件**：`<hash>.pcm` = 24kHz mono S16LE 整句 PCM。
-//! 无自定义容器、无头部、无校验尾、无 json 登记表——`ffplay -f s16le -ar 24000
-//! -ch_layout mono <file>.pcm`（或 Audacity 导入原始数据）即可直接播放/检查，删任意
-//! 文件都不影响其余缓存。文件名 = 合成身份的稳定 FNV-1a 64（引擎签名/音色/语速/文本
-//! 各自哈希后的稳定投影，文件内外都不出现凭据明文）。
+//! **磁盘存的就是可直接播放的裸音频文件**：`<hash>.pcm` = mono S16LE 整句 PCM，
+//! **引擎原样输出、未做任何重采样**（AIUI 16k / Kokoro 24k，速率随身份键记录）。
+//! 无自定义容器、无头部、无校验尾、无 json 登记表——按对应采样率
+//! `ffplay -f s16le -ar 16000 -ch_layout mono <file>.pcm`（或 Audacity 导入原始数据）
+//! 即可直接播放/检查，删任意文件都不影响其余缓存。文件名 = 合成身份的稳定 FNV-1a 64
+//!（口径版本/引擎签名/音色/语速/源采样率/文本各自哈希后的稳定投影，文件内外都不出现
+//! 凭据明文）。
 //!
 //! 磁盘身份刻意**不含下行编码参数**（采样率/帧长/编解码档）——那属于"投递"，不属于
 //! "合成成品"。换设备档位、改 `[audio]` 帧长都不作废磁盘缓存；命中后在读路径按会话
@@ -40,9 +42,11 @@ pub(crate) fn cache_dir(config_location: Option<&str>, memory_db_path: &str) -> 
     .join("hot-audio")
 }
 
-/// 磁盘固定存储采样率：TTS 引擎产物统一为 24k（kokoro/讯飞/内置全是 24k），
-/// 写入时经重采样归一，读取时按会话实际下行格式再重采样。
-pub const PCM_SAMPLE_RATE: u32 = 24_000;
+/// 磁盘载荷口径版本：**改动存储语义（采样率/声道/位深/字节序）必须 +1**。
+/// 版本参与文件名哈希，旧口径成品因此自动失效、重新合成。否则声明错误的旧文件
+/// 会被持续命中——听感偏移无法靠重启自愈（2026-10-22 的 1.5× 提速即此类）。
+/// v2 = 统一重采样到固定 24k 锚点；v3 = **引擎原样落盘**（不重采样，采样率随身份记录）。
+const PCM_FORMAT_VERSION: u32 = 3;
 /// 全文本缓存的固定安全限制；后续如需可配置，统一从配置注册表接入。
 pub const MAX_FILES: usize = 4096;
 pub const MAX_TOTAL_BYTES: u64 = 512 * 1024 * 1024;
@@ -63,6 +67,12 @@ pub struct HotAudioKey {
     pub engine_sig: String,
     pub speaker: i32,
     pub speed: f32,
+    /// 落盘 PCM 的**真实采样率**（引擎原样输出，未做任何重采样）。
+    ///
+    /// 必须随身份记录：裸 `.pcm` 没有文件头，读写两侧只能靠它知道这份字节按什么率还原。
+    /// 它取引擎实例的 [`crate::plugins::tts::TtsEngine::output_sample_rate`]，不是配置里
+    /// 的期望值——声明率与真实率不符时，所有出口会按错比例播放（提速/降速 1.5×）。
+    pub tts_sr: u32,
     pub text: String,
 }
 
@@ -73,13 +83,15 @@ impl HotAudioKey {
             engine_sig: lease.fingerprint().to_string(),
             speaker: lease.config().speaker,
             speed: lease.config().speed,
+            // 以实例自报的真实率为准（AIUI 恒 16k、Kokoro 24k），不读配置期望值
+            tts_sr: lease.engine().output_sample_rate(),
             text: text.to_string(),
         }
     }
 
     /// 配置投影只供离线格式测试；生产无法调用，必须使用实际租约构造身份。
     #[cfg(test)]
-    pub fn from_session(live: &Config, text: &str) -> Self {
+    pub fn from_session(live: &Config, text: &str, tts_sr: u32) -> Self {
         Self {
             engine_sig: crate::plugins::registry::signature_of(
                 live,
@@ -87,6 +99,7 @@ impl HotAudioKey {
             ),
             speaker: live.tts.speaker,
             speed: live.tts.speed,
+            tts_sr,
             text: text.to_string(),
         }
     }
@@ -95,12 +108,14 @@ impl HotAudioKey {
     ///
     /// 内存里缓存的是**已编码下行帧**，所以键含**整个**下行格式（采样率/帧长之外还有
     /// 编解码档与契约版本；磁盘身份不含它们）；命中它 = 走既有下行链路的零合成零编码
-    /// 路径（预取 worker 直接投递已编码帧）。
+    /// 路径（预取 worker 直接投递已编码帧）。也含源采样率：同一引擎换档后重采样比不同，
+    /// 编码出的帧字节不可互喂。
     pub fn mem_key(&self, format: crate::app::audio::media::AudioFormat) -> u64 {
         TtsCache::make_key(
             &self.engine_sig,
             self.speaker,
             self.speed,
+            self.tts_sr,
             format,
             &self.text,
         )
@@ -111,10 +126,14 @@ impl HotAudioKey {
     /// 输入是各字段的**稳定投影**（签名与文本先各自 FNV 一次，再连同标量打包哈希），
     /// 因此文件里外都不会出现凭据明文。
     pub fn file_id(&self) -> u64 {
-        let mut packed = Vec::with_capacity(24);
+        let mut packed = Vec::with_capacity(32);
+        // 口径版本打头：口径一变全库换名，杜绝「旧文件按新口径解读」
+        packed.extend_from_slice(&PCM_FORMAT_VERSION.to_le_bytes());
         packed.extend_from_slice(&fnv1a64(self.engine_sig.as_bytes()).to_le_bytes());
         packed.extend_from_slice(&self.speaker.to_le_bytes());
         packed.extend_from_slice(&self.speed.to_bits().to_le_bytes());
+        // 同一句在不同源率下字节数不同，必须进身份，否则会拿错率还原
+        packed.extend_from_slice(&self.tts_sr.to_le_bytes());
         packed.extend_from_slice(&fnv1a64(self.text.as_bytes()).to_le_bytes());
         fnv1a64(&packed)
     }
@@ -166,7 +185,7 @@ impl HotAudioStore {
         self.dir.as_deref()
     }
 
-    /// 读一条；命中返回**整句裸 PCM S16LE 字节**（[`PCM_SAMPLE_RATE`] 单声道）。
+    /// 读一条；命中返回**整句裸 PCM S16LE 字节**（单声道，采样率见 [`HotAudioKey::tts_sr`]）。
     ///
     /// 任何异常（文件不存在 / 非法载荷 / IO 错误）都返回 `None` 并删掉坏文件——读不出来
     /// 只意味着"要重新合成一次"，**永远不该影响会话**。
@@ -201,7 +220,7 @@ impl HotAudioStore {
         }
     }
 
-    /// 写一条（覆盖同名）。`pcm` = 整句裸 S16LE 字节（[`PCM_SAMPLE_RATE`] 单声道）。
+    /// 写一条（覆盖同名）。`pcm` = 整句裸 S16LE 字节（单声道，采样率见 [`HotAudioKey::tts_sr`]）。
     /// 返回是否真的落盘。
     ///
     /// 先写临时文件再 `rename`：读者**永远看不到半截文件**（唤醒可能在写入的同一瞬间发生）。
@@ -244,18 +263,24 @@ fn next_tmp_seq() -> u64 {
     SEQ.fetch_add(1, Ordering::Relaxed)
 }
 
-/// 落盘 PCM S16LE 字节 → 分帧器吃的 f32（口径与 `framer` 的 PCM 编码互逆）。
+/// 落盘 PCM S16LE 字节 → f32（**与 [`f32_to_pcm16_bytes`] 严格互逆**）。
+///
+/// 标度用 32768 而不是 32767：2^15 是二次幂，`i16 / 32768`、`f32 * 32768` 在 f32 里
+/// 都**精确无误差**，于是「引擎 i16 → f32 → 落盘 i16 → f32」逐样本还原，磁盘字节与
+/// 引擎产物完全一致（用 32767 会因除法不精确 + 截断而系统性丢 1 LSB）。
 pub(crate) fn pcm_bytes_to_f32(pcm: &[u8]) -> Vec<f32> {
     pcm.chunks_exact(2)
-        .map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32_767.0)
+        .map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32_768.0)
         .collect()
 }
 
-/// f32 样本 → 落盘 PCM S16LE 字节（钳位口径与 `framer` 的 PCM 编码一致）。
+/// f32 样本 → 落盘 PCM S16LE 字节（**引擎原样**：不重采样、不改标度口径）。
+///
+/// 与 [`pcm_bytes_to_f32`] 互逆；`+1.0` 钳到 32767（避免溢出回绕），`-1.0` 对应 -32768。
 pub(crate) fn f32_to_pcm16_bytes(samples: &[f32]) -> Vec<u8> {
     samples
         .iter()
-        .flat_map(|s| ((s.clamp(-1.0, 1.0) * 32_767.0) as i16).to_le_bytes())
+        .flat_map(|s| ((s * 32_768.0).clamp(-32_768.0, 32_767.0) as i16).to_le_bytes())
         .collect()
 }
 

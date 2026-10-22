@@ -6,11 +6,14 @@
 use super::*;
 use crate::app::audio::media::{AudioCodec, AudioFormat};
 
+/// 测试用源采样率（磁盘 PCM 的真实率）。
+const SRC_SR: u32 = 16_000;
+
 /// 测试用下行档位（16k / 60ms Opus）。
 const KEY_FMT: AudioFormat = AudioFormat::new(AudioCodec::Opus, 24_000, 60);
 
 fn key(text: &str) -> u64 {
-    TtsCache::make_key("sig", 0, 1.0, KEY_FMT, text)
+    TtsCache::make_key("sig", 0, 1.0, SRC_SR, KEY_FMT, text)
 }
 
 #[test]
@@ -24,49 +27,55 @@ fn cache_roundtrip() {
 
 #[test]
 fn key_varies_with_all_encoding_inputs() {
-    let a = TtsCache::make_key("sig", 0, 1.0, KEY_FMT, "文本");
+    let a = TtsCache::make_key("sig", 0, 1.0, SRC_SR, KEY_FMT, "文本");
     assert_ne!(
         a,
-        TtsCache::make_key("sig2", 0, 1.0, KEY_FMT, "文本"),
+        TtsCache::make_key("sig2", 0, 1.0, SRC_SR, KEY_FMT, "文本"),
         "引擎签名"
     );
     assert_ne!(
         a,
-        TtsCache::make_key("sig", 1, 1.0, KEY_FMT, "文本"),
+        TtsCache::make_key("sig", 1, 1.0, SRC_SR, KEY_FMT, "文本"),
         "speaker"
     );
     assert_ne!(
         a,
-        TtsCache::make_key("sig", 0, 1.1, KEY_FMT, "文本"),
+        TtsCache::make_key("sig", 0, 1.1, SRC_SR, KEY_FMT, "文本"),
         "speed"
+    );
+    // 源采样率决定重采样比：同一句 16k 与 24k 还原出的帧字节不同，键必须分开
+    assert_ne!(
+        a,
+        TtsCache::make_key("sig", 0, 1.0, 24_000, KEY_FMT, "文本"),
+        "源采样率"
     );
     let mut f = KEY_FMT;
     f.sample_rate = 16_000;
     assert_ne!(
         a,
-        TtsCache::make_key("sig", 0, 1.0, f, "文本"),
+        TtsCache::make_key("sig", 0, 1.0, SRC_SR, f, "文本"),
         "下行采样率"
     );
     f = KEY_FMT;
     f.frame_ms = 40;
-    assert_ne!(a, TtsCache::make_key("sig", 0, 1.0, f, "文本"), "帧长");
+    assert_ne!(a, TtsCache::make_key("sig", 0, 1.0, SRC_SR, f, "文本"), "帧长");
     f = KEY_FMT;
     f.codec = AudioCodec::PcmS16Le;
     assert_ne!(
         a,
-        TtsCache::make_key("sig", 0, 1.0, f, "文本"),
+        TtsCache::make_key("sig", 0, 1.0, SRC_SR, f, "文本"),
         "编解码档位（bench 回声档与设备档可能几何相同）"
     );
     f = KEY_FMT;
     f.codec_version += 1;
-    assert_ne!(a, TtsCache::make_key("sig", 0, 1.0, f, "文本"), "契约版本");
+    assert_ne!(a, TtsCache::make_key("sig", 0, 1.0, SRC_SR, f, "文本"), "契约版本");
     assert_ne!(
         a,
-        TtsCache::make_key("sig", 0, 1.0, KEY_FMT, "文本2"),
+        TtsCache::make_key("sig", 0, 1.0, SRC_SR, KEY_FMT, "文本2"),
         "文本"
     );
     // 确定性：同输入同键（跨会话命中前提）
-    assert_eq!(a, TtsCache::make_key("sig", 0, 1.0, KEY_FMT, "文本"));
+    assert_eq!(a, TtsCache::make_key("sig", 0, 1.0, SRC_SR, KEY_FMT, "文本"));
 }
 
 #[test]
@@ -108,15 +117,15 @@ fn overwrite_refreshes_same_key() {
 }
 
 fn persistent_key(text: &str) -> HotAudioKey {
-    HotAudioKey::from_session(&crate::config::Config::default(), text)
+    HotAudioKey::from_session(&crate::config::Config::default(), text, SRC_SR)
 }
 
 /// 测试用下行格式（16k / 60ms Opus）：磁盘身份不含它，内存键含它。
 const OUT: AudioFormat = AudioFormat::new(AudioCodec::Opus, 16_000, 60);
 
-/// 测试用 PCM：`n` 毫秒 24k 静音（S16LE，偶数字节）。
+/// 测试用 PCM：`n` 毫秒 `SRC_SR` 静音（S16LE，偶数字节）。
 fn pcm_ms(ms: usize) -> Vec<u8> {
-    vec![0u8; ms * PCM_SAMPLE_RATE as usize / 1000 * 2]
+    vec![0u8; ms * SRC_SR as usize / 1000 * 2]
 }
 
 #[tokio::test]

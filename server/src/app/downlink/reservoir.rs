@@ -492,7 +492,7 @@ async fn push_sentence(
                 }
             };
             let mut collected: Option<SentenceCollector> =
-                (cache_key != 0).then(|| SentenceCollector::new(sr));
+                (cache_key != 0).then(SentenceCollector::new);
             let mut intact = true;
             while let Some(chunk) = chunks.recv().await {
                 if abort.load(Ordering::Relaxed) {
@@ -502,7 +502,7 @@ async fn push_sentence(
                 // 先编码，再**立刻丢弃分片**：Drop 即把下载额度还给上游（见 `PcmChunk`）。
                 // 于是水库的背压不会反向摁住 TTS 下载——两段缓冲各按自己的口径吃满
                 // （水库多秒 Opus + 下载缓冲多秒 PCM，见 `app::prefetch` 模块文档）。
-                // 缓存收集（下行帧副本 + 原始 24k PCM）也只在 Drop 之前做。
+                // 缓存收集（下行帧副本 + 引擎原样 PCM，不重采样）也只在 Drop 之前做。
                 let encoded = framer.push(&chunk.pcm);
                 if let Some(c) = collected.as_mut() {
                     c.on_chunk(&chunk.pcm);

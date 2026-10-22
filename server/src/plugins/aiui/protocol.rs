@@ -171,7 +171,7 @@ pub(super) fn first_frame(
                 "speed": cfg.speed,
                 "volume": cfg.volume,
                 "pitch": cfg.pitch,
-                // 下行合成采样率：与本地 Kokoro 一致的 24k，见 `TTS_SAMPLE_RATE`。
+                // 下行合成采样率：AIUI 实测只支持 16k（忽略更大值），见 `TTS_SAMPLE_RATE`。
                 "tts": { "encoding": "raw", "sample_rate": super::TTS_SAMPLE_RATE, "channels": 1, "bit_depth": 16 }
             }
         },

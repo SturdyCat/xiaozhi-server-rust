@@ -17,8 +17,11 @@ fn tmp_dir() -> PathBuf {
     std::env::temp_dir().join(format!("xz-wake-{}", uuid::Uuid::new_v4()))
 }
 
+/// 测试用源采样率：磁盘 PCM 的原样率。
+const SRC_SR: u32 = 24_000;
+
 fn key_of(text: &str) -> HotAudioKey {
-    HotAudioKey::from_session(&Config::default(), text)
+    HotAudioKey::from_session(&Config::default(), text, SRC_SR)
 }
 
 /// 测试用下行格式（16k / 60ms Opus）：内存键含它，磁盘身份不含它。
@@ -28,9 +31,9 @@ fn frames(n: usize) -> Vec<Vec<u8>> {
     (0..n).map(|i| vec![i as u8; 8]).collect()
 }
 
-/// 测试用 PCM：`ms` 毫秒 24k 静音（S16LE，偶数字节）。
+/// 测试用 PCM：`ms` 毫秒 `SRC_SR` 静音（S16LE，偶数字节）。
 fn pcm(ms: usize) -> Vec<u8> {
-    vec![0u8; ms * 48] // 24000 Hz × 2 字节 ≈ 48 字节/毫秒
+    vec![0u8; ms * SRC_SR as usize / 1000 * 2]
 }
 
 #[test]

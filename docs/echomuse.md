@@ -29,7 +29,7 @@ emOS Web 管理的额外参考锚点是上游 [`858987c272329a41d385835439bd3e2d
 | `token` | 空 | 校验设备 `X-Em-Token` 头；留空不校验。生产建议设置（同网段任何设备都能按此协议连进来） |
 | `ble_proxy` | `false` | 开启蓝牙代理：ack 向声明了 `ble_connect` 的设备回声明 `ble_connect` + `ble_adverts_data`，接入时推送 `bleProxyEnabled`/`bleProxyConnections`（每设备 settings 可覆盖）；关闭时 ack 不声明、`0x06`/`0x08` 按未知帧忽略、管理面 BLE 端点 404——零行为变化 |
 | `plain_port` | `8767` | 控制器专用端口（官方接口对齐）：enabled 且 >0 时**额外**监听设备面路由（`/em/*` + `/shell`），mDNS `plain_port` 也广播它；0 = 关闭（仅主端口）。绑定失败只告警、mDNS 回退广播主端口；主端口始终继续服务 `/em/*` |
-| `welcome` | 含使用提示 | 连接欢迎语：register + data 认领、会话建立后**立刻**说一次（`client_id="echomuse"` 的会话专属，走唤醒问候同一预制话术链路，合成一次即落盘 `hot-audio/` 的裸 24k PCM 文件免复合成）；留空 = 不说；每次会话建立（含断线重连）都会说一遍。管理台「配置 → EchoMuse」可编辑 |
+| `welcome` | 含使用提示 | 连接欢迎语：register + data 认领、会话建立后**立刻**说一次（`client_id="echomuse"` 的会话专属，走唤醒问候同一预制话术链路，合成一次即落盘 `hot-audio/` 的裸 PCM（引擎原样 16k，不重采样）免复合成）；留空 = 不说；每次会话建立（含断线重连）都会说一遍。管理台「配置 → EchoMuse」可编辑 |
 
 mDNS 广播地址**无配置项**：启动时动态探测部署机默认出口的局域网 IPv4，部署在哪台机器、是什么 IP 就广播什么。docker 容器部署会探测到容器内网 IP（设备连不上），请改用 host 网络部署。
 

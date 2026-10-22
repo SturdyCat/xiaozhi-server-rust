@@ -526,7 +526,7 @@ impl<'a, T: Transport> Session<'a, T> {
                 let fmt = params.output_format();
                 SentenceSource {
                     tts: lease.engine(),
-                    // 内存键含整个下行格式（帧按会话格式编码）；磁盘身份不含（存 PCM 24k）。
+                    // 内存键含整个下行格式（帧按会话格式编码）；磁盘身份不含（存引擎原样 PCM）。
                     cache_key: key.mem_key(fmt),
                     // 完整身份：预取 worker 据此登记热音频（磁盘持久化，跨重启复用）。
                     // `register_identity` 内部校验 `mem_key == cache_key`，漂移即不登记。

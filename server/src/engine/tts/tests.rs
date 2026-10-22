@@ -73,7 +73,7 @@ fn failed_build_retains_instance_config_fingerprint_generation_and_cache_identit
     assert!(cache.get(mem(&key(&retained))).is_some());
     assert_ne!(
         key(&retained),
-        HotAudioKey::from_session(&cfg("bad-new"), "same sentence")
+        HotAudioKey::from_session(&cfg("bad-new"), "same sentence", 24_000)
     );
 }
 
@@ -183,7 +183,7 @@ async fn disk_cache_uses_retained_actual_identity_after_failed_refresh() {
         "磁盘命中按会话格式从 PCM 重新编码"
     );
     assert!(store
-        .get(&HotAudioKey::from_session(&cfg("bad"), "same sentence"))
+        .get(&HotAudioKey::from_session(&cfg("bad"), "same sentence", 24_000))
         .is_none());
     // 只清理由本测试创建的明确临时目录。
     assert!(dir

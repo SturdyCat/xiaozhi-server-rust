@@ -368,7 +368,7 @@ pub(crate) struct SentenceSource {
 /// 本句自己的推理窗口。
 ///
 /// `output_format` = 本会话的下行音频格式（会话开始时固定）：内存缓存键与磁盘命中的
-/// 编码都依赖它（磁盘存的是 24k PCM，见 `app::hot_audio`）。
+/// 编码都依赖它（磁盘存的是**引擎原样 PCM**，源率记在身份键上，见 `app::hot_audio`）。
 ///
 /// `first_pcm`（缺口②）= 首个**非缓存**句的首个 PCM 分片回调（TTFA 分段采集的
 /// `tts_first_pcm` 埋点）；`None` = 不采集。first-only 语义由调用方闭包用 `AtomicBool`

@@ -546,7 +546,7 @@ mod gates;
 async fn persistent_hit_skips_synthesis_and_inference_gate() {
     use crate::app::hot_audio::{HotAudioKey, HotAudioStore};
     let dir = std::env::temp_dir().join(format!("xz-prefetch-{}", uuid::Uuid::new_v4()));
-    let key = HotAudioKey::from_session(&crate::config::Config::default(), "普通回答");
+    let key = HotAudioKey::from_session(&crate::config::Config::default(), "普通回答", 24_000);
     // 磁盘上存的是 24k PCM（v3 格式）；内存键与编码按 24k/60ms 下行档位。
     let fmt = out_fmt();
     let store = Arc::new(HotAudioStore::new(Some(dir.clone())));

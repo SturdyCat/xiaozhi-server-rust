@@ -182,7 +182,7 @@ pub async fn run_session<T: Transport>(
     };
     // 连接欢迎语（`[echomuse].welcome`，RestartOnly）：设备接入即说一次，走唤醒问候
     // 同一预制话术链路（`speak_canned`）——固定文本合成一次即经预取链路落盘
-    // hot-audio/（裸 24k PCM 文件，见 `app::hot_audio`），稳态零合成；失败只记日志，
+    // hot-audio/（裸 PCM 文件，引擎原样、无重采样，见 `app::hot_audio`），稳态零合成；失败只记日志，
     // 绝不影响会话本身。
     if let Some(text) = welcome {
         if let Err(e) = session.speak_canned(&text).await {
