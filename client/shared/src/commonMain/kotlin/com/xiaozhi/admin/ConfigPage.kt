@@ -14,7 +14,9 @@ import com.tencent.kuikly.core.views.View
  * 逻辑全部下沉到 ConfigFormState（load/save/renderForm），本页只负责壳 + 生命周期。
  */
 @Page("config")
-class ConfigPage : Pager() {
+class ConfigPage : Pager(), FieldHelpHost {
+    /** 字段帮助弹层（ⓘ）显隐状态：本页唯一实例，卡片里的徽标经 [fieldHelpState] 回溯到这里。 */
+    override val fieldHelp = FieldHelpState(this)
 
     val form = ConfigFormState(this)
 
@@ -65,7 +67,7 @@ class ConfigPage : Pager() {
             }
 
             // ⚠️ 非限定调用（接收者=当前容器），组件才能挂进正确的父容器
-            largeTitleBar({ "节点管理" + if (ctx.form.editDeviceId.isEmpty()) "" else " · 设备 ${ctx.form.editDeviceId}" },
+            largeTitleBar({ configPageTitle(ctx.form) },
                 stackActions = { workspaceIsCompact(ctx) && (ctx.form.conflict || ctx.form.editDeviceId.isNotEmpty()) },
                 trailing = {
                 // 过期写入（409）后：草稿仍在本地，给一个「重新加载」出口（对齐 DSH 的冲突文案口径）
@@ -120,9 +122,24 @@ class ConfigPage : Pager() {
                 ctx,
             )
 
+            // 字段帮助弹层（ⓘ 的唯一实例）：每页根部挂一次，Modal 渲染不占布局
+            fieldHelpDialog()
+
             // 顶部浮动 toast（跨端统一，3 秒自动消失）：必须放在**页面根容器**最后——
             // 绝对定位脱离布局（不占高度、不推挤内容），相对整页水平居中、盖在标题栏与内容之上。
             ToastHost(ctx.toast)
         }
     }
+}
+
+/**
+ * 单页模式标题：停在流程节点=「节点管理」（设备个性化带设备号），停在全局 section=「全局配置」。
+ *
+ * 统一管理台（`@Page("admin")`）的标题由侧边栏菜单决定（「语音流程」/「全局配置」），
+ * 这里只是让**独立的配置页**在两种语义下都不要自称"节点管理"。
+ */
+private fun configPageTitle(form: ConfigFormState): String = when {
+    form.workflowPosition != null ->
+        "节点管理" + if (form.editDeviceId.isEmpty()) "" else " · 设备 ${form.editDeviceId}"
+    else -> "全局配置"
 }

@@ -69,14 +69,15 @@ class NluSectionState(private val scope: PagerScope) {
     val slots: ObservableList<SlotDraft> by scope.observableList()
 
     /// action.kind 下拉选项（官方 AlertDialog 要求 ObservableList；全部行共享同一份）。
+    /// 界面只出中文（动作枚举值不进界面，见 fieldLabel 文案口径）。
     val actionOptions: ObservableList<Pair<String, String>> by scope.observableList()
 
     init {
         actionOptions.addAll(
             listOf(
-                "reply" to "reply（只应答，不执行动作）",
-                "end_session" to "end_session（说 reply 后结束聆听）",
-                "mcp" to "mcp（应答后派发设备工具）",
+                "reply" to "只应答（说完就结束，不执行动作）",
+                "end_session" to "结束聆听（说完应答语让设备退出）",
+                "mcp" to "派发设备工具（把槽位作为参数调用）",
             ),
         )
     }

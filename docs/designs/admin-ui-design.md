@@ -104,7 +104,7 @@ DSH 的两条规则（`ui-settings-plugin-inventory/README.md:36` 原文）：
 
 1. **草稿 + 单一保存点**：`blocked = !dirty || invalid || saving`；DSH 在卸载时**丢弃草稿且不提供"放弃"按钮**（`ui-primitives/lib/index.js` 注释：*"Leaving the page drops every staged edit, so the form discards on unmount and offers no discard control"*）。我们的 `ConfigPage.kt` 已是"顶栏保存按钮"形态，保持即可。
 2. **覆盖语义按"存在性"而非"值比较"**（原文：*"That presence, not a value comparison, is what marks a field overridden: an override equal to the composition default is still an override."*）→ 字段旁给「已覆盖」+「恢复默认」；**空输入 = 清除 = 恢复继承**。这正好对应我们「`config.toml` 覆盖内置默认」的真实语义。
-3. **hint 讲后果，help 放展开区**。DSH 文案范例（中文，直接可用）：*"单条命令允许运行多久，超时即终止。"*、*"超出部分会转存到临时文件，而不是被丢弃。"*、*"请填数字；留空表示使用默认值。"*、*"本部署的设置为只读。"*、*"该插件当前未加载，暂时无法配置。"*、*"本部署没有接受这些值，已保留供你修改。"* → **不要复述标签**（"超时时间"→"单条命令允许运行多久"）。Kuikly 无 tooltip，用 `vif` 展开的 `Text`（12px 次级色）作为 help 区。
+3. **hint 讲后果，help 放展开区**。DSH 文案范例（中文，直接可用）：*"单条命令允许运行多久，超时即终止。"*、*"超出部分会转存到临时文件，而不是被丢弃。"*、*"请填数字；留空表示使用默认值。"*、*"本部署的设置为只读。"*、*"该插件当前未加载，暂时无法配置。"*、*"本部署没有接受这些值，已保留供你修改。"* → **不要复述标签**（"超时时间"→"单条命令允许运行多久"）。~~Kuikly 无 tooltip，用 `vif` 展开的 `Text`（12px 次级色）作为 help 区。~~ → **2026-10 起改为 tooltip**：Kuikly 用官方 `AlertDialog` 做弹层（Modal 渲染、蒙层点击关闭），见 §5.10。hint 只留真正的**风险/跨字段矛盾**（黄色一行），解释性长段落一律进 tooltip。
 4. **密钥字段：只报 presence，空草稿保留原值**。DSH 原文：*"The value never rides a response, so the control reports only whether one is configured and starts blank; a blank draft writes nothing, which keeps the stored key rather than clearing it."*；文案 *"不写入设置文件。留空表示保持当前密钥。"* / *"已配置密钥。"* / *"未配置密钥"*；校验 = trim 后非空且**全为可打印 ASCII**（`[\x21-\x7E]`），拒绝 `NAME=value` 与成对引号。服务端侧 *"Secret values cross in this direction only: no method here returns one"* + `redactSecrets: true`。
    → **与 §1.7 bug-1 / §3.4 完全一致**：`GET /api/config` 只回 `has_api_key: true`；`POST` 里**空字符串视为"未提供"**（这条必须显式写进契约，否则旧客户端回传空串会把密钥清掉）。
 5. **revision 冲突**：DSH 的 code 是 `settings/conflict`，客户端文案 *"Someone else changed these settings while this card was open. Close it and reopen to edit the current values."*，且**保留草稿**。→ 我们 `POST /api/config` 冲突返回 409 + 该文案花色的中文（"配置在别处被改过，请重新加载后再保存"）+ 保留草稿 + 「重新加载」按钮。
@@ -175,6 +175,27 @@ DSH 全部走语义 token（`--dsw-alias-*` / `--dsw-radius-*` / `--dsw-elevatio
 - 新增「总览 / AIUI / 记忆 / 灵魂」页面只改两处：`ConfigCards.kt:22-34` 的 `pages` 列表 + 新增卡片函数（若沿用现有 `renderForm` 结构）；有 `SectionDescriptor` 表后收敛为一处；
 - **`[aiui]` 卡必须一并补上**（当前 `commonMain` grep `aiui` 零命中，配置段完全不可见，见 §1.8#9）；
 - 保存语义改为"部分更新"后（bug-1），**旧客户端（回传完整 JSON 但缺字段）依然安全**；但**密钥打码会破坏旧客户端**（它会把空串回传 → 按 §5.4 规则"空串=未提供"处理即可兼容），因此**打码与空串约定必须同批上线**。
+
+#### 5.10 字段文案与布局口径（2026-10，可读性重做）
+
+配置表单此前把 TOML key 直接当标签（`min_silence_duration`、`extractor.api_base`、`enabled（…）`），解释性长段落又堆在字段下方，一眼看不出"这个框该填什么"。现行口径三条：
+
+1. **标签用中文见名知意**（CPU / AI / Token / AppID / MCP 这类通用术语保留英文），配置 key 不上界面。解释里也不要复述标签。
+2. **复杂字段才挂 ⓘ**：`labeledField/labeledIntField/labeledDecimalField/labeledTextArea/switchRow/dropdownField` 的 `help` 参数非空时，名称右侧渲染 `infoBadge`；点开是官方 `AlertDialog` 弹层（[FieldHelp.kt](<../../client/shared/src/commonMain/kotlin/com/xiaozhi/admin/FieldHelp.kt>)）。见名知意的字段（端口 / 语速 / 声道数）**不挂** icon——不是每个字段都需要解释。原来常驻的 `Text` caption 长段落搬进 `help`，界面只留风险提示。
+3. **该功能的控制动作靠右**：`fieldLabel(label, help, trailing)` 把「获取模型列表 / 测试凭据 / 探测音色目录 / 生成 NLU 模型 / 重建索引 / 添加意图」放在名称同一行的右端（左名右控、两端对齐），不再另起 `actionRow` 与字段脱节。
+
+实现约束：徽标与弹层都经 `getPager()` 回溯到页面持有的 `FieldHelpState`（`FieldHelpHost`），**不用全局单例 observable**——脱离 `PagerScope` 的 observable 不会驱动任何页面重建。弹层每页只在根部渲染一次（`fieldHelpDialog()`），避免每字段一个 AlertDialog 把节点数翻倍。
+
+#### 5.11 导航拆分：「语音流程」与「全局配置」是两个一级菜单（2026-10）
+
+此前侧边栏只有一个「语音流程与配置」，全局设置（服务 / MCP / OTA / AIUI / 能力总览 / 预设）藏在工作流右上的「全局设置」按钮后面，落到工作流页左菜单里与流程节点混排——同一列既有"改某个阶段"又有"改整套部署"，语义不同却无视觉区分。
+
+现行口径：
+
+1. **两级菜单，一条路由**。侧边栏分成「语音流程」（id `config`，默认落地）与「全局配置」（id `settings`）。两者共用同一份 `ConfigFormState` 与同一条 `ConfigSelection`，保存都是同一次 `POST /api/config`；**不新增第二套 active 状态**，只各自记住上次停留的位置（`openWorkflowPage` / `openGlobalPage`）。
+2. **归属判据是可推导的，不是手工分类**：`ConfigSections.global` = `PipelineFlow.primaryForSection(id) == null` 的 section。有流程节点的一定能从「语音流程」到达（VAD/ASR/NLU/LLM/TTS 与挂在连接点上的唤醒、指令、人格、记忆、音频入口/输出），其余才进「全局配置」。同一 section 不出现在两套导航里。
+3. **全局配置页不套工作流外壳**：无横向轨道、无「配置 / 测试」Tab（全局设置没有节点、也没有可执行测试，套 Tab 只会造出空壳页），只有分组左菜单（总览 / 上下文增强 / 服务与接入）+ 右表单，保存仍在标题栏右上。
+4. **跨页跳转按归属路由**：概览页的能力健康修复横幅、工作流右上的「全局设置」按钮都先 `openConfigSection(section)`，再按 section 归属切菜单（有节点 → `config`，否则 → `settings`），不硬编码 `selectedSection`。
 
 ---
 

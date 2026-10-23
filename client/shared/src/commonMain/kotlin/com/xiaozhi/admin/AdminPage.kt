@@ -66,7 +66,10 @@ import com.tencent.kuikly.core.views.View
  *   嵌套 builder 闭包对 `pagerData` 的访问。
  */
 @Page("admin")
-class AdminPage : Pager() {
+class AdminPage : Pager(), FieldHelpHost {
+
+    /** 字段帮助弹层（ⓘ）显隐状态：本页唯一实例，卡片里的徽标经 [fieldHelpState] 回溯到这里。 */
+    override val fieldHelp = FieldHelpState(this)
 
     /** 配置表单（复用既有实现：同一份 [ConfigFormState] 驱动「配置」section）。 */
     val form = ConfigFormState(this)
@@ -125,6 +128,11 @@ class AdminPage : Pager() {
 
     override fun pageDidAppear() {
         super.pageDidAppear()
+        // 跨菜单跳转：卡片里的跳转（能力健康修复 / 全局设置按钮）只给 section，
+        // 由这里决定侧边栏落到哪个菜单——有流程节点回「语音流程」，否则去「全局配置」。
+        form.onSectionRouted = { section ->
+            selectedSection = if (ConfigSections.isGlobal(section)) "settings" else "config"
+        }
         refreshAll(pagerBaseUrl(this))
     }
 
@@ -169,6 +177,9 @@ class AdminPage : Pager() {
         // （@DslMarker 屏蔽嵌套 builder 闭包对 pagerData 的访问），故收敛成顶层 lambda，
         // 嵌套 vif 里一律经 isNarrow() 求值——窗口 resize 跨过断点时自动 常驻 ⇄ 抽屉 切换。
         val isNarrow = { pagerData.pageViewWidth < NARROW_BREAKPOINT }
+        // 「语音流程」与「全局配置」是两个菜单、同一份表单：标题栏的保存 / 冲突动作对两者都要出现
+        //（保存都是同一次 POST /api/config，不存在第二套提交路径）。
+        val editableSection = { ctx.selectedSection == "config" || ctx.selectedSection == "settings" }
         // 测试台布局参数（mac-only section，见下方分支）：与 AdminShell 时代同一口径
         //（宽 = 窗口宽 - 侧边栏(240) - 分隔(1)；高 = 窗口高 - 顶避让(36) - 标题栏区(145-36)）。
         val twoColumn = { pagerData.pageViewWidth >= 900f }
@@ -222,17 +233,18 @@ class AdminPage : Pager() {
                                 hamburgerButton { ctx.drawerOpen = true }
                             }
                         },
-                        stackActions = { ctx.selectedSection == "config" && workspaceIsCompact(ctx) &&
+                        stackActions = { editableSection() && workspaceIsCompact(ctx) &&
                             (ctx.form.conflict || ctx.form.editDeviceId.isNotEmpty()) },
                         trailing = {
-                            vif({ ctx.selectedSection == "config" && ctx.form.conflict }) {
+                            vif({ editableSection() && ctx.form.conflict }) {
                                 // 过期写入（409）：草稿仍在本地，给一个「重新加载」出口
                                 secondaryButton("重新加载") { ctx.form.reload(ctx, ctx.apiBase) }
                                 View { attr { width(AdminSpace.sm) } }
                             }
                             // 保存按钮：构建期文案参数 → 用 vif 切换两份按钮响应编辑对象
                             //（全局 = POST /api/config；设备 = 白名单差量 PUT overlay）
-                            vif({ ctx.selectedSection == "config" && ctx.form.editDeviceId.isEmpty() }) {
+                            // 「全局配置」页共用同一按钮：它保存的也是整份全局配置。
+                            vif({ editableSection() && ctx.form.editDeviceId.isEmpty() }) {
                                 primaryButton(
                                     "保存配置",
                                     loading = { ctx.form.saving },
@@ -265,8 +277,8 @@ class AdminPage : Pager() {
                     vif({ ctx.selectedSection == "overview" }) {
                         opsScroller {
                             renderOpsOverview(ctx.stats, ctx.plugins, ctx.engineHealth, ctx) { section ->
-                                // 横幅跳转：切到配置页并定位对应 section（P0 导航重组既有链路）
-                                ctx.selectedSection = "config"
+                                // 横幅跳转：菜单归属由 form.onSectionRouted 统一按 section 判定
+                                //（有流程节点 → 语音流程；服务 / MCP / OTA / AIUI… → 全局配置）
                                 ctx.form.openConfigSection(section)
                             }
                         }
@@ -286,6 +298,9 @@ class AdminPage : Pager() {
                                 { id ->
                                     ctx.form.editDeviceId = id
                                     ctx.form.load(ctx, ctx.apiBase)
+                                    // 设备 overlay 只覆盖流程节点参数：先回到「语音流程」的流程位置，
+                                    // 否则会停在上一轮的全局 section 上（overlay 里没有那些字段）
+                                    ctx.form.openWorkflowPage()
                                     ctx.selectedSection = "config"
                                 },
                                 ctx,
@@ -325,8 +340,21 @@ class AdminPage : Pager() {
                     vif({ ctx.selectedSection == "config" }) {
                         // Workflow sits at the top of the voice config content area only,
                         // then drives the local tabs and their left/right workspace.
+                        // 右上「全局设置」按钮经 form.onSectionRouted 切到独立菜单「全局配置」。
                         pipelineWorkflowHeader(ctx.form, ctx)
                         renderConfigLayout(
+                            ctx.form,
+                            ctx.plugins,
+                            ctx.engineHealth,
+                            ctx.mcpTools,
+                            ctx.ota,
+                            ctx.toast,
+                            ctx,
+                        )
+                    }
+                    vif({ ctx.selectedSection == "settings" }) {
+                        // 全局配置：无工作流轨道、无配置/测试 Tab——只有全局 section 分组菜单 + 表单。
+                        renderGlobalConfigLayout(
                             ctx.form,
                             ctx.plugins,
                             ctx.engineHealth,
@@ -364,6 +392,8 @@ class AdminPage : Pager() {
                 }
             }
 
+            // 字段帮助弹层（ⓘ 的唯一实例）：每页根部挂一次，Modal 渲染不占布局
+            fieldHelpDialog()
             // 顶部浮动 toast：必须放在**页面根容器**最后（绝对定位，不占高度、盖在内容之上）
             ToastHost(ctx.toast)
         }
@@ -399,9 +429,16 @@ private fun ViewContainer<*, *>.adminSidebar(ctx: AdminPage, topInset: Float) {
             sidebarItem(
                 item.label,
                 { ctx.selectedSection == item.id },
-                showDot = { item.id == "config" && ctx.form.dirty },
+                // 两个配置菜单共用同一份草稿：任一菜单都能是"有未保存改动"的入口
+                showDot = { (item.id == "config" || item.id == "settings") && ctx.form.dirty },
             ) {
                 ctx.selectedSection = item.id
+                // 两个配置菜单共用一条表单路由：进入时各自回到上次停留的位置
+                //（否则「全局配置」会顶着上一轮流程节点的 section 打开，反之亦然）
+                when (item.id) {
+                    "config" -> ctx.form.openWorkflowPage()
+                    "settings" -> ctx.form.openGlobalPage()
+                }
                 // 窄屏抽屉：选中导航后收起（宽屏 drawerOpen 恒为 false，无副作用）
                 ctx.drawerOpen = false
             }

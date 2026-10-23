@@ -144,7 +144,11 @@ fun ViewContainer<*, *>.renderConfigSection(
  * 块即高级字段区。开关状态全局共享（同一时刻只看一个 section，无歧义）。
  */
 fun ViewContainer<*, *>.advancedToggleRow(form: ConfigFormState) {
-    switchRow("显示高级选项", form.showAdvanced) { form.showAdvanced = !form.showAdvanced }
+    switchRow(
+        "显示高级选项", form.showAdvanced,
+        help = "高级字段是调优项（缓存容量、切句时序、检索预算、上下文长度等），" +
+            "默认折叠以免淹没常用配置；展开状态全局共享，不影响保存内容。",
+    ) { form.showAdvanced = !form.showAdvanced }
 }
 
 /** 配置左侧导航的分组标题（如「语音与对话」）。 */

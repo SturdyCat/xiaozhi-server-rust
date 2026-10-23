@@ -48,6 +48,31 @@ object ConfigSections {
     val pinned: List<SectionDescriptor> get() = all.filter { it.group == null }
     val tabs: List<Pair<String, String>> = pinned.map { it.id to it.label } + groups
 
+    /**
+     * 「全局配置」菜单包含的 section：**没有流程节点**的那些。
+     *
+     * 划分口径（2026-10 菜单拆分）：有流程节点的 section（VAD/ASR/NLU/LLM/TTS 与挂在
+     * 连接点上的唤醒、指令、人格、记忆、音频入口/输出）归「语音流程」，按节点修改；
+     * 其余（能力总览 / 预设 / AIUI 全链路 / 服务 / EchoMuse 接入 / MCP / OTA）在流程里
+     * 没有位置，集中到侧边栏独立菜单「全局配置」，不再混进工作流的左菜单。
+     *
+     * 判据取 [PipelineFlow.primaryForSection]（而不是 group 名）：只要在流程里有节点，
+     * 就一定能从「语音流程」到达，避免同一 section 出现在两套导航里对不上。
+     */
+    val global: List<SectionDescriptor> get() = all.filter { PipelineFlow.primaryForSection(it.id) == null }
+
+    fun isGlobal(sectionId: String): Boolean = global.any { it.id == sectionId }
+
+    /** 全局配置左菜单的分组（总览 / 上下文增强 / 服务与接入；空组不出现）。 */
+    val globalGroups: List<Pair<String, List<SectionDescriptor>>>
+        get() {
+            val ids = listOf<String?>(null) + groups.map { it.first }
+            val labels = listOf("总览") + groups.map { it.second }
+            return ids.zip(labels)
+                .map { (id, label) -> label to global.filter { it.group == id } }
+                .filter { it.second.isNotEmpty() }
+        }
+
     fun tabOf(sectionId: String): String = all.firstOrNull { it.id == sectionId }?.group ?: sectionId
 
     fun firstSectionIn(tabId: String): String =

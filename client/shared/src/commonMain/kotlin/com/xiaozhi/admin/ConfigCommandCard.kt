@@ -2,7 +2,6 @@ package com.xiaozhi.admin
 
 import com.tencent.kuikly.core.base.ViewContainer
 import com.tencent.kuikly.core.directives.vif
-import com.tencent.kuikly.core.views.Text
 
 /**
  * 「指令」配置卡（`[command]`）：**ASR → LLM 之间**的指令闸门。
@@ -23,22 +22,20 @@ fun ViewContainer<*, *>.commandConfigCard(form: ConfigFormState) {
         vif({ form.schema.sectionNote("command").isNotEmpty() }) {
             textNote(form.schema.sectionNote("command"), micro = true)
         }
-        switchRow("enabled（识别到指令就让设备结束聆听）", cmd.enabled == "true") {
+        switchRow(
+            "启用指令闸门", cmd.enabled == "true",
+            help = "识别到指令词就让设备结束聆听：先说告别语，再让设备退出（音频通道保留、下次唤醒不重连）；" +
+                "设备不支持 MCP 时降级为断开本次会话。全程不调用大模型。默认关闭。",
+        ) {
             form.toggleStringBool(cmd::enabled)
-        }
-        Text {
-            attr {
-                fontSize(AdminType.caption)
-                color(AdminColors.textTertiary)
-                text("命中后先说告别语，再让设备结束聆听（音频通道保留、下次唤醒不重连）；设备不支持 MCP 时降级为断开本次会话。不会再调用大模型；默认关闭。")
-            }
         }
         vif({ cmd.enabled == "true" }) {
             labeledTextArea(
-                "keywords（每行一个指令词）",
+                "指令词（每行一个）",
                 { cmd.keywords },
                 { cmd.keywords = it; form.markDirty() },
                 height = 88f,
+                help = "命中任意一行即触发。识别文本会先去标点与句末语气词——「退下吧。」等价于「退下」。",
             )
             dropdownField(
                 label = "匹配方式",
@@ -54,62 +51,44 @@ fun ViewContainer<*, *>.commandConfigCard(form: ConfigFormState) {
                     form.markDirty()
                     form.openDropdown = ""
                 },
+                help = "整句相等 = 只认完整的一句话（推荐，安全）；句中出现即命中 = 更宽松，" +
+                    "「关闭闹钟」「把灯关闭」这类短请求也会误触发结束聆听。不确定就用整句相等。",
             )
             labeledIntField(
-                "max_chars（最长字数，超过就不做指令判断）",
+                "最长字数",
                 { cmd.maxChars },
                 { cmd.maxChars = it; form.markDirty() },
                 "5",
+                help = "归一化后超过该字数的句子携带信息，直接交给大模型——「帮我关闭卧室的灯」不会被当成关机指令。" +
+                    "留空按 5 处理；0 = 不限制长度（任何长度只要命中指令词就触发）。",
             )
-            labeledField(
-                "reply（告别语）",
-                { cmd.reply },
-                { cmd.reply = it; form.markDirty() },
-                "好的，我先退下了。",
-            )
-            Text {
-                attr {
-                    fontSize(AdminType.caption)
-                    color(AdminColors.textTertiary)
-                    text("识别文本会先去标点与句末语气词：「退下吧。」等价于「退下」；留空告别语 = 直接断开、不出声。")
-                }
-            }
-            Text {
-                attr {
-                    fontSize(AdminType.caption)
-                    color(AdminColors.textTertiary)
-                    text("长度闸门：归一化后超过 max_chars（默认 5）个字的长句携带信息，直接交给大模型——「帮我关闭卧室的灯」不会被当成关机指令。留空按 5 处理。")
-                }
-            }
-            // 0 = 不限制是显式拆掉保险，必须说出来（而不是让用户以为自己填错了）
             vif({ (cmd.maxChars.trim().toIntOrNull() ?: 5) <= 0 }) {
-                Text {
-                    attr {
-                        fontSize(AdminType.caption)
-                        color(AdminColors.warningTintText)
-                        text("⚠️ max_chars = 0 表示不限制长度：任何长度、只要匹配上指令词就会让设备结束聆听（MCP 不可用时断开本次会话），请确认这符合预期。")
-                    }
-                }
+                textNote(
+                    "⚠️ 最长字数 = 0 表示不限制：任何长度、只要匹配上指令词就会让设备结束聆听" +
+                        "（MCP 不可用时断开本次会话），请确认这符合预期。",
+                    tone = "warn",
+                    micro = true,
+                )
             }
             // ⚠️ contains 的代价必须显式说出来：它会把「关闭闹钟」也当成关机指令
             vif({ cmd.matchMode == "contains" }) {
-                Text {
-                    attr {
-                        fontSize(AdminType.caption)
-                        color(AdminColors.warningTintText)
-                        text("⚠️ contains 会让「关闭闹钟」「把灯关闭」这类短请求也触发结束聆听/断开（长度闸门只挡 6 个字以上的长句）；不确定就用 exact。")
-                    }
-                }
+                textNote(
+                    "⚠️ 「句中出现即命中」会让「关闭闹钟」「把灯关闭」这类短请求也触发结束聆听/断开" +
+                        "（长度闸门只挡 6 个字以上的长句）；不确定就改用「整句相等」。",
+                    tone = "warn",
+                    micro = true,
+                )
             }
+            labeledField(
+                "告别语",
+                { cmd.reply },
+                { cmd.reply = it; form.markDirty() },
+                "好的，我先退下了。",
+                help = "触发后先说这句再结束聆听。留空 = 直接断开、不出声。",
+            )
         }
         vif({ cmd.enabled != "true" }) {
-            Text {
-                attr {
-                    fontSize(AdminType.caption)
-                    color(AdminColors.textTertiary)
-                    text("未启用：识别结果照常交给大模型（行为与加本插件之前一致）。")
-                }
-            }
+            textNote("未启用：识别结果照常交给大模型（行为与加本插件之前一致）。", micro = true)
         }
     }
 }

@@ -41,17 +41,47 @@ internal val DECIMAL_INPUT_FILTER: (String) -> String = { raw ->
     }
 }
 
-/** 字段标签（只读）：顶部 fieldGap 与上一字段拉开间距。 */
-fun ViewContainer<*, *>.fieldLabel(label: String) {
-    Text {
+/**
+ * 字段标题行：左「中文名 + 可选 ⓘ」，右「可选控制按钮」，两端对齐。
+ *
+ * 文案口径（2026-10 产品决策，见 [FieldHelpState]）：界面只出**中文名**，配置 key 不上界面；
+ * [help] 非空才挂 ⓘ（点开弹层看完整说明），空的字段不画 icon——不制造"每个字段都有解释"的噪音。
+ * [trailing] 用于该功能的控制动作（获取模型列表 / 探测音色目录 / 生成模型…）：
+ * 放在名称右侧而不是另起一行，标题与动作的归属关系一眼可见。
+ *
+ * ⚠️ 标签侧是 `flex(1f)` 容器、名称与 ⓘ 紧跟在一起（不贴行尾）；名称过长时按可用宽度换行，
+ * 动作按钮始终贴右端。名称本身要短——"每行一条""0~1"这类填写说明属于 [help]，不塞进名字。
+ */
+fun ViewContainer<*, *>.fieldLabel(
+    label: String,
+    help: String = "",
+    trailing: ViewBuilder? = null,
+) {
+    View {
         attr {
-            fontSize(AdminType.body)
-            fontWeightMedium()
-            color(AdminColors.textSecondary)
+            flexDirectionRow()
+            alignItemsCenter()
             marginTop(AdminSpace.fieldGap)
             marginBottom(AdminSpace.xs)
-            text(label)
         }
+        View {
+            attr {
+                flex(1f)
+                flexDirectionRow()
+                alignItemsCenter()
+            }
+            Text {
+                attr {
+                    fontSize(AdminType.body)
+                    fontWeightMedium()
+                    color(AdminColors.textSecondary)
+                    text(label)
+                }
+            }
+            // ⓘ 紧跟名称（不贴到行尾），help 为空时调用方不传 → 不渲染
+            if (help.isNotEmpty()) infoBadge(label, help)
+        }
+        if (trailing != null) trailing(this)
     }
 }
 
@@ -77,8 +107,12 @@ fun ViewContainer<*, *>.labeledField(
     note: () -> String = { "" },
     /** 输入过滤（进状态前剥离非法字符）：[INT_INPUT_FILTER] / [DECIMAL_INPUT_FILTER]，null = 不过滤。 */
     inputFilter: ((String) -> String)? = null,
+    /** 字段详解（ⓘ 弹层正文）；空串 = 该字段见名知意，不挂 icon。 */
+    help: String = "",
+    /** 名称右侧的控制动作（如「获取模型列表」），与标题左右两端对齐。 */
+    trailing: ViewBuilder? = null,
 ) {
-    fieldLabel(label)
+    fieldLabel(label, help, trailing)
     View {
         attr {
             flexDirectionRow()
@@ -157,7 +191,12 @@ fun ViewContainer<*, *>.labeledIntField(
     placeholder: String = "",
     height: Float = 48f,
     note: () -> String = { "" },
-) = labeledField(label, getValue, onChange, placeholder, height, note, inputFilter = INT_INPUT_FILTER)
+    help: String = "",
+    trailing: ViewBuilder? = null,
+) = labeledField(
+    label, getValue, onChange, placeholder, height, note,
+    inputFilter = INT_INPUT_FILTER, help = help, trailing = trailing,
+)
 
 /**
  * 标签 + **小数**输入框：[labeledField] + [DECIMAL_INPUT_FILTER]——放行数字与至多一个小数点
@@ -170,7 +209,12 @@ fun ViewContainer<*, *>.labeledDecimalField(
     placeholder: String = "",
     height: Float = 48f,
     note: () -> String = { "" },
-) = labeledField(label, getValue, onChange, placeholder, height, note, inputFilter = DECIMAL_INPUT_FILTER)
+    help: String = "",
+    trailing: ViewBuilder? = null,
+) = labeledField(
+    label, getValue, onChange, placeholder, height, note,
+    inputFilter = DECIMAL_INPUT_FILTER, help = help, trailing = trailing,
+)
 
 /**
  * 标签 + 多行输入框（官方 TextArea 基座）：散文/提示词/系统提示等多行文本。
@@ -183,8 +227,10 @@ fun ViewContainer<*, *>.labeledTextArea(
     onChange: (String) -> Unit,
     placeholder: String = "",
     height: Float = 100f,
+    help: String = "",
+    trailing: ViewBuilder? = null,
 ) {
-    fieldLabel(label)
+    fieldLabel(label, help, trailing)
     View {
         attr {
             height(height)
@@ -247,12 +293,13 @@ fun ViewContainer<*, *>.actionRow(content: ViewBuilder) {
 // ===================== 开关行 =====================
 
 /**
- * 开关行：高 52（触屏），左标签 body(17)/500 textPrimary，右开关。
+ * 开关行：高 52（触屏），左「中文名 + 可选 ⓘ」，右开关（左名右控，左右两端对齐）。
  * 开关用**官方 Switch 组件**（组合组件：iOS 走原生 UISwitch，其他平台官方内置实现，跨端一致），
  * 颜色对齐主题 token：开=accent、关=switchOff、滑块=knob。
  * 注：checked 为初始值；点击后的视觉翻转由官方组件内部状态自治，业务在 onToggle 同步数据。
+ * [help] 非空才挂 ⓘ（说明"打开后到底改变什么"收进弹层，行内只留名字）。
  */
-fun ViewContainer<*, *>.switchRow(label: String, checked: Boolean, onToggle: () -> Unit) {
+fun ViewContainer<*, *>.switchRow(label: String, checked: Boolean, help: String = "", onToggle: () -> Unit) {
     View {
         attr {
             flexDirectionRow()
@@ -260,14 +307,21 @@ fun ViewContainer<*, *>.switchRow(label: String, checked: Boolean, onToggle: () 
             height(52f)
             marginTop(AdminSpace.fieldGap)
         }
-        Text {
+        View {
             attr {
                 flex(1f)
-                fontSize(AdminType.body)
-                fontWeightMedium()
-                color(AdminColors.textPrimary)
-                text(label)
+                flexDirectionRow()
+                alignItemsCenter()
             }
+            Text {
+                attr {
+                    fontSize(AdminType.body)
+                    fontWeightMedium()
+                    color(AdminColors.textPrimary)
+                    text(label)
+                }
+            }
+            if (help.isNotEmpty()) infoBadge(label, help)
         }
         Switch {
             attr {

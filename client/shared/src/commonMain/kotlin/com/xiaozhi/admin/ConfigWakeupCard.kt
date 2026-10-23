@@ -2,7 +2,6 @@ package com.xiaozhi.admin
 
 import com.tencent.kuikly.core.base.ViewContainer
 import com.tencent.kuikly.core.directives.vif
-import com.tencent.kuikly.core.views.Text
 
 /**
  * 「唤醒」配置卡（`[wakeup]`）：**唤醒 → LLM 之间**的唤醒问候语。
@@ -22,69 +21,52 @@ fun ViewContainer<*, *>.wakeupConfigCard(form: ConfigFormState) {
         vif({ form.schema.sectionNote("wakeup").isNotEmpty() }) {
             textNote(form.schema.sectionNote("wakeup"), micro = true)
         }
-        switchRow("enabled（唤醒后立刻回一句，跳过 LLM）", wake.enabled == "true") {
+        switchRow(
+            "启用唤醒问候", wake.enabled == "true",
+            help = "设备唤醒词命中后（需固件 CONFIG_SEND_WAKE_WORD_DATA=y），服务器立刻说一句问候语，" +
+                "不再调用大模型、也不进入正常回复。默认关闭；关闭时唤醒后静默等待用户说话。",
+        ) {
             form.toggleStringBool(wake::enabled)
-        }
-        Text {
-            attr {
-                fontSize(AdminType.caption)
-                color(AdminColors.textTertiary)
-                text("设备唤醒词命中后固件立刻上报 listen state=detect（需固件 CONFIG_SEND_WAKE_WORD_DATA=y），服务器收到即说问候语，不再调用大模型、也不进入正常回复。默认关闭。")
-            }
         }
         vif({ wake.enabled == "true" }) {
             labeledField(
-                "greeting（问候语）",
+                "问候语",
                 { wake.greeting },
                 { wake.greeting = it; form.markDirty() },
                 "我在",
+                help = "改这句话会换缓存键，因此会自动重新合成一次并落盘；之后唤醒直接复用。" +
+                    "建议 ≤ 10 字：它播放期间用户的第一句话会在缓冲区排队，等它说完才被处理" +
+                    "（超过 30 字服务端会直接拦下并提示）。",
             )
-            Text {
-                attr {
-                    fontSize(AdminType.caption)
-                    color(AdminColors.textTertiary)
-                    text("改这句话会换缓存键，因此会自动重新合成一次并落盘；之后唤醒直接复用。")
-                }
-            }
             // 问候语是下行音频，播放期间上行音频在缓冲区排队——太长会推迟用户第一句话。
             vif({ wake.greeting.trim().length > 10 }) {
-                Text {
-                    attr {
-                        fontSize(AdminType.caption)
-                        color(AdminColors.warningTintText)
-                        text("⚠️ 问候语偏长（建议 ≤ 10 字）：它播放期间用户的第一句话会在缓冲区排队，等它说完才被处理。服务端对超过 30 字的问候语会直接拦下并提示。")
-                    }
-                }
+                textNote(
+                    "⚠️ 问候语偏长（建议 ≤ 10 字）：它播放期间用户的第一句话会在缓冲区排队，等它说完才被处理。",
+                    tone = "warn",
+                    micro = true,
+                )
             }
-            switchRow("persist（落盘复用，重启后仍免合成）", wake.persist == "true") {
+            switchRow(
+                "成品音频落盘复用", wake.persist == "true",
+                help = "把成品音频（裸 24kHz PCM，约 48KB/秒，ffplay -f s16le -ar 24000 可直接播放）" +
+                    "写到配置文件同级的 hot-audio/ 目录，文件名即内容哈希；容器重建后仍在挂载卷上。" +
+                    "下行格式（采样率/帧长）不影响复用，换音色会自动重新合成并另存一份，不会串用旧音色。",
+            ) {
                 form.toggleStringBool(wake::persist)
-            }
-            Text {
-                attr {
-                    fontSize(AdminType.caption)
-                    color(AdminColors.textTertiary)
-                    text("把成品音频（裸 24kHz PCM 文件，约 48KB/秒，ffplay -f s16le -ar 24000 可直接播放）写到配置文件同级的 hot-audio/ 目录，文件名即内容哈希；容器重建后仍在挂载卷上。下行格式（采样率/帧长）不影响复用，换音色会自动重新合成并另存一份，不会串用旧音色。")
-                }
             }
             // ⚠️ 跨段矛盾必须显式说出来：复用经内存缓存承载成品帧，缓存关掉时落盘会静默失效。
             vif({ wake.persist == "true" && (form.ttsCacheEntries.trim().toIntOrNull() ?: 256) <= 0 }) {
-                Text {
-                    attr {
-                        fontSize(AdminType.caption)
-                        color(AdminColors.warningTintText)
-                        text("⚠️ 当前 [tts].cache_entries = 0（TTS 结果缓存已关闭），音频**无法落盘**：每次唤醒都会重新合成。请到「TTS」页把「结果缓存条目数」设为大于 0（推荐 256），或把这里的 persist 关掉。保存时服务端也会拦下并提示。")
-                    }
-                }
+                textNote(
+                    "⚠️ 当前「TTS · 结果缓存条目数」= 0（缓存已关闭），音频**无法落盘**：每次唤醒都会重新合成。" +
+                        "请到「TTS」页把结果缓存条目数设为大于 0（推荐 256），或把这里的落盘复用关掉。" +
+                        "保存时服务端也会拦下并提示。",
+                    tone = "warn",
+                    micro = true,
+                )
             }
         }
         vif({ wake.enabled != "true" }) {
-            Text {
-                attr {
-                    fontSize(AdminType.caption)
-                    color(AdminColors.textTertiary)
-                    text("未启用：唤醒后静默等待用户说话（行为与加本插件之前一致）。")
-                }
-            }
+            textNote("未启用：唤醒后静默等待用户说话（行为与加本插件之前一致）。", micro = true)
         }
     }
 }

@@ -156,6 +156,40 @@ async function iconCheck(){
 }
 // EchoMuse device cards: delete is the encapsulated icon-only appButton with the embedded vector
 // Delete icon (never the legacy 🗑 emoji glyph); in-card menu items lead with vector icons too.
+// Field copy contract: labels are Chinese with an ⓘ badge only where a field has details,
+// and the badge opens the AlertDialog tooltip with that explanation (dismiss via 知道了).
+async function globalConfigCheck(){
+  // 「全局配置」是独立一级菜单：不带语音工作流轨道、不带配置/测试 Tab，只列没有流程节点的 section。
+  await clickText('全局配置',{order:'left'});await delay(350);
+  const track=await workflowBounds();const text=await bodyText();
+  check('Sidebar 全局配置 is a separate menu without the voice workflow track',track===null,{track,text});
+  check('Global settings menu lists the workflow-free sections only',['能力总览','预设','AIUI 全链路模式','EchoMuse 接入','MCP 工具','固件与 OTA'].every(t=>text.includes(t)),{text});
+  await clickText('MCP 工具',{order:'left'});await delay(250);
+  const card=await bodyText();
+  check('Global settings section opens its form with the shared save action',card.includes('保存配置')&&(await workflowBounds())===null,{text:card});
+  await screenshot('admin-global-settings');
+  await clickText('语音流程',{order:'left'});await delay(320);
+  const back=await workflowBounds();
+  check('Switching back to 语音流程 restores the workflow workspace',!!back&&back.core.length===5&&(await bodyText()).includes('全局设置'),{track:back});
+  await clickText('全局配置',{order:'left'});await delay(320);
+  check('Returning to 全局配置 keeps the last global section',(await bodyText()).includes('MCP 工具')&&(await workflowBounds())===null,{text:await bodyText()});
+  await clickText('语音流程',{order:'left'});await delay(200);
+}
+async function fieldHelpCheck(){
+  await viewport(1440);
+  await selectNode('ASR · 语音识别',{tab:'配置'});
+  const badge=await cdp.eval(`(()=>{const e=[...document.querySelectorAll('#root *')].find(e=>e.textContent==='i'&&!e.children.length&&getComputedStyle(e).cursor==='pointer'&&e.getBoundingClientRect().width>0&&e.getBoundingClientRect().width<=24);if(!e)return null;e.scrollIntoView({block:'center'});const r=e.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2,w:r.width,h:r.height};})()`);
+  check('Field help badge renders next to the complex field name',!!badge,badge);
+  if(!badge)return;
+  await clickPoint(badge,'field help badge');
+  await delay(350);
+  const tooltip=await bodyText();
+  check('Field help badge opens the tooltip with the field explanation',tooltip.includes('sherpa-onnx'),{tail:tooltip.slice(-500)});
+  await screenshot('field-help-tooltip');
+  await clickText('知道了',{order:'right'});
+  await delay(250);
+  check('Field help tooltip dismisses via 知道了',!(await bodyText()).includes('sherpa-onnx'));
+}
 async function echoMuseIconCheck(){
   await viewport(1440);
   await clickText('EchoMuse',{order:'left'});
@@ -222,7 +256,9 @@ async function runChecks(){
   plans.push({action:'llm.chat',status:409,delay:500});await runAction('节点调用测试');await until(async()=>(await bodyText()).includes('配置快照已变化，请刷新测试能力'));check('Test HTTP409 keeps test input',(await cdp.eval(`[...document.querySelectorAll('input')].some(e=>e.value===${JSON.stringify(inputValue)})`)),{text:await bodyText()});
   await selectNode('VAD · 语音分段',{tab:'配置'});const draft='FIXTURE_LOCAL_UNSAVED_VAD_MODEL';const edit=await fillInput(draft,'FIXTURE-VAD-MODEL');check('Production config input accepts local draft',edit.ok,edit);await delay(150);await clickText('保存配置');await until(async()=>(await bodyText()).includes('重新加载'));check('Config HTTP409 preserves input/draft and offers reload',await cdp.eval(`[...document.querySelectorAll('input')].some(e=>e.value===${JSON.stringify(draft)})`)&&report.requests.filter(r=>r.method==='POST'&&r.path==='/api/config').at(-1)?.body?.vad?.model===draft,{text:await bodyText(),post:report.requests.filter(r=>r.method==='POST'&&r.path==='/api/config').at(-1)});await screenshot('config-409-draft-preserved');
   await viewport(320);await titleActionCheck('Config HTTP409 at 320');const conflictLayout=await layout();check('Conflict state remains within narrow viewport after resize',conflictLayout.clippedControls.length===0&&conflictLayout.documentWidth<=321,conflictLayout);await screenshot('config-409-narrow-320');
-  await viewport(1440);await navigate('admin');await screenshot('admin-1440');const admin=await bodyText();check('Admin Web navigation hides native testbench',admin.includes('EchoMuse')&&admin.includes('对话记录')&&!admin.includes('测试台'),{text:admin});await workflowCheck('Admin config content');await workflowFitCheck('Admin config content',1440);await clickText('概览',{order:'left'});check('Admin operations overview renders no workflow outside the config area',!(await bodyText()).includes('语音工作流')&&(await workflowBounds())===null,{text:await bodyText()});await clickText('语音流程与配置',{order:'left'});await delay(300);await selectPosition({stage:'ASR'});check('Config-area workflow opens the matching node workspace from operations',(await bodyText()).includes('ASR · 语音识别')&&(await bodyText()).includes('模型与参数'));await workspaceTab('测试');check('Admin config workflow shares the HTTP node-test workspace',(await bodyText()).includes('节点测试 · 已保存配置'));await screenshot('admin-workflow-asr');const repairRuns=report.requests.filter(r=>r.path==='/api/test/run').length;await clickText('概览',{order:'left'});await until(async()=>(await bodyText()).includes('FIXTURE VAD 健康修复入口'));await clickText('去修复 ›');const repaired=await bodyText();check('Health repair from Testing through operations forces Configuration parameters',repaired.includes('模型与参数')&&!repaired.includes('节点测试 · 已保存配置')&&await cdp.eval(`[...document.querySelectorAll('input')].some(e=>e.value==='FIXTURE-VAD-MODEL')`),{text:repaired});check('Health repair navigation never executes a node test',report.requests.filter(r=>r.path==='/api/test/run').length===repairRuns);await screenshot('admin-health-repair');
+  await viewport(1440);await navigate('admin');await screenshot('admin-1440');const admin=await bodyText();check('Admin Web navigation hides native testbench',admin.includes('EchoMuse')&&admin.includes('对话记录')&&!admin.includes('测试台'),{text:admin});await workflowCheck('Admin config content');await workflowFitCheck('Admin config content',1440);await clickText('概览',{order:'left'});check('Admin operations overview renders no workflow outside the config area',!(await bodyText()).includes('语音工作流')&&(await workflowBounds())===null,{text:await bodyText()});await clickText('语音流程',{order:'left'});await delay(300);await selectPosition({stage:'ASR'});check('Config-area workflow opens the matching node workspace from operations',(await bodyText()).includes('ASR · 语音识别')&&(await bodyText()).includes('模型与参数'));await workspaceTab('测试');check('Admin config workflow shares the HTTP node-test workspace',(await bodyText()).includes('节点测试 · 已保存配置'));await screenshot('admin-workflow-asr');const repairRuns=report.requests.filter(r=>r.path==='/api/test/run').length;await clickText('概览',{order:'left'});await until(async()=>(await bodyText()).includes('FIXTURE VAD 健康修复入口'));await clickText('去修复 ›');const repaired=await bodyText();check('Health repair from Testing through operations forces Configuration parameters',repaired.includes('模型与参数')&&!repaired.includes('节点测试 · 已保存配置')&&await cdp.eval(`[...document.querySelectorAll('input')].some(e=>e.value==='FIXTURE-VAD-MODEL')`),{text:repaired});check('Health repair navigation never executes a node test',report.requests.filter(r=>r.path==='/api/test/run').length===repairRuns);await screenshot('admin-health-repair');
+  await globalConfigCheck();
+  await fieldHelpCheck();
   await echoMuseIconCheck();
   for(const width of [800,900,1280,1440]){await viewport(width);await navigate('admin');await workflowCheck(`Admin ${width}`);if(width>=1280)await workflowFitCheck('Admin',width);await workspaceCheck(width,{admin:true});const evidence=await layout();check(`Admin ${width}: compact workspace remains inside the shell`,evidence.clippedControls.length===0&&evidence.documentWidth<=width+1,evidence);await screenshot(`admin-workspace-${width}`);}
   await viewport(375);await navigate('admin');await screenshot('admin-375');const adminLayout=await layout();check('Admin compact shell has no cropped visible controls',adminLayout.clippedControls.length===0&&adminLayout.documentWidth<=376,adminLayout);await workflowCheck('Admin compact config shell');

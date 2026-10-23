@@ -20,9 +20,10 @@
 - **异步回调线程契约**：Kuikly 的 Kotlin 侧只允许在 context 线程碰 observable/`setTimeout`。mac 端管理台实时通道 [AdminRealtime](<AdminRealtime.kt>) 的 `PlatformWsSocket` actual 经 XiaoZhiModule 原生桥（`XiaoZhiModule+AdminWs.m`）实现——模块回调 block 由框架包裹 `performOnContextQueue`，任意原生线程 invoke 都会落回 context 线程；**禁止**在平台 actual 里自建 NSURLSession/GCD 直调共享层（2026-10 断线重连 `assertContextQueue` 卡死事故根因）。服务器设置（`macServerSwitchEntry`）同理：发现事件走原生桥回调，不在 Kotlin 侧起线程。
 - [ConfigFormState](<ConfigFormState.kt>)保存草稿，[fill](<ConfigFormFill.kt>)映射读取；密钥只读 presence、写入 putSecret，空草稿不发送。新增密钥与服务端 SECRET_PATHS 同批改。
 - 整型字段用 labeledIntField、浮点字段用 labeledDecimalField（[AdminFormControls](<AdminFormControls.kt>)，输入侧实时剥离非法字符）：裸 labeledField 留给文本/密钥——整数字段混入脏输入会让 `toIntOrNull() ?: 默认值` 把错误静默存成默认值。
+- **字段文案口径**（2026-10 可读性重做，细则见[管理台界面设计 §5.10](<../../../../../../../../docs/designs/admin-ui-design.md>)）：标签只用中文见名知意（CPU / AI / Token / AppID 这类通用术语保留英文），配置 key 不上界面；复杂字段把解释写进 `help`（名称旁 ⓘ → 官方 AlertDialog 弹层，[FieldHelp](<FieldHelp.kt>)），见名知意的字段不传 `help`、不挂 icon；常驻 caption 只留真正的风险与跨字段矛盾。控制动作（获取模型列表 / 测试凭据 / 探测音色目录 / 重建索引…）用 `fieldLabel(..., trailing = {...})` 放在名称同一行右端，不另起 actionRow。⛔ 帮助状态别写回全局单例 observable：脱离 PagerScope 的 observable 不驱动重建；状态由页面经 [FieldHelpHost](<FieldHelp.kt>) 持有，徽标与弹层用 `getPager()` 回溯同一份。
 - BLE 的危险目标 handle 是严格校验例外：使用 `labeledField` 保留原始输入并由 [EchoMuseBleCodec](<EchoMuseBleCodec.kt>) 的纯函数拒绝非法十进制/范围；不得把 -1 或 1.2 清洗成别的真实外设 handle，也不允许解析服务树数字时截断小数。
 - hot/字段提示由[FormSchemaState](<FormSchemaState.kt>)消费服务端 schema，不手写另一套档位。schema 不是自动布局，engine/preset 可选项仍需两端同步。
-- 409 保留草稿，显式“重新加载”，不静默覆盖；紧凑标题栏冲突/设备操作另起右对齐行，不挤压标题。preset 应用复用服务端配置管线；overlay 编辑只提交设备增量，不能混成全局整份配置。健康修复/全局设置的明确配置跳转用 `openConfigSection` 回到 Configuration 参数页，普通顶部节点点击才保留 tab。
+- 409 保留草稿，显式“重新加载”，不静默覆盖；紧凑标题栏冲突/设备操作另起右对齐行，不挤压标题。preset 应用复用服务端配置管线；overlay 编辑只提交设备增量，不能混成全局整份配置。健康修复/全局设置的明确配置跳转用 `openConfigSection` 回到 Configuration 参数页，普通顶部节点点击才保留 tab；跳转后按 section 归属切菜单（有流程节点 → `config`，否则 → `settings`），不要用 `selectedSection` 硬编码。
 - NetworkModule 只支持 GET/POST，使用服务端 POST 别名；curl 的 PUT/DELETE 能用不等于页面可用。
 - 人格预览 effective 全段 fill，客户端不复制预设合并。能力 enabled 与 phase 分开，异常/降级须显示原因与修复指引。
 - 设备/会话/最近对话/延迟注明进程内口径，online 非心跳，不呈现为完整历史。
@@ -40,7 +41,7 @@
 
 管理台是 **Kuikly 多端工程**（`client/`），逻辑在 `client/shared/commonMain` 跨端复用；web 构建产物由 server 在 `/` 静态托管。
 
-默认落地页是 **语音流程与配置**（`@Page("admin")`）：该内容区顶部为[横向工作流](<PipelineWorkflowView.kt>)（仅配置区渲染，不跨运维页面），VAD → ASR → NLU → LLM → TTS 为模块，头尾及衔接共六个可点击圆点；独立配置页复用同一组件。轨道宽按 `adminContentWidth` 自适应（桌面 ≥1280 无横向滚动，不设最大上限），窄屏横向滚动，不能退回纵向节点轨道/下拉。点击模块/圆点进入「配置 / 测试」两个官方 Tabs（官方 `indicatorInTabItem` 文字下滑块样式），各自固定左菜单、右内容；测试左菜单选择单个动作。无配置搜索框，分区只能经工作流、全局设置或侧边栏到达。工作区小于 700 宽保留 92 宽左菜单，操作行靠右并可换行。布局见 [ConfigTabs](<ConfigTabs.kt>)及[工作区菜单](<ConfigWorkspaceViews.kt>)，位置投影见 [PipelineWorkflow](<PipelineWorkflow.kt>)，功能仍由 [PipelineFlow](<PipelineFlow.kt>)声明。只持有一个 `ConfigSelection(sectionId,nodeId?,workflowPositionId?)`，top/left 选择均由它派生；tab/status/action 是局部展示维度。空圆点只说明暂无扩展，不创建伪配置或测试。全局设置、草稿、保存冲突和独立请求凭据保持原契约，不得恢复第二份 active 状态：
+默认落地页是 **语音流程**（`@Page("admin")`，侧边栏 id `config`）：该内容区顶部为[横向工作流](<PipelineWorkflowView.kt>)（仅配置区渲染，不跨运维页面），VAD → ASR → NLU → LLM → TTS 为模块，头尾及衔接共六个可点击圆点；独立配置页复用同一组件。轨道宽按 `adminContentWidth` 自适应（桌面 ≥1280 无横向滚动，不设最大上限），窄屏横向滚动，不能退回纵向节点轨道/下拉。点击模块/圆点进入「配置 / 测试」两个官方 Tabs（官方 `indicatorInTabItem` 文字下滑块样式），各自固定左菜单、右内容；测试左菜单选择单个动作。无配置搜索框，分区只能经工作流或侧边栏到达。工作区小于 700 宽保留 92 宽左菜单，操作行靠右并可换行。布局见 [ConfigTabs](<ConfigTabs.kt>)及[工作区菜单](<ConfigWorkspaceViews.kt>)，位置投影见 [PipelineWorkflow](<PipelineWorkflow.kt>)，功能仍由 [PipelineFlow](<PipelineFlow.kt>)声明。只持有一个 `ConfigSelection(sectionId,nodeId?,workflowPositionId?)`，top/left 选择均由它派生；tab/status/action 是局部展示维度。空圆点只说明暂无扩展，不创建伪配置或测试。**全局配置是侧边栏独立一级菜单**（id `settings`，[renderGlobalConfigLayout](<ConfigWorkspaceViews.kt>)）：只放没有流程节点的 section（能力总览 / 预设 / AIUI 全链路 / 服务 / EchoMuse 接入 / MCP / OTA），无工作流轨道、无配置/测试 Tab，与「语音流程」共用同一份表单与同一个「保存配置」动作（`ConfigSections.global` + `ConfigFormState.openWorkflowPage/openGlobalPage` 各自记住停留位置）。带流程节点的 section（含人格 / 记忆 / 音频入口与输出）只在「语音流程」里改，**不要**把同一 section 同时挂进两套导航。全局设置、草稿、保存冲突和独立请求凭据保持原契约，不得恢复第二份 active 状态：
 
 | Section | 数据源 | 回答什么问题 |
 |---|---|---|
@@ -52,7 +53,8 @@
 | 对话记录 | `GET /api/conversations` | 最近聊了什么（内存环形，非持久化） |
 | 用量 | `GET /api/usage` | 令牌去向、记忆/人格把上下文撑大了多少 |
 | 延迟 | `GET /api/metrics` | 整轮与各段首包延迟 p50/p95、错误率（内存态） |
-| 配置 | `/api/config` 等 | 全部参数 + 预设 + 每设备 overlay + 能力健康卡 + 内联连通性测试 |
+| 语音流程 | `/api/config` 等 | 五个核心阶段 + 连接点分支（唤醒 / 指令 / 人格 / 记忆 / 音频入口与输出）的节点参数与节点测试 |
+| 全局配置 | `/api/config` 等 | 没有流程节点的部署级参数：能力总览、预设、AIUI 全链路、服务、EchoMuse 接入、MCP、OTA；与语音流程共用一份表单、一次 `POST /api/config` |
 | 文件 | `GET /api/files` + POST mkdir/upload/delete | 服务端存储目录浏览与管理：新建文件夹、上传模型/文件（`oww-models/` 即 EchoMuse 自定义唤醒词模型的存放处）、删除（二次确认，受保护文件拒绝） |
 
 > ⚠️ 设备/会话/对话记录/延迟是**进程内存态**：重启清零、`online` 由会话生命周期派生、对话只留最近若干轮。长期留存请开启 `[memory]`。
@@ -84,6 +86,7 @@ EchoMuse 实现按职责分为 [列表与配置状态](<EchoMuseState.kt>)（含
 - `configureAccess(token, base)` 在加载前传入；切 base 或 token 清管理目标和输出，列表/长挂/写操作通过代际丢弃旧连接回包。
 - 鉴权语义（产品决策：**局域网默认可管理**）：`server.expected_token` 为空（默认）= 管理面免 token 可用（系统操作/管理接口直接放行，不再要求双 token 非空）；配置了 token 即收紧为必须鉴权——web 用 `?token=URL编码后的管理令牌` 进入，不附裸查询参数，不在诊断内容中复制 token；macOS 服务器设置提供密码型管理令牌输入，只保留在当前 Pager 会话，不落 SP/配置。设备侧看 `echomuse.token`：空 = 局域网信任设备（shell/BLE 通道不要求设备令牌），非空 = 设备必须带 `X-Em-Token`。请求凭据由 [AdminAccess](<AdminAccess.kt>)统一读取，不得复用配置草稿 expectedToken；受保护真实服务仍需独立联调。
 - 唤醒设置以固件类型发送：`owwOnDevice=off|shadow|on`、`wakeSoundLevel=quiet|medium|loud`，旧 bool/number 只在读取时迁移（旧数字统一 medium）；阈值滑杆按官方量程 0.1～0.975、步进 0.025、Precise↔Eager 反向（常量与映射在 [EchoMuseWakeWord](<EchoMuseWakeWord.kt>)），轨外历史值读数保真、把手钉端点、拖动才落轨，保存仍拒非正数（服务端 `(0,1]`）；shadow 为官方诊断档、仅当前已处于该档时显示为选项，保存/重填后按当前值重建选项；提示音档位仅开关打开时显示；只发送本表单字段，服务端按部分更新合并，保留 BLE 等其他设置。唤醒词模型显示与选择规则在 [EchoMuseWakeWord](<EchoMuseWakeWord.kt>)（锚定上游默认 `hey_jarvis_v0.1`、官方四款与 display_name 规则）：存储为空即设备默认 hey jarvis 并明示，下拉列官方四款 + 服务端 `oww-models/` 已上传自定义模型 + 已存自定义值（[buildOwwOptions] 纯函数去重），保存恒发非空生效模型名（设备 config 对空 `owwModel` 不生效，恢复默认须显式发默认模型名）。卡片唤醒面板提供「管理模型文件」入口跳「文件」页 `oww-models/` 目录；**上传 ≠ 安装**——设备只认本地已装模型，未安装的模型选了也听不到唤醒词。
+- 灵敏度滑杆必须给 `Slider` **显式宽高**（宽度由 [echoMuseSliderWidth](<EchoMuseDeviceCard.kt>) 按内容区宽算出，不能用 `flex(1f)`）：官方 Slider 是组合组件，渲染时读自身 attr 的宽高，`flex` 不参与该判定，读不到就 `throwRuntimeError`（日志「Slider组件需要设置宽度和高度」）并中断所在面板的构建事务——实测表现为点「唤醒词设置」后右栏整片空白（只剩卡片标题与左菜单），同页其它面板不受影响。
 
 「文件」实现按职责分为 [纯逻辑](<FilesModel.kt>)（相对路径校验与服务端同规则镜像、清单解析安全兜底、尺寸/`yyyy-MM-dd HH:mm` 本地时间格式化——零 Kuikly 依赖，由普通 JVM 测试模块 `:adminCoreTests` 直接回归）、[目录状态](<FilesState.kt>)、[页面](<FilesPage.kt>) 与 [平台选文件桥](<UploadFilePicker.kt>)：
 - 写动作只走服务端 POST 端点（`mkdir`/`upload`/`delete`，即 NetworkModule GET/POST 约束下的别名）；GET 把 token 编进查询串、POST 走 Bearer；`{"error":"..."}` 文案就地透出（409 同名不静默覆盖、403 受保护、413 超限）。

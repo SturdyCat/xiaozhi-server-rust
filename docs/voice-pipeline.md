@@ -4,13 +4,13 @@
 
 ## 1. 主流程是入口，不是插件平铺
 
-公共管理台默认进入「语音流程与配置」，核心节点固定为 **VAD → ASR → NLU → LLM → TTS**。定义集中在[核心面板描述符](<../client/shared/src/commonMain/kotlin/com/xiaozhi/admin/PipelinePanels.kt>)与[流程描述符](<../client/shared/src/commonMain/kotlin/com/xiaozhi/admin/PipelineFlow.kt>)，渲染分支显式编译，不下载执行 UI 插件。
+公共管理台默认进入「语音流程」，核心节点固定为 **VAD → ASR → NLU → LLM → TTS**。没有流程节点的部署级参数（能力总览 / 预设 / AIUI 全链路 / 服务 / EchoMuse 接入 / MCP / OTA）在侧边栏独立菜单「全局配置」，不与流程节点混在同一个左菜单。定义集中在[核心面板描述符](<../client/shared/src/commonMain/kotlin/com/xiaozhi/admin/PipelinePanels.kt>)与[流程描述符](<../client/shared/src/commonMain/kotlin/com/xiaozhi/admin/PipelineFlow.kt>)，渲染分支显式编译，不下载执行 UI 插件。
 
 扩展位置支持开始、结束、核心节点之前与之后；排序稳定且重复 ID 立即失败。目前展示输入、唤醒、会话指令、人格、记忆召回、输出与记忆写回。记忆召回/写回的节点身份不同，但复用一个配置源；同理输入/输出复用音频配置，而非创建不同步的副本。
 
 提供方实现、上下文增强、AIUI 托管全链路、终端适配和基础设施仍可分别配置，不把它们误称为第六个核心阶段。AIUI 的外部闭环不能被本地级联预览冒充。
 
-[路由草稿所有者](<../client/shared/src/commonMain/kotlin/com/xiaozhi/admin/ConfigFormState.kt>)只维护一个 `ConfigSelection(sectionId,nodeId?,workflowPositionId?)`。「语音流程与配置」内容区顶部及独立配置页共用[横向工作流](<../client/shared/src/commonMain/kotlin/com/xiaozhi/admin/PipelineWorkflowView.kt>)（不跨运维页面），五个模块间及头尾共六个可点击圆点；轨道宽度按可见内容区自适应（`adminContentWidth` 扣常驻侧栏，独立配置页取整窗），桌面视口 ≥1280 整条轨道完整呈现、无横向滚动且不设最大上限，更窄回退 112 最小阶段宽由 Scroller 横向滚动，不变成纵向步骤或下拉选择。位置由[纯模型](<../client/shared/src/commonMain/kotlin/com/xiaozhi/admin/PipelineWorkflow.kt>)从现有 anchors 投影，12 个真实节点各归属一次：
+[路由草稿所有者](<../client/shared/src/commonMain/kotlin/com/xiaozhi/admin/ConfigFormState.kt>)只维护一个 `ConfigSelection(sectionId,nodeId?,workflowPositionId?)`。「语音流程」内容区顶部及独立配置页共用[横向工作流](<../client/shared/src/commonMain/kotlin/com/xiaozhi/admin/PipelineWorkflowView.kt>)（不跨运维页面），五个模块间及头尾共六个可点击圆点；轨道宽度按可见内容区自适应（`adminContentWidth` 扣常驻侧栏，独立配置页取整窗），桌面视口 ≥1280 整条轨道完整呈现、无横向滚动且不设最大上限，更窄回退 112 最小阶段宽由 Scroller 横向滚动，不变成纵向步骤或下拉选择。位置由[纯模型](<../client/shared/src/commonMain/kotlin/com/xiaozhi/admin/PipelineWorkflow.kt>)从现有 anchors 投影，12 个真实节点各归属一次：
 
 | 圆点 | 下方扩展菜单 |
 |---|---|
@@ -21,7 +21,7 @@
 | LLM → TTS | 暂无扩展 |
 | 结束 | 终端输出适配、轮次结束与记忆写回 |
 
-模块/圆点点击后进入[节点管理工作区](<../client/shared/src/commonMain/kotlin/com/xiaozhi/admin/ConfigTabs.kt>)：只有「配置 / 测试」两个官方 Tabs（文字下官方滑块指示条），每个 tab 均为左菜单、右内容。核心配置菜单为模型与参数、运行状态；圆点配置菜单选择所属功能，测试菜单选择单个共享动作。空圆点没有伪配置、能力或 API 动作。全局设置与运行观测仍可达；无配置搜索框。不恢复第二份 active 状态。切 tab、状态页或测试动作只改变局部展示；右内容重建键保留 section/revision/node/position/panel，草稿和请求所有权不复制。
+模块/圆点点击后进入[节点管理工作区](<../client/shared/src/commonMain/kotlin/com/xiaozhi/admin/ConfigTabs.kt>)：只有「配置 / 测试」两个官方 Tabs（文字下官方滑块指示条），每个 tab 均为左菜单、右内容。核心配置菜单为模型与参数、运行状态；圆点配置菜单选择所属功能，测试菜单选择单个共享动作。空圆点没有伪配置、能力或 API 动作。全局设置经工作流右上的「全局设置」按钮或侧边栏独立菜单「全局配置」可达（后者不带工作流轨道与配置/测试 Tab）；无配置搜索框。不恢复第二份 active 状态。切 tab、状态页或测试动作只改变局部展示；右内容重建键保留 section/revision/node/position/panel，草稿和请求所有权不复制。
 
 动作行统一右对齐、允许窄屏换行；小于 700 宽的工作区左菜单保留 92 宽、卡片内边距减为 12。保存仍在右上方；目录加载、凭据校验和当前草稿预览继续保留其原有作用域，不伪装成保存态节点测试。
 
@@ -95,14 +95,16 @@ SQLite 与注册表仍是配置和热生效元数据的唯一权威。草稿只�
 
 ## 6. 本次配置区工作流验收
 
-2026-10-21 最终修订：工作流从全局顶部移入「语音流程与配置」内容区（运维页不再渲染），移除配置搜索（`ConfigSections.search`/keywords 一并删除），Tabs 改用官方 `indicatorInTabItem` 文字下滑块（44×3 圆角 accent pill，`indicatorAlignCenter`）。未改动 Rust 业务逻辑；最终证据为[第四轮 Chrome 报告](<../client/build/ui-validation/workflow-top-v4/report.json>)。
+2026-10-23 菜单修订：原「语音流程与配置」更名「语音流程」，全局设置拆为侧边栏独立菜单「全局配置」（`ConfigSections.global` = 没有流程节点的 section；无工作流轨道、无配置/测试 Tab，与语音流程共用一份表单与同一个保存动作）。
+
+2026-10-21 最终修订：工作流从全局顶部移入配置内容区（运维页不再渲染），移除配置搜索（`ConfigSections.search`/keywords 一并删除），Tabs 改用官方 `indicatorInTabItem` 文字下滑块（44×3 圆角 accent pill，`indicatorAlignCenter`）。未改动 Rust 业务逻辑；最终证据为[第四轮 Chrome 报告](<../client/build/ui-validation/workflow-top-v4/report.json>)。
 
 | 范围 | 本次实际结果 |
 |---|---|
 | 纯模型与协议 | 管理台 **24 项**（含 8 项工作流投影；搜索断言随功能删除）及 BLE **15 项**随最终构建实际执行并通过 |
 | 最终跨端产物 | shared JS、macOS Kotlin 编译、Release Framework 链接及 Catalyst 补丁、H5 `publishWeb` 通过；仍有既有 expect/actual Beta、Gradle 与 webpack 包体积提示 |
 | Chrome 155 | **242/242 通过**（含 8 处新增滑块几何断言）；0 未捕获异常、0 非预期资源失败，自管 Chrome 与 fixture server 均退出 |
-| 布局与交互 | 工作流仅出现在配置内容区（概览页断言无工作流，经侧边栏「语音流程与配置」可达）；320/375/768/900/1440 的五模块、六圆点、双 Tabs（官方滑块）、左菜单/右内容、右对齐动作、空圆点无请求全部验证；Admin 800/900 扣 241 后 92 宽菜单、独立 900 为 192 宽菜单 |
+| 布局与交互 | 工作流仅出现在配置内容区（概览页断言无工作流，经侧边栏「语音流程」可达）；320/375/768/900/1440 的五模块、六圆点、双 Tabs（官方滑块）、左菜单/右内容、右对齐动作、空圆点无请求全部验证；Admin 800/900 扣 241 后 92 宽菜单、独立 900 为 192 宽菜单 |
 | 补充回归 | scrollport 不裁切、隐藏轨道后原生横向滚轮生效、紧凑冲突标题不与按钮重叠、健康修复从 Testing 回 Configuration 参数、SVG 唯一源、异步防重/陈旧响应、409 草稿保留均通过 |
 | 产物 | `index.html` afef51e2…、`nativevue2.js` 4a31475d…、`h5App.js` 3b873830…（sha256，报告内逐一核对） |
 

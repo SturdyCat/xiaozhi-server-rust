@@ -317,6 +317,47 @@ class ConfigFormState(private val scope: PagerScope) {
     var selectedTestActionId by scope.observable("")
         private set
 
+    /**
+     * 侧边栏「语音流程」与「全局配置」是两个独立菜单，但只有**一条**路由（[configSelection]）。
+     * 这里分别记住两个菜单上次停留的位置：切换菜单时回到原处，而不是每次都被重置。
+     * （不引入第二份 active 状态：位置记忆只是路由的历史值，不参与渲染判定。）
+     */
+    private var lastWorkflowSelection by scope.observable(ConfigSelection("vad", "vad"))
+    private var lastGlobalSection by scope.observable(ConfigSections.global.firstOrNull()?.id.orEmpty())
+
+    /** 当前路由是否落在「全局配置」菜单（= 选中的 section 没有流程节点）。 */
+    val isGlobalSelection: Boolean get() = ConfigSections.isGlobal(configSection)
+
+    /** 侧边栏进入「语音流程」：当前停在全局设置时，回到上次的流程位置。 */
+    fun openWorkflowPage() {
+        if (isGlobalSelection) selectConfigRoute(lastWorkflowSelection)
+    }
+
+    /** 侧边栏进入「全局配置」：当前停在流程节点时，回到上次的全局 section（可指定目标）。 */
+    fun openGlobalPage(sectionId: String? = null) {
+        val target = sectionId ?: lastGlobalSection.ifBlank { ConfigSections.global.firstOrNull()?.id.orEmpty() }
+        if (target.isBlank()) return
+        if (isGlobalSelection && configSection == target) return
+        selectConfigRoute(ConfigSelection(target))
+    }
+
+    /**
+     * 跨菜单跳转钩子：由壳页面注册，把侧边栏导航切到该 section 所属的菜单
+     *（有流程节点 → 「语音流程」，否则 → 「全局配置」）。
+     *
+     * 为什么需要：卡片内的跳转（能力总览的健康修复、就绪度横幅…）只知道自己要打开哪个
+     * section，并不知道当前在哪个菜单。没有这个钩子，「全局配置」页里点一个流程节点的链接，
+     * 就会在全局菜单下渲染流程节点卡片——又回到两套语义混在一起的老问题。
+     * 单页模式（`@Page("config")` 没有侧边栏）保持为 null，行为不变。
+     */
+    var onSectionRouted: ((String) -> Unit)? = null
+
+    /** 全局配置左菜单选择：记下位置，切到语音流程再回来时仍在同一 section。 */
+    fun selectGlobalSection(sectionId: String) {
+        lastGlobalSection = sectionId
+        openConfigSection(sectionId)
+    }
+
     val workflowPosition: WorkflowPosition? get() = PipelineWorkflow.resolve(configSelection)
     val workspaceTitle: String get() = workflowPosition?.let {
         "${it.label} · ${if (it.isCore) "节点管理" else "扩展管理"}"
@@ -354,6 +395,8 @@ class ConfigFormState(private val scope: PagerScope) {
         configSection = sectionId
         showNodeParameters()
         selectWorkspaceTab(NodeWorkspaceTab.Configuration)
+        // 菜单归属随 section 走（见 [onSectionRouted]）：跳到全局 section 就切到「全局配置」菜单
+        onSectionRouted?.invoke(sectionId)
     }
 
     fun selectWorkspaceTab(tab: NodeWorkspaceTab) {
@@ -383,6 +426,12 @@ class ConfigFormState(private val scope: PagerScope) {
     private fun selectConfigRoute(selection: ConfigSelection) {
         if (configSelection == selection) return
         configSelection = selection
+        // 记住两个菜单各自的位置（全局 section 无流程节点 → 只有它属于「全局配置」）
+        if (ConfigSections.isGlobal(selection.sectionId)) {
+            lastGlobalSection = selection.sectionId
+        } else {
+            lastWorkflowSelection = selection
+        }
         showingNodeStatus = false
         selectedTestActionId = ""
         openDropdown = ""

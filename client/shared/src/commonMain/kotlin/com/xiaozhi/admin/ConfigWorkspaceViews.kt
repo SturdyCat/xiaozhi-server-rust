@@ -2,6 +2,8 @@ package com.xiaozhi.admin
 
 import com.tencent.kuikly.core.base.CursorType
 import com.tencent.kuikly.core.base.ViewContainer
+import com.tencent.kuikly.core.directives.vbind
+import com.tencent.kuikly.core.directives.vfor
 import com.tencent.kuikly.core.directives.vif
 import com.tencent.kuikly.core.pager.IPager
 import com.tencent.kuikly.core.pager.Pager
@@ -60,8 +62,11 @@ internal fun ViewContainer<*, *>.workspaceMenu(form: ConfigFormState, meta: Plug
                 workspaceMenuItem("运行状态", ctx, IconToken.Info, selected = { form.showingNodeStatus }) { form.showNodeStatus() }
             }
         } else {
-            // Global settings remain reachable without becoming obligatory voice stages.
-            for (section in ConfigSections.all.filter { it.id !in VoiceStageId.entries.map { stage -> stage.id } }) {
+            // 单页模式兜底（`@Page("config")` 没有侧边栏，「全局配置」菜单不可达）：停在全局
+            // section 时这里列出它们，保证独立配置页仍能改服务 / MCP / OTA。
+            // 统一管理台（AdminPage）不会走到这里——全局配置是独立菜单，有专属布局
+            //（[renderGlobalConfigLayout]）。
+            for (section in ConfigSections.global) {
                 workspaceMenuItem(section.label, ctx, IconToken.Settings,
                     selected = { form.configSection == section.id },
                     warning = { sectionCapability(meta, section.id)?.phase in setOf("failed", "degraded") },
@@ -113,6 +118,82 @@ private fun ViewContainer<*, *>.workspaceMenuItem(
             View { attr { size(5f, 5f); borderRadius(3f); marginLeft(3f); backgroundColor(AdminColors.warning); touchEnable(false) } }
         }
     }
+}
+
+/**
+ * 「全局配置」页布局（侧边栏独立菜单）：**没有**语音工作流轨道、也**没有**配置/测试 Tab。
+ *
+ * 左侧是全局 section 的分组菜单（总览 / 上下文增强 / 服务与接入），右侧复用
+ * [renderConfigSection] 渲染同一套卡片；保存仍由顶部「保存配置」按钮统一提交
+ *（与「语音流程」共用一份 [ConfigFormState]、一次 `POST /api/config`）。
+ *
+ * 之所以另起布局而不是复用 [renderConfigLayout]：那套布局的 Tab 语义是"节点的配置 / 测试"，
+ * 全局设置没有节点、也没有可执行测试，套上 Tab 会造出空壳页面。
+ */
+fun ViewContainer<*, *>.renderGlobalConfigLayout(
+    form: ConfigFormState,
+    meta: PluginMetaState,
+    health: EngineHealthState,
+    mcp: McpToolsState,
+    ota: OtaState,
+    toast: ToastState,
+    ctx: Pager,
+) {
+    View {
+        attr { flex(1f); flexDirectionColumn() }
+        menuPaneRow(
+            menuWidth = if (workspaceIsCompact(ctx)) 92f else 192f,
+            fillHeight = true,
+            menuBackground = AdminColors.sidebarBg,
+            // 与工作流左菜单同一口径：菜单是静态项，只在选中 section 变化时重建
+            menu = { vbind({ form.configSection }) { globalConfigMenu(form, meta, ctx) } },
+            panel = {
+                Scroller {
+                    attr {
+                        flex(1f); showScrollerIndicator(false)
+                        val compact = workspaceIsCompact(ctx)
+                        paddingLeft(if (compact) AdminSpace.xs else AdminSpace.lg)
+                        paddingRight(if (compact) AdminSpace.xs else AdminSpace.lg)
+                        paddingTop(AdminSpace.md); paddingBottom(AdminSpace.xxl)
+                    }
+                    // 与工作区同一重建口径：路由/快照变化才重建整块内容
+                    vfor({ form.configSectionList }) { _ ->
+                        View {
+                            attr { flexDirectionColumn() }
+                            renderConfigSection(form, meta, health, mcp, ota, toast, ctx, form.configSection)
+                        }
+                    }
+                }
+            },
+        )
+    }
+}
+
+/** 全局配置左菜单：只列没有流程节点的 section，按 [ConfigSections.globalGroups] 分组。 */
+private fun ViewContainer<*, *>.globalConfigMenu(form: ConfigFormState, meta: PluginMetaState, ctx: Pager) {
+    Scroller {
+        attr { flex(1f); showScrollerIndicator(false); paddingTop(AdminSpace.xs); paddingBottom(AdminSpace.lg) }
+        for ((groupLabel, sections) in ConfigSections.globalGroups) {
+            workspaceMenuHeading(groupLabel)
+            for (section in sections) {
+                workspaceMenuItem(section.label, ctx, globalSectionIcon(section.id),
+                    selected = { form.configSection == section.id },
+                    warning = { sectionCapability(meta, section.id)?.phase in setOf("failed", "degraded") },
+                ) { form.selectGlobalSection(section.id) }
+            }
+        }
+    }
+}
+
+/** 全局 section 的菜单图标（无流程位置，故不复用流程节点图标）。 */
+private fun globalSectionIcon(sectionId: String): IconToken = when (sectionId) {
+    "overview" -> IconToken.Info
+    "presets" -> IconToken.Save
+    "aiui" -> IconToken.Model
+    "echomuse" -> IconToken.Waveform
+    "mcp" -> IconToken.Intent
+    "ota" -> IconToken.Document
+    else -> IconToken.Settings
 }
 
 internal fun ViewContainer<*, *>.workspaceNodeStatus(

@@ -21,62 +21,49 @@ import com.tencent.kuikly.core.views.View
  */
 fun ViewContainer<*, *>.nluConfigCard(form: ConfigFormState, ctx: Pager) {
     val nlu = form.nlu
-    groupedCard("技能级联（规则 → 轻量模型 → 云 LLM）") {
+    groupedCard("NLU · 意图与技能") {
         // 整段档位提示（保存后新会话生效）：来自 /api/config/schema，服务端为唯一权威
         vif({ form.schema.sectionNote("nlu").isNotEmpty() }) {
             textNote(form.schema.sectionNote("nlu"), micro = true)
         }
-        switchRow("enabled（启用技能级联）", nlu.enabled == "true") {
+        switchRow(
+            "启用技能级联", nlu.enabled == "true",
+            help = "识别文本先过本地规则模板（命中即执行、不调大模型），再过本地轻量模型打分；" +
+                "两级都未命中才交给大模型。大模型若把话识别成下面的技能，也会回到这份白名单校验后执行——" +
+                "大模型不能凭空发明技能或动作。",
+        ) {
             form.toggleStringBool(nlu::enabled)
-        }
-        Text {
-            attr {
-                fontSize(AdminType.caption)
-                color(AdminColors.textTertiary)
-                text("识别文本先过本地规则模板（命中即执行、不调大模型），再过本地轻量模型打分；两级都未命中才交给大模型。大模型若把话识别成下面的技能，也会回到这份白名单校验后执行——大模型不能凭空发明技能或动作。")
-            }
         }
         vif({ nlu.enabled == "true" }) {
             labeledDecimalField(
-                "model_threshold（轻量模型执行阈值，0~1）",
+                "执行阈值",
                 { nlu.modelThreshold },
                 { nlu.modelThreshold = it; form.markDirty() },
                 "0.9",
+                help = "轻量模型打分达到该值即本地执行，取值 0~1（默认 0.9）。调到 1.0 等于关闭这一级：" +
+                    "只有规则模板完全命中的技能会本地执行，其余全部交给大模型（更省钱但更慢）。",
             )
+            vif({ (nlu.modelThreshold.trim().toDoubleOrNull() ?: 0.9) >= 1.0 }) {
+                textNote(
+                    "⚠️ 阈值 = 1.0 表示关闭轻量模型级：只有规则模板完全命中的技能会本地执行，其余全部交给大模型。",
+                    tone = "warn",
+                    micro = true,
+                )
+            }
             labeledDecimalField(
-                "model_margin（领先次高分的最小差值，0~1）",
+                "领先余量",
                 { nlu.modelMargin },
                 { nlu.modelMargin = it; form.markDirty() },
                 "0.1",
+                help = "第一名必须比第二名高出该差值（0~1）才算「有把握」；调大更保守、误触发更少，" +
+                    "但更多请求会落到大模型。",
             )
-            vif({ (nlu.modelThreshold.trim().toDoubleOrNull() ?: 0.9) >= 1.0 }) {
-                Text {
-                    attr {
-                        fontSize(AdminType.caption)
-                        color(AdminColors.warningTintText)
-                        text("⚠️ threshold = 1.0 表示关闭轻量模型级：只有规则模板完全命中的技能会本地执行，其余全部交给大模型。")
-                    }
-                }
-            }
-            Text {
-                attr {
-                    fontSize(AdminType.caption)
-                    color(AdminColors.textTertiary)
-                    text("封闭槽位容忍「包含唯一值」的口语化说法（「把卧室灯打开」可命中「把{room}的灯{action}」）；但含否定词（别/不要）或多个候选值（开还是关）时不本地执行，交大模型判断。")
-                }
-            }
+            nluBuildModelSection(form, nlu, ctx)
             nluIntentList(form, nlu)
             nluSlotList(form, nlu)
-            nluBuildModelSection(form, nlu, ctx)
         }
         vif({ nlu.enabled != "true" }) {
-            Text {
-                attr {
-                    fontSize(AdminType.caption)
-                    color(AdminColors.textTertiary)
-                    text("未启用：识别结果照常交给大模型（内置指令闸门 [command] 不受影响，见「指令」卡）。")
-                }
-            }
+            textNote("未启用：识别结果照常交给大模型（内置指令闸门不受影响，见「指令」卡）。", micro = true)
         }
     }
 }
@@ -89,25 +76,19 @@ fun ViewContainer<*, *>.nluConfigCard(form: ConfigFormState, ctx: Pager) {
  * （model.onnx / tokenizer.json / labels.txt），产物供 `[nlu]` bert_* 配置指向。
  */
 private fun ViewContainer<*, *>.nluBuildModelSection(form: ConfigFormState, nlu: NluSectionState, ctx: Pager) {
-    fieldLabel("轻量模型（TinyBERT 语义打分）")
-    Text {
-        attr {
-            fontSize(AdminType.caption)
-            color(AdminColors.textTertiary)
-            text("可选增强：用当前技能定义自动生成一个本地语义分类模型，替换「轻量模型」级的启发式打分（对口语化说法识别更稳，零外网推理）。训练在服务端宿主 docker 里进行，约数分钟。")
-        }
-    }
-    primaryButton("生成 NLU 模型", loading = { nlu.buildBusy }, loadingText = "训练中…") {
-        nlu.startBuildModel(ctx, form.serverBase)
-    }
-    vif({ nlu.buildMsg.isNotEmpty() }) {
-        Text {
-            attr {
-                fontSize(AdminType.caption)
-                color(if (nlu.buildPhase == "failed") AdminColors.warningTintText else AdminColors.textTertiary)
-                text(nlu.buildMsg)
+    fieldLabel(
+        "轻量模型（TinyBERT 语义打分）",
+        help = "可选增强：用当前技能定义自动生成一个本地语义分类模型，替换「轻量模型」级的启发式打分" +
+            "（对口语化说法识别更稳，零外网推理）。训练在服务端宿主 docker 里进行，约数分钟；" +
+            "产物为 model.onnx / tokenizer.json / labels.txt 三件套。",
+        trailing = {
+            primaryButton("生成 NLU 模型", loading = { nlu.buildBusy }, loadingText = "训练中…") {
+                nlu.startBuildModel(ctx, form.serverBase)
             }
-        }
+        },
+    )
+    vif({ nlu.buildMsg.isNotEmpty() }) {
+        textNote(nlu.buildMsg, tone = if (nlu.buildPhase == "failed") "warn" else "tertiary", micro = true)
     }
     vif({ nlu.buildLog.isNotEmpty() && (nlu.buildPhase == "running" || nlu.buildPhase == "failed") }) {
         Text {
@@ -123,22 +104,22 @@ private fun ViewContainer<*, *>.nluBuildModelSection(form: ConfigFormState, nlu:
 // ===================== 自定义意图（intents） =====================
 
 private fun ViewContainer<*, *>.nluIntentList(form: ConfigFormState, nlu: NluSectionState) {
-    fieldLabel("自定义技能 intents（${nlu.intents.size} 条）")
-    vif({ nlu.intents.size == 0 }) {
-        Text {
-            attr {
-                fontSize(AdminType.caption)
-                color(AdminColors.textTertiary)
-                text("还没有自定义技能。点下方「添加意图」，用模板描述一句话指令（如「把{room}的灯{action}」），命名槽位后即可本地执行。")
+    fieldLabel(
+        "自定义技能（${nlu.intents.size} 条）",
+        help = "用「一句话模板 + 动作」描述本地技能，例如模板「把{room}的灯{action}」配动作「派发设备工具」。" +
+            "匹配成功就不再调用大模型，直接执行并回一句应答语。",
+        trailing = {
+            secondaryButton("＋ 添加意图") {
+                nlu.addIntent()
+                form.markDirty()
             }
-        }
+        },
+    )
+    vif({ nlu.intents.size == 0 }) {
+        textNote("还没有自定义技能。点右侧「添加意图」，用模板描述一句话指令（如「把{room}的灯{action}」），命名槽位后即可本地执行。", micro = true)
     }
     vfor({ nlu.intents }) { d ->
         nluIntentBlock(form, nlu, d)
-    }
-    secondaryButton("＋ 添加意图") {
-        nlu.addIntent()
-        form.markDirty()
     }
 }
 
@@ -171,20 +152,23 @@ private fun ViewContainer<*, *>.nluIntentBlock(form: ConfigFormState, nlu: NluSe
             }
         }
         labeledField(
-            "name（技能名，须唯一）",
+            "技能名",
             { d.name },
             { d.name = it; form.markDirty() },
             "light_control",
+            help = "技能唯一标识，仅用于本配置内部引用（可保留英文下划线写法）；重名会让后一条覆盖前一条。",
         )
         labeledTextArea(
-            "templates（每行一个模板，{槽位名} 为占位）",
+            "触发模板（每行一条）",
             { d.templates },
             { d.templates = it; form.markDirty() },
             "把{room}的灯{action}",
             height = 88f,
+            help = "每行一个句式，{槽位名} 是可变部分（需在下方「槽位定义」里声明）。" +
+                "封闭槽位容忍「包含唯一值」的口语化说法（「把卧室灯打开」也能命中）。",
         )
         dropdownField(
-            label = "action.kind（命中后做什么）",
+            label = "命中后动作",
             currentLabel = {
                 nlu.actionOptions.firstOrNull { it.first == d.actionKind }?.second ?: d.actionKind
             },
@@ -197,27 +181,25 @@ private fun ViewContainer<*, *>.nluIntentBlock(form: ConfigFormState, nlu: NluSe
                 d.actionMenuOpen = false
                 form.markDirty()
             },
+            help = "只应答 = 说一句应答语后结束；结束聆听 = 说应答语后让设备退出（等同指令闸门）；" +
+                "派发设备工具 = 把槽位作为参数调用设备声明的 MCP 工具。",
         )
         vif({ d.actionKind == "mcp" }) {
             labeledField(
-                "mcp 工具名（设备声明的工具，精确匹配）",
+                "MCP 工具名",
                 { d.mcpTool },
                 { d.mcpTool = it; form.markDirty() },
                 "set_volume",
+                help = "设备在 MCP 清单里声明的工具名，需精确匹配（清单见「MCP 工具」页）。" +
+                    "命中后先说应答语，再把槽位作为参数派发；设备没有同名工具则跳过、不报错。",
             )
-            Text {
-                attr {
-                    fontSize(AdminType.caption)
-                    color(AdminColors.textTertiary)
-                    text("命中后先说 reply，再把槽位作为参数派发到该设备工具；设备清单里没有同名工具则零调用跳过（清单见「MCP 工具」页）。")
-                }
-            }
         }
         labeledField(
-            "reply（命中后的应答语）",
+            "应答语",
             { d.reply },
             { d.reply = it; form.markDirty() },
             "好的，已为你打开灯。",
+            help = "命中后要说的话（走 TTS 合成）。留空 = 只执行动作、不出声。",
         )
     }
 }
@@ -225,22 +207,23 @@ private fun ViewContainer<*, *>.nluIntentBlock(form: ConfigFormState, nlu: NluSe
 // ===================== 槽位定义（slots） =====================
 
 private fun ViewContainer<*, *>.nluSlotList(form: ConfigFormState, nlu: NluSectionState) {
-    fieldLabel("槽位定义 slots（${nlu.slots.size} 条）")
-    vif({ nlu.slots.size == 0 }) {
-        Text {
-            attr {
-                fontSize(AdminType.caption)
-                color(AdminColors.textTertiary)
-                text("模板里用到的 {槽位} 在这里命名并给封闭值表（用于校验与抽取）；不给值表 = 开放槽位（任意短语）。")
+    fieldLabel(
+        "槽位定义（${nlu.slots.size} 条）",
+        help = "模板里用到的 {槽位} 在这里命名并给出封闭值表（用于校验与抽取）；不给值表 = 开放槽位，" +
+            "任意短语都接受。值表里的词会做归一化比对（忽略标点差异），命中后按配置原文回填。" +
+            "含否定词（别/不要）或出现多个候选值时不会本地执行，交大模型判断。",
+        trailing = {
+            secondaryButton("＋ 添加槽位") {
+                nlu.addSlot()
+                form.markDirty()
             }
-        }
+        },
+    )
+    vif({ nlu.slots.size == 0 }) {
+        textNote("模板里用到的 {槽位} 在这里命名并给封闭值表；不给值表 = 开放槽位（任意短语）。", micro = true)
     }
     vfor({ nlu.slots }) { s ->
         nluSlotBlock(form, nlu, s)
-    }
-    secondaryButton("＋ 添加槽位") {
-        nlu.addSlot()
-        form.markDirty()
     }
 }
 
@@ -273,27 +256,26 @@ private fun ViewContainer<*, *>.nluSlotBlock(form: ConfigFormState, nlu: NluSect
             }
         }
         labeledField(
-            "name（槽位名，对应模板占位）",
+            "槽位名",
             { s.name },
             { s.name = it; form.markDirty() },
             "room",
+            help = "必须与模板里的 {占位名} 完全一致（区分大小写）。改名后不会自动同步模板，需自行修改。",
         )
         labeledTextArea(
-            "values（封闭值表，每行一个；留空 = 开放槽位）",
+            "封闭值表（每行一个）",
             { s.values },
             { s.values = it; form.markDirty() },
             "卧室\n客厅\n书房",
             height = 80f,
+            help = "列出这个槽位所有合法取值，用于校验与抽取；留空 = 开放槽位（任意短语都接受，不再校验）。",
         )
-        switchRow("optional（模板中可缺省）", s.optional == "true") {
+        switchRow(
+            "允许缺省", s.optional == "true",
+            help = "打开后模板里可以不说这个槽位（如「开灯」省略房间），缺省时以空值执行；" +
+                "关闭则该槽位必须出现。",
+        ) {
             form.toggleStringBool(s::optional)
-        }
-        Text {
-            attr {
-                fontSize(AdminType.caption)
-                color(AdminColors.textTertiary)
-                text("值表里的词会做归一化比对（忽略标点差异），命中后按配置原文回填；可选槽位缺省时以空值执行。")
-            }
         }
     }
 }

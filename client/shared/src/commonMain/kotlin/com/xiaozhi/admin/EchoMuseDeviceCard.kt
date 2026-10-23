@@ -39,6 +39,28 @@ import com.tencent.kuikly.core.views.View
 /** 卡片内左列菜单宽度（紧凑菜单；右栏面板 flex(1) 占满剩余宽度）。 */
 private const val ECHOMUSE_MENU_WIDTH = 150f
 
+/**
+ * 唤醒词面板里滑杆之外的全部固定占位（滚动页左右留白 + 卡内边距 + 左菜单 + 竖分隔线 +
+ * 面板左内距 + 右侧阈值读数）。滑杆宽度 = 内容区宽 − 本占位，见 [echoMuseSliderWidth]。
+ */
+private val ECHOMUSE_SLIDER_CHROME: Float =
+    AdminSpace.xl * 2 + AdminSpace.cardPadding * 2 + ECHOMUSE_MENU_WIDTH + 1f + AdminSpace.md + 48f + AdminSpace.sm
+
+/** 滑杆最小宽度（窄窗兜底；低于此值宁可窄也不为负）。 */
+private const val ECHOMUSE_SLIDER_MIN_WIDTH = 120f
+
+/**
+ * 唤醒灵敏度滑杆的显式宽度。
+ *
+ * ⚠️ 官方 `Slider` 是**组合组件**（track/progress/thumb 三层自绘），渲染时读自身 attr 的
+ * 宽高——`flex(1f)` 不参与该判定，读不到就 `throwRuntimeError`（日志「Slider组件需要设置
+ * 宽度和高度」）。异常会中断所在面板的构建事务：实测唤醒词面板（连同前面已构建的开关、
+ * 下拉、文案）整片空白，只有卡片 header 和左菜单还在。因此这里按内容区宽度算出**确定值**，
+ * 不能用 flex；读取放在 attr 闭包内，窗口宽度变化时随 `pageViewWidth` 响应式更新。
+ */
+private fun echoMuseSliderWidth(ctx: Pager): Float =
+    (adminContentWidth(ctx) - ECHOMUSE_SLIDER_CHROME).coerceAtLeast(ECHOMUSE_SLIDER_MIN_WIDTH)
+
 /** 一台 EchoMuse 设备卡片：header（标题+状态+删除）+ 卡内左菜单/右内容面板（EchoMusePage 调用）。 */
 internal fun ViewContainer<*, *>.echoMuseDeviceCard(
     row: EchoMuseDeviceRow,
@@ -468,7 +490,8 @@ private fun ViewContainer<*, *>.echoMuseWakeSettings(
         }
         Slider {
             attr {
-                flex(1f)
+                // ⚠️ 必须是显式宽度，不能用 flex(1f)（理由见 [echoMuseSliderWidth]）
+                width(echoMuseSliderWidth(ctx))
                 height(28f)
                 currentProgress(EchoMuseWakeWord.trackProgress(state.owwThreshold))
                 progressColor(AdminColors.accent)

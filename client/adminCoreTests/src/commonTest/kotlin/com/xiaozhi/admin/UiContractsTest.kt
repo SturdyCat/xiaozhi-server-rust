@@ -94,4 +94,21 @@ class UiContractsTest {
         assertEquals("fullchain", ConfigSections.all.single { it.id == "aiui" }.capabilityId)
         assertEquals("vad", ConfigSections.firstSectionIn("voice"))
     }
+
+    /**
+     * 导航拆分的硬约束：「语音流程」与「全局配置」两个菜单必须**正好划分**全部 section。
+     * 每个 section 要么有流程节点（语音流程里能改），要么落在全局配置菜单；不允许两边都有，
+     * 也不允许两边都没有（后者等于配置项在界面上失联）。
+     */
+    @Test fun everySectionBelongsToExactlyOneMenu() {
+        val workflowSections = ConfigSections.all.filter { PipelineFlow.primaryForSection(it.id) != null }.map { it.id }
+        val globalSections = ConfigSections.global.map { it.id }
+        assertEquals(ConfigSections.all.map { it.id }.toSet(), (workflowSections + globalSections).toSet())
+        assertTrue(workflowSections.intersect(globalSections.toSet()).isEmpty())
+        // 全局配置菜单只剩没有流程位置的 section：流程阶段与连接点分支都在语音流程里
+        assertTrue(VoiceStageId.entries.none { stage -> stage.id in globalSections })
+        assertTrue(globalSections.containsAll(listOf("overview", "presets", "aiui", "server", "echomuse", "mcp", "ota")))
+        assertTrue(ConfigSections.isGlobal("server") && !ConfigSections.isGlobal("llm") && !ConfigSections.isGlobal("soul"))
+        assertEquals(ConfigSections.global.size, ConfigSections.globalGroups.sumOf { it.second.size })
+    }
 }

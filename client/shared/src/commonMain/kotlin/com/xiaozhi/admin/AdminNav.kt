@@ -51,7 +51,12 @@ object AdminNav {
         NavDescriptor("conversations", 30, "对话记录", GROUP_OBSERVE),
         NavDescriptor("usage", 40, "用量", GROUP_OBSERVE),
         NavDescriptor("metrics", 45, "延迟", GROUP_OBSERVE),
-        NavDescriptor("config", 50, "语音流程与配置", GROUP_CONFIG),
+        // 语音流程：只装流程节点（VAD/ASR/NLU/LLM/TTS 与挂在连接点上的分支），配置/测试双 Tab
+        NavDescriptor("config", 50, "语音流程", GROUP_CONFIG),
+        // 全局配置：没有流程节点的 section（能力总览 / 预设 / AIUI / 服务 / EchoMuse 接入 / MCP / OTA）。
+        // 独立成一级菜单（2026-10）：此前它藏在工作流右上的「全局设置」里，和流程节点挤同一个左菜单，
+        // 用户分不清"改某个阶段"和"改整套部署"的区别。
+        NavDescriptor("settings", 55, "全局配置", GROUP_CONFIG),
         // 文件（服务端存储目录：新建/上传/删除；EchoMuse 自定义唤醒词模型放 oww-models/）
         NavDescriptor("files", 60, "文件", GROUP_STORAGE),
     )

@@ -37,9 +37,11 @@ fun ViewContainer<*, *>.dropdownField(
     isOpen: () -> Boolean,
     onToggle: () -> Unit,
     onSelect: (String) -> Unit,
+    /** 字段详解（ⓘ 弹层正文）；空串 = 见名知意，不挂 icon（见 [fieldLabel]）。 */
+    help: String = "",
 ) {
     val modalWidth = { (getPager().pageData.pageViewWidth - 2 * AdminSpace.md).coerceAtMost(340f).coerceAtLeast(0f) }
-    fieldLabel(label)
+    fieldLabel(label, help)
     View {
         attr {
             flexDirectionRow()
