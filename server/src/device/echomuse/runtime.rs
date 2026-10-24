@@ -15,6 +15,13 @@ pub(crate) const MAX_TELEMETRY_BYTES: usize = 16 * 1024;
 struct Runtime {
     stats: Option<Value>,
     listen_state: Option<Value>,
+    listen_end: Option<Value>,
+    playback_stats: Option<Value>,
+    oww_shadow_cross: Option<Value>,
+    wifi_result: Option<Value>,
+    wifi_scan: Option<Value>,
+    ambient_light: Option<Value>,
+    pair_requested_at: Option<u64>,
     volume_state: Option<Value>,
     mute_state: Option<Value>,
     updated_at: Option<u64>,
@@ -28,6 +35,8 @@ pub(crate) struct LiveControl {
     pub peer: Option<IpAddr>,
     pub authenticated: bool,
     pub(crate) turn: super::turn::BoundedTurn,
+    pub(crate) mic: super::mic::MicControl,
+    pub(crate) fx: super::fx::Fx,
     pub(crate) media: Arc<super::media::MediaState>,
     state: Mutex<Runtime>,
 }
@@ -39,6 +48,8 @@ impl LiveControl {
             peer,
             authenticated,
             turn: super::turn::BoundedTurn::default(),
+            mic: super::mic::MicControl::default(),
+            fx: super::fx::Fx::default(),
             media: Arc::new(super::media::MediaState::default()),
             state: Mutex::new(Runtime::default()),
         }
@@ -120,6 +131,36 @@ impl LiveControl {
                 };
                 state.mute_state = Some(json!({"muted": muted}));
             }
+            // ── P2 上行面（官方文档 §/control Device→Controller；此前全部丢弃）──
+            // 设备自己关会话的原因（ack_timeout/max_open/muted/link/stopped）。
+            Some("listen_end") => {
+                state.listen_end = Some(cloned(value));
+            }
+            // 一次完成的扬声器流（minDepth/primeWaitMs/underruns/barge…）：
+            // 服务端自算"断音"告警之外的设备侧实况。
+            Some("playback_stats") => {
+                state.playback_stats = Some(cloned(value));
+            }
+            // 影子评分命中（只报不动作）：调 owwThreshold / 唤醒词模型的关键数据。
+            Some("oww_shadow_cross") => {
+                state.oww_shadow_cross = Some(cloned(value));
+            }
+            // 配网闭环的设备侧结果（wifi_result 会重发到 wifi_commit 为止）。
+            Some("wifi_result" | "wifi_scan_result") => {
+                if value["type"] == "wifi_result" {
+                    state.wifi_result = Some(cloned(value));
+                } else {
+                    state.wifi_scan = Some(cloned(value));
+                }
+            }
+            // 环境光（本机 tsl2540 未绑定则不会出现；字段留作通用）。
+            Some("ambient_light") => {
+                state.ambient_light = Some(cloned(value));
+            }
+            // 长按 action 5s 的配对申请：管理台凭 registry 审批，这里只记时刻。
+            Some("pair_request") => {
+                state.pair_requested_at = Some(super::registry::now_secs());
+            }
             _ => return,
         }
         state.updated_at = Some(super::registry::now_secs());
@@ -128,14 +169,40 @@ impl LiveControl {
     pub(crate) fn payload(&self, id: &str) -> Value {
         let s = self.state.lock().expect("echomuse runtime lock");
         json!({"device_id": id, "session_id": self.session_id.to_string(), "online": true, "stats": s.stats,
-            "listen_state": s.listen_state, "volume_state": s.volume_state,
+            "listen_state": s.listen_state, "listen_end": s.listen_end,
+            "playback_stats": s.playback_stats, "oww_shadow_cross": s.oww_shadow_cross,
+            "wifi_result": s.wifi_result, "wifi_scan": s.wifi_scan,
+            "ambient_light": s.ambient_light, "pair_requested_at": s.pair_requested_at,
+            "volume_state": s.volume_state,
             "mute_state": s.mute_state, "updated_at": s.updated_at})
     }
 }
 
 pub(crate) fn offline_payload(id: &str) -> Value {
     json!({"device_id": id, "session_id": null, "online": false, "stats": null, "listen_state": null,
+        "listen_end": null, "playback_stats": null, "oww_shadow_cross": null,
+        "wifi_result": null, "wifi_scan": null, "ambient_light": null, "pair_requested_at": null,
         "volume_state": null, "mute_state": null, "updated_at": null})
+}
+
+/// 上行报告的受限拷贝：深度截断防恶意/异常固件把大对象塞进 runtime
+/// （总字节上限已由 MAX_TELEMETRY_BYTES 把关，这里只防单键巨型值）。
+fn cloned(value: &Value) -> Value {
+    let mut v = value.clone();
+    if let Some(obj) = v.as_object_mut() {
+        obj.remove("type");
+        let long_keys: Vec<String> = obj
+            .iter()
+            .filter(|(_, val)| val.as_str().is_some_and(|s| s.len() > 256))
+            .map(|(k, _)| k.clone())
+            .collect();
+        for k in long_keys {
+            if let Some(s) = obj.get(&k).and_then(Value::as_str) {
+                obj.insert(k, json!(s.chars().take(256).collect::<String>()));
+            }
+        }
+    }
+    v
 }
 
 /// Raw tinymix speaker control index, not a percent (upstream volumeMax=127).

@@ -47,13 +47,48 @@ fun ViewContainer<*, *>.dividerH(trailingGap: Float = AdminSpace.sm) {
     }
 }
 
-/** 左右分栏之间 1px 纵向分隔线（行内 stretch 自动撑满列高）。 */
+/**
+ * 左右分栏之间 1px 纵向分隔线（stretch 版）。
+ *
+ * ⚠️ 只在**交叉轴尺寸已确定**的行里可靠（如挂在 `flex(1f)` 定高容器上的主壳分栏）。
+ * 高度由内容决定的卡片内分栏请用 [dividerVAt]，否则线高恒为 0（见该函数说明）。
+ */
 fun ViewContainer<*, *>.dividerV() {
     View {
         attr {
             width(1f)
             // 显式拉伸交叉轴（高度）：父行若设了 alignCenter，默认值会让线塌成 0 高（看不见）
             alignSelfStretch()
+            backgroundColor(AdminColors.divider)
+        }
+    }
+}
+
+/**
+ * 纵向分隔线（绝对定位版）：`left` 由所在行的定宽分区累计得出，`top/bottom = 0`
+ * 把线拉满整行高度。
+ *
+ * **为什么不能只靠 [dividerV] 的 alignSelfStretch**：Kuikly 的 flex 交叉轴 stretch 只在
+ * 「父容器交叉轴尺寸已定」时才生效（`LayoutImpl`：`alignItem == STRETCH &&
+ * isCrossDimDefined` 才预填充子项）。卡片内左右分栏的高度由内容决定，父高要等子项排完
+ * 才算出，源码此处至今是：
+ *
+ * ```
+ * // TODO(prenaux): Correctly set the height of items with undefined (auto) crossAxis dimension.
+ * ```
+ *
+ * 结果就是线节点在树里、宽度 1px、**高度恒为 0**——「卡片里没有分割线」的真正原因
+ * （主壳分栏挂在定高容器上，同一条线却看得见，差异就在这里）。
+ *
+ * 绝对定位子项走**父尺寸算出之后的二次布局**（`LayoutImpl` 的 <Loop G> 遍历
+ * `firstAbsoluteChild`）：top/bottom 同时给出、自身又不设高度时才回填成父高，因此这一版
+ * 能取到真实行高。线不占主轴位置（1px 压在交界处），调用方无需再留 1px 间隙。
+ */
+private fun ViewContainer<*, *>.dividerVAt(left: Float) {
+    View {
+        attr {
+            absolutePosition(top = 0f, left = left, bottom = 0f)
+            width(1f)
             backgroundColor(AdminColors.divider)
         }
     }
@@ -159,7 +194,11 @@ class SplitScope internal constructor(
     private val trailingGap: Float,
     private val spacing: Float,
 ) {
-    private class Pane(val show: (() -> Boolean)?, val paint: ViewBuilder)
+    /**
+     * [width] 仅左右布局的常驻定宽分区有值：它是下一个分隔线的水平锚点（绝对定位竖线要
+     * 知道 left）。弹性分区、条件分区都无法在构建期给出确定位置，只能退回 stretch 版线。
+     */
+    private class Pane(val show: (() -> Boolean)?, val width: Float?, val paint: ViewBuilder)
 
     private val panes = mutableListOf<Pane>()
 
@@ -179,7 +218,7 @@ class SplitScope internal constructor(
         paddingBottom: Float = 0f,
         content: ViewBuilder,
     ) {
-        panes += Pane(show) {
+        panes += Pane(show, if (horizontal) size else null) {
             View {
                 attr {
                     if (horizontal) width(size) else height(size)
@@ -208,7 +247,7 @@ class SplitScope internal constructor(
         paddingBottom: Float = 0f,
         content: ViewBuilder,
     ) {
-        panes += Pane(show) {
+        panes += Pane(show, null) {
             View {
                 attr {
                     flex(weight)
@@ -230,43 +269,72 @@ class SplitScope internal constructor(
      * 适合上下布局的标题行、说明行，或左右布局的图标等固定内容块。
      */
     fun auto(show: (() -> Boolean)? = null, content: ViewBuilder) {
-        panes += Pane(show) { content(this) }
+        panes += Pane(show, null) { content(this) }
     }
 
-    /** 分发渲染：分隔线只在「前一个分区也真实显示」时才画。 */
+    /**
+     * 分发渲染：分隔线只在「前一个分区也真实显示」时才画。
+     *
+     * 左右布局的竖线**优先用绝对定位**（[dividerVAt]）：位置由前面的常驻定宽分区累计得出，
+     * 高度交给 Kuikly 的绝对定位二次布局撑满整行——这是卡片这类「高度由内容决定」的容器
+     * 里唯一能画出等高分栏线的办法（stretch 版线高恒为 0，原因见 [dividerVAt]）。
+     * 位置算不出来时（前面有弹性/条件分区）退回 [dividerV] 的 stretch 版。
+     */
     internal fun render(target: ViewContainer<*, *>) {
-        // 前面所有条件分区的显示判定（累积）：任一不显示，当前分区就是第一个可见分区
+        // 前面所有条件分区的显示判定（快照）：任一不显示，当前分区就是第一个可见分区
         val guards = mutableListOf<() -> Boolean>()
+        // 绝对定位竖线：left + 显示条件（null = 恒显示）。分区挂完再统一挂，绘制在最上层
+        val absLines = mutableListOf<Pair<Float, (() -> Boolean)?>>()
+        var offset = 0f          // 前面常驻定宽分区的总宽 = 下一条竖线的 left
+        var offsetKnown = true
 
-        fun drawSeparator() {
+        fun ViewContainer<*, *>.flowSeparator() {
             if (divided) {
-                if (horizontal) target.dividerV() else target.dividerH(trailingGap)
+                if (horizontal) dividerV() else dividerH(trailingGap)
             } else if (spacing > 0f) {
-                if (horizontal) target.View { attr { width(spacing) } } else target.View { attr { height(spacing) } }
+                if (horizontal) View { attr { width(spacing) } } else View { attr { height(spacing) } }
             }
         }
 
         panes.forEachIndexed { index, pane ->
             val show = pane.show
-            if (index > 0) {
-                when {
-                    // 前一个分区常驻：分隔线直接画
-                    show == null && guards.isEmpty() -> drawSeparator()
-                    // 本分区常驻、但前面有条件分区：线随前置条件一起显示
-                    show == null -> target.vif({ guards.all { it() } }) { drawSeparator() }
-                    // 本分区条件渲染：线在下方与分区同处一个 vif
-                }
+            val before = guards.toList()
+            // 线的显示条件：前面条件分区都可见，且本分区可见
+            val lineCond: (() -> Boolean)? = when {
+                before.isEmpty() && show == null -> null
+                before.isEmpty() -> show
+                show == null -> ({ before.all { it() } })
+                else -> ({ before.all { it() } && show() })
             }
-            when {
-                show == null -> pane.paint(target)
-                index == 0 -> target.vif(show) { pane.paint(target) }
-                else -> {
-                    // 分区不显示时线也必须消失（否则会在第一个可见分区前多出一条）
-                    target.vif({ guards.all { it() } && show() }) { drawSeparator() }
-                    target.vif(show) { pane.paint(target) }
+            val lineLeft = offset
+            val lineAbsolute = divided && horizontal && offsetKnown
+
+            if (index > 0) {
+                if (lineAbsolute) {
+                    absLines += lineLeft to lineCond
+                } else if (lineCond == null) {
+                    target.flowSeparator()
+                } else {
+                    target.vif({ lineCond() }) { flowSeparator() }
                 }
+                // 用空白间距代替分隔线时，间距本身占主轴位置
+                if (!divided && spacing > 0f) offset += spacing
+            }
+
+            if (show == null) pane.paint(target) else target.vif(show) { pane.paint(target) }
+
+            // 主轴推进：只有常驻定宽分区能确定下一条线的位置
+            val width = pane.width
+            when {
+                !offsetKnown -> Unit
+                show != null || width == null -> offsetKnown = false
+                else -> offset += width
             }
             if (show != null) guards += show
+        }
+
+        for ((left, cond) in absLines) {
+            if (cond == null) target.dividerVAt(left) else target.vif({ cond() }) { dividerVAt(left) }
         }
     }
 }

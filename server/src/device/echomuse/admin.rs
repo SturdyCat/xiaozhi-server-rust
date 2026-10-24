@@ -46,6 +46,7 @@ pub(crate) fn admin_routes() -> axum::Router<Arc<Engines>> {
         .route("/api/echomuse/devices/{id}/approve", post(device_approve))
         .route("/api/echomuse/devices/{id}/command", post(device_command))
         .route("/api/echomuse/devices/{id}/settings", post(device_settings))
+        .route("/api/echomuse/devices/{id}/music", post(device_music))
         .merge(super::system::routes())
         .merge(super::oww::routes())
 }
@@ -135,26 +136,30 @@ fn command_out(body: &serde_json::Value) -> Result<String, &'static str> {
             let psk = body.get("psk").and_then(|s| s.as_str()).unwrap_or("");
             Ok(serde_json::json!({ "type": "wifi_change", "ssid": ssid, "psk": psk }).to_string())
         }
-        _ => Err("action 只支持 wifi；重启请使用确认 system/reboot 接口"),
+        // 配网闭环（官方三步：wifi_change → 设备重连回 wifi_result → wifi_commit）。
+        // commit 前设备处于回滚窗口（连不上会自动退回旧网）；管理台在确认新网
+        // 可用（/runtime 的 wifi_result.ok）后调用。
+        Some("wifi_commit") => Ok(r#"{"type":"wifi_commit"}"#.into()),
+        // 扫描周边网络；结果经 /runtime 的 wifi_scan 读取（wifi_scan_result 上行）。
+        Some("wifi_scan") => Ok(r#"{"type":"wifi_scan"}"#.into()),
+        _ => Err("action 只支持 wifi/wifi_scan/wifi_commit；重启请使用确认 system/reboot 接口"),
     }
 }
 
-/// settings 白名单：唤醒词相关且设备实际执行的 config 键（协议 camelCase，
-/// 部分"零值忽略"更新）。
-/// `bleProxyEnabled`/`bleProxyConnections` 是蓝牙代理的每设备开关（接入时由
-/// `config_baseline` 打基线，单台可覆盖，例如关连接留扫描）。
+/// settings 白名单：**设备端 `ConfigMessage` 全量字段**（`device/internal/config/
+/// config.go` 实际消费的键，文档 canonical 里的 controller 侧键——`ledScene`/
+/// `meter*`/`nsAsr`/`wakeArbitrationMs`/`button*`/`saveUtterances`——不进设备，不收）。
+/// 协议 camelCase、"零值忽略"部分更新；`0`/`false` 是合法设置，设备按指针类型
+/// 区分"未设置"。
 ///
-/// **音频链路子集**（官方 `device/internal/config/config.go` 的 `ConfigMessage`
-/// 全量字段里与"听到 / 听清"直接相关的那几项）：
-/// - 设备默认值：`beamformingEnabled=true`、`beamAngle=-1`（自动追踪最响源）、
-///   `aecEnabled=true`、`agcEnabled=true`、`vadThreshold=0.004`、`micGainDb=24`
-///   （设备侧 clamp 0..42）、`adcDigitalGain=88`、`adcMicpga=40`。
-/// - 服务端此前一个都不下发，设备只吃存储值/默认值；波束 baseline 校准不出来
-///   导致 mic 静音时，管理面无从干预。暴露出来是为了现场排障：
-///   `beamformingEnabled:false` 退回单麦（`wakeMic`，默认 0=中心麦）可一步验证
-///   "是不是波束把信号吃掉了"；`micGainDb` / `vadThreshold` 用于调门限；
-///   `aecEnabled` / `agcEnabled` 用于 A/B。
+/// 设备默认值（排障基准）：`beamformingEnabled=true`、`beamAngle=-1`（自动追踪）、
+/// `aecEnabled=true`、`agcEnabled=true`、`vadThreshold=0.004`、`micGainDb=24`、
+/// `adcDigitalGain=88`、`adcMicpga=40`、`startupVolume` 取设备存储值。
+///
+/// kind 语言（[`filter_settings`] 解析）：`bool` / `string` / `json`（任意 JSON）/
+/// `float list`（数字数组）/ 含 `|` 的枚举 / `(0,1]` / `integer A..B` / `number A..B`。
 const SETTINGS_KEYS: &[(&str, &str)] = &[
+    // 唤醒词
     ("wakeWordEnabled", "bool"),
     ("owwOnDevice", "off|shadow|on"),
     ("owwModel", "string"),
@@ -162,16 +167,67 @@ const SETTINGS_KEYS: &[(&str, &str)] = &[
     ("wakeSound", "bool"),
     ("wakeSoundLevel", "quiet|medium|loud"),
     ("wakeMic", "integer 0..6"),
-    ("bleProxyEnabled", "bool"),
-    ("bleProxyConnections", "bool"),
-    // 音频链路（0 值是合法设置，设备按指针类型区分"未设置"与"设为零"）
+    // VAD 时序（"多久算说完"的现场调参）
+    ("vadThreshold", "(0,1]"),
+    ("vadSpeechMs", "integer 0..60000"),
+    ("vadSilenceMs", "integer 0..60000"),
+    // 采集增益链（模拟前端 → 数字增益 → 处理增益）
+    ("adcMicpga", "integer 0..127"),
+    ("adcDigitalGain", "integer 0..127"),
+    ("micGainDb", "integer 0..42"),
+    ("startupVolume", "integer 0..127"),
+    // AEC / AGC（aecRefSource: auto 检测硬件环回，hw/sw 钉死做 A/B）
+    ("aecEnabled", "bool"),
+    ("aecDelayMs", "integer 0..1000"),
+    ("aecTailMs", "integer 0..500"),
+    ("aecRefSource", "auto|hw|sw"),
+    ("agcEnabled", "bool"),
+    // 波束
     ("beamformingEnabled", "bool"),
     ("beamAngle", "number -1..360"),
-    ("aecEnabled", "bool"),
-    ("agcEnabled", "bool"),
-    ("vadThreshold", "(0,1]"),
-    ("micGainDb", "integer 0..42"),
+    // 打断（barge-in）
+    ("bargeInEnabled", "bool"),
+    ("bargeInThreshold", "number 0..1"),
+    // 音量交互与播报电平
+    ("responseLevel", "low|medium|high"),
+    ("volumeButtonSound", "bool"),
+    ("remoteVolumeArc", "bool"),
+    // 输出链（ack 声明 output_chain 后设备在 ALSA 写入处执行）
+    ("eqBands", "float list"),
+    ("eqLoudness", "bool"),
+    ("bassGuardEnabled", "bool"),
+    ("bassGuardDb", "number -60..24"),
+    ("limiterEnabled", "bool"),
+    ("limiterThreshold", "number -60..0"),
+    ("limiterRelease", "number 10..2000"),
+    // 音乐压低（duck）深度
+    ("duckDb", "number -60..0"),
+    // 蓝牙代理（每设备开关：接入时 config_baseline 打基线，单台可覆盖）
+    ("bleProxyEnabled", "bool"),
+    ("bleProxyConnections", "bool"),
+    // Sendspin（Music Assistant 直连设备，不经本服务器；仅开关与名字）
+    ("sendspinEnabled", "bool"),
+    ("sendspinName", "string"),
+    // 灯环：私听态默认动画 spec（设备本地渲染）
+    ("listeningAnim", "json"),
 ];
+
+fn range_ok(kind: &str, prefix: &str, v: &serde_json::Value) -> bool {
+    let Some(rest) = kind.strip_prefix(prefix) else {
+        return false;
+    };
+    let Some((lo, hi)) = rest.split_once("..") else {
+        return false;
+    };
+    let (Ok(lo), Ok(hi)) = (lo.trim().parse::<f64>(), hi.trim().parse::<f64>()) else {
+        return false;
+    };
+    if prefix == "integer " {
+        v.as_i64().is_some_and(|n| n as f64 >= lo && n as f64 <= hi)
+    } else {
+        v.as_f64().is_some_and(|n| n >= lo && n <= hi)
+    }
+}
 
 /// 过滤并校验 settings body：只留白名单键且类型匹配（`number` 接受整/浮）。
 /// 返回 (过滤后键集, 首个错误描述)。
@@ -192,12 +248,16 @@ pub(crate) fn filter_settings(
         let ok = match *kind {
             "bool" => v.is_boolean(),
             "string" => v.is_string(),
-            "off|shadow|on" => matches!(v.as_str(), Some("off" | "shadow" | "on")),
-            "quiet|medium|loud" => matches!(v.as_str(), Some("quiet" | "medium" | "loud")),
-            "integer 0..6" => v.as_u64().is_some_and(|n| n <= 6),
-            "integer 0..42" => v.as_u64().is_some_and(|n| n <= 42),
-            "number -1..360" => v.as_f64().is_some_and(|n| (-1.0..=360.0).contains(&n)),
+            "json" => v.is_object() || v.is_array(),
+            "float list" => v
+                .as_array()
+                .is_some_and(|a| !a.is_empty() && a.iter().all(|x| x.is_number())),
             "(0,1]" => v.as_f64().is_some_and(|n| n > 0.0 && n <= 1.0),
+            k if k.contains('|') => v
+                .as_str()
+                .is_some_and(|s| k.split('|').any(|option| option == s)),
+            k if k.starts_with("integer ") => range_ok(k, "integer ", v),
+            k if k.starts_with("number ") => range_ok(k, "number ", v),
             _ => v.is_number(),
         };
         if !ok {
@@ -469,4 +529,67 @@ async fn device_command(
         }
     }
     json(code, reply)
+}
+
+/// `POST /api/echomuse/devices/{id}/music`（音乐面）：
+/// `{"action":"play","path":"a.wav"}` → 202 `{queued,seconds}`（路径相对
+/// `[echomuse].music_dir`，禁止越界与绝对路径）；
+/// `{"action":"stop"}` → 200（epoch 作废 + `music_flush`）。
+/// 音源支持 16-bit PCM WAV（解码见 [`super::music`]）。
+async fn device_music(
+    headers: HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
+    Path(id): Path<String>,
+    State(engines): State<Arc<Engines>>,
+    body: Option<axum::Json<serde_json::Value>>,
+) -> Response {
+    if let Some(r) = gate(&engines, &headers, &query) {
+        return r;
+    }
+    let dir = engines.config.echomuse.music_dir.clone();
+    if dir.is_empty() {
+        return json(StatusCode::NOT_FOUND, serde_json::json!({"error": "music disabled"}));
+    }
+    let Some((_, live)) = super::hub_live(&id) else {
+        return json(
+            StatusCode::CONFLICT,
+            serde_json::json!({ "error": "device offline" }),
+        );
+    };
+    let Some(data_tx) = super::hub_data_tx(&id) else {
+        return json(
+            StatusCode::CONFLICT,
+            serde_json::json!({ "error": "data channel offline" }),
+        );
+    };
+    let payload = body.map(|axum::Json(v)| v).unwrap_or(serde_json::json!({}));
+    match payload.get("action").and_then(|a| a.as_str()) {
+        Some("stop") => {
+            super::music::MusicPlane::new(live.fx.clone(), live.media.clone(), data_tx).stop();
+            json(StatusCode::OK, serde_json::json!({ "stopped": true }))
+        }
+        Some("play") => {
+            let Some(rel) = payload.get("path").and_then(|p| p.as_str()) else {
+                return json(StatusCode::BAD_REQUEST, serde_json::json!({"error": "play 需要 path"}));
+            };
+            // 路径安全：拒绝绝对路径与 `..`，拼接后必须仍在 music_dir 内。
+            if rel.starts_with('/') || rel.split(['/', '\\']).any(|seg| seg == "..") {
+                return json(StatusCode::BAD_REQUEST, serde_json::json!({"error": "path 越界"}));
+            }
+            let full = std::path::Path::new(&dir).join(rel);
+            let plane =
+                super::music::MusicPlane::new(live.fx.clone(), live.media.clone(), data_tx);
+            match plane.play_file(&full).await {
+                Ok(duration) => json(
+                    StatusCode::ACCEPTED,
+                    serde_json::json!({ "queued": true, "seconds": duration.as_secs_f64().round() as u64 }),
+                ),
+                Err(e) => json(StatusCode::BAD_REQUEST, serde_json::json!({ "error": e })),
+            }
+        }
+        _ => json(
+            StatusCode::BAD_REQUEST,
+            serde_json::json!({ "error": "action 只支持 play/stop" }),
+        ),
+    }
 }

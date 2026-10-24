@@ -42,6 +42,11 @@ pub struct EchomuseConfig {
     /// 每次会话建立（含断线重连）都会说一遍——重连频繁时请自行取舍。
     #[serde(default = "default_welcome")]
     pub welcome: String,
+    /// 音乐文件根目录（音乐面 `POST /devices/{id}/music` 的 `path` 必须落在
+    /// 此目录内，防任意路径读取）。留空 = 音乐面 404。默认 `/data/music`
+    /// （容器卷；`docker-compose.yml` 已可写挂载 `/data`）。
+    #[serde(default = "default_music_dir")]
+    pub music_dir: String,
 }
 
 /// `[echomuse].plain_port` 默认值：官方 controller 明文端口。
@@ -51,6 +56,11 @@ fn default_plain_port() -> u16 {
 
 fn default_welcome() -> String {
     DEFAULT_WELCOME.to_string()
+}
+
+/// 音乐文件根目录默认值（容器 /data 卷下）。
+fn default_music_dir() -> String {
+    "/data/music".to_string()
 }
 
 fn default_true() -> bool {
@@ -65,6 +75,7 @@ impl Default for EchomuseConfig {
             ble_proxy: false,
             plain_port: default_plain_port(),
             welcome: default_welcome(),
+            music_dir: default_music_dir(),
         }
     }
 }
@@ -74,6 +85,7 @@ impl EchomuseConfig {
     pub fn normalize(&mut self) {
         self.token = self.token.trim().to_string();
         self.welcome = self.welcome.trim().to_string();
+        self.music_dir = self.music_dir.trim().to_string();
     }
 }
 

@@ -23,6 +23,9 @@ pub(crate) fn dedicated_port(cfg: &super::EchomuseConfig) -> Option<u16> {
 
 /// 绑定并 spawn 一个已完成 `with_state` 的路由监听；返回实际绑定端口，
 /// 绑定失败（占用等）返回 `None` 由调用方回退——专用端口是增强，不是前提。
+///
+/// 走 [`crate::serve::serve_with_keepalive`]（TCP keepalive 手动 accept loop）：
+/// 设备断电不发 FIN，半开连接若不靠内核探测，hub 条目永不摘除、管理台永远在线。
 pub(crate) async fn bind_and_serve(router: Router, port: u16) -> Option<u16> {
     let addr = format!("0.0.0.0:{port}");
     let listener = match tokio::net::TcpListener::bind(&addr).await {
@@ -35,12 +38,7 @@ pub(crate) async fn bind_and_serve(router: Router, port: u16) -> Option<u16> {
     let bound = listener.local_addr().map(|a| a.port()).unwrap_or(port);
     // ConnectInfo 与主端口同款：设备 shell 拨回校验 TCP 对端，不信任转发头。
     tokio::spawn(async move {
-        if let Err(e) = axum::serve(
-            listener,
-            router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-        )
-        .await
-        {
+        if let Err(e) = crate::serve::serve_with_keepalive(listener, router).await {
             tracing::warn!("[echomuse] 控制器专用端口服务退出: {e}");
         }
     });

@@ -3,6 +3,7 @@ package com.xiaozhi.admin
 import com.xiaozhi.admin.ui.*
 
 import com.tencent.kuikly.core.base.PagerScope
+import com.tencent.kuikly.core.nvi.serialization.json.JSONArray
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.pager.Pager
 import com.tencent.kuikly.core.reactive.collection.ObservableList
@@ -37,8 +38,17 @@ const val ECHOMUSE_MENU_OVERVIEW = "overview"
 const val ECHOMUSE_MENU_APPROVE = "approve"
 const val ECHOMUSE_MENU_WIFI = "wifi"
 const val ECHOMUSE_MENU_WAKE = "wake"
+const val ECHOMUSE_MENU_AUDIO = "audio"
+const val ECHOMUSE_MENU_MUSIC = "music"
 const val ECHOMUSE_MENU_MANAGE = "manage"
 const val ECHOMUSE_MENU_BLE = "ble"
+
+/**
+ * 音乐面音源在服务端**数据目录**下的默认子目录（对应 `[echomuse].music_dir` 默认值
+ * `/data/music`；管理台「文件」页上传 WAV 到这里）。服务端改配了 music_dir 时清单
+ * 列不到，用手动输入路径兜底。
+ */
+const val MUSIC_DIR = "music"
 
 /** 一台 EchoMuse 设备（`GET /api/echomuse/devices` 的一行）。字段不可变——刷新时整表重建。 */
 class EchoMuseDeviceRow(
@@ -60,6 +70,14 @@ class EchoMuseDeviceRow(
     val capabilities: List<String> = emptyList(),
     /** 当前 control 会话标识，不持久化；旧服务端缺省为空。 */
     val sessionId: String = "",
+    /** 最近一次 register 的 IP（排障用；旧服务端/旧记录缺省为空）。 */
+    val ip: String = "",
+    /** 内核架构与版本（如 armv7 / 5.10.x）。 */
+    val kernelArch: String = "",
+    val kernelRelease: String = "",
+    /** 本次开机标识与启动原因（重启/断电/看门狗判别的唯一来源）。 */
+    val bootId: String = "",
+    val bootReason: String = "",
 ) {
     /** 标题：label 优先，未命名时回退设备号。 */
     val title: String get() = label.ifEmpty { deviceId }
@@ -92,6 +110,9 @@ class EchoMuseDeviceRow(
             add("设备: $title")
             if (renamed) add("device_id: $deviceId")
             if (subtitle.isNotEmpty()) add(subtitle)
+            if (ip.isNotEmpty()) add("IP: $ip")
+            if (kernelRelease.isNotEmpty()) add("内核: $kernelRelease${if (kernelArch.isNotEmpty()) " ($kernelArch)" else ""}")
+            if (bootReason.isNotEmpty()) add("启动原因: $bootReason")
             if (metaText.isNotEmpty()) add(metaText)
             add("状态: ${if (online) "在线" else "离线"}${if (approved) "" else "（待批准）"}")
         }.joinToString("\n")
@@ -184,6 +205,11 @@ class EchoMuseState(scope: PagerScope) {
                         connectedSecs = (d.opt("connected_secs") as? Number)?.toLong() ?: -1L,
                         settings = d.optJSONObject("settings") ?: JSONObject(),
                         sessionId = d.text("session_id"),
+                        ip = d.text("ip"),
+                        kernelArch = d.text("kernel_arch"),
+                        kernelRelease = d.text("kernel_release"),
+                        bootId = d.text("boot_id"),
+                        bootReason = d.text("boot_reason"),
                         capabilities = d.array("capabilities")?.let { values ->
                             (0 until values.length()).mapNotNull { values.optString(it)?.takeIf { value -> value.isNotEmpty() } }
                         } ?: emptyList(),
@@ -249,7 +275,7 @@ class EchoMuseState(scope: PagerScope) {
      * 的清空语义）：批准清 label 草稿、WiFi 清 ssid/psk、唤醒词按设备 settings 重填；
      * 管理/蓝牙代理把对应子状态的 target 定到本设备（已选中则保留诊断输出不重置）。
      */
-    fun selectMenu(row: EchoMuseDeviceRow, item: String) {
+    fun selectMenu(row: EchoMuseDeviceRow, item: String, ctx: Pager) {
         if (menuDevice == row.deviceId && menuItem == item) return
         menuDevice = row.deviceId
         menuItem = item
@@ -260,6 +286,8 @@ class EchoMuseState(scope: PagerScope) {
                 wifiPsk = ""
             }
             ECHOMUSE_MENU_WAKE -> fillSettingsDraft(row.deviceId)
+            ECHOMUSE_MENU_AUDIO -> fillAudioDraft(row.deviceId)
+            ECHOMUSE_MENU_MUSIC -> musicFilesRefresh(ctx)
             ECHOMUSE_MENU_MANAGE -> management.select(row, base)
             ECHOMUSE_MENU_BLE -> ble.select(row)
         }
@@ -267,12 +295,14 @@ class EchoMuseState(scope: PagerScope) {
 
     /**
      * 当前卡片生效的菜单项：[menuDevice] 不匹配本卡、或菜单项不适用当前批准态
-     * （已批准没有「批准」、未批准没有 WiFi/唤醒词/管理/蓝牙）一律回落「概览」。
+     * （已批准没有「批准」、未批准没有 WiFi/唤醒词/音频/音乐/管理/蓝牙）一律回落「概览」。
      */
     fun activeMenuItem(row: EchoMuseDeviceRow): String {
         if (menuDevice != row.deviceId) return ECHOMUSE_MENU_OVERVIEW
         val approvedOnly = menuItem == ECHOMUSE_MENU_WIFI ||
             menuItem == ECHOMUSE_MENU_WAKE ||
+            menuItem == ECHOMUSE_MENU_AUDIO ||
+            menuItem == ECHOMUSE_MENU_MUSIC ||
             menuItem == ECHOMUSE_MENU_MANAGE ||
             menuItem == ECHOMUSE_MENU_BLE
         return when {
@@ -525,6 +555,354 @@ class EchoMuseState(scope: PagerScope) {
                     else -> "设置保存失败：${reason.ifEmpty { "HTTP $code" }}"
                 })
             }
+        }
+    }
+
+    // ============================================================
+    // WiFi 配网闭环（wifi_scan → 设备上报 → wifi_commit；对齐官方三步）
+    // ============================================================
+
+    /**
+     * 最近一次为「WiFi 配置」面板拉的运行状态快照（`GET …/runtime` 的原样 JSON）。
+     * 扫描结果在 `wifi_scan.networks`（`[{ssid,signal}]`），切网结果在 `wifi_result`
+     * （`{ok,ssid,error?}`）——都是设备上行、进 runtime 的有界遥测。
+     */
+    var wifiRuntime by scope.observable<JSONObject?>(null)
+        private set
+    var wifiRuntimeBusy by scope.observable(false)
+        private set
+
+    /** 读取运行状态快照（WiFi 面板展示扫描/切网结果用；离线时服务端回历史快照）。 */
+    fun readWifiRuntime(ctx: Pager, deviceId: String) {
+        if (wifiRuntimeBusy) return
+        wifiRuntimeBusy = true
+        getJson(ctx, echoMuseAuthenticatedUrl("$base/api/echomuse/devices/${echoMuseUrlComponent(deviceId)}/runtime", accessToken)) { ok, data, reason ->
+            wifiRuntimeBusy = false
+            if (ok) wifiRuntime = data
+            else wifiRuntimeError = "运行状态读取失败：${reason.ifEmpty { "请确认设备在线" }}"
+        }
+    }
+    var wifiRuntimeError by scope.observable("")
+
+    /** 下发 `wifi_scan`（扫描周边网络）。202 = 已排队；结果经「读取扫描结果」拉 runtime。 */
+    fun sendWifiScan(ctx: Pager, deviceId: String, onDone: (ok: Boolean, msg: String) -> Unit) {
+        command(ctx, deviceId, JSONObject().apply { put("action", "wifi_scan") }) { ok, msg ->
+            if (ok) readWifiRuntime(ctx, deviceId)
+            onDone(ok, if (ok) "扫描指令已下发，稍候点击「读取扫描结果」查看周边网络" else msg)
+        }
+    }
+
+    /**
+     * 下发 `wifi_commit`（确认新网络）。设备切网重连成功后处于回滚窗口，commit 前先
+     * 在 `wifi_result.ok` 里确认新网可用；超时未 commit 设备自动回滚旧网。
+     */
+    fun sendWifiCommit(ctx: Pager, deviceId: String, onDone: (ok: Boolean, msg: String) -> Unit) {
+        command(ctx, deviceId, JSONObject().apply { put("action", "wifi_commit") }) { ok, msg ->
+            onDone(ok, if (ok) "已确认新网络；设备将固定使用新网接入" else msg)
+        }
+    }
+
+    /** WiFi 扫描结果（`wifi_scan.networks` 解析为「显示行 + 信号值」）；未扫描为空表。 */
+    private val wifiScanEntries: List<Pair<String, Int?>>
+        get() {
+            val networks = wifiRuntime?.optJSONObject("wifi_scan")?.array("networks") ?: return emptyList()
+            return (0 until networks.length()).mapNotNull { i ->
+                val n = networks.optJSONObject(i) ?: return@mapNotNull null
+                val ssid = n.text("ssid").ifEmpty { "(隐藏网络)" }
+                val signal = (n.opt("signal") as? Number)?.toInt()
+                val line = if (signal != null) "$ssid · $signal dBm" else ssid
+                line to signal
+            }
+        }
+
+    /** 扫描结果展示行（按信号强度降序：强在前）。 */
+    val wifiScanRows: List<String>
+        get() = wifiScanEntries
+            .sortedWith(compareByDescending<Pair<String, Int?>> { it.second }.thenBy { it.first })
+            .map { it.first }
+
+    /** 最近一次切网结果的一行摘要（`wifi_result`）；设备未上报为 null。 */
+    val wifiResultText: String?
+        get() {
+            val r = wifiRuntime?.optJSONObject("wifi_result") ?: return null
+            if (r.length() == 0) return null
+            val ok = r.opt("ok") as? Boolean
+            val ssid = r.text("ssid")
+            val error = r.text("error")
+            return when {
+                ok == true -> "新网络连接成功${if (ssid.isNotEmpty()) "（$ssid）" else ""}——可点击「确认新网络」固定"
+                ok == false -> "新网络连接失败${if (error.isNotEmpty()) "：$error" else ""}；回滚窗口结束后设备回到旧网"
+                else -> null
+            }
+        }
+
+    // ============================================================
+    // 音频调优（settings 的采集/回声/打断/输出链键；面板见 EchoMuseAudioPanel.kt）
+    // ============================================================
+
+    // —— 表单草稿：进入面板时按设备 settings 快照重填；数值**留空 = 不修改**（不写死默认值）——
+    var vadThresholdDraft by scope.observable("")
+    var vadSpeechMsDraft by scope.observable("")
+    var vadSilenceMsDraft by scope.observable("")
+    var adcMicpgaDraft by scope.observable("")
+    var adcDigitalGainDraft by scope.observable("")
+    var micGainDbDraft by scope.observable("")
+    var startupVolumeDraft by scope.observable("")
+    var aecEnabled by scope.observable(true)
+    var aecDelayMsDraft by scope.observable("")
+    var aecTailMsDraft by scope.observable("")
+    var aecRefSource by scope.observable("auto")
+    var aecRefSourceOpen by scope.observable(false)
+    val aecRefSources by scope.observableList<Pair<String, String>>()
+    var agcEnabled by scope.observable(true)
+    var beamformingEnabled by scope.observable(true)
+    var beamAngleDraft by scope.observable("")
+    var bargeInEnabled by scope.observable(true)
+    var bargeInThresholdDraft by scope.observable("")
+    var responseLevel by scope.observable("medium")
+    var responseLevelOpen by scope.observable(false)
+    val responseLevels by scope.observableList<Pair<String, String>>()
+    var volumeButtonSound by scope.observable(true)
+    var remoteVolumeArc by scope.observable(true)
+    var eqLoudness by scope.observable(false)
+    var bassGuardEnabled by scope.observable(true)
+    var bassGuardDbDraft by scope.observable("")
+    var limiterEnabled by scope.observable(true)
+    var limiterThresholdDraft by scope.observable("")
+    var limiterReleaseDraft by scope.observable("")
+    var duckDbDraft by scope.observable("")
+    /** EQ 频段 JSON（数字数组，如 `[2,0,-1,0,2]`）；空 = 不修改。 */
+    var eqBandsDraft by scope.observable("")
+    /** 私听态灯环动画 spec JSON；空 = 不修改。 */
+    var listeningAnimDraft by scope.observable("")
+
+    init {
+        aecRefSources.addAll(listOf(
+            "auto" to "自动检测（推荐）", "hw" to "硬件环回（hw）", "sw" to "软件参考（sw）",
+        ))
+        responseLevels.addAll(listOf(
+            "low" to "低（0 dB）", "medium" to "中（+6 dB）", "high" to "高（+12 dB）",
+        ))
+    }
+
+    /** 进入「音频调优」面板时按该设备 settings 快照重填草稿；数值键缺省留空（= 不修改）。 */
+    private fun fillAudioDraft(deviceId: String) {
+        val s = devices.firstOrNull { it.deviceId == deviceId }?.settings ?: JSONObject()
+        fun num(key: String): String = (s.opt(key) as? Number)?.let {
+            if (it.toDouble() % 1.0 == 0.0) it.toLong().toString() else it.toString()
+        } ?: ""
+        vadThresholdDraft = num("vadThreshold")
+        vadSpeechMsDraft = num("vadSpeechMs")
+        vadSilenceMsDraft = num("vadSilenceMs")
+        adcMicpgaDraft = num("adcMicpga")
+        adcDigitalGainDraft = num("adcDigitalGain")
+        micGainDbDraft = num("micGainDb")
+        startupVolumeDraft = num("startupVolume")
+        aecEnabled = s.optBoolean("aecEnabled", true)
+        aecDelayMsDraft = num("aecDelayMs")
+        aecTailMsDraft = num("aecTailMs")
+        aecRefSource = s.optString("aecRefSource", "auto").takeIf { it in setOf("auto", "hw", "sw") } ?: "auto"
+        aecRefSourceOpen = false
+        agcEnabled = s.optBoolean("agcEnabled", true)
+        beamformingEnabled = s.optBoolean("beamformingEnabled", true)
+        beamAngleDraft = num("beamAngle")
+        bargeInEnabled = s.optBoolean("bargeInEnabled", true)
+        bargeInThresholdDraft = num("bargeInThreshold")
+        responseLevel = s.optString("responseLevel", "medium").takeIf { it in setOf("low", "medium", "high") } ?: "medium"
+        responseLevelOpen = false
+        volumeButtonSound = s.optBoolean("volumeButtonSound", true)
+        remoteVolumeArc = s.optBoolean("remoteVolumeArc", true)
+        eqLoudness = s.optBoolean("eqLoudness", false)
+        bassGuardEnabled = s.optBoolean("bassGuardEnabled", true)
+        bassGuardDbDraft = num("bassGuardDb")
+        limiterEnabled = s.optBoolean("limiterEnabled", true)
+        limiterThresholdDraft = num("limiterThreshold")
+        limiterReleaseDraft = num("limiterRelease")
+        duckDbDraft = num("duckDb")
+        eqBandsDraft = s.optJSONArray("eqBands")?.toString().orEmpty()
+        listeningAnimDraft = s.optJSONObject("listeningAnim")?.toString().orEmpty()
+    }
+
+    /**
+     * 保存音频调优。**部分更新语义**：数值/JSON 字段留空 = 不发该键（不把默认值写死成
+     * 显式设置——协议按指针类型区分"未设置"与"设为零"，这一点与固件口径一致）；
+     * 开关/枚举恒发（有明确视觉状态）。202 = 设备在线已排队下发，200 = 保存待接入。
+     */
+    fun saveAudioSettings(ctx: Pager, deviceId: String, onDone: (ok: Boolean, msg: String) -> Unit) {
+        val body = JSONObject()
+        fun int(key: String, draft: String, range: IntRange, label: String): Boolean {
+            val t = draft.trim()
+            if (t.isEmpty()) return true
+            val v = t.toIntOrNull()
+            if (v == null || v !in range) {
+                onDone(false, "$label 需要 $range 范围内的整数")
+                return false
+            }
+            body.put(key, v)
+            return true
+        }
+        fun dec(key: String, draft: String, lo: Double, hi: Double, label: String): Boolean {
+            val t = draft.trim()
+            if (t.isEmpty()) return true
+            val v = t.toDoubleOrNull()
+            if (v == null || !v.isFinite() || v < lo || v > hi) {
+                onDone(false, "$label 需要 $lo ～ $hi 之间的数字")
+                return false
+            }
+            body.put(key, v)
+            return true
+        }
+        // 语音结束判定
+        if (!dec("vadThreshold", vadThresholdDraft, 0.0001, 1.0, "VAD 门限")) return
+        if (!int("vadSpeechMs", vadSpeechMsDraft, 0..60000, "开口判定时长")) return
+        if (!int("vadSilenceMs", vadSilenceMsDraft, 0..60000, "收尾静音时长")) return
+        // 采集增益
+        if (!int("adcMicpga", adcMicpgaDraft, 0..127, "模拟前端增益")) return
+        if (!int("adcDigitalGain", adcDigitalGainDraft, 0..127, "数字增益")) return
+        if (!int("micGainDb", micGainDbDraft, 0..42, "处理增益（dB）")) return
+        if (!int("startupVolume", startupVolumeDraft, 0..127, "开机音量")) return
+        // AEC
+        if (!int("aecDelayMs", aecDelayMsDraft, 0..1000, "AEC 参考延时")) return
+        if (!int("aecTailMs", aecTailMsDraft, 0..500, "AEC 尾长")) return
+        // 波束与打断
+        if (!dec("beamAngle", beamAngleDraft, -1.0, 360.0, "波束角度")) return
+        if (!dec("bargeInThreshold", bargeInThresholdDraft, 0.0, 1.0, "打断阈值")) return
+        // 输出链
+        if (!dec("bassGuardDb", bassGuardDbDraft, -60.0, 24.0, "低音保护阈值")) return
+        if (!dec("limiterThreshold", limiterThresholdDraft, -60.0, 0.0, "限幅阈值")) return
+        if (!dec("limiterRelease", limiterReleaseDraft, 10.0, 2000.0, "限幅释放时间")) return
+        if (!dec("duckDb", duckDbDraft, -60.0, 0.0, "音乐压低深度")) return
+        // JSON 进阶键：非空时必须能解析且形状正确（构造失败 = 文案报错，不发半截更新；
+        // 服务端白名单 kind 仍是权威校验）。
+        val eqText = eqBandsDraft.trim()
+        if (eqText.isNotEmpty()) {
+            val bands = try { JSONArray(eqText) } catch (_: Exception) { null }
+            if (bands == null || bands.length() == 0 ||
+                (0 until bands.length()).any { bands.opt(it) !is Number }
+            ) {
+                onDone(false, "EQ 频段需要是非空数字数组，如 [2,0,-1,0,2]")
+                return
+            }
+            body.put("eqBands", bands)
+        }
+        val animText = listeningAnimDraft.trim()
+        if (animText.isNotEmpty()) {
+            val anim = try { JSONObject(animText) } catch (_: Exception) { null }
+            if (anim == null) {
+                onDone(false, "聆听灯环动画需要是 JSON 对象（如 {\"pattern\":\"spin\",\"colors\":[[0,180,0]],\"ttlSec\":30}）")
+                return
+            }
+            body.put("listeningAnim", anim)
+        }
+        // 开关/枚举恒发（有明确视觉状态，写回现值无害）
+        body.put("aecEnabled", aecEnabled)
+        body.put("agcEnabled", agcEnabled)
+        body.put("beamformingEnabled", beamformingEnabled)
+        body.put("bargeInEnabled", bargeInEnabled)
+        body.put("responseLevel", responseLevel)
+        body.put("volumeButtonSound", volumeButtonSound)
+        body.put("remoteVolumeArc", remoteVolumeArc)
+        body.put("eqLoudness", eqLoudness)
+        body.put("bassGuardEnabled", bassGuardEnabled)
+        body.put("limiterEnabled", limiterEnabled)
+        if (actionBusy) return
+        actionBusy = true
+        post(ctx, "/api/echomuse/devices/${echoMuseUrlComponent(deviceId)}/settings", body) { ok, code, reason, data ->
+            actionBusy = false
+            if (ok) {
+                val delivered = data?.optBoolean("delivered", false) == true
+                onDone(
+                    true,
+                    if (delivered) "音频设置已保存并排队下发，实际生效请在设备上核对"
+                    else "音频设置已保存，设备下次接入时自动推送",
+                )
+            } else {
+                onDone(false, when (code) {
+                    400 -> "设置未保存：${reason.ifEmpty { "字段不合法" }}"
+                    404 -> "设备不存在（列表可能已过期，请刷新后重试）"
+                    else -> "设置保存失败：${reason.ifEmpty { "HTTP $code" }}"
+                })
+            }
+        }
+    }
+
+    // ============================================================
+    // 音乐面（POST …/music play/stop；音源 = 服务端数据目录 music/ 下的 WAV）
+    // ============================================================
+
+    /** 服务端数据目录 `music/` 下的音频文件（`.wav`；value=文件名，label=显示名）。 */
+    var musicFiles by scope.observableList<Pair<String, String>>()
+        private set
+    var musicFilesLoaded by scope.observable(false)
+        private set
+    var musicFileOpen by scope.observable(false)
+    /** 已选中的音乐文件名（相对 `music_dir` 的路径；手动输入的路径也走它）。 */
+    var musicSelection by scope.observable("")
+    /** 手动输入的文件名（下拉里没有目标文件时的兜底，如子目录 `wake/a.wav`）。 */
+    var musicManualPath by scope.observable("")
+
+    /**
+     * 拉取 `GET /api/files?path=music` 收集 `.wav` 文件名（音乐面音源 = 服务端数据目录
+     * music/，管理台「文件」页可上传）。**刻意安静**：目录缺失/接口不可用保持现状不报错
+     * （默认部署即无该目录）；手动输入路径的兜底始终可用。
+     */
+    fun musicFilesRefresh(ctx: Pager) {
+        getJson(ctx, echoMuseAuthenticatedUrl("$base/api/files?path=${echoMuseUrlComponent(MUSIC_DIR)}", accessToken)) { ok, data, _ ->
+            if (!ok) return@getJson
+            val arr = data.array("entries") ?: return@getJson
+            val names = (0 until arr.length()).mapNotNull { i ->
+                val e = arr.optJSONObject(i) ?: return@mapNotNull null
+                val name = e.text("name")
+                if (name.isNotEmpty() && !e.optBoolean("dir", false) && name.endsWith(".wav", ignoreCase = true)) name else null
+            }.sorted()
+            musicFiles.clear()
+            musicFiles.addAll(names.map { it to it })
+            musicFilesLoaded = true
+        }
+    }
+
+    /** 播放选中的音乐（POST music {action:play}）；202 = 已排队逐帧下发。 */
+    fun playMusic(ctx: Pager, deviceId: String, onDone: (ok: Boolean, msg: String) -> Unit) {
+        val path = (musicManualPath.trim().ifEmpty { musicSelection })
+        if (path.isEmpty()) {
+            onDone(false, "请先选择或输入要播放的音频文件（.wav）")
+            return
+        }
+        if (actionBusy) return
+        actionBusy = true
+        post(ctx, "/api/echomuse/devices/${echoMuseUrlComponent(deviceId)}/music", JSONObject().apply {
+            put("action", "play")
+            put("path", path)
+        }) { ok, code, reason, data ->
+            actionBusy = false
+            if (ok) {
+                val seconds = (data?.opt("seconds") as? Number)?.toLong()
+                onDone(true, "已排队播放 $path${seconds?.takeIf { it > 0 }?.let { "（约 $it 秒）" } ?: ""}；说话会自动压低音乐")
+            } else {
+                onDone(false, when (code) {
+                    404 -> "音乐面未启用：服务端 [echomuse].music_dir 为空，或文件不存在/不是 WAV"
+                    409 -> "设备离线或 data 链未就绪，播放未开始"
+                    400 -> "播放失败：${reason.ifEmpty { "文件不支持" }}"
+                    else -> "播放失败：${reason.ifEmpty { "HTTP $code" }}"
+                })
+            }
+        }
+    }
+
+    /** 停止音乐并丢弃设备缓冲（POST music {action:stop}；不可恢复，恢复播放请重新点播放）。 */
+    fun stopMusic(ctx: Pager, deviceId: String, onDone: (ok: Boolean, msg: String) -> Unit) {
+        if (actionBusy) return
+        actionBusy = true
+        post(ctx, "/api/echomuse/devices/${echoMuseUrlComponent(deviceId)}/music", JSONObject().apply {
+            put("action", "stop")
+        }) { ok, code, reason, _ ->
+            actionBusy = false
+            if (ok) onDone(true, "已停止播放并清空设备音乐缓冲")
+            else onDone(false, when (code) {
+                404 -> "音乐面未启用（服务端 [echomuse].music_dir 为空）"
+                409 -> "设备离线，无需停止"
+                else -> "停止失败：${reason.ifEmpty { "HTTP $code" }}"
+            })
         }
     }
 

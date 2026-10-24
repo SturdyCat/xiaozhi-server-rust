@@ -2,6 +2,7 @@
 use super::ble::BleLink;
 use super::frames::{self, UplinkFrame};
 use super::media::{MediaState, MAX_CAPTURE_US};
+use super::mic::MicControl;
 use super::turn::BoundedTurn;
 use crate::media::media::{AudioChunk, AudioEpoch, AudioFormat};
 use crate::workflow::protocol::{IncomingFrame, UtteranceEnd};
@@ -10,25 +11,45 @@ use tokio::sync::mpsc::UnboundedSender;
 
 pub(super) struct MicUplink {
     media: Arc<MediaState>,
+    mic: MicControl,
+    fx: super::fx::Fx,
     epoch: AudioEpoch,
     generation: Option<u64>,
     captured_us: u64,
 }
 impl MicUplink {
     #[cfg(test)]
-    pub(super) fn new() -> anyhow::Result<Self> {
+    pub(super) fn new(mic: MicControl, fx: super::fx::Fx) -> anyhow::Result<Self> {
         let media = Arc::new(MediaState::default());
         media.claim();
-        Ok(Self::for_media(media))
+        Ok(Self::for_media(media, mic, fx))
     }
-    pub(super) fn for_media(media: Arc<MediaState>) -> Self {
+    pub(super) fn for_media(media: Arc<MediaState>, mic: MicControl, fx: super::fx::Fx) -> Self {
         let epoch = AudioEpoch::capture(&media.generation, 0);
         Self {
             media,
+            mic,
+            fx,
             epoch,
             generation: None,
             captured_us: 0,
         }
+    }
+    /// 一轮收口（0x04/0x05 或溢出）：turn 已收掉才发官方三连
+    /// （`mic_stop → beam_unlock → mic_start` 回常开流）；对未活跃轮是 no-op。
+    /// 同时切灯：有语音 → 思考 spinner（ASR/LLM 进行中）；无语音 → 慢脉冲自清。
+    /// 音乐恢复（duck_off）：语音轮次只压低、从不停止音乐面。
+    fn turn_finished(&mut self, ended: bool, speech: bool) {
+        if !ended {
+            return;
+        }
+        if speech {
+            self.fx.thinking();
+        } else {
+            self.fx.nospeech();
+        }
+        self.fx.duck_off();
+        self.mic.turn_ended();
     }
     pub(super) fn on_binary(
         &mut self,
@@ -72,12 +93,17 @@ impl MicUplink {
                     let _ = up.send(IncomingFrame::Audio(chunk));
                 });
                 if overflow {
-                    turn.finish(UtteranceEnd::NoSpeech, up, |_| {});
+                    let ended = turn.finish(UtteranceEnd::NoSpeech, up, |_| {});
+                    self.turn_finished(ended, false);
                 }
             }
-            UplinkFrame::VadEnd => turn.finish_media(UtteranceEnd::Speech, up, self.epoch.clone()),
+            UplinkFrame::VadEnd => {
+                let ended = turn.finish_media(UtteranceEnd::Speech, up, self.epoch.clone());
+                self.turn_finished(ended, true);
+            }
             UplinkFrame::NoSpeech => {
-                turn.finish_media(UtteranceEnd::NoSpeech, up, self.epoch.clone())
+                let ended = turn.finish_media(UtteranceEnd::NoSpeech, up, self.epoch.clone());
+                self.turn_finished(ended, false);
             }
             UplinkFrame::BleAdverts(payload) if ble_on => {
                 if let Ok(v) = serde_json::from_slice::<serde_json::Value>(payload) {

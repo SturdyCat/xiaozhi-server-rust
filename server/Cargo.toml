@@ -38,6 +38,15 @@ tower-http = { version = "0.6", features = ["fs"] }
 # EchoMuse 设备发现（`[echomuse].enabled` 时广播 `_emcontroller._tcp`；纯 Rust，无系统依赖）
 mdns-sd = "0.11"
 
+# 监听层（src/serve.rs 的手动 accept loop）：axum::serve 不暴露 per-connection socket
+# 选项，而 TCP keepalive 必须逐连接设置——设备拔电不发 FIN/RST，连接半开挂着，tokio 的
+# read 永远 pending，EchoMuse 的 hub 条目永不摘除（管理台"断电仍在线"的根因）。四个 crate
+# 都已在依赖树中（hyper/hyper-util/tower 经 axum、socket2 经 tokio），不新增编译单元。
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1.21", features = ["tokio", "service"] }
+socket2 = { version = "0.5", features = ["all"] }
+tower = "0.5"
+
 # 仅在 sherpa feature 下引入（需要网络下载原生库 + 系统 libopus）
 sherpa-onnx = { version = "1.13.8", optional = true }
 audiopus = { version = "0.2", optional = true }

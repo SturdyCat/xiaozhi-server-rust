@@ -471,11 +471,15 @@ async fn push(
     deadline: Instant,
 ) -> Result<Transfer, ShellError> {
     // 1) 探测：同一次往返问完解码器与哈希工具，先发完再发字节。
+    //    末尾的 `\n` 不是排版：设备 shell 是**非 pty 的管道 stdin**，sh 只在读到
+    //    换行时才执行一条完整命令行。少这个换行，命令会一直攥在行缓冲里不跑，
+    //    调用方只能等到 deadline（实测挂满 120s、设备侧 shell 会话空转，一个字节
+    //    都没发出去）。同理见下面第 4) 步的校验命令。
     let probe = format!(
         "if echo dGVzdA== | busybox base64 -d >/dev/null 2>&1; then echo DECODER:ok; \
          else echo DECODER:none; fi; \
          if echo x | busybox sha256sum >/dev/null 2>&1; then echo HASH:ok; \
-         else echo HASH:none; fi; echo {PROBE_MARKER}"
+         else echo HASH:none; fi; echo {PROBE_MARKER}\n"
     );
     send_text(socket, probe).await?;
     let probe_out = read_until(socket, PROBE_MARKER, deadline).await?;
@@ -511,7 +515,7 @@ async fn push(
         format!(
             "GOT=$(busybox sha256sum {part} 2>/dev/null); GOT=${{GOT%% *}}; \
              if [ \"$GOT\" = \"{digest}\" ]; then mv {part} {dest} && chmod {mode:o} {dest} \
-             && echo VERIFY_OK; else rm -f {part}; echo \"VERIFY_BAD:$GOT\"; fi"
+             && echo VERIFY_OK; else rm -f {part}; echo \"VERIFY_BAD:$GOT\"; fi\n"
         ),
     )
     .await?;
@@ -541,7 +545,16 @@ async fn read_until(
     let mut buffer = String::new();
     loop {
         let message = match timeout_at(deadline, socket.next()).await {
-            Err(_) => return Err(ShellError::Timeout),
+            Err(_) => {
+                // 超时几乎总是"设备没执行"而不是"链路慢"：把已经收到的输出打出来，
+                // 否则设备侧的 `sh: syntax error` 之类只有插数据线才看得到。
+                tracing::warn!(
+                    "[echomuse] shell 等待 `{needle}` 超时：已收 {} 字节，尾部输出={:?}",
+                    buffer.len(),
+                    buffer.chars().rev().take(400).collect::<String>().chars().rev().collect::<String>()
+                );
+                return Err(ShellError::Timeout);
+            }
             Ok(None) | Ok(Some(Err(_))) => return Err(ShellError::Transport),
             Ok(Some(Ok(message))) => message,
         };

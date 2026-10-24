@@ -244,6 +244,9 @@ const APP_SECTION_HOT: &[(&str, HotReload)] = &[
     // `[echomuse]`（EchoMuse 设备入口）：路由挂载与 mDNS 广播由启动值决定，
     // `enabled`/`token` 改动都需重启生效。
     ("echomuse", HotReload::RestartOnly),
+    // `[esp_home]`（ESPHome 桥）：feature 开关与设备连接在启动时建立，
+    // 改动需重启生效。
+    ("esp_home", HotReload::RestartOnly),
 ];
 
 /// 按**字段完整路径**查热生效语义：路径 = `fields_path ++ [key]`

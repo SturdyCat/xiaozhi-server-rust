@@ -21,6 +21,9 @@ pub(crate) struct MediaState {
     online: AtomicBool,
     closed: AtomicBool,
     writes: Mutex<VecDeque<WriteTicket>>,
+    /// 音乐平面当前 epoch（None = 无播放）。与 voice 互相独立：语音轮次的
+    /// disconnect_if_current 不得掐掉背景音乐（官方语义：语音 turn 只 duck）。
+    music_epoch: Mutex<Option<AudioEpoch>>,
     pub changed: Notify,
 }
 impl Default for MediaState {
@@ -32,6 +35,7 @@ impl Default for MediaState {
             online: AtomicBool::new(false),
             closed: AtomicBool::new(false),
             writes: Mutex::new(VecDeque::new()),
+            music_epoch: Mutex::new(None),
             changed: Notify::new(),
         }
     }
@@ -41,6 +45,7 @@ impl MediaState {
         let mut writes = self.writes.lock().expect("PCM writes lock");
         self.generation.fetch_add(1, Ordering::AcqRel);
         writes.clear();
+        *self.music_epoch.lock().expect("music epoch lock") = None;
         self.online
             .store(!self.closed.load(Ordering::Acquire), Ordering::Release);
         self.changed.notify_waiters();
@@ -127,6 +132,71 @@ impl MediaState {
     }
     pub fn take_write(&self) -> Option<WriteTicket> {
         self.writes.lock().expect("PCM writes lock").pop_front()
+    }
+
+    // ── 音乐面（`0x04`/`0x05` 下行；设备 announce `audio_mix` 才使用）──
+
+    /// 开一条音乐流 epoch（旧流立即作废：新播放顶掉旧播放）。断链/换设备时
+    /// 由 `claim` 统一失效。返回的 epoch 由播放任务持有，逐帧校验。
+    pub fn start_music(&self) -> Option<AudioEpoch> {
+        if !self.ready() {
+            return None;
+        }
+        let epoch = AudioEpoch::capture(&self.generation, 0);
+        *self.music_epoch.lock().expect("music epoch lock") = Some(epoch.clone());
+        Some(epoch)
+    }
+
+    /// 停止音乐流（管理面 stop）：epoch 作废 + `music_flush` 由调用方发 control 面。
+    pub fn stop_music(&self) {
+        *self.music_epoch.lock().expect("music epoch lock") = None;
+        self.changed.notify_waiters();
+    }
+
+    /// 音乐帧入队（复用 output 预算：音乐与语音共享设备播放带宽与 2s 水库）。
+    /// 返回 None = 未就绪/流已停/预算满（调用方节流重试）。
+    pub fn enqueue_music(
+        &self,
+        pcm: &[u8],
+        tx: &UnboundedSender<super::DataOut>,
+    ) -> Option<oneshot::Receiver<bool>> {
+        let epoch = self.music_epoch.lock().expect("music epoch lock").clone()?;
+        let mut writes = self.writes.lock().expect("PCM writes lock");
+        if !self.ready() || pcm.is_empty() || pcm.len() % 2 != 0 {
+            return None;
+        }
+        let permit = self
+            .output
+            .reserve(AudioFormat::echo_speaker().duration_us(pcm.len()), pcm.len())?;
+        let (ack, done) = oneshot::channel();
+        writes.push_back(WriteTicket {
+            epoch: epoch.clone(),
+            ack: Some(ack),
+            _permit: Some(permit),
+        });
+        if tx.send(super::frames::frame_music(pcm)).is_err() {
+            writes.pop_back();
+            return None;
+        }
+        Some(done)
+    }
+
+    /// 音乐流收尾（`0x05`）。只在流仍存活时入队。
+    pub fn enqueue_music_eos(&self, tx: &UnboundedSender<super::DataOut>) {
+        let Some(epoch) = self.music_epoch.lock().expect("music epoch lock").clone() else {
+            return;
+        };
+        let mut writes = self.writes.lock().expect("PCM writes lock");
+        if self.ready() && writes.len() < 64 {
+            writes.push_back(WriteTicket {
+                epoch,
+                ack: None,
+                _permit: None,
+            });
+            if tx.send(super::frames::frame_music_eos()).is_err() {
+                writes.pop_back();
+            }
+        }
     }
 }
 

@@ -48,6 +48,7 @@
 
 pub mod ble;
 pub mod frames;
+pub(crate) mod fx;
 pub mod transport;
 
 pub(crate) mod admin;
@@ -57,15 +58,19 @@ mod admin_tests;
 mod ble_tests;
 mod config;
 #[cfg(test)]
+mod fx_tests;
+#[cfg(test)]
 mod hub_tests;
 pub(crate) mod listen;
 #[cfg(test)]
 mod listen_tests;
+pub(crate) mod mic;
 mod onnx_typed;
 pub(crate) mod oww;
 pub(crate) mod registry;
 pub(crate) mod routes;
 pub(crate) mod runtime;
+pub(crate) mod music;
 mod settings;
 pub(crate) mod shell;
 pub(crate) mod system;
@@ -340,6 +345,12 @@ pub(crate) fn hub_data(device_id: &str) -> Option<UnboundedSender<DataOut>> {
     hub_iter().get(device_id).and_then(|p| p.data_tx.clone())
 }
 
+/// 音乐面 data 出站（生产路径）：条目里的 data_tx 探针克隆，data 认领不影响它
+/// （认领只取 data_rx）。离线返回 None（handler 按离线口径拒绝）。
+pub(crate) fn hub_data_tx(device_id: &str) -> Option<UnboundedSender<DataOut>> {
+    hub_iter().get(device_id).and_then(|p| p.data_tx.clone())
+}
+
 /// Fixture-only BLE observation. Production dispatch uses its atomic capture;
 /// lifecycle sections acquire hub -> BLE, never the reverse order.
 #[cfg(test)]
@@ -395,34 +406,61 @@ pub struct DeviceRegister {
     /// plain 拨号并置位；该拨号**不带 token**，见 routes.rs 的鉴权豁免）。
     #[serde(default)]
     pub pairing: bool,
+    /// 以下为官方 register 的信息性字段（`docs/device-controller-interface.md`
+    /// §Registration）：排障与"这块板什么状态"的唯一来源，只透传日志。
+    #[serde(default)]
+    pub ip: Option<String>,
+    #[serde(default)]
+    pub kernel_arch: Option<String>,
+    #[serde(default)]
+    pub kernel_release: Option<String>,
+    /// 内核 boot_id：每次重拨都带，控制器按它区分"重启"与"重连"。
+    #[serde(default)]
+    pub boot_id: Option<String>,
+    /// 启动原因（power_key / wdt_by_pass_pwk / …；biscuit 的 FireOS5 cmdline 截断时缺）。
+    #[serde(default)]
+    pub boot_reason: Option<String>,
 }
 
-/// 服务器 → 设备 的 `ack`（能力协商：`features` 是**服务器**的能力表，
-/// 未列出的能力设备按协议降级——`listen_session` 不列出即不会走 `0x07` 私听会话，
-/// 统一走 `mic_start{lock_mic:true}` bounded turn，服务端只处理 `0x01`/`0x04`/`0x05`）。
+/// 服务器 → 设备 的 `ack`（能力协商）。
+///
+/// **`features` 是"控制器"的能力表**：固件只读四个真名
+/// （`control.go` 的 `FeatureBleAdvertsData/FeatureBleConnect/FeatureListenSession/
+/// FeatureOutputChain` 常量 + `HasFeature`），其余键进 map 但永不命中。此前发的是
+/// 设备能力名（`mic`/`speaker`/`leds`…），全部是无效噪音。
+///
+/// - `output_chain`：声明 = 服务器不做输出 DSP，设备在 ALSA 写入处自行跑
+///   EQ→bass guard→limiter（官方 `cmd/server.go:553` 据此 `SetOutputChainActive`）。
+/// - `listen_session` **不声明**：私听会话未实现；声明 + `owwOnDevice=on` 会让设备
+///   走私听路径（`listen.Resolve`），而设备 oww 资产尚未同步，结果是既不推流也不触发。
+///   不声明 ⇒ 设备保持 stream 模式（持续推流，服务端评分/按键开轮）。
+/// - `time_ms`：设备无 RTC（启动即 2010-01-01），官方在 ack 里顺带校时
+///   （`em_controller.py:5189`）；旧固件忽略该字段，加字段安全。
 ///
 /// `ble=true` 时追加 `ble_connect` + `ble_adverts_data`：调用方（control 接入）仅在
 /// `[echomuse].ble_proxy` 开启**且**设备 register 声明 `ble_connect` 时置位（协议
 /// 要求双向声明才启用，设备按"未声明即降级"静默关闭）。
 pub fn ack_message(device_id: &str, ble: bool) -> String {
-    let mut features = vec![
-        "mic",
-        "speaker",
-        "leds",
-        "buttons",
-        "oww_trigger",
-        "oww_local_only",
-    ];
+    let mut features = vec!["output_chain"];
     if ble {
-        features.push("ble_connect");
         features.push("ble_adverts_data");
+        features.push("ble_connect");
     }
     serde_json::json!({
         "type": "ack",
         "device_id": device_id,
         "features": features,
+        "time_ms": unix_ms(),
     })
     .to_string()
+}
+
+/// Unix 毫秒（ack 校时用；时钟早于 epoch 时回 0，设备端按原样处理）。
+fn unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 /// control 接入时的 config 基线：`ble_proxy` 开启时默认打开设备侧扫描与连接
@@ -442,9 +480,13 @@ pub(crate) fn config_baseline(ble_proxy: bool, settings: &serde_json::Value) -> 
     serde_json::Value::Object(eff)
 }
 
-/// 服务器 → 设备 的极简 `config` 推送：只写行为开关，不碰设备音频链路参数
-/// （EQ/AEC/波束等保持设备存储值）。`owwOnDevice="on"` 让唤醒词在设备本地识别，
-/// 服务端零持续音频负载。
+/// 服务器 → 设备 的 `config` 推送：行为开关 + 每设备保存的设置（部分更新语义）。
+///
+/// `owwOnDevice` 基线 **"off"**：设备 oww 运行时资产（melspectrogram/embedding/
+/// 分类器 + libonnxruntime.so）尚未同步，`"on"` 只会让固件空转加载评分器并打
+/// `shadow not started` 日志；且本服务器不声明 `listen_session`，设备无论如何
+/// 都走 stream 模式（`listen.Resolve`）。等资产下发通道就绪后随 `[echomuse]`
+/// 配置切换为 `"on"`。
 ///
 /// `settings` 是管理面保存的每设备部分更新（协议 camelCase 字段，已在 admin 层
 /// 白名单过滤）：非 `null` 键覆盖基线，协议本身是"零/缺省字段忽略"的部分更新。
@@ -453,7 +495,8 @@ pub(crate) fn config_baseline(ble_proxy: bool, settings: &serde_json::Value) -> 
 pub fn config_push_with(settings: &serde_json::Value) -> Vec<String> {
     let mut base = serde_json::json!({
         "type": "config",
-        "owwOnDevice": "on",
+        "owwOnDevice": "off",
+        // controller 侧语义（config scoping），官方 canonical 字段集原样保留。
         "streamReply": true,
     });
     if let (Some(obj), Some(base_obj)) = (settings.as_object(), base.as_object_mut()) {

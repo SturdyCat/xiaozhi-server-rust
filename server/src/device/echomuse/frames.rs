@@ -4,14 +4,15 @@
 //! 首字节是帧型，其余是负载；**帧型按方向分命名空间**——`0x04`/`0x05` 在两个方向
 //! 含义不同（下行是音乐帧，上行是 VAD 哨兵），这是协议刻意的设计。
 //!
-//! 当前实现范围（MVP + 蓝牙代理）：
+//! 当前实现范围（MVP + 蓝牙代理 + 音乐面）：
 //! - 上行：`0x01` mic PCM（mono S16_LE 16kHz）、`0x07` 私听会话音频
 //!   （`[session u32 BE][seq u16 BE][PCM]` 头）、`0x04`/`0x05` bounded-turn 哨兵、
 //!   `0x06` BLE 广播批次（`ble_proxy` 开启时经 [`super::ble`] 采集）。
 //! - 下行：`0x02` speaker PCM（**mono S16_LE 48 kHz**，见 [`SPEAKER_SAMPLE_RATE`]）、
-//!   `0x03` speaker EOS、`0x08` BLE 连接桥 JSON（管理面直驱 GATT 请求）。
-//! - 其余帧型（音乐面 `0x04/0x05` 下行）**不解析、静默忽略**——协议规定"未知帧型
-//!   双向忽略"，即正确的前向兼容降级。
+//!   `0x03` speaker EOS、`0x04`/`0x05` music PCM/EOS（独立音乐平面，与 voice
+//!   设备侧混音）、`0x08` BLE 连接桥 JSON（管理面直驱 GATT 请求）。
+//! - 其余帧型（如私听 `0x07` 下行方向不存在）**不解析、静默忽略**——协议规定
+//!   "未知帧型双向忽略"，即正确的前向兼容降级。
 //!
 //! `ble_connect`/`ble_adverts_data` 是能力协商的产物：服务器 ack 不声明时设备不发
 //! `0x06`/`0x08`（见 [`super::ack_message`]），data 任务也只在 `ble_proxy` 开启时翻译。
@@ -34,6 +35,11 @@ pub const FRAME_BLE_GATT: u8 = 0x08;
 pub const FRAME_SPEAKER: u8 = 0x02;
 /// 下行：voice 流结束。
 pub const FRAME_SPEAKER_EOS: u8 = 0x03;
+/// 下行：music PCM 块（独立音乐平面，与 voice 在设备 ALSA 写入处混音；
+/// 仅设备 announce `audio_mix` 时使用）。mono S16_LE 48 kHz。
+pub const FRAME_MUSIC: u8 = 0x04;
+/// 下行：music 流结束（用户真的停止/暂停才发；voice turn 只 duck 不 flush）。
+pub const FRAME_MUSIC_EOS: u8 = 0x05;
 
 /// 设备 mic 音频固定 16 kHz 单声道（协议常量，不随配置变）。
 ///
@@ -97,10 +103,14 @@ pub fn parse_uplink(data: &[u8]) -> UplinkFrame<'_> {
 }
 
 /// Sole outbound kind classifier used by the socket writer's PCM ticket adapter.
+/// 音乐面 `0x04`/`0x05` 与 voice 同样按 ticket 流控（共享一条 data WS 与播放带宽）。
 pub(crate) fn is_voice(data: &[u8]) -> bool {
     matches!(
         data.first(),
-        Some(&FRAME_SPEAKER) | Some(&FRAME_SPEAKER_EOS)
+        Some(&FRAME_SPEAKER)
+            | Some(&FRAME_SPEAKER_EOS)
+            | Some(&FRAME_MUSIC)
+            | Some(&FRAME_MUSIC_EOS)
     )
 }
 
@@ -115,6 +125,19 @@ pub fn frame_speaker(pcm: &[u8]) -> Vec<u8> {
 /// 打一条下行 speaker EOS 帧（`0x03`）。
 pub fn frame_speaker_eos() -> Vec<u8> {
     vec![FRAME_SPEAKER_EOS]
+}
+
+/// 打一条下行 music PCM 帧（`0x04` + PCM，48 kHz mono S16_LE）。
+pub fn frame_music(pcm: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(pcm.len() + 1);
+    out.push(FRAME_MUSIC);
+    out.extend_from_slice(pcm);
+    out
+}
+
+/// 打一条下行 music EOS 帧（`0x05`）。
+pub fn frame_music_eos() -> Vec<u8> {
+    vec![FRAME_MUSIC_EOS]
 }
 
 /// 打一条下行 BLE 连接桥帧（`0x08` + JSON 文本；管理面 GATT 请求用）。

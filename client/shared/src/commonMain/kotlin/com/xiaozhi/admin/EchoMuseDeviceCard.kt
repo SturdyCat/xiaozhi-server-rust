@@ -21,7 +21,9 @@ import com.tencent.kuikly.core.views.View
  * │ 概览        │ 设备号  xx:xx…        [复制信息]    │
  * │ WiFi 配置   │ 版本    1.2.3                      │ ← 卡内左菜单 + 右内容面板
  * │ 唤醒词设置  │ …                                  │   （menuPaneRow 原语，与
- * │ 设备管理    │                                    │     ConfigTabs 工作区同一出处）
+ * │ 音频调优    │                                    │     ConfigTabs 工作区同一出处）
+ * │ 音乐        │                                    │
+ * │ 设备管理    │                                    │
  * │ 蓝牙代理    │                                    │
  * └────────────────────────────────────────────────┘
  * ```
@@ -72,6 +74,7 @@ internal fun ViewContainer<*, *>.echoMuseDeviceCard(
     toast: ToastState,
     ctx: Pager,
     onOpenModelFiles: () -> Unit = {},
+    onOpenMusicFiles: () -> Unit = {},
 ) {
     // 卡片 = 上下布局「header │ 卡内左右分栏」：外观壳由 cardSurface 统一提供，
     // 卡内左右走 menuPaneRow（同一套 splitRow 原语），不再自绘卡片容器与分隔线。
@@ -99,11 +102,11 @@ internal fun ViewContainer<*, *>.echoMuseDeviceCard(
                                 itemIcon,
                                 itemLabel,
                                 isSelected = { state.activeMenuItem(row) == itemId },
-                            ) { state.selectMenu(row, itemId) }
+                            ) { state.selectMenu(row, itemId, ctx) }
                         }
                     }
                 },
-                panel = { echoMusePanel(row, state, toast, ctx, onOpenModelFiles) },
+                panel = { echoMusePanel(row, state, toast, ctx, onOpenModelFiles, onOpenMusicFiles) },
             )
         },
     )
@@ -206,13 +209,15 @@ private fun ViewContainer<*, *>.echoMuseDeleteConfirm(
 // 卡内菜单（左列）
 // ============================================================
 
-/** 卡片内菜单项集合：未批准 = 概览/批准；已批准 = 概览/WiFi 配置/唤醒词设置/设备管理/蓝牙代理。 */
+/** 卡片内菜单项集合：未批准 = 概览/批准；已批准 = 概览/WiFi/唤醒词/音频调优/音乐/设备管理/蓝牙代理。 */
 private fun echoMuseMenuItems(row: EchoMuseDeviceRow): List<Triple<String, String, IconToken>> =
     if (row.approved) {
         listOf(
             Triple(ECHOMUSE_MENU_OVERVIEW, "概览", IconToken.Info),
             Triple(ECHOMUSE_MENU_WIFI, "WiFi 配置", IconToken.Wifi),
             Triple(ECHOMUSE_MENU_WAKE, "唤醒词设置", IconToken.Waveform),
+            Triple(ECHOMUSE_MENU_AUDIO, "音频调优", IconToken.Microphone),
+            Triple(ECHOMUSE_MENU_MUSIC, "音乐", IconToken.Speaker),
             Triple(ECHOMUSE_MENU_MANAGE, "设备管理", IconToken.Settings),
             Triple(ECHOMUSE_MENU_BLE, "蓝牙代理", IconToken.Bluetooth),
         )
@@ -259,12 +264,19 @@ private fun ViewContainer<*, *>.echoMusePanel(
     toast: ToastState,
     ctx: Pager,
     onOpenModelFiles: () -> Unit = {},
+    onOpenMusicFiles: () -> Unit = {},
 ) {
     vif({ state.activeMenuItem(row) == ECHOMUSE_MENU_OVERVIEW }) { echoMuseOverviewPanel(row, state, toast) }
     vif({ state.activeMenuItem(row) == ECHOMUSE_MENU_APPROVE }) { echoMuseApprovePanel(row, state, toast, ctx) }
     vif({ state.activeMenuItem(row) == ECHOMUSE_MENU_WIFI }) { echoMuseWifiPanel(row, state, toast, ctx) }
     vif({ state.activeMenuItem(row) == ECHOMUSE_MENU_WAKE }) {
         echoMuseWakeSettings(row.deviceId, state, toast, ctx, onOpenModelFiles)
+    }
+    vif({ state.activeMenuItem(row) == ECHOMUSE_MENU_AUDIO }) {
+        echoMuseAudioPanel(row, state, toast, ctx)
+    }
+    vif({ state.activeMenuItem(row) == ECHOMUSE_MENU_MUSIC }) {
+        echoMuseMusicPanel(row, state, toast, ctx, onOpenMusicFiles)
     }
     vif({ state.activeMenuItem(row) == ECHOMUSE_MENU_MANAGE }) { echoMuseManagementPanel(row, state, toast, ctx) }
     vif({ state.activeMenuItem(row) == ECHOMUSE_MENU_BLE }) { echoMuseBlePanel(row, state, ctx) }
@@ -290,6 +302,20 @@ private fun ViewContainer<*, *>.echoMuseOverviewPanel(
     }
     if (row.baseOs.isNotEmpty()) {
         infoRow("系统", row.baseOs)
+    }
+    // register 上报的网络/内核/启动标识（P2 对齐：排障与"这块板什么版本"的唯一来源；
+    // 旧服务端/旧记录缺省不渲染）
+    if (row.ip.isNotEmpty()) {
+        infoRow("IP", row.ip)
+    }
+    if (row.kernelRelease.isNotEmpty()) {
+        infoRow(
+            "内核",
+            if (row.kernelArch.isNotEmpty()) "${row.kernelRelease}（${row.kernelArch}）" else row.kernelRelease,
+        )
+    }
+    if (row.bootReason.isNotEmpty()) {
+        infoRow("启动原因", row.bootReason)
     }
     if (row.metaText.isNotEmpty()) {
         textNote(row.metaText, micro = true)
@@ -336,7 +362,12 @@ private fun ViewContainer<*, *>.echoMuseApprovePanel(
     }
 }
 
-/** WiFi 配置面板：ssid/psk 表单 + 下发（enabled 随在线）；202 只代表已排队，结果看灯环。 */
+/**
+ * WiFi 配置面板：ssid/psk 下发 + **配网闭环**（对齐官方三步）——`wifi_scan` 扫描周边
+ * （结果经设备 `wifi_scan_result` 上行进 runtime），下发新网后设备重连回报 `wifi_result`
+ * （ok/失败），回滚窗口内点「确认新网络」下发 `wifi_commit` 固定；超时未确认设备自动
+ * 回滚旧网，切错网不失联。202 只代表指令已排队，结果一律以 runtime 快照为准。
+ */
 private fun ViewContainer<*, *>.echoMuseWifiPanel(
     row: EchoMuseDeviceRow,
     state: EchoMuseState,
@@ -356,6 +387,58 @@ private fun ViewContainer<*, *>.echoMuseWifiPanel(
             state.sendWifi(ctx, row.deviceId) { ok, msg ->
                 toast.show(msg, if (ok) "ok" else "error")
             }
+        }
+    }
+    // ---- 配网闭环：扫描 / 结果 / 确认 ----
+    groupLabel("配网闭环")
+    actionRow {
+        secondaryButton(
+            "扫描周边网络",
+            enabled = { row.online },
+            loading = { state.actionBusy || state.wifiRuntimeBusy },
+            icon = IconToken.Refresh,
+        ) {
+            state.sendWifiScan(ctx, row.deviceId) { ok, msg ->
+                toast.show(msg, if (ok) "ok" else "error")
+            }
+        }
+        hGap(AdminSpace.sm)
+        secondaryButton(
+            "读取扫描结果",
+            enabled = { row.online && !state.wifiRuntimeBusy },
+            loading = { state.wifiRuntimeBusy },
+            icon = IconToken.Refresh,
+        ) {
+            state.readWifiRuntime(ctx, row.deviceId)
+        }
+    }
+    // 切网结果（wifi_result）：成功才露「确认新网络」，失败/无上报不渲染空行
+    vif({ state.wifiResultText != null }) {
+        captionLine(state.wifiResultText ?: "")
+    }
+    vif({ (state.wifiRuntime?.optJSONObject("wifi_result")?.opt("ok") as? Boolean) == true }) {
+        actionRow {
+            primaryButton(
+                "确认新网络（wifi_commit）",
+                enabled = { row.online },
+                loading = { state.actionBusy },
+                icon = IconToken.Check,
+            ) {
+                state.sendWifiCommit(ctx, row.deviceId) { ok, msg ->
+                    toast.show(msg, if (ok) "ok" else "error")
+                }
+            }
+        }
+        textNote(
+            "确认后设备固定使用新网；不确认则回滚窗口结束后自动回到旧网（切错网不失联的保险）。",
+            micro = true,
+        )
+    }
+    // 扫描结果清单（wifi_scan.networks，按信号强度降序）
+    vif({ state.wifiScanRows.isNotEmpty() }) {
+        groupLabel("周边网络（信号强 → 弱）")
+        for (line in state.wifiScanRows) {
+            detailLine(line)
         }
     }
     vif({ !row.online }) {

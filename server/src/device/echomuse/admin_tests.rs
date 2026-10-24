@@ -220,6 +220,48 @@ fn filter_settings_allowlist_and_types() {
 }
 
 #[test]
+fn filter_settings_accepts_full_device_config_surface() {
+    // 官方 ConfigMessage 设备端全量字段抽样：VAD 时序 / 前端增益 / AEC 参考 /
+    // 打断 / 播报电平 / 输出链 / 音乐压低 / Sendspin / 灯环默认。
+    // 0 与 false 都是合法值（指针类型区分"未设置"），不能按真值拒绝。
+    let (ok, err) = filter_settings(&serde_json::json!({
+        "vadSpeechMs": 0, "vadSilenceMs": 700,
+        "adcMicpga": 40, "adcDigitalGain": 88, "startupVolume": 0,
+        "aecDelayMs": 0, "aecTailMs": 64, "aecRefSource": "auto",
+        "bargeInEnabled": true, "bargeInThreshold": 0.0,
+        "responseLevel": "high",
+        "volumeButtonSound": false, "remoteVolumeArc": false,
+        "eqBands": [0.0, 1.5, -2.0], "eqLoudness": false,
+        "bassGuardEnabled": false, "bassGuardDb": 0.0,
+        "limiterEnabled": true, "limiterThreshold": -3.0, "limiterRelease": 120.0,
+        "duckDb": -12.0,
+        "sendspinEnabled": false, "sendspinName": "Kitchen Dot",
+        "listeningAnim": {"pattern": "solid", "colors": [[0, 255, 255]], "ttlSec": 30}
+    }));
+    assert!(err.is_none(), "{err:?}");
+    assert_eq!(ok.len(), 24);
+    // 枚举 / 范围 / 结构校验照样拦截。
+    assert!(filter_settings(&serde_json::json!({"responseLevel": "loud"}))
+        .1
+        .is_some());
+    assert!(filter_settings(&serde_json::json!({"aecRefSource": "bitexact"}))
+        .1
+        .is_some());
+    assert!(filter_settings(&serde_json::json!({"vadSpeechMs": 60001}))
+        .1
+        .is_some());
+    assert!(filter_settings(&serde_json::json!({"eqBands": []}))
+        .1
+        .is_some());
+    assert!(filter_settings(&serde_json::json!({"eqBands": ["low"]}))
+        .1
+        .is_some());
+    assert!(filter_settings(&serde_json::json!({"listeningAnim": "solid"}))
+        .1
+        .is_some());
+}
+
+#[test]
 fn filter_settings_accepts_audio_chain_keys() {
     // 音频链路键（波束/AEC/AGC/VAD/增益）：用于现场排障，
     // `beamformingEnabled:false` 退回单麦，一步验证波束是否把信号吃掉了。

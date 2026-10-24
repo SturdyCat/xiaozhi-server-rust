@@ -21,7 +21,7 @@ fn ack_declares_ble_only_when_enabled() {
         .filter_map(|f| f.as_str())
         .collect();
     assert!(names.contains(&"ble_connect") && names.contains(&"ble_adverts_data"));
-    assert!(names.contains(&"mic") && !names.contains(&"listen_session"));
+    assert!(names.contains(&"output_chain") && !names.contains(&"listen_session"));
 }
 
 #[test]

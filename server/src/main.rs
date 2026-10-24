@@ -23,6 +23,7 @@ mod media;
 mod observability;
 mod runtime;
 mod plugins;
+mod serve;
 
 #[cfg(test)]
 mod tests;
@@ -30,7 +31,6 @@ mod tests;
 use std::sync::Arc;
 
 use anyhow::Result;
-use axum::serve;
 use tokio::net::TcpListener;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::EnvFilter;
@@ -188,11 +188,9 @@ async fn run(config: Config, config_store: Arc<dyn ConfigStore>) -> Result<()> {
     crate::device::discovery::spawn_admin_mdns(config.server.port);
     // 设备主动拨回的受限 shell 面必须绑定当前 control 的真实对端地址；
     // ConnectInfo 来自 TCP 连接，不信任可伪造的转发头。
-    serve(
-        listener,
-        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-    )
-    .await?;
+    // 带 TCP keepalive（src/serve.rs）：设备断电不发 FIN，半开连接靠内核探测
+    // ~35s 内判死——WS 会话收尾、hub 摘除，管理台才能把断电设备转成离线。
+    crate::serve::serve_with_keepalive(listener, app).await?;
     Ok(())
 }
 

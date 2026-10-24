@@ -30,7 +30,6 @@ use crate::workflow::session::run_session;
 
 use super::ble::BleLink;
 use super::transport::EchomuseTransport;
-use super::turn::{start_turn, BoundedTurn};
 use super::uplink::MicUplink;
 use super::{
     ack_message, config_baseline, config_push_with, hub_claim_data, hub_claim_only, hub_insert,
@@ -121,27 +120,53 @@ async fn control_session(
     if register.device_id.is_empty() {
         anyhow::bail!("register 缺 device_id");
     }
-    // 鉴权裁决（见 em_control）：无 token 且不是配对请求 → 拒绝；配对请求放行
-    // 但明确告警，设备是否可用仍由管理面审批（registry.approved）决定。
-    if !authenticated {
-        if !register.pairing {
-            anyhow::bail!("token 缺失/错误，拒绝接入");
-        }
-        tracing::warn!(
-            "[echomuse] 配对请求：device={}（无 token，请到管理台认领/审批）",
-            register.device_id
-        );
-    }
     let device_id = register.device_id.clone();
     tracing::info!(
-        "[echomuse] 设备接入：device={device_id} ver={} board={:?} os={:?} caps={}",
+        "[echomuse] 设备接入：device={device_id} ver={} board={:?} os={:?} caps={} ip={:?} kernel={:?}/{:?} boot={:?}/{:?}",
         register.version,
         register.board,
         register.base_os,
         register.capabilities.join(","),
+        register.ip,
+        register.kernel_arch,
+        register.kernel_release,
+        register.boot_id,
+        register.boot_reason,
     );
 
-    // 蓝牙代理按协议双向协商：服务器配置开启 且 设备声明 ble_connect 才在 ack 里
+    // 准入裁决（官方语义：`refused` = 凭据不对；`pending` = 未 admit，保持重拨；
+    // 见 docs/device-controller-interface.md §/control Controller→Device）。
+    // 固件收到 refused 会显示拒绝环（提示长按 action 配对），收到 pending 继续
+    // 每 5s/2min 重拨；老固件两者都忽略，行为等同直接断链（与旧实现一致）。
+    let registry = super::registry::global(&engines.config);
+    if !authenticated {
+        if !register.pairing {
+            // token 缺失/错误：先告诉设备"为什么"，再断。
+            let _ = sink
+                .send(Message::Text(r#"{"type":"refused"}"#.into()))
+                .await;
+            anyhow::bail!("token 缺失/错误，拒绝接入");
+        }
+        // 配对窗口：登记（管理台可见、可批）+ pending，不建会话；批准后重拨即接入。
+        registry.upsert(&register, super::registry::now_secs());
+        super::bump_devices_version();
+        let _ = sink
+            .send(Message::Text(r#"{"type":"pending","pairing":true}"#.into()))
+            .await;
+        tracing::warn!("[echomuse] 配对请求：device={device_id}（无 token），已登记待审批，本连接不建立");
+        return Ok(());
+    }
+    if !registry.get(&device_id).map(|r| r.approved).unwrap_or(false) {
+        // token 对但未审批：同 pending 语义——登记 + 等管理台批准，不建会话。
+        // （此前审批从未真正生效：register 即建会话。首台设备在管理台批准一次即可。）
+        registry.upsert(&register, super::registry::now_secs());
+        super::bump_devices_version();
+        let _ = sink.send(Message::Text(r#"{"type":"pending"}"#.into())).await;
+        tracing::info!("[echomuse] device={device_id} 已认证但未审批：登记 + pending，等待管理台批准");
+        return Ok(());
+    }
+
+    // 蓝牙代理链路按协议双向协商：服务器配置开启 且 设备声明 ble_connect 才在 ack 里
     // 回声明（未声明即降级，设备侧扫描/连接保持关闭）。
     let ble_on = engines.config.echomuse.ble_proxy
         && register.capabilities.iter().any(|c| c == "ble_connect");
@@ -169,6 +194,9 @@ async fn control_session(
 
     let ble = Arc::new(std::sync::Mutex::new(BleLink::default()));
     let live = Arc::new(super::runtime::LiveControl::new(peer, authenticated));
+    // 采集指令与灯效/提示音绑定本会话的 control 出站（同一条 FIFO，保序）。
+    live.mic.bind(ctl_tx.clone());
+    live.fx.bind(ctl_tx.clone());
     hub_insert(
         &device_id,
         super::PendingDevice {
@@ -185,6 +213,10 @@ async fn control_session(
     );
 
     // control 任务：收设备事件（唤醒/按钮/旧固件 ble_adverts）+ 发 mic_start 等出站。
+    // 常开唤醒流（官方接入后立即下发）：omni ch6、无门控。波束基线/AEC/影子评分
+    // 的持续输入；缺了它，首个 turn 流刚起就 beam.Lock() 必落 `baseline not ready`。
+    // 指令进 FIFO channel，control_loop spawn 后按序发出。
+    live.mic.wake_stream();
     let media = live.media.clone();
     let lease = super::runtime::ControlLease {
         id: device_id.clone(),
@@ -242,12 +274,7 @@ async fn control_loop(
                     if t.len() <= super::runtime::MAX_TELEMETRY_BYTES {
                         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&t) { lease.live.update(&v); }
                     }
-                    if handle_control_text(&t, &lease.id, &lease.live.turn, &mut sink, &up_tx, &ble, ble_on)
-                        .await
-                        .is_err()
-                    {
-                        break;
-                    }
+                    handle_control_text(&t, &lease.id, &lease.live, &up_tx, &ble, ble_on);
                 }
             }
             out = ctl_rx.recv() => {
@@ -267,31 +294,32 @@ async fn control_loop(
 /// 先写入有界 runtime，其余 log/pong 等仍忽略）。
 /// `ble_adverts` 是旧固件的广播回退路径（`0x06` 未被 ack 声明时设备改走 control 面）。
 /// `device_id` 只用于日志（唤醒/按键是用户最关心的"收到了什么事件"，行里要能对上设备）。
-async fn handle_control_text(
+/// 开轮走 [`super::mic::MicControl`]（官方三连时序），采集收口在 data 侧
+/// [`super::uplink::MicUplink`] 的 0x04/0x05 路径。
+fn handle_control_text(
     text: &str,
     device_id: &str,
-    turn: &BoundedTurn,
-    sink: &mut futures_util::stream::SplitSink<WebSocket, Message>,
+    live: &super::runtime::LiveControl,
     up_tx: &mpsc::UnboundedSender<IncomingFrame>,
     ble: &Arc<std::sync::Mutex<BleLink>>,
     ble_on: bool,
-) -> anyhow::Result<()> {
+) {
     let Ok(v) = serde_json::from_str::<serde_json::Value>(text) else {
-        return Ok(()); // control 面恒为 JSON；防御式忽略而非报错
+        return; // control 面恒为 JSON；防御式忽略而非报错
     };
     let kind = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
     match kind {
         // 设备本地唤醒词命中（oww_trigger）。服务器未声明 `listen_session`，设备不会走
-        // 私听会话（无 session 字段），这里直接开 bounded turn（mic_start + listen start）。
+        // 私听会话（无 session 字段），这里直接开 bounded turn。
         // 来源标签随 detect 的 text 透传给会话层（会话日志据此区分唤醒词 vs 按键）。
         "oww_wake" => {
             tracing::info!("[echomuse] device {device_id} 触发来源：本地唤醒词，开轮");
-            start_turn(turn, sink, up_tx, "本地唤醒词").await?
+            super::turn::start_turn(live, up_tx, "本地唤醒词")
         }
         // 动作键单击 = 无唤醒词模型的兜底入口；mute/音量走 mute_state/volume_state，不进这里。
         "button" => {
             tracing::info!("[echomuse] device {device_id} 触发来源：action 键，开轮");
-            start_turn(turn, sink, up_tx, "action 键").await?
+            super::turn::start_turn(live, up_tx, "action 键")
         }
         "ble_adverts" if ble_on => {
             if let Some(list) = v.get("adverts").and_then(|a| a.as_array()) {
@@ -300,9 +328,23 @@ async fn handle_control_text(
                     .merge_adverts(list, super::registry::now_secs());
             }
         }
+        // 设备日志行：透传进服务端日志（官方还持久化到 dashboard/支持包，
+        // 这里达到"不用插线也能看到设备侧 sh: syntax error 之类"的目的即可）。
+        "log" => {
+            let level = v.get("level").and_then(|l| l.as_str()).unwrap_or("info");
+            let message = v.get("message").and_then(|m| m.as_str()).unwrap_or("");
+            if !message.is_empty() {
+                let line = format!("[echomuse] {device_id} 设备日志: {message}");
+                match level {
+                    "error" => tracing::error!("{line}"),
+                    "warn" | "warning" => tracing::warn!("{line}"),
+                    "debug" => tracing::debug!("{line}"),
+                    _ => tracing::info!("{line}"),
+                }
+            }
+        }
         _ => {}
     }
-    Ok(())
 }
 
 async fn em_data(
@@ -382,7 +424,8 @@ async fn data_loop(
         management,
     } = claim;
     let (mut sink, mut stream) = socket.split();
-    let mut uplink = MicUplink::for_media(management.media.clone());
+    let mut uplink =
+        MicUplink::for_media(management.media.clone(), management.mic.clone(), management.fx.clone());
     // 认领前替读的首帧（若有）按正常上行处理，不丢首包。
     if let Some(Message::Binary(raw)) = prelude {
         uplink.on_binary(&raw, &management.turn, &up_tx, &ble, ble_on);

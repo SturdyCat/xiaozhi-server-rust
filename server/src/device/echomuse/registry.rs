@@ -44,6 +44,17 @@ pub struct DeviceRecord {
     /// 设备接入时随 `config` 推送，管理面改设置时落盘）。
     #[serde(default)]
     pub settings: HashMap<String, serde_json::Value>,
+    /// 最近一次 register 的网络与内核标识（排障用；旧记录缺省为空）。
+    #[serde(default)]
+    pub ip: Option<String>,
+    #[serde(default)]
+    pub kernel_arch: Option<String>,
+    #[serde(default)]
+    pub kernel_release: Option<String>,
+    #[serde(default)]
+    pub boot_id: Option<String>,
+    #[serde(default)]
+    pub boot_reason: Option<String>,
 }
 
 impl DeviceRecord {
@@ -53,6 +64,11 @@ impl DeviceRecord {
         self.board = reg.board.clone();
         self.base_os = reg.base_os.clone();
         self.capabilities = reg.capabilities.clone();
+        self.ip = reg.ip.clone();
+        self.kernel_arch = reg.kernel_arch.clone();
+        self.kernel_release = reg.kernel_release.clone();
+        self.boot_id = reg.boot_id.clone();
+        self.boot_reason = reg.boot_reason.clone();
         self.last_seen = now;
     }
 
@@ -71,6 +87,11 @@ impl DeviceRecord {
             "online": connected_secs.is_some(),
             "connected_secs": connected_secs,
             "settings": self.settings,
+            "ip": self.ip,
+            "kernel_arch": self.kernel_arch,
+            "kernel_release": self.kernel_release,
+            "boot_id": self.boot_id,
+            "boot_reason": self.boot_reason,
         })
     }
 }
@@ -126,6 +147,11 @@ impl Registry {
                 first_seen: now,
                 last_seen: now,
                 settings: HashMap::new(),
+                ip: None,
+                kernel_arch: None,
+                kernel_release: None,
+                boot_id: None,
+                boot_reason: None,
             });
         record.absorb(reg, now);
         drop(guard);

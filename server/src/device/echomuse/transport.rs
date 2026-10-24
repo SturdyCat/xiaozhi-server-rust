@@ -1,4 +1,5 @@
 //! Native PCM Echo adapter. No Opus codec exists in either Echo direction.
+use super::fx::Fx;
 use super::{media::MediaState, ControlOut, DataOut};
 use crate::media::media::*;
 use crate::workflow::protocol::{IncomingFrame, Transport};
@@ -75,10 +76,13 @@ impl Transport for EchomuseTransport {
     }
     async fn send_text(&mut self, json: String) -> Result<()> {
         let value = serde_json::from_str::<serde_json::Value>(&json).ok();
+        // 灯效走同一 control 通道：播报开始 → meter 环；收尾 → 熄灯。
+        let fx = Fx::bound(self.ctl_tx.clone());
         if value
             .as_ref()
             .is_some_and(|v| v["type"] == "tts" && v["state"] == "start")
         {
+            fx.speaking();
             // Initial data identify may follow register. Wait with a deadline;
             // a reconnect later in this reply must never rebind its media epoch.
             let _ = tokio::time::timeout(Duration::from_secs(5), async {
@@ -99,6 +103,7 @@ impl Transport for EchomuseTransport {
         // Framer already padded/sent the final PCM frame; EOS follows its write ACK.
         // No data claim means no queueing EOS for replay on a later connection.
         if is_stop {
+            fx.off(); // 播报收尾：环立即熄（meter 的长死信是给异常路径的兜底）
             if let Some(epoch) = self.reply_epoch.take() {
                 self.media.enqueue_eos_for(&self.data_tx, &epoch);
             }

@@ -344,6 +344,12 @@ async fn loopback_stream_file_round_trips_base64_and_verifies() {
             panic!("probe must be text")
         };
         assert!(probe.contains("base64 -d") && probe.contains("sha256sum"));
+        // 非 pty 管道：sh 只在读到换行时才执行这条命令行。缺了它设备会一直
+        // 攥着不跑，调用方空转到 deadline（真机实测挂满 120s、零字节发出）。
+        assert!(
+            probe.ends_with('\n'),
+            "探测命令必须以换行结尾，否则设备 shell 不执行: {probe:?}"
+        );
         ws.send(tungstenite::Message::Text(
             "DECODER:ok\nHASH:ok\n__EM_PROBE__\n".into(),
         ))
@@ -372,6 +378,10 @@ async fn loopback_stream_file_round_trips_base64_and_verifies() {
         assert!(
             verify.contains("VERIFY_OK") && verify.contains("sha256sum"),
             "verify frame was {verify:?}"
+        );
+        assert!(
+            verify.ends_with('\n'),
+            "校验命令同样必须以换行结尾（heredoc 结束后是新的一条命令行）: {verify:?}"
         );
         let start = raw.find('\n').unwrap() + 1;
         let end = raw.find("\n__END_B64_42__").unwrap();

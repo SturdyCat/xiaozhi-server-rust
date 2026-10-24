@@ -67,30 +67,45 @@ fn ack_declares_supported_subset_only() {
     let v: serde_json::Value = serde_json::from_str(&ack).unwrap();
     assert_eq!(v["type"], "ack");
     assert_eq!(v["device_id"], "dev-1");
+    // features 是控制器能力表：固件只读 output_chain/ble_*，绝无设备能力名噪音。
     let feats = v["features"].as_array().unwrap();
-    // 不声明 listen_session / audio_mix / ble_connect —— 服务器不支持的照协议静默降级。
     let names: Vec<&str> = feats.iter().filter_map(|f| f.as_str()).collect();
-    assert!(names.contains(&"mic") && names.contains(&"speaker"));
+    assert!(names.contains(&"output_chain"));
+    // 不声明 listen_session —— 私听会话未实现，声明会让设备在 owwOnDevice=on 时
+    // 走私听路径（而 oww 资产未同步 ⇒ 既不推流也不触发）。
     assert!(!names.contains(&"listen_session"));
     assert!(!names.contains(&"audio_mix"));
     assert!(!names.contains(&"ble_connect"));
     assert!(!names.contains(&"ble_adverts_data"));
+    // 设备能力名不是 controller feature，一个都不该出现。
+    for noise in ["mic", "speaker", "leds", "buttons", "oww_trigger", "oww_local_only"] {
+        assert!(!names.contains(&noise), "噪音 feature: {noise}");
+    }
+    // 校时：设备无 RTC，ack 顺带 time_ms（官方 em_controller.py:5189）。
+    let time_ms = v["time_ms"].as_u64().expect("ack 缺 time_ms");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    assert!(now >= time_ms && now - time_ms < 5_000, "time_ms 应是当前时刻");
 }
 
 #[test]
-fn config_push_enables_on_device_wake() {
+fn config_push_defaults_to_off_device_wake() {
     let msgs = config_push_with(&serde_json::json!({}));
     assert_eq!(msgs.len(), 1);
     let v: serde_json::Value = serde_json::from_str(&msgs[0]).unwrap();
     assert_eq!(v["type"], "config");
-    assert_eq!(v["owwOnDevice"], "on");
-    // 设置合并覆盖基线；wakeWordEnabled 单独成条。
+    // 基线 off：设备 oww 资产未同步，"on" 只会空转加载评分器；stream 模式下设备
+    // 无论此值都持续推流（listen.Resolve）。
+    assert_eq!(v["owwOnDevice"], "off");
+    // 设置合并覆盖基线；wakeWordEnabled 单独成条。bool 兼容旧值转协议字符串。
     let msgs = config_push_with(
-        &serde_json::json!({"owwOnDevice": false, "wakeSound": true, "wakeWordEnabled": false}),
+        &serde_json::json!({"owwOnDevice": true, "wakeSound": true, "wakeWordEnabled": false}),
     );
     assert_eq!(msgs.len(), 2);
     let v: serde_json::Value = serde_json::from_str(&msgs[0]).unwrap();
-    assert_eq!(v["owwOnDevice"], "off");
+    assert_eq!(v["owwOnDevice"], "on");
     assert_eq!(v["wakeSound"], true);
     assert!(v.get("wakeWordEnabled").is_none());
     let v: serde_json::Value = serde_json::from_str(&msgs[1]).unwrap();
@@ -311,6 +326,22 @@ pub(super) fn reg_load(device_id: &str, version: &str) -> DeviceRegister {
 }
 
 #[test]
+fn register_parses_informational_boot_fields_with_defaults() {
+    // 官方 register 的信息性字段：齐全会解析，缺省（老固件）全 None。
+    let full: DeviceRegister = serde_json::from_str(
+        r#"{"device_id":"d1","version":"v2.18.1","capabilities":["mic"],
+            "ip":"192.168.9.9","kernel_arch":"armv7l","kernel_release":"3.18.19",
+            "boot_id":"b-1","boot_reason":"power_key","emmc":{"rev":7}}"#,
+    )
+    .unwrap();
+    assert_eq!(full.ip.as_deref(), Some("192.168.9.9"));
+    assert_eq!(full.boot_reason.as_deref(), Some("power_key"));
+    let minimal = reg_load("d2", "v1");
+    assert!(minimal.ip.is_none() && minimal.boot_id.is_none());
+    assert!(minimal.kernel_release.is_none() && minimal.boot_reason.is_none());
+}
+
+#[test]
 fn registry_upsert_and_roundtrip() {
     let (reg, path) = temp_registry("roundtrip");
     reg.upsert(&reg_load("dev-reg-1", "1.0"), 100);
@@ -330,6 +361,28 @@ fn registry_upsert_and_roundtrip() {
     assert!(!d1.approved);
     assert_eq!(d1.board.as_deref(), Some("echo-dot-2"));
     assert_eq!(d1.base_os.as_deref(), Some("emOS 0.10"));
+    // payload 输出 register 的网络/内核/启动标识（管理台概览展示用）。
+    let payload = d1.payload(Some(5));
+    assert_eq!(payload["ip"], serde_json::Value::Null, "reg_load 未带 ip");
+    let full_record = {
+        let reg2 = Registry::load(path.with_extension("full.json"));
+        reg2.upsert(
+            &serde_json::from_str::<DeviceRegister>(
+                r#"{"device_id":"d3","version":"v2","capabilities":["mic"],
+                    "ip":"10.0.0.3","kernel_arch":"armv7l","kernel_release":"3.18.19",
+                    "boot_id":"b-9","boot_reason":"reboot"}"#,
+            )
+            .unwrap(),
+            400,
+        );
+        reg2.get("d3").expect("d3 已登记").clone()
+    };
+    let full_payload = full_record.payload(None);
+    assert_eq!(full_payload["ip"], "10.0.0.3");
+    assert_eq!(full_payload["kernel_arch"], "armv7l");
+    assert_eq!(full_payload["kernel_release"], "3.18.19");
+    assert_eq!(full_payload["boot_id"], "b-9");
+    assert_eq!(full_payload["boot_reason"], "reboot");
     // list 全表按 device_id 排序。
     let ids: Vec<String> = reloaded
         .list()
@@ -397,12 +450,11 @@ fn advertise_ipv4_fallback_is_routable_or_loopback() {
 #[tokio::test]
 async fn 开轮聆听先detect再listen_start且重复唤醒零副作用() {
     let (up_tx, mut up_rx) = mpsc::unbounded_channel();
-    // 丢弃 sink：mic_start 走 control 面不进 up_tx，这里只验证会话侧投帧顺序。
-    let mut sink = futures_util::sink::drain::<axum::extract::ws::Message>();
-    let turn = super::turn::BoundedTurn::default();
-    super::turn::start_turn(&turn, &mut sink, &up_tx, "本地唤醒词")
-        .await
-        .expect("开轮不应失败");
+    let live = super::runtime::LiveControl::new(None, false);
+    let (ctl_tx, _ctl_rx) = mpsc::unbounded_channel();
+    live.mic.bind(ctl_tx.clone());
+    live.fx.bind(ctl_tx);
+    super::turn::start_turn(&live, &up_tx, "本地唤醒词");
     match up_rx.recv().await {
         Some(IncomingFrame::Text(t)) => {
             assert!(
@@ -422,8 +474,36 @@ async fn 开轮聆听先detect再listen_start且重复唤醒零副作用() {
         other => panic!("次帧应是文本帧: {other:?}"),
     }
     // 已在聆听：重复唤醒零副作用（不重复 mic_start、不再投帧）。
-    super::turn::start_turn(&turn, &mut sink, &up_tx, "本地唤醒词")
-        .await
-        .expect("重复开轮也不应失败");
+    super::turn::start_turn(&live, &up_tx, "本地唤醒词");
     assert!(up_rx.try_recv().is_err(), "重复唤醒不得再投帧");
+}
+
+// ---- P2 上行面：此前丢弃的消息现在进入有界 runtime ----
+
+#[test]
+fn telemetry_consumes_uplink_reports_previously_dropped() {
+    let live = super::runtime::LiveControl::new(None, false);
+    live.update(&serde_json::json!({"type":"listen_end","session":7,"reason":"ack_timeout"}));
+    live.update(&serde_json::json!({
+        "type":"playback_stats","periods":128,"underruns":0,
+        "stats":{"minDepth":23,"primeWaitMs":935,"maxGapMs":41}}));
+    live.update(&serde_json::json!({
+        "type":"oww_shadow_cross","score":0.83,"threshold":0.5}));
+    live.update(&serde_json::json!({"type":"wifi_result","ok":true,"ssid":"home"}));
+    live.update(&serde_json::json!({
+        "type":"wifi_scan_result","networks":[{"ssid":"home","signal":-40}]}));
+    live.update(&serde_json::json!({"type":"pair_request"}));
+    let p = live.payload("d1");
+    assert_eq!(p["listen_end"]["reason"], "ack_timeout");
+    assert_eq!(p["playback_stats"]["underruns"], 0);
+    assert_eq!(p["playback_stats"]["stats"]["minDepth"], 23);
+    assert_eq!(p["oww_shadow_cross"]["score"], 0.83);
+    assert_eq!(p["wifi_result"]["ok"], true);
+    assert_eq!(p["wifi_scan"]["networks"][0]["ssid"], "home");
+    assert!(p["pair_requested_at"].as_u64().is_some());
+    // 长字符串截断：runtime 是有界缓存，不吞内存。
+    live.update(&serde_json::json!({
+        "type":"playback_stats","note": "x".repeat(2000)}));
+    let p = live.payload("d1");
+    assert!(p["playback_stats"]["note"].as_str().map(|s| s.len()).unwrap_or(0) <= 256);
 }
