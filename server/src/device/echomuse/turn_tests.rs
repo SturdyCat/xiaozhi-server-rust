@@ -57,7 +57,9 @@ async fn speech_and_no_speech_each_rearm_consecutive_turns_without_reply_eos() {
         assert!(up_rx.try_recv().is_err());
         assert!(ctl_types(&mut rx).is_empty(), "活跃轮内重复触发不下发");
         assert!(live.turn.finish(reason, &up, |_| {}));
-        assert!(matches!(up_rx.try_recv().unwrap(), IncomingFrame::EndOfUtterance(r) if r == reason));
+        assert!(
+            matches!(up_rx.try_recv().unwrap(), IncomingFrame::EndOfUtterance(r) if r == reason)
+        );
         assert!(!live
             .turn
             .finish(reason, &up, |_| panic!("duplicate sentinel ran tail")));

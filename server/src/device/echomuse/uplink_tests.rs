@@ -28,7 +28,7 @@ fn begin(
 }
 #[tokio::test]
 async fn native_partial_pcm_precedes_end_without_codec_padding_or_replay() {
-        let ble = Arc::new(Mutex::new(BleLink::default()));
+    let ble = Arc::new(Mutex::new(BleLink::default()));
     let (up, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let (live, _ctl_rx) = bound();
     let mut uplink = MicUplink::new(live.mic.clone(), live.fx.clone()).unwrap();
@@ -60,7 +60,7 @@ async fn native_partial_pcm_precedes_end_without_codec_padding_or_replay() {
 }
 #[tokio::test]
 async fn no_speech_invalidates_queued_audio_then_next_capture_is_fresh() {
-        let ble = Arc::new(Mutex::new(BleLink::default()));
+    let ble = Arc::new(Mutex::new(BleLink::default()));
     let (up, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let (live, _ctl_rx) = bound();
     let mut uplink = MicUplink::new(live.mic.clone(), live.fx.clone()).unwrap();
@@ -85,7 +85,7 @@ async fn no_speech_invalidates_queued_audio_then_next_capture_is_fresh() {
 }
 #[tokio::test]
 async fn duration_overflow_cancels_capture_without_blocking_boundary_or_control() {
-        let ble = Arc::new(Mutex::new(BleLink::default()));
+    let ble = Arc::new(Mutex::new(BleLink::default()));
     let (up, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let (live, _ctl_rx) = bound();
     let mut uplink = MicUplink::new(live.mic.clone(), live.fx.clone()).unwrap();
@@ -107,7 +107,7 @@ async fn duration_overflow_cancels_capture_without_blocking_boundary_or_control(
 }
 #[tokio::test]
 async fn data_disconnect_invalidates_speech_end_and_stale_reader() {
-        let ble = Arc::new(Mutex::new(BleLink::default()));
+    let ble = Arc::new(Mutex::new(BleLink::default()));
     let (up, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let (live, _ctl_rx) = bound();
     let mut uplink = MicUplink::new(live.mic.clone(), live.fx.clone()).unwrap();
@@ -135,7 +135,7 @@ async fn data_disconnect_invalidates_speech_end_and_stale_reader() {
 }
 #[test]
 fn unsolicited_sentinels_and_unnegotiated_ble_are_ignored() {
-        let ble = Arc::new(Mutex::new(BleLink::default()));
+    let ble = Arc::new(Mutex::new(BleLink::default()));
     let (up, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let (live, _ctl_rx) = bound();
     let mut uplink = MicUplink::new(live.mic.clone(), live.fx.clone()).unwrap();

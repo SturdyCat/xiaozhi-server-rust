@@ -367,11 +367,6 @@ private fun ViewContainer<*, *>.adminContentArea(
                         ctx.files.openPath(ctx, OWW_MODELS_DIR)
                         ctx.selectedSection = "files"
                     },
-                    // 音乐面板的「管理音乐文件」入口：跳「文件」页的 music/ 目录
-                    onOpenMusicFiles = {
-                        ctx.files.openPath(ctx, MUSIC_DIR)
-                        ctx.selectedSection = "files"
-                    },
                 )
             }
         }

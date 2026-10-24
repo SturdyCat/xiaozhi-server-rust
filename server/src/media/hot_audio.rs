@@ -24,9 +24,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
-use crate::workflow::pipeline::tts_cache::TtsCache;
 #[cfg(test)]
 use crate::config::Config;
+use crate::workflow::pipeline::tts_cache::TtsCache;
 
 /// 首选配置来源目录；无来源时复用记忆库目录（包括相对路径的当前目录）。
 /// 这里只派生路径，不建目录或打开记忆库，memory.enabled=false 的零成本契约不变。

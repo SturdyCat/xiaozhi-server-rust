@@ -56,7 +56,17 @@ pub async fn run_session<T: Transport>(
     let bounded_turn = profile.capabilities.bounded_utterance;
     let mut turn_transport = super::utterance::TurnTransport::new(transport, bounded_turn);
     let transport = &mut turn_transport;
-    let vad = engines.acquire_vad().await?;
+    // 设备端已做 VAD（EchoMuse speech gate：Silero VAD 判定人声才上行，0x04/0x05 明确
+    // 收口）→ 服务端跳过 VAD：不借池实例（省 1 个名额 + 每帧推理），PCM 直接缓冲，
+    // `UtteranceEnd::Speech` 时整段送 ASR。双 VAD 口径不一致会吞字（设备上行的是
+    // "gate 通过的音频"，服务端 VAD 若把个别帧判为非语音，句首/句中就被切掉）。
+    // 判定与数据路径同源：上行格式为 `echo_mic()` 的承载（见 `media.rs::native_pcm`）。
+    let device_vad = profile.input == crate::media::media::AudioFormat::echo_mic();
+    let vad = if device_vad {
+        None
+    } else {
+        Some(engines.acquire_vad().await?)
+    };
     let uplink_decoder = if super::media::needs_opus(profile.input.codec) {
         Some(OpusFrameDecoder::new(params.uplink_sr)?)
     } else {
@@ -164,6 +174,7 @@ pub async fn run_session<T: Transport>(
         test_recording: false,
         test_buf: Vec::new(),
         vad,
+        device_vad,
         uplink_decoder,
         real_audio,
         is_test,

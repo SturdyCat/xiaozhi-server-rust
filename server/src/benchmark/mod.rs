@@ -1,8 +1,8 @@
 //! Unified, isolated node tests. Saved SQLite snapshot once per request; no engine publication,
 //! production session state, config writes, device actions, memory writes or audio caches.
 //! The default feature build never passes audio compilation stubs off as real providers.
-use crate::workflow::pipeline::inference::GateHandle;
 use crate::plugins::prompt::{MemoryPosition, TurnPrompt};
+use crate::workflow::pipeline::inference::GateHandle;
 use crate::{
     config::{store::ConfigStore, Config},
     runtime::Engines,

@@ -78,7 +78,14 @@ fn ack_declares_supported_subset_only() {
     assert!(!names.contains(&"ble_connect"));
     assert!(!names.contains(&"ble_adverts_data"));
     // 设备能力名不是 controller feature，一个都不该出现。
-    for noise in ["mic", "speaker", "leds", "buttons", "oww_trigger", "oww_local_only"] {
+    for noise in [
+        "mic",
+        "speaker",
+        "leds",
+        "buttons",
+        "oww_trigger",
+        "oww_local_only",
+    ] {
         assert!(!names.contains(&noise), "噪音 feature: {noise}");
     }
     // 校时：设备无 RTC，ack 顺带 time_ms（官方 em_controller.py:5189）。
@@ -87,7 +94,10 @@ fn ack_declares_supported_subset_only() {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_millis() as u64;
-    assert!(now >= time_ms && now - time_ms < 5_000, "time_ms 应是当前时刻");
+    assert!(
+        now >= time_ms && now - time_ms < 5_000,
+        "time_ms 应是当前时刻"
+    );
 }
 
 #[test]
@@ -505,5 +515,11 @@ fn telemetry_consumes_uplink_reports_previously_dropped() {
     live.update(&serde_json::json!({
         "type":"playback_stats","note": "x".repeat(2000)}));
     let p = live.payload("d1");
-    assert!(p["playback_stats"]["note"].as_str().map(|s| s.len()).unwrap_or(0) <= 256);
+    assert!(
+        p["playback_stats"]["note"]
+            .as_str()
+            .map(|s| s.len())
+            .unwrap_or(0)
+            <= 256
+    );
 }

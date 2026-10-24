@@ -192,7 +192,9 @@ pub(super) async fn device_inject(
         crate::workflow::pipeline::inject::InjectError::NoChannel => {
             "该会话不支持文本注入：测试台会话与 AIUI 全链路（识别在云端闭环）没有文本入口。"
         }
-        crate::workflow::pipeline::inject::InjectError::Closed => "会话刚刚结束（通道已关闭），请刷新后重试。",
+        crate::workflow::pipeline::inject::InjectError::Closed => {
+            "会话刚刚结束（通道已关闭），请刷新后重试。"
+        }
         crate::workflow::pipeline::inject::InjectError::Busy => {
             "会话正忙（正在处理上一轮对话，注入队列已满），请稍后重试。"
         }

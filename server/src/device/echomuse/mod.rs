@@ -57,6 +57,8 @@ mod admin_tests;
 #[cfg(test)]
 mod ble_tests;
 mod config;
+pub(crate) mod dlna;
+pub(crate) mod dot2;
 #[cfg(test)]
 mod fx_tests;
 #[cfg(test)]
@@ -65,14 +67,12 @@ pub(crate) mod listen;
 #[cfg(test)]
 mod listen_tests;
 pub(crate) mod mic;
+pub(crate) mod music;
 mod onnx_typed;
 pub(crate) mod oww;
 pub(crate) mod registry;
 pub(crate) mod routes;
 pub(crate) mod runtime;
-pub(crate) mod dot2;
-pub(crate) mod dlna;
-pub(crate) mod music;
 mod settings;
 pub(crate) mod shell;
 pub(crate) mod system;
@@ -202,7 +202,9 @@ fn hub_insert(device_id: &str, entry: PendingDevice) {
         .insert(device_id.to_string(), entry)
     {
         old.management.media.close();
-        let _ = old.up_tx.send(crate::workflow::protocol::IncomingFrame::Closed);
+        let _ = old
+            .up_tx
+            .send(crate::workflow::protocol::IncomingFrame::Closed);
     }
     // 上线/下线对管理台列表可见（online / connected_secs）。
     bump_devices_version();
@@ -588,7 +590,9 @@ fn local_ipv4() -> Option<Ipv4Addr> {
 }
 
 /// Native Echo PCM geometry; no ESP codec/wire negotiation occurs.
-pub(crate) fn session_params(cfg: &crate::config::Config) -> crate::workflow::session::SessionParams {
+pub(crate) fn session_params(
+    cfg: &crate::config::Config,
+) -> crate::workflow::session::SessionParams {
     crate::workflow::session::SessionParams::configured_defaults(
         cfg,
         crate::media::media::AudioCodec::PcmS16Le,

@@ -130,7 +130,12 @@ pub struct Session<'a, T: Transport> {
     downlink_ts: u32,
     test_recording: bool,
     test_buf: Vec<f32>,
-    vad: crate::plugins::vad::pool::VadGuard,
+    /// 服务端 VAD 实例（池借出，RAII 归还）。`None` = 设备端已做 VAD 的会话（EchoMuse
+    /// speech gate，见 `start.rs::device_vad`）：跳过服务端检测，`device_vad=true` 走直通缓冲。
+    vad: Option<crate::plugins::vad::pool::VadGuard>,
+    /// 设备端已做 VAD（EchoMuse speech gate 判定人声才上行）：上行 PCM 直接缓冲，
+    /// `UtteranceEnd::Speech`（设备 0x04）时整段送 ASR——不做服务端二次检测。
+    device_vad: bool,
     uplink_decoder: Option<OpusFrameDecoder>,
     real_audio: bool,
     /// hello.test=true 的测试台会话：唯一能发起 asr_test/tts_test/llm_test 的连接。
@@ -235,7 +240,9 @@ impl<'a, T: Transport> Session<'a, T> {
         // ⚠️ 指令断开会话时**不** flush：用户已明确要求退下，不该再为残留音频开一轮对话。
         if self.real_audio && !self.close_requested && !self.bounded_turn {
             let mut segments = Vec::new();
-            self.vad.flush(&mut |seg| segments.push(seg));
+            if let Some(vad) = self.vad.as_mut() {
+                vad.flush(&mut |seg| segments.push(seg));
+            }
             self.recognize_segments(segments).await;
         }
         if self.close_requested {

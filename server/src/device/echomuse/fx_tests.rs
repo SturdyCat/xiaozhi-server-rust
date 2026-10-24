@@ -24,12 +24,7 @@ fn anim_specs_carry_pattern_colors_and_dead_man_ttl() {
     assert!(fx.thinking());
     assert!(fx.speaking());
     assert!(fx.nospeech());
-    let expected = [
-        ("solid", 30u64),
-        ("spin", 10),
-        ("meter", 120),
-        ("pulse", 1),
-    ];
+    let expected = [("solid", 30u64), ("spin", 10), ("meter", 120), ("pulse", 1)];
     for pattern_ttl in expected {
         let ControlOut::Json(json) = rx.try_recv().unwrap() else {
             panic!("指令缺失")
@@ -67,7 +62,10 @@ fn off_paints_twelve_dark_leds_and_cue_and_flush_shapes() {
     assert!(fx.wake_cue());
     assert!(fx.speaker_flush());
     let mut kinds = sent(&mut rx);
-    assert_eq!(kinds.drain(..3).collect::<Vec<_>>(), vec!["leds", "play_cue", "speaker_flush"]);
+    assert_eq!(
+        kinds.drain(..3).collect::<Vec<_>>(),
+        vec!["leds", "play_cue", "speaker_flush"]
+    );
 }
 
 #[test]

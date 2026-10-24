@@ -165,9 +165,10 @@ impl MediaState {
         if !self.ready() || pcm.is_empty() || pcm.len() % 2 != 0 {
             return None;
         }
-        let permit = self
-            .output
-            .reserve(AudioFormat::echo_speaker().duration_us(pcm.len()), pcm.len())?;
+        let permit = self.output.reserve(
+            AudioFormat::echo_speaker().duration_us(pcm.len()),
+            pcm.len(),
+        )?;
         let (ack, done) = oneshot::channel();
         writes.push_back(WriteTicket {
             epoch: epoch.clone(),

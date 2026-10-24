@@ -551,7 +551,14 @@ async fn read_until(
                 tracing::warn!(
                     "[echomuse] shell 等待 `{needle}` 超时：已收 {} 字节，尾部输出={:?}",
                     buffer.len(),
-                    buffer.chars().rev().take(400).collect::<String>().chars().rev().collect::<String>()
+                    buffer
+                        .chars()
+                        .rev()
+                        .take(400)
+                        .collect::<String>()
+                        .chars()
+                        .rev()
+                        .collect::<String>()
                 );
                 return Err(ShellError::Timeout);
             }

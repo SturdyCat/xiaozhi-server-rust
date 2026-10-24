@@ -6,17 +6,27 @@ use crate::workflow::protocol::ClientMessage;
 use crate::workflow::protocol::{IncomingFrame, Transport, UtteranceEnd};
 
 /// Speech 才把已切段及尾段交给 ASR；NoSpeech 丢弃两者。两种结束都重置 recurrent state。
+///
+/// `vad` 为 `None` = 设备端已做 VAD 的会话（EchoMuse speech gate）：没有服务端实例，
+/// pending 里的 PCM 就是完整语音，Speech 直接整段交出（不 flush）。
 pub(super) fn finish_utterance(
-    vad: &mut VadGuard,
+    vad: Option<&mut VadGuard>,
     pending: &mut Vec<Vec<f32>>,
     reason: UtteranceEnd,
 ) -> Vec<Vec<f32>> {
+    let mut vad = vad;
     let mut segments = std::mem::take(pending);
     match reason {
-        UtteranceEnd::Speech => vad.flush(&mut |seg| segments.push(seg)),
+        UtteranceEnd::Speech => {
+            if let Some(vad) = vad.as_deref_mut() {
+                vad.flush(&mut |seg| segments.push(seg));
+            } // None = 设备 VAD 直通：pending 已是完整语音
+        }
         UtteranceEnd::NoSpeech => segments.clear(),
     }
-    vad.reset();
+    if let Some(vad) = vad {
+        vad.reset();
+    }
     segments
 }
 

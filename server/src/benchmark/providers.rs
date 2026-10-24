@@ -1,12 +1,12 @@
 //! Isolated real provider factories and common measured execution; never publish/cache engines.
 use super::contracts::StageResult;
-use crate::workflow::pipeline::inference::GateHandle;
 use crate::config::Config;
 use crate::plugins::{
     registry::{active_impl, Built, Capability},
     skill::SkillRegistry,
     vad::VadEngine,
 };
+use crate::workflow::pipeline::inference::GateHandle;
 use anyhow::{anyhow, Result};
 use serde_json::json;
 use std::sync::{

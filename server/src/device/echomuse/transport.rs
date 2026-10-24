@@ -45,7 +45,10 @@ impl EchomuseTransport {
     }
 }
 impl Transport for EchomuseTransport {
-    fn terminal_profile(&self, params: &crate::workflow::session::SessionParams) -> TerminalProfile {
+    fn terminal_profile(
+        &self,
+        params: &crate::workflow::session::SessionParams,
+    ) -> TerminalProfile {
         let _ = params;
         TerminalProfile::echo()
     }

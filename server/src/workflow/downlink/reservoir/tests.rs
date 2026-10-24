@@ -10,12 +10,12 @@ use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 
 use super::*;
-use crate::media::media::{AudioCodec, AudioFormat};
 use crate::media::hot_audio::{HotAudioKey, MAX_ENTRY_BYTES};
+use crate::media::media::{AudioCodec, AudioFormat};
 use crate::workflow::pipeline::prefetch::{PcmChunk, PreparedAudio};
+use crate::workflow::pipeline::tts_cache::TtsCache;
 use crate::workflow::protocol::BinVersion;
 use crate::workflow::session::SessionParams;
-use crate::workflow::pipeline::tts_cache::TtsCache;
 
 /// 测试用下行档位（与 `params()` 的 24k/60ms 一致；只影响内存键）。
 fn fmt() -> AudioFormat {

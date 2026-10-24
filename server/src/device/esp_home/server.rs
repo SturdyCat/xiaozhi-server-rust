@@ -134,7 +134,9 @@ fn build_api(cfg: &EspHomeConfig, ble_proxy: bool) -> Result<EspHomeApi> {
     } else {
         base.encryption_key(cfg.encryption_key.clone()).build()
     };
-    built.map_err(|e| anyhow::anyhow!("ESPHome API 配置非法（多为 encryption_key 非合法 base64）：{e}"))
+    built.map_err(|e| {
+        anyhow::anyhow!("ESPHome API 配置非法（多为 encryption_key 非合法 base64）：{e}")
+    })
 }
 
 /// 单条客户端连接：取发送端/接收端，循环应答协议请求并回推状态变化。
@@ -246,19 +248,17 @@ async fn send_entity_list(tx: &mpsc::Sender<ProtoMessage>) {
                 step,
                 unit,
                 mode,
-            } => {
-                ProtoMessage::ListEntitiesNumberResponse(ListEntitiesNumberResponse {
-                    object_id: spec.object_id.to_string(),
-                    key: key as u32,
-                    name: spec.name.to_string(),
-                    min_value: min,
-                    max_value: max,
-                    step,
-                    unit_of_measurement: unit.to_string(),
-                    mode,
-                    ..Default::default()
-                })
-            }
+            } => ProtoMessage::ListEntitiesNumberResponse(ListEntitiesNumberResponse {
+                object_id: spec.object_id.to_string(),
+                key: key as u32,
+                name: spec.name.to_string(),
+                min_value: min,
+                max_value: max,
+                step,
+                unit_of_measurement: unit.to_string(),
+                mode,
+                ..Default::default()
+            }),
         };
         if tx.send(msg).await.is_err() {
             return;
@@ -293,9 +293,7 @@ async fn send_binary_state(tx: &mpsc::Sender<ProtoMessage>, key: u32, on: bool) 
         missing_state: false,
         device_id: 0,
     };
-    let _ = tx
-        .send(ProtoMessage::BinarySensorStateResponse(resp))
-        .await;
+    let _ = tx.send(ProtoMessage::BinarySensorStateResponse(resp)).await;
 }
 
 /// 发一个 `number` 的当前值。
@@ -640,21 +638,21 @@ mod tests {
             let mut hello = vec![0x0a, 0x04];
             hello.extend_from_slice(b"test");
             hello.extend_from_slice(&[0x10, 0x01, 0x18, 0x0a]);
-            stream.write_all(&frame(HELLO_REQUEST, &hello)).await.unwrap();
+            stream
+                .write_all(&frame(HELLO_REQUEST, &hello))
+                .await
+                .unwrap();
             let (ty, _) = read_frame(&mut stream).await;
             assert_eq!(ty, HELLO_RESPONSE, "期望 HelloResponse");
 
-        // 2) DeviceInfo：应带上配置里的节点名。
+            // 2) DeviceInfo：应带上配置里的节点名。
             stream
                 .write_all(&frame(DEVICE_INFO_REQUEST, &[]))
                 .await
                 .unwrap();
             let (ty, payload) = read_frame(&mut stream).await;
             assert_eq!(ty, DEVICE_INFO_RESPONSE, "期望 DeviceInfoResponse");
-            assert!(
-                contains(&payload, b"xiaozhi-dot2"),
-                "DeviceInfo 应含节点名"
-            );
+            assert!(contains(&payload, b"xiaozhi-dot2"), "DeviceInfo 应含节点名");
 
             // 3) 实体列表：5 条 binary_sensor + 1 条 number + Done，object_id 按声明顺序。
             stream
@@ -781,7 +779,10 @@ mod tests {
     #[test]
     fn number_command_only_targets_volume() {
         assert_eq!(number_command_target(state::VOLUME as u32, 30.4), Some(30));
-        assert_eq!(number_command_target(state::VOLUME as u32, 127.9), Some(127));
+        assert_eq!(
+            number_command_target(state::VOLUME as u32, 127.9),
+            Some(127)
+        );
         // 其它实体的 key（binary_sensor）与时越界 key 都不应触发动作。
         assert_eq!(number_command_target(state::ONLINE as u32, 50.0), None);
         assert_eq!(number_command_target(999, 50.0), None);

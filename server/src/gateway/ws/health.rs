@@ -32,10 +32,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use axum::{extract::State, response::Response};
 
 use super::json_ok;
-use crate::runtime::Engines;
 use crate::plugins::health::{probe, ProbeState};
 use crate::plugins::host::{Phase, PluginHost};
 use crate::plugins::registry::{Capability, ALL_CAPABILITIES};
+use crate::runtime::Engines;
 
 /// capability → 配置页 section id（前端跳转锚点；`None` = 无对应配置 section）。
 ///

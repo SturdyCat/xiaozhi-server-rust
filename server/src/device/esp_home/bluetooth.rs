@@ -185,9 +185,7 @@ pub fn parse_ad(raw: &[u8]) -> AdData {
             }
             0x20 => {
                 if value.len() >= 4 {
-                    let uuid = uuid32(u32::from_le_bytes([
-                        value[0], value[1], value[2], value[3],
-                    ]));
+                    let uuid = uuid32(u32::from_le_bytes([value[0], value[1], value[2], value[3]]));
                     out.service_data.push((uuid, value[4..].to_vec()));
                 }
             }
@@ -199,8 +197,10 @@ pub fn parse_ad(raw: &[u8]) -> AdData {
             }
             0xFF => {
                 if value.len() >= 2 {
-                    out.manufacturer_data
-                        .push((u16::from_le_bytes([value[0], value[1]]), value[2..].to_vec()));
+                    out.manufacturer_data.push((
+                        u16::from_le_bytes([value[0], value[1]]),
+                        value[2..].to_vec(),
+                    ));
                 }
             }
             // flags(0x01) / TX power(0x0A) / 外观(0x19) 等对代理无用，忽略。
@@ -443,7 +443,10 @@ impl Proxy {
                         let ok = send(
                             tx,
                             ProtoMessage::BluetoothGattGetServicesResponse(
-                                BluetoothGattGetServicesResponse { address: addr, services },
+                                BluetoothGattGetServicesResponse {
+                                    address: addr,
+                                    services,
+                                },
                             ),
                         )
                         .await
@@ -556,11 +559,13 @@ impl Proxy {
                     .unwrap_or_default();
                 return send(
                     tx,
-                    ProtoMessage::BluetoothConnectionsFreeResponse(BluetoothConnectionsFreeResponse {
-                        free: num("free"),
-                        limit: num("limit"),
-                        allocated,
-                    }),
+                    ProtoMessage::BluetoothConnectionsFreeResponse(
+                        BluetoothConnectionsFreeResponse {
+                            free: num("free"),
+                            limit: num("limit"),
+                            allocated,
+                        },
+                    ),
                 )
                 .await;
             }
@@ -580,7 +585,12 @@ impl Proxy {
         true
     }
 
-    async fn device_request(&mut self, engines: &Engines, req: BluetoothDeviceRequest, tx: &Tx) -> bool {
+    async fn device_request(
+        &mut self,
+        engines: &Engines,
+        req: BluetoothDeviceRequest,
+        tx: &Tx,
+    ) -> bool {
         let addr = req.address;
         // ESPHome: 0=Connect(已废弃) 1=Disconnect 2=Pair 3=Unpair
         //          4=ConnectV3WithCache 5=ConnectV3WithoutCache 6=ClearCache
@@ -626,12 +636,14 @@ impl Proxy {
         let Some(id) = self.device_id() else {
             return send(
                 tx,
-                ProtoMessage::BluetoothDeviceConnectionResponse(BluetoothDeviceConnectionResponse {
-                    address: addr,
-                    connected: false,
-                    mtu: 0,
-                    error: ERR_NOT_CONNECTED,
-                }),
+                ProtoMessage::BluetoothDeviceConnectionResponse(
+                    BluetoothDeviceConnectionResponse {
+                        address: addr,
+                        connected: false,
+                        mtu: 0,
+                        error: ERR_NOT_CONNECTED,
+                    },
+                ),
             )
             .await;
         };
@@ -877,7 +889,10 @@ mod tests {
         assert_eq!(addr, 0x0000_aabb_ccdd_eeff);
         assert_eq!(u64_to_mac(addr), "aa:bb:cc:dd:ee:ff");
         // 大写、短段、缺段一律拒绝——不能拿 0 地址去连设备。
-        assert_eq!(mac_to_u64("AA:BB:CC:DD:EE:FF").map(u64_to_mac), Some("aa:bb:cc:dd:ee:ff".into()));
+        assert_eq!(
+            mac_to_u64("AA:BB:CC:DD:EE:FF").map(u64_to_mac),
+            Some("aa:bb:cc:dd:ee:ff".into())
+        );
         assert!(mac_to_u64("aa:bb:cc:dd:ee").is_none());
         assert!(mac_to_u64("aa:bb:cc:dd:ee:ff:00").is_none());
         assert!(mac_to_u64("zz:bb:cc:dd:ee:ff").is_none());

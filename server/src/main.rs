@@ -14,16 +14,16 @@
 //! 环境变量覆盖（**仅影响本次运行，不写回**）：
 //! - `XIAOZHI_ADMIN_DIR`：覆盖 `[server].admin_dir`（Docker 镜像内置 `/app/web` 即此机制）。
 
-mod workflow;
+mod benchmark;
+mod config;
 mod device;
 mod gateway;
-mod config;
-mod benchmark;
 mod media;
 mod observability;
-mod runtime;
 mod plugins;
+mod runtime;
 mod serve;
+mod workflow;
 
 #[cfg(test)]
 mod tests;
@@ -35,10 +35,10 @@ use tokio::net::TcpListener;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::EnvFilter;
 
-use crate::gateway::ws::router;
 use crate::config::store::sqlite::SqliteConfigStore;
 use crate::config::store::ConfigStore;
 use crate::config::Config;
+use crate::gateway::ws::router;
 use crate::runtime::Engines;
 
 fn main() -> Result<()> {
@@ -70,7 +70,10 @@ async fn run(config: Config, config_store: Arc<dyn ConfigStore>) -> Result<()> {
         .with(crate::gateway::ws::log_stream::layer())
         // 时间戳统一本地 `YYYY-MM-DD HH:MM:SS`（observability::logtime 是唯一时间出口，
         // /api/logs 日志流与控制台两处同格式；Docker 镜像默认 TZ=Asia/Shanghai）
-        .with(tracing_subscriber::fmt::layer().with_timer(crate::observability::logtime::LocalDatetime));
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_timer(crate::observability::logtime::LocalDatetime),
+        );
     tracing::subscriber::set_global_default(subscriber)?;
 
     tracing::info!(

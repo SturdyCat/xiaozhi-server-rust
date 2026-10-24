@@ -44,19 +44,19 @@ async fn speech_flushes_tail_once_and_no_speech_discards_ready_and_partial_segme
         .unwrap();
     let mut ready = vec![vec![1.0]];
     assert_eq!(
-        finish_utterance(&mut vad, &mut ready, UtteranceEnd::Speech),
+        finish_utterance(Some(&mut vad), &mut ready, UtteranceEnd::Speech),
         vec![vec![1.0], vec![2.0]]
     );
     assert_eq!(flushes.load(Ordering::SeqCst), 1);
     assert_eq!(resets.load(Ordering::SeqCst), 1);
     assert!(
-        finish_utterance(&mut vad, &mut ready, UtteranceEnd::Speech).is_empty(),
+        finish_utterance(Some(&mut vad), &mut ready, UtteranceEnd::Speech).is_empty(),
         "no duplicate ASR"
     );
     vad.accept(&[3.0], &mut |_| {});
     ready.push(vec![4.0]);
     let before = flushes.load(Ordering::SeqCst);
-    assert!(finish_utterance(&mut vad, &mut ready, UtteranceEnd::NoSpeech).is_empty());
+    assert!(finish_utterance(Some(&mut vad), &mut ready, UtteranceEnd::NoSpeech).is_empty());
     assert_eq!(
         flushes.load(Ordering::SeqCst),
         before,
@@ -64,7 +64,7 @@ async fn speech_flushes_tail_once_and_no_speech_discards_ready_and_partial_segme
     );
     assert!(ready.is_empty());
     assert!(
-        finish_utterance(&mut vad, &mut ready, UtteranceEnd::Speech).is_empty(),
+        finish_utterance(Some(&mut vad), &mut ready, UtteranceEnd::Speech).is_empty(),
         "no ghost next turn"
     );
 }
@@ -201,4 +201,39 @@ fn esp_reply_poll_retains_legacy_audio_drop_behavior() {
     assert!(!poll_abort(&mut transport, "test", &abort));
     assert!(transport.pending.is_empty());
     assert!(transport.inner.0.is_empty());
+}
+
+#[tokio::test]
+async fn device_vad_passes_pending_through_without_touching_server_vad() {
+    // 设备端已做 VAD（EchoMuse speech gate）：`vad=None`，pending 整段直通，
+    // 服务端实例零接触（flush/reset 都不发生）。
+    let pool = VadPool::new();
+    let flushes = Arc::new(AtomicUsize::new(0));
+    let resets = Arc::new(AtomicUsize::new(0));
+    let _guard = pool
+        .acquire("test".into(), || {
+            Ok(Box::new(FakeVad {
+                tail: vec![],
+                flushes: flushes.clone(),
+                resets: resets.clone(),
+            }))
+        })
+        .await
+        .unwrap(); // 防止 FakeVad 语义被误当"未借实例"误导
+    let mut ready = vec![vec![1.0], vec![2.0]];
+    assert_eq!(
+        finish_utterance(None, &mut ready, UtteranceEnd::Speech),
+        vec![vec![1.0], vec![2.0]],
+        "pending 整段直通送 ASR"
+    );
+    assert_eq!(
+        flushes.load(Ordering::SeqCst),
+        0,
+        "设备 VAD 会话不应触碰服务端实例"
+    );
+    assert_eq!(resets.load(Ordering::SeqCst), 0);
+    // NoSpeech 同样丢弃全部 pending（设备说没有语音）。
+    ready.push(vec![3.0]);
+    assert!(finish_utterance(None, &mut ready, UtteranceEnd::NoSpeech).is_empty());
+    assert!(ready.is_empty());
 }

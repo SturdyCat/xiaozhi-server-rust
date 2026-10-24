@@ -30,7 +30,7 @@ emOS Web 管理的额外参考锚点是上游 [`858987c272329a41d385835439bd3e2d
 | `ble_proxy` | `false` | 开启蓝牙代理：ack 向声明了 `ble_connect` 的设备回声明 `ble_connect` + `ble_adverts_data`，接入时推送 `bleProxyEnabled`/`bleProxyConnections`（每设备 settings 可覆盖）；关闭时 ack 不声明、`0x06`/`0x08` 按未知帧忽略、管理面 BLE 端点 404——零行为变化 |
 | `plain_port` | `8767` | 控制器专用端口（官方接口对齐）：enabled 且 >0 时**额外**监听设备面路由（`/em/*` + `/shell`），mDNS `plain_port` 也广播它；0 = 关闭（仅主端口）。绑定失败只告警、mDNS 回退广播主端口；主端口始终继续服务 `/em/*` |
 | `welcome` | 含使用提示 | 连接欢迎语：register + data 认领、会话建立后**立刻**说一次（`client_id="echomuse"` 的会话专属，走唤醒问候同一预制话术链路，合成一次即落盘 `hot-audio/` 的裸 PCM（引擎原样 16k，不重采样）免复合成）；留空 = 不说；每次会话建立（含断线重连）都会说一遍。管理台「配置 → EchoMuse」可编辑 |
-| `music_dir` | `/data/music` | 音乐面音源目录：`POST …/music` 的 `path` 相对此目录解析（拒绝绝对路径与 `..`）；留空 = 音乐面禁用（端点 404）。支持 16-bit PCM WAV（单/双声道、任意采样率线性重采样到 48k） |
+| `music_dir` | `/data/music` | 服务端数据目录的 music/ 子目录（管理台「文件」页仍可管理其中文件）。**音乐面音源已改为仅 DLNA**（2026-10-24），该目录不再被 `POST …/music` 消费，仅作通用文件存储 |
 
 mDNS 广播地址**无配置项**：启动时动态探测部署机默认出口的局域网 IPv4，部署在哪台机器、是什么 IP 就广播什么。docker 容器部署会探测到容器内网 IP（设备连不上），请改用 host 网络部署。
 
@@ -127,9 +127,9 @@ session … 回复（耗时 1820ms / 音频 4100ms / LLM 87 字 / 工具 0 个�
 - `GET /api/echomuse/devices/{id}` → 单台（同上形状）；不存在 404 `{"error":"device not found"}`。
 - `POST /api/echomuse/devices/{id}/approve`，body `{"label":"客厅音箱"}`（label 可省）→ 200 + 该设备 JSON（`approved=true`，label trim 后非空才改名）；不存在 404。
 - `POST /api/echomuse/devices/{id}/command`，body `{"action":"wifi","ssid":"...","psk":"..."}`：在线（hub 有 control 通道）返回 202 `{"queued":true}` 并下发 `wifi_change`；不在线 409，action 非法 / wifi 缺 ssid 400。旧 `action:reboot` 不再下发固件不认识的消息，改用下述需要确认的系统重启接口。WiFi 当前仍只报告排队，不代表切换结果已确认。**配网闭环**：`{"action":"wifi_scan"}` 下发 `wifi_scan`（结果经设备 `wifi_scan_result` 上行进 runtime 遥测）；`{"action":"wifi_commit"}` 在设备重连后的回滚窗口内下发 `wifi_commit`（确认新网，超时未 commit 设备自动回滚旧网）；设备侧 `wifi_result`（`success`/`fail`）同样进遥测。
-- `POST /api/echomuse/devices/{id}/music`（音乐面，`[echomuse].music_dir` 为空时 404）：`{"action":"play","path":"a.wav"}` → 202 `{"queued":true,"seconds":<预计时长>}`——路径相对 `music_dir`（拒绝绝对路径与 `..`），旧流立即被顶掉，逐帧下发与语音共用 output 预算（语音占满时音乐退避让路）；`{"action":"stop"}` → 200 `{"stopped":true}`——epoch 作废 + 下发 `music_flush` 丢弃设备缓冲（不可恢复）。设备离线/data 链未就绪 409，编码不支持等 400。
+- `POST /api/echomuse/devices/{id}/music`（音乐面，音源**仅 DLNA**，实现见 `echomuse/dlna.rs` + `music.rs::play_url`）：`{"action":"scan"}` → 200 `{"servers":[{"name","location"}]}`——SSDP M-SEARCH（约 4s 窗口）发现局域网 MediaServer，**不依赖设备在线**；空结果带 `hint`（容器部署需 host 网络才能收组播）；`{"action":"browse","location":"..."}` → 200 `{"tracks":[{"title","artist","album","url","duration"}]}`——服务端拉设备描述取 ContentDirectory、SOAP Browse 递归列曲（深度 ≤5、条目 ≤3000）；`{"action":"play_url","url":"..."}` → 202 `{"queued":true}`——服务端下载直链→symphonia 解码→下混 mono→线性重采样 48k→复用音乐通道逐帧下发（与语音共用 output 预算，语音占满时音乐退避让路），设备离线/data 链未就绪 409；`{"action":"stop"}` → 200 `{"stopped":true}`——epoch 作废 + 下发 `music_flush` 丢弃设备缓冲（不可恢复，不依赖 `music_dir`）。本地 WAV `action:play` 已移除（2026-10-24），未知 action 400。
 
-**管理台 UI**（`client/shared/.../admin/EchoMuse*.kt`）：设备卡左菜单七项——概览（含 IP/内核/启动原因）、WiFi 配置（ssid/psk 下发 + 配网闭环：扫描周边网络 → 读取扫描结果（`/runtime` 的 `wifi_scan.networks` 按信号降序）→ 切网成功（`wifi_result.ok`）后「确认新网络」下发 `wifi_commit`）、唤醒词设置、音频调优（`EchoMuseAudioPanel.kt`：VAD 时序/采集增益/AEC/波束/打断/播报电平/输出音效链/duck 深度/JSON 进阶键；数值留空 = 不发该键，不把默认值写死）、音乐（`EchoMuseMusicPanel.kt`：`music/` 文件下拉 + 手动路径兜底 + 播放/停止并清空缓冲 + 跳「文件」页上传）、设备管理、蓝牙代理。
+**管理台 UI**（`client/shared/.../admin/EchoMuse*.kt`）：设备卡左菜单七项——概览（含 IP/内核/启动原因）、WiFi 配置（ssid/psk 下发 + 配网闭环：扫描周边网络 → 读取扫描结果（`/runtime` 的 `wifi_scan.networks` 按信号降序）→ 切网成功（`wifi_result.ok`）后「确认新网络」下发 `wifi_commit`）、唤醒词设置、音频调优（`EchoMuseAudioPanel.kt`：VAD 时序/采集增益/AEC/波束/打断/播报电平/输出音效链/duck 深度/JSON 进阶键；数值留空 = 不发该键，不把默认值写死）、音乐（`EchoMuseMusicPanel.kt`：DLNA 音源——扫描局域网 → 选服务器 → 浏览曲目 → 播放所选 / 停止并清空缓冲，协议细节全在服务端）、设备管理、蓝牙代理。
 - `POST /api/echomuse/devices/{id}/settings`，body 为**部分更新**的每设备配置，与已有键合并保存。白名单对齐上游 `config.go` 的 `ConfigMessage` 全量设备键（2026-10-24 起）：唤醒（`wakeWordEnabled`/`owwOnDevice`/`owwModel`/`owwThreshold`/`wakeSound`/`wakeSoundLevel`/`wakeMic`/`owwSpeexNs`/`nsAsr`）、采集与音频链路（`beamformingEnabled`/`beamAngle`/`aecEnabled`/`agcEnabled`/`vadThreshold`/`micGainDb`/`vadSpeechMs`/`vadSilenceMs`/`adcMicpga`/`adcDigitalGain`/`aecDelayMs`/`aecTailMs`/`aecRefSource`/`bargeInEnabled`/`bargeInThreshold`）、音量与音效（`startupVolume`/`responseLevel`/`volumeButtonSound`/`remoteVolumeArc`/`eqBands`/`eqLoudness`/`bassGuardEnabled`/`bassGuardDb`/`limiterEnabled`/`limiterThreshold`/`limiterRelease`）、音乐（`duckDb`）、灯效（`ledScene`/`ledListenColor`/`ledThinkColor`/`meterAttack`/`meterDecay`/`meterFloor`/`meterGamma`/`meterRef`/`meterCurve`/`listeningAnim`）、按键（`buttonSingleTapEvent`/`buttonMultiTapMs`）、音乐助手（`sendspinEnabled`/`sendspinName`）、蓝牙（`bleProxyEnabled`/`bleProxyConnections`）；白名单外、类型错或越界 400。**指针类型的键 0/-1 都是合法值**（区分"未设置"与"设为零"）。排障价值：波束 baseline 校准不出来导致 mic 静音时，`beamformingEnabled:false` 退回单麦（`wakeMic`，默认 0=中心麦）可一步验证"是不是波束把信号吃掉了"。旧持久化的本地唤醒 bool / 提示音数字在推送时兼容转换，不再发送会导致 Go 整条 config 解析失败的旧类型。在线返回 202 并排队 `config`（`wakeWordEnabled` 单独一条）；离线返回 200 保存待下次接入。`delivered:true` 只代表下发通道接受，不等于设备执行确认。
 - **唤醒词模型（`owwModel`）语义**（对照上游 wilbowes/EchoMuse @858987c）：存储为空表示**设备默认** `hey_jarvis_v0.1`（上游 `device/internal/config/config.go` 的 `OWW_MODEL` 缺省，人读唤醒词 "hey jarvis"，面板据此显示默认唤醒词）；修改即随 `config` 下发 `owwModel`，设备 `Apply` 只认**非空**值——所以"恢复默认"必须显式发 `hey_jarvis_v0.1`，发空串不会重置。设备本地评分（`owwOnDevice=on`）只认设备已预装的分类器：官方内置共四款 `hey_jarvis_v0.1`/`alexa_v0.1`/`hey_mycroft_v0.1`/`hey_rhasspy_v0.1`（上游 `em_oww_assets.py` `STOCK_MODELS`，开通时全部预装；`timer`/`weather` 是意图模型不算唤醒词），切到设备没有的模型会听不到唤醒词（上游 #191）；本服务器不做上游 shell 面的模型自动分发，设备只消费本地已装的分类器，面板下拉列官方四款并追加服务端 `oww-models/` 的已上传清单（`GET /api/files?path=oww-models`，端点见下方"文件管理 API"一节），已存自定义值原样保留。人读名规则同上游 `display_name`：去 `_v<数字>` 后缀、下划线转空格。自定义模型全流程见下节。
 - **唤醒词面板官方信息移植**（对照上游 `controller/static/dashboard.jsx` Wake word 卡，HEAD e2f2f4e）：「唤醒词检测位置」下拉用官方标签与顺序（`On this Echo` 官方推荐 / `On the controller`），`shadow` 是开发者诊断档、仅设备已处于该档时作为选项显示（服务端仍接受三值，恢复需设备先处于 shadow 或走 API）；选中档位附官方解释文案。灵敏度滑杆移植官方量程 **0.1~0.975、步进 0.025、Precise↔Eager 反向**（左严格右积极；上限 0.975 因 openWakeWord 分数是低于 1.0 即饱和的 sigmoid、判定为 `score≥threshold`，1.0 永不唤醒，官方实测 18,021 帧峰值 0.999），轨外历史值读数保真、把手钉在端点，拖动才写入量程内新值；服务端白名单仍是 `(0,1]` 不变。提示音附官方语义（听到唤醒词播放短促上升音），档位仅开关打开时显示。
@@ -171,7 +171,29 @@ session … 回复（耗时 1820ms / 音频 4100ms / LLM 87 字 / 工具 0 个�
 
 RMS 门限与真实电平差近 10 倍（24dB 增益后 `rms≈0.0066` vs `threshold=0.0634`），`gate` 永远不开 → 一帧人声都不上行 → 服务端收不到音频、没有 ASR → 设备 `streamMic: no speech detected within timeout — ending turn`。用户侧表现就是"按了 action 键、说了话、没有反应"，而且灯效/监听状态看起来都正常（那些是另一条链路）。
 
-**下发方式（对齐官方，自动为主）**：官方把 `silero_vad.onnx` 随 OWW 资产**自动**同步到设备（`em_oww_sync`），不靠手动按钮。本服务端同语义：`echomuse/oww.rs::ensure_vad_on_connect` 在**已批准的 emOS 设备接入**时（`routes.rs` 的 `hub_insert` 之后）自动触发——幂等（设备侧 `busybox sha256sum` 已等于 typed 版摘要则跳过，不重传 1.8MB）；模型在服务端尚未就绪时跳过、待下次接入再试；失败只告警、不阻断语音会话。设备下一轮开轮即生效，**无需重启设备**。
+**下发方式（对齐官方，自动为主）**：官方把 OWW 资产（含 `silero_vad.onnx`）**自动**同步到设备（`em_oww_sync`），不靠手动按钮。本服务端同语义：`echomuse/oww.rs::ensure_on_device_assets` 在**已批准的 emOS 设备接入**时（`routes.rs` 的 `hub_insert` 之后）自动触发——幂等（设备侧 `busybox sha256sum` 已匹配则跳过，不重传）；资产在服务端尚未就绪时跳过、待下次接入再试；失败只告警、不阻断语音会话。设备下一轮开轮即生效，**无需重启设备**。
+
+**是两件套，缺一照样退回 RMS**：模型到位后设备会 `dlopen` 同目录的 `libonnxruntime.so`（ORT 运行时），缺失时日志报 `ort: open …/libonnxruntime.so: dlopen failed`，语音门**仍退回 RMS**（且报错不知所云）。官方从不把这两件打进固件（12.3MB 会翻倍 OTA 载荷与 A/B 槽位），而是带外安装。本服务端对齐：`spawn_ort_prefetch` 在启动时从官方钉版的 `onnxruntime-android-1.19.2.aar`（maven central，AAR 级 sha256 钉死，`OWW_ORT_URL` 可指内网镜像）解出 `jni/armeabi-v7a/libonnxruntime.so` 落模型卷 `oww/`，接入时与 VAD 一起幂等下发；推前做设备剩余空间检查（官方 `FREE_FLOOR_MB=50` 同值，装满会以"半个 .so"收场）。注意 shell 面传输 12.3MB 较慢（120s 上限），弱网失败会在下次接入自动重试。
+
+**设备 VAD 生效后，服务端跳过 VAD 直接 ASR**：EchoMuse 承载的语音契约是"设备端 speech gate 判定人声才上行，`0x04`/`0x05` 明确收口"——服务端再跑一遍 Silero VAD 属于重复检测：每帧二次推理白占一个 VAD 池名额，且双 VAD 口径不一致会**吞字**（设备上行的是"gate 通过的音频"，服务端 VAD 若把个别帧判为非语音，句首/句中就被切掉）。因此 `session/start.rs` 判定上行格式为 `echo_mic()` 的会话**不借 VAD 实例**（`vad=None` + `device_vad=true`），`media.rs::handle_pcm` 把 PCM 直接缓冲进 `pending_segments`，等设备 `UtteranceEnd::Speech`（0x04）时整段送 ASR（`utterance.rs::finish_utterance` 对 `None` 直通、不 flush 不 reset）；`NoSpeech`（0x05）丢弃全部 pending。级联与 AIUI 全链路共用 `recognize_segments`，两条识别路径同样受益。ESP/浏览器等"设备端没做 VAD"的承载不变（服务端 VAD 照旧）。
+
+**与官方下发流程逐项对照**（对照物：`em_oww_assets.py` / `em_oww_sync.py` / 设备端 `speechgate.go`，一次性摆明，避免反复修差异）：
+
+| 官方 | 本服务端 | 结论 |
+|---|---|---|
+| connect 后台 reconcile，不阻塞握手 | 同（`hub_insert` 之后 spawn） | ✅ 一致 |
+| **一趟 shell 读全清单**（glob 逐文件哈希 + `df -m /data`，"one shell round trip"） | 同款 `DEVICE_STATE_CHECK`（sha256 版、去掉 mtime——那是自定义分类器 LRU 用的，两件套无淘汰语义） | ✅ 一致 |
+| 清单**读失败 ≠ 缺失**：读不到就什么都不动设备 | 同（`device_state` 返回 None 即整体跳过） | ✅ 一致 |
+| 推到 `{dest}.part` → 设备侧哈希回算 → 一致才 `mv`+chmod | `shell::stream_file` 协议同构（.part 落地 + 回算 + `mv`，chmod 在 .part 上） | ✅ 一致 |
+| md5 校验（"md5 is the only definition of success"） | sha256（同一语义、更强；真机已验证设备 busybox 有 `sha256sum`） | 等价差异 |
+| 幂等：已装且摘要匹配 → 跳过不重传 | 同 | ✅ 一致 |
+| 空间护栏：`free − need < 50MB` → blocked | 同值 50MB，且在摘要比对之后（已齐的设备绝不被空间挡） | ✅ 一致 |
+| `parse_free_mb` 以 % 列锚定（busybox 列序不稳） | 同算法 | ✅ 一致 |
+| 失败只告警、下次接入重试，不阻断语音会话 | 同 | ✅ 一致 |
+| **vad/stream 推完不需要重启**（`restart` 只对 classifier/runtime-as-scorer；speechgate 每轮重试 `loadSilero`，失败不缓存） | 同：设备下一轮开轮 stat+dlopen，装好即生效，无需重启设备 | ✅ 一致 |
+| desired 全套：runtime + vad + stream + melspectrogram + embedding_model + 分类器（含 4 个 stock 唤醒词、LRU 淘汰） | **刻意子集：只 vad+runtime 两件** | 功能性差异，见下 |
+
+子集的理由：melspectrogram/embedding_model/embedding_stream/分类器是**设备端唤醒词评分**（`owwOnDevice=on`）的资产，本服务端该功能基线 `off`（评分在服务端做）；且这些模型来自 openwakeword 包/自定义训练产物，与语音门无关。语音门在两种模式下都用同两件（官方原话 "the speech gate's model rides the same set and is used in both modes"）。**将来开设备端唤醒词时**，把这三件 + 分类器纳入同一 `device_state` 同步即可（来源：openwakeword v0.5.1 资产 + `oww_stream` 重写版，摘要官方已钉）。
 
 手动接口保留为兜底（自动下发失败后可在管理台重试）：`POST /api/echomuse/devices/{id}/oww/install-vad`（无 body）。服务端读模型卷里的 `$XIAOZHI_MODELS_DIR/oww/silero_vad.onnx`（容器默认 `/data/models/oww/silero_vad.onnx`，**由服务端在启用 EchoMuse 时启动后下载**，见下），经受限 shell 面 **base64 heredoc** 写到设备该路径，设备侧 `busybox sha256sum` 与发送端一致才 `mv` 落位（不一致删 `.part`，目标文件保持原样）。成功 200：
 

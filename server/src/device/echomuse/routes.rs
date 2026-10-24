@@ -155,16 +155,26 @@ async fn control_session(
         let _ = sink
             .send(Message::Text(r#"{"type":"pending","pairing":true}"#.into()))
             .await;
-        tracing::warn!("[echomuse] 配对请求：device={device_id}（无 token），已登记待审批，本连接不建立");
+        tracing::warn!(
+            "[echomuse] 配对请求：device={device_id}（无 token），已登记待审批，本连接不建立"
+        );
         return Ok(());
     }
-    if !registry.get(&device_id).map(|r| r.approved).unwrap_or(false) {
+    if !registry
+        .get(&device_id)
+        .map(|r| r.approved)
+        .unwrap_or(false)
+    {
         // token 对但未审批：同 pending 语义——登记 + 等管理台批准，不建会话。
         // （此前审批从未真正生效：register 即建会话。首台设备在管理台批准一次即可。）
         registry.upsert(&register, super::registry::now_secs());
         super::bump_devices_version();
-        let _ = sink.send(Message::Text(r#"{"type":"pending"}"#.into())).await;
-        tracing::info!("[echomuse] device={device_id} 已认证但未审批：登记 + pending，等待管理台批准");
+        let _ = sink
+            .send(Message::Text(r#"{"type":"pending"}"#.into()))
+            .await;
+        tracing::info!(
+            "[echomuse] device={device_id} 已认证但未审批：登记 + pending，等待管理台批准"
+        );
         return Ok(());
     }
 
@@ -214,10 +224,10 @@ async fn control_session(
         },
     );
 
-    // 设备侧语音门模型自动下发：对齐官方 em_oww_sync——Silero VAD 随 OWW 资产自动同步到
-    // 设备，不靠手动按钮。仅在已批准、在线、emOS 设备接入时触发；幂等（设备已装 typed 版
-    // 则跳过，避免每次重连重传 1.8MB）。模型未就绪（[echomuse] 未启用下载）时静默跳过。
-    super::oww::ensure_vad_on_connect(device_id.clone(), register.base_os.clone());
+    // 设备侧 OWW 资产自动下发：对齐官方 em_oww_sync——语音门模型 + ORT 运行时**自动**
+    // 同步到设备，不靠手动按钮。仅在已批准、在线、emOS 设备接入时触发；幂等（设备侧
+    // sha256 已匹配则跳过，避免每次重连重传）。资产未就绪时静默跳过。
+    super::oww::ensure_on_device_assets(device_id.clone(), register.base_os.clone());
 
     // control 任务：收设备事件（唤醒/按钮/旧固件 ble_adverts）+ 发 mic_start 等出站。
     // 常开唤醒流（官方接入后立即下发）：omni ch6、无门控。波束基线/AEC/影子评分
@@ -436,8 +446,14 @@ mod tests {
     #[test]
     fn volume_buttons_do_not_start_turn() {
         let live = fixture();
-        assert!(!fired_turn(&live, r#"{"type":"button","clickType":115,"down":true}"#));
-        assert!(!fired_turn(&live, r#"{"type":"button","clickType":114,"down":true}"#));
+        assert!(!fired_turn(
+            &live,
+            r#"{"type":"button","clickType":115,"down":true}"#
+        ));
+        assert!(!fired_turn(
+            &live,
+            r#"{"type":"button","clickType":114,"down":true}"#
+        ));
     }
 
     #[test]
@@ -453,10 +469,7 @@ mod tests {
     fn action_button_while_muted_does_not_start_turn() {
         let live = fixture();
         live.update(&json!({"type":"mute_state","muted":true}));
-        assert!(
-            live.is_muted(),
-            "前置：设备应处于静音"
-        );
+        assert!(live.is_muted(), "前置：设备应处于静音");
         assert!(
             !fired_turn(&live, r#"{"type":"button","clickType":138,"down":true}"#),
             "静音状态下 action 键不应开轮"
@@ -467,7 +480,10 @@ mod tests {
     fn action_button_by_semantic_type_starts_turn() {
         let live = fixture();
         assert!(
-            fired_turn(&live, r#"{"type":"button","clickType":99,"down":true,"button":{"type":"action"}}"#),
+            fired_turn(
+                &live,
+                r#"{"type":"button","clickType":99,"down":true,"button":{"type":"action"}}"#
+            ),
             "语义字段 button.type==action 也应开轮"
         );
     }
@@ -550,8 +566,11 @@ async fn data_loop(
         management,
     } = claim;
     let (mut sink, mut stream) = socket.split();
-    let mut uplink =
-        MicUplink::for_media(management.media.clone(), management.mic.clone(), management.fx.clone());
+    let mut uplink = MicUplink::for_media(
+        management.media.clone(),
+        management.mic.clone(),
+        management.fx.clone(),
+    );
     // 认领前替读的首帧（若有）按正常上行处理，不丢首包。
     if let Some(Message::Binary(raw)) = prelude {
         uplink.on_binary(&raw, &management.turn, &up_tx, &ble, ble_on);

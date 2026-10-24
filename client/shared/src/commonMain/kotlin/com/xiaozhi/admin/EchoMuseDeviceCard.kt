@@ -74,7 +74,6 @@ internal fun ViewContainer<*, *>.echoMuseDeviceCard(
     toast: ToastState,
     ctx: Pager,
     onOpenModelFiles: () -> Unit = {},
-    onOpenMusicFiles: () -> Unit = {},
 ) {
     // 卡片 = 上下布局「header │ 卡内左右分栏」：外观壳由 cardSurface 统一提供，
     // 卡内左右走 menuPaneRow（同一套 splitRow 原语），不再自绘卡片容器与分隔线。
@@ -106,7 +105,7 @@ internal fun ViewContainer<*, *>.echoMuseDeviceCard(
                         }
                     }
                 },
-                panel = { echoMusePanel(row, state, toast, ctx, onOpenModelFiles, onOpenMusicFiles) },
+                panel = { echoMusePanel(row, state, toast, ctx, onOpenModelFiles) },
             )
         },
     )
@@ -264,7 +263,6 @@ private fun ViewContainer<*, *>.echoMusePanel(
     toast: ToastState,
     ctx: Pager,
     onOpenModelFiles: () -> Unit = {},
-    onOpenMusicFiles: () -> Unit = {},
 ) {
     vif({ state.activeMenuItem(row) == ECHOMUSE_MENU_OVERVIEW }) { echoMuseOverviewPanel(row, state, toast) }
     vif({ state.activeMenuItem(row) == ECHOMUSE_MENU_APPROVE }) { echoMuseApprovePanel(row, state, toast, ctx) }
@@ -276,7 +274,7 @@ private fun ViewContainer<*, *>.echoMusePanel(
         echoMuseAudioPanel(row, state, toast, ctx)
     }
     vif({ state.activeMenuItem(row) == ECHOMUSE_MENU_MUSIC }) {
-        echoMuseMusicPanel(row, state, toast, ctx, onOpenMusicFiles)
+        echoMuseMusicPanel(row, state, toast, ctx)
     }
     vif({ state.activeMenuItem(row) == ECHOMUSE_MENU_MANAGE }) { echoMuseManagementPanel(row, state, toast, ctx) }
     vif({ state.activeMenuItem(row) == ECHOMUSE_MENU_BLE }) { echoMuseBlePanel(row, state, ctx) }

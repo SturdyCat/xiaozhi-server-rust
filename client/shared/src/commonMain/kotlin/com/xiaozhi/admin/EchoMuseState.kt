@@ -43,13 +43,6 @@ const val ECHOMUSE_MENU_MUSIC = "music"
 const val ECHOMUSE_MENU_MANAGE = "manage"
 const val ECHOMUSE_MENU_BLE = "ble"
 
-/**
- * 音乐面音源在服务端**数据目录**下的默认子目录（对应 `[echomuse].music_dir` 默认值
- * `/data/music`；管理台「文件」页上传 WAV 到这里）。服务端改配了 music_dir 时清单
- * 列不到，用手动输入路径兜底。
- */
-const val MUSIC_DIR = "music"
-
 /** 一台 EchoMuse 设备（`GET /api/echomuse/devices` 的一行）。字段不可变——刷新时整表重建。 */
 class EchoMuseDeviceRow(
     val deviceId: String,
@@ -287,7 +280,6 @@ class EchoMuseState(scope: PagerScope) {
             }
             ECHOMUSE_MENU_WAKE -> fillSettingsDraft(row.deviceId)
             ECHOMUSE_MENU_AUDIO -> fillAudioDraft(row.deviceId)
-            ECHOMUSE_MENU_MUSIC -> musicFilesRefresh(ctx)
             ECHOMUSE_MENU_MANAGE -> management.select(row, base)
             ECHOMUSE_MENU_BLE -> ble.select(row)
         }
@@ -827,88 +819,9 @@ class EchoMuseState(scope: PagerScope) {
     }
 
     // ============================================================
-    // 音乐面（POST …/music play/stop；音源 = 服务端数据目录 music/ 下的 WAV）
-    // ============================================================
-
-    /** 服务端数据目录 `music/` 下的音频文件（`.wav`；value=文件名，label=显示名）。 */
-    var musicFiles by scope.observableList<Pair<String, String>>()
-        private set
-    var musicFilesLoaded by scope.observable(false)
-        private set
-    var musicFileOpen by scope.observable(false)
-    /** 已选中的音乐文件名（相对 `music_dir` 的路径；手动输入的路径也走它）。 */
-    var musicSelection by scope.observable("")
-    /** 手动输入的文件名（下拉里没有目标文件时的兜底，如子目录 `wake/a.wav`）。 */
-    var musicManualPath by scope.observable("")
-
-    /**
-     * 拉取 `GET /api/files?path=music` 收集 `.wav` 文件名（音乐面音源 = 服务端数据目录
-     * music/，管理台「文件」页可上传）。**刻意安静**：目录缺失/接口不可用保持现状不报错
-     * （默认部署即无该目录）；手动输入路径的兜底始终可用。
-     */
-    fun musicFilesRefresh(ctx: Pager) {
-        getJson(ctx, echoMuseAuthenticatedUrl("$base/api/files?path=${echoMuseUrlComponent(MUSIC_DIR)}", accessToken)) { ok, data, _ ->
-            if (!ok) return@getJson
-            val arr = data.array("entries") ?: return@getJson
-            val names = (0 until arr.length()).mapNotNull { i ->
-                val e = arr.optJSONObject(i) ?: return@mapNotNull null
-                val name = e.text("name")
-                if (name.isNotEmpty() && !e.optBoolean("dir", false) && name.endsWith(".wav", ignoreCase = true)) name else null
-            }.sorted()
-            musicFiles.clear()
-            musicFiles.addAll(names.map { it to it })
-            musicFilesLoaded = true
-        }
-    }
-
-    /** 播放选中的音乐（POST music {action:play}）；202 = 已排队逐帧下发。 */
-    fun playMusic(ctx: Pager, deviceId: String, onDone: (ok: Boolean, msg: String) -> Unit) {
-        val path = (musicManualPath.trim().ifEmpty { musicSelection })
-        if (path.isEmpty()) {
-            onDone(false, "请先选择或输入要播放的音频文件（.wav）")
-            return
-        }
-        if (actionBusy) return
-        actionBusy = true
-        post(ctx, "/api/echomuse/devices/${echoMuseUrlComponent(deviceId)}/music", JSONObject().apply {
-            put("action", "play")
-            put("path", path)
-        }) { ok, code, reason, data ->
-            actionBusy = false
-            if (ok) {
-                val seconds = (data?.opt("seconds") as? Number)?.toLong()
-                onDone(true, "已排队播放 $path${seconds?.takeIf { it > 0 }?.let { "（约 $it 秒）" } ?: ""}；说话会自动压低音乐")
-            } else {
-                onDone(false, when (code) {
-                    404 -> "音乐面未启用：服务端 [echomuse].music_dir 为空，或文件不存在/不是 WAV"
-                    409 -> "设备离线或 data 链未就绪，播放未开始"
-                    400 -> "播放失败：${reason.ifEmpty { "文件不支持" }}"
-                    else -> "播放失败：${reason.ifEmpty { "HTTP $code" }}"
-                })
-            }
-        }
-    }
-
-    /** 停止音乐并丢弃设备缓冲（POST music {action:stop}；不可恢复，恢复播放请重新点播放）。 */
-    fun stopMusic(ctx: Pager, deviceId: String, onDone: (ok: Boolean, msg: String) -> Unit) {
-        if (actionBusy) return
-        actionBusy = true
-        post(ctx, "/api/echomuse/devices/${echoMuseUrlComponent(deviceId)}/music", JSONObject().apply {
-            put("action", "stop")
-        }) { ok, code, reason, _ ->
-            actionBusy = false
-            if (ok) onDone(true, "已停止播放并清空设备音乐缓冲")
-            else onDone(false, when (code) {
-                404 -> "音乐面未启用（服务端 [echomuse].music_dir 为空）"
-                409 -> "设备离线，无需停止"
-                else -> "停止失败：${reason.ifEmpty { "HTTP $code" }}"
-            })
-        }
-    }
-
-    // ============================================================
-    // DLNA 音源（POST …/music scan/browse/play_url；扫描/浏览/拉流/推流全部在
-    // 服务端完成，管理台只负责「选服务器 → 浏览 → 选曲目 → 点播放」）
+    // 音乐面（POST …/music scan/browse/play_url/stop；音源仅 DLNA，
+    // 扫描/浏览/拉流/推流全部在服务端完成，管理台只「选服务器 → 浏览 →
+    // 选曲目 → 点播放」）
     // ============================================================
 
     /** 局域网 DLNA 媒体服务器（value=location 设备描述地址，label=友好名）。 */
@@ -1035,6 +948,22 @@ class EchoMuseState(scope: PagerScope) {
                     else -> "播放失败：${reason.ifEmpty { "HTTP $code" }}"
                 })
             }
+        }
+    }
+
+    /** 停止音乐并丢弃设备缓冲（POST music {action:stop}；不可恢复，恢复播放请重新点播放）。 */
+    fun stopMusic(ctx: Pager, deviceId: String, onDone: (ok: Boolean, msg: String) -> Unit) {
+        if (actionBusy) return
+        actionBusy = true
+        post(ctx, "/api/echomuse/devices/${echoMuseUrlComponent(deviceId)}/music", JSONObject().apply {
+            put("action", "stop")
+        }) { ok, code, reason, _ ->
+            actionBusy = false
+            if (ok) onDone(true, "已停止播放并清空设备音乐缓冲")
+            else onDone(false, when (code) {
+                409 -> "设备离线，无需停止"
+                else -> "停止失败：${reason.ifEmpty { "HTTP $code" }}"
+            })
         }
     }
 

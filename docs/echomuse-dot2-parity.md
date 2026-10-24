@@ -307,7 +307,7 @@ P0/P1/P2 与音乐面已全部落地（全量测试 851 passed）。逐项对应
 | 4.6 shell pty | ⏸ 维持原设计 | plain pipe 已覆盖 OTA/脚本场景；交互式 mksh 单独立项 |
 | 4.7 wss + 三平面 token | ⏸ 后续整块工程 | 局域网可接受；跨网部署时做（自签 CA + token 分发） |
 | 4.8 `0x07` 私听 | ⏸ 未动 | `ack` 不声明 `listen_session`（见 5.2），设备保持 stream 模式，现状正确 |
-| 5.1 音乐面 | ✅ | `music.rs`（WAV 解码 + 48k 重采样 + 逐帧下发任务）、`frames.rs` `0x04/0x05`、`media.rs` `music_epoch`（共享 output 预算）、`turn.rs` duck 起止、`admin.rs` `POST /api/echomuse/devices/{id}/music`（play/stop，路径越界校验）、config 键 `[echomuse].music_dir`（默认 `/data/music`） |
+| 5.1 音乐面 | ✅ | 音源**仅 DLNA**（2026-10-24 起移除本地 WAV）：`dlna.rs`（SSDP 发现 + SOAP Browse + 内置 XML scanner）、`music.rs::play_url`（symphonia 解码 → mono 下混 → 48k 重采样）、`frames.rs` `0x04/0x05`、`media.rs` `music_epoch`（共享 output 预算）、`turn.rs` duck 起止、`admin.rs` `POST /api/echomuse/devices/{id}/music`（scan/browse/play_url/stop）；本地 `music_dir` 音源已移除（目录仅作通用文件存储） |
 | 5.2 私听会话 | ⏸ 未做 | 依赖设备端唤醒资产同步；当前 stream 模式是唯一能走通唤醒词的路径 |
 | **Dot2 专属适配层（按键识别 + 静音主权）** | ✅ | `dot2.rs`（`is_action_button` 语义字段 `button.type=="action"` 优先 + `clickType==138` 兜底、`Dot2Button` 映射、四键常量 113/114/115/138）；`routes.rs` button 分支仅 action 键且仅 `down=true` 开轮、静音双保险拒绝；`runtime.rs::LiveControl::is_muted()`；`dot2_tests.rs` + `routes.rs` 端到端共 11 用例 |
 

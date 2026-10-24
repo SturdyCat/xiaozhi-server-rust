@@ -95,9 +95,7 @@ impl Fx {
         let leds: Vec<serde_json::Value> = (0..12)
             .map(|id| serde_json::json!({"id": id, "r": 0, "g": 0, "b": 0}))
             .collect();
-        self.send(
-            serde_json::json!({"type": "leds", "leds": leds, "listening": false}).to_string(),
-        )
+        self.send(serde_json::json!({"type": "leds", "leds": leds, "listening": false}).to_string())
     }
 
     /// 唤醒提示音（`wakeSound` 开启时设备才发声；0-TTFA，先于 TTS）。

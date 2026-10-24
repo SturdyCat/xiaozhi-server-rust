@@ -58,8 +58,8 @@ use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::media::hot_audio::HotAudioKey;
-use crate::workflow::pipeline::tts_cache::TtsCache;
 use crate::plugins::tts::TtsEngine;
+use crate::workflow::pipeline::tts_cache::TtsCache;
 
 /// 预取领先播放的成品句数上限（背压）。3 已足够覆盖"在线合成短连接握手 + 服务端首帧"，
 /// 又不至于把待播音频堆太多（打断时白合成的量有限）。

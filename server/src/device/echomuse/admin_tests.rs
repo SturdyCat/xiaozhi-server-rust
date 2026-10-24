@@ -241,12 +241,16 @@ fn filter_settings_accepts_full_device_config_surface() {
     assert!(err.is_none(), "{err:?}");
     assert_eq!(ok.len(), 24);
     // 枚举 / 范围 / 结构校验照样拦截。
-    assert!(filter_settings(&serde_json::json!({"responseLevel": "loud"}))
-        .1
-        .is_some());
-    assert!(filter_settings(&serde_json::json!({"aecRefSource": "bitexact"}))
-        .1
-        .is_some());
+    assert!(
+        filter_settings(&serde_json::json!({"responseLevel": "loud"}))
+            .1
+            .is_some()
+    );
+    assert!(
+        filter_settings(&serde_json::json!({"aecRefSource": "bitexact"}))
+            .1
+            .is_some()
+    );
     assert!(filter_settings(&serde_json::json!({"vadSpeechMs": 60001}))
         .1
         .is_some());
@@ -256,9 +260,11 @@ fn filter_settings_accepts_full_device_config_surface() {
     assert!(filter_settings(&serde_json::json!({"eqBands": ["low"]}))
         .1
         .is_some());
-    assert!(filter_settings(&serde_json::json!({"listeningAnim": "solid"}))
-        .1
-        .is_some());
+    assert!(
+        filter_settings(&serde_json::json!({"listeningAnim": "solid"}))
+            .1
+            .is_some()
+    );
 }
 
 #[test]

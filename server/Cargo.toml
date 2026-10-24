@@ -37,9 +37,13 @@ futures-util = "0.3.31"
 tower-http = { version = "0.6", features = ["fs"] }
 # EchoMuse 设备发现（`[echomuse].enabled` 时广播 `_emcontroller._tcp`；纯 Rust，无系统依赖）
 mdns-sd = "0.11"
-# DLNA/UPnP 媒体服务器音频解码：symphonia 把常见格式（mp3/flac/wav/aac/m4a/ogg…）
-# 解码到 PCM，再统一重采样 48k mono 经既有音乐通道推流。XML（设备描述/SOAP/DIDL）
-# 用内置极简 scanner 解析，不另引 XML 依赖。
+# DLNA/UPnP 媒体服务器接入：SSDP 发现（多网卡接口枚举、正确 M-SEARCH 收发）与设备
+# 描述/SOAP 动作交给 rupnp（成熟实现，内部 ssdp-client + roxmltree + hyper）；本 crate
+# 只做 DIDL 解析（内置极简 scanner）与音频解码推流。自研 SSDP 只查 MediaServer:1 单条
+# ST 会漏掉只声明 :2/:3 的服务器，且组播不枚举接口——这是"扫描无效"的根因。
+rupnp = "=3.0.0"
+# DLNA 音频解码：symphonia 把常见格式（mp3/flac/wav/aac/m4a/ogg…）解码到 PCM，再统一
+# 重采样 48k mono 经既有音乐通道推流。XML（DIDL）用内置极简 scanner 解析。
 # 全家族精确钉 0.5.4：顶层 "0.5" 的 caret 会把子 crate（symphonia-core 等）解析到
 # 破坏性改版的 0.5.5（Probe::format 取代 probe()、audio planes/frames 签名全变），
 # 子 crate 与顶层 feature 转发必须同版本，否则编译失败。
@@ -87,6 +91,10 @@ httpdate = "1.0.3"
 rustls = { version = "0.23.18", default-features = false, features = ["std", "ring"] }
 webpki-roots = "0.26"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
+# 仅用于从官方钉版的 onnxruntime-android AAR（zip 容器）里解出 armv7 的
+# libonnxruntime.so（EchoMuse 设备语音门 dlopen 的运行时）。只开 deflate、
+# 关掉加密/其它压缩/时间特性，把依赖树压到最小。
+zip = { version = "4", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 # 仅测试用：`esphome-native-api` 内部用 `log` 打协议日志（握手/读取循环终止原因），

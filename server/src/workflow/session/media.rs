@@ -62,8 +62,11 @@ impl<T: Transport> Session<'_, T> {
         &mut self,
         reason: crate::workflow::protocol::UtteranceEnd,
     ) {
-        let segments =
-            super::utterance::finish_utterance(&mut self.vad, &mut self.pending_segments, reason);
+        let segments = super::utterance::finish_utterance(
+            self.vad.as_mut(),
+            &mut self.pending_segments,
+            reason,
+        );
         if self.real_audio && !self.close_requested && !self.is_test && !segments.is_empty() {
             self.recognize_segments(segments).await;
         }
@@ -96,8 +99,18 @@ impl<T: Transport> Session<'_, T> {
         if !self.real_audio {
             return;
         }
+        if self.device_vad {
+            // 设备端 speech gate 已判"这是人声"（Silero VAD 生效）：跳过服务端检测，
+            // PCM 直接进 pending，等设备 0x04（UtteranceEnd::Speech）整段送 ASR。
+            // 双 VAD 口径不一致会吞字，且每帧重复推理白占一个 VAD 池名额。
+            self.pending_segments.push(pcm.to_vec());
+            return;
+        }
         let mut segments = Vec::new();
-        self.vad.accept(pcm, &mut |seg| segments.push(seg));
+        self.vad
+            .as_mut()
+            .expect("非 device_vad 会话必须持有 VAD 实例")
+            .accept(pcm, &mut |seg| segments.push(seg));
         if self.bounded_turn {
             self.pending_segments.extend(segments);
         } else {

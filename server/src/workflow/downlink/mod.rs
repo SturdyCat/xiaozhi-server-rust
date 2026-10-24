@@ -38,8 +38,8 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 
 use crate::workflow::protocol::{ClientMessage, ServerMessage};
-use crate::workflow::session::send_text;
 use crate::workflow::protocol::{IncomingFrame, Transport};
+use crate::workflow::session::send_text;
 
 pub(crate) use reservoir::{new_reservoir, spawn_reservoir_filler, spawn_single_sentence_filler};
 pub(crate) use sender::{drain_reservoir, ReservoirDrain};

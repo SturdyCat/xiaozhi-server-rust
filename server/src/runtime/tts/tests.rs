@@ -3,8 +3,8 @@ use super::*;
 
 mod language;
 use crate::media::hot_audio::{HotAudioKey, HotAudioStore};
-use crate::workflow::pipeline::tts_cache::TtsCache;
 use crate::plugins::tts::TtsChunkCallback;
+use crate::workflow::pipeline::tts_cache::TtsCache;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 struct FakeTts(&'static str, f32);
@@ -183,7 +183,11 @@ async fn disk_cache_uses_retained_actual_identity_after_failed_refresh() {
         "磁盘命中按会话格式从 PCM 重新编码"
     );
     assert!(store
-        .get(&HotAudioKey::from_session(&cfg("bad"), "same sentence", 24_000))
+        .get(&HotAudioKey::from_session(
+            &cfg("bad"),
+            "same sentence",
+            24_000
+        ))
         .is_none());
     // 只清理由本测试创建的明确临时目录。
     assert!(dir

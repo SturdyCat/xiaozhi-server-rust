@@ -16,8 +16,8 @@ use super::{
     chunk_ms, push_pcm, spawn_sentence_prefetch, DownloadBudget, PcmChunk, PreparedAudio,
     SentenceSource,
 };
-use crate::workflow::pipeline::tts_cache::TtsCache;
 use crate::plugins::tts::{TtsChunkCallback, TtsEngine};
+use crate::workflow::pipeline::tts_cache::TtsCache;
 
 /// 合成事件日志项：(事件名, 文本, 时刻)。事件名 `synth_start` / `synth_end`。
 type Log = Arc<Mutex<Vec<(&'static str, String, Instant)>>>;
@@ -140,11 +140,7 @@ fn abort_flag() -> Arc<AtomicBool> {
 
 /// 测试用下行档位（24k / 60ms Opus）：内存键与磁盘命中编码都用它。
 fn out_fmt() -> crate::media::media::AudioFormat {
-    crate::media::media::AudioFormat::new(
-        crate::media::media::AudioCodec::Opus,
-        24_000,
-        60,
-    )
+    crate::media::media::AudioFormat::new(crate::media::media::AudioCodec::Opus, 24_000, 60)
 }
 
 /// 100ms 的 24k 静音 PCM（S16LE）。

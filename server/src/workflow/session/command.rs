@@ -246,7 +246,9 @@ impl<'a, T: Transport> Session<'a, T> {
                 );
                 // 丢弃 VAD 里可能残留的半句音频：用户已明确退下，不该把它带进下一轮对话。
                 // （与 `run()` 命中指令时跳过 flush 同一口径——区别只是这里会话还活着。）
-                self.vad.flush(&mut |_| {});
+                if let Some(vad) = self.vad.as_mut() {
+                    vad.flush(&mut |_| {});
+                }
             }
             Ok(reply) => {
                 // 设备明确拒绝：最常见的原因是固件还没刷上 `self.audio_listener.stop`

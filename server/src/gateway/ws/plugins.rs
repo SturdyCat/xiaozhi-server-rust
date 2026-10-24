@@ -14,8 +14,8 @@ use axum::{extract::State, response::Response};
 
 use super::json_ok;
 use crate::gateway::ws::config::config_is_persistent;
-use crate::runtime::Engines;
 use crate::plugins::registry;
+use crate::runtime::Engines;
 
 /// `GET /api/plugins`：能力清单 + 状态。
 pub(super) async fn list_plugins(State(engines): State<Arc<Engines>>) -> Response {

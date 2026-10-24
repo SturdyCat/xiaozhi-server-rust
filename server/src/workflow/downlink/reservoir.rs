@@ -47,8 +47,8 @@ use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, Notify};
 
 use crate::workflow::pipeline::prefetch::{PreparedAudio, PreparedSentence, PREFETCH_SENTENCES};
-use crate::workflow::session::SessionParams;
 use crate::workflow::pipeline::tts_cache::TtsCache;
+use crate::workflow::session::SessionParams;
 
 use self::collect::SentenceCollector;
 use super::framer::StreamingFramer;

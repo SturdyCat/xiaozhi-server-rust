@@ -58,7 +58,11 @@ fn key_varies_with_all_encoding_inputs() {
     );
     f = KEY_FMT;
     f.frame_ms = 40;
-    assert_ne!(a, TtsCache::make_key("sig", 0, 1.0, SRC_SR, f, "文本"), "帧长");
+    assert_ne!(
+        a,
+        TtsCache::make_key("sig", 0, 1.0, SRC_SR, f, "文本"),
+        "帧长"
+    );
     f = KEY_FMT;
     f.codec = AudioCodec::PcmS16Le;
     assert_ne!(
@@ -68,14 +72,21 @@ fn key_varies_with_all_encoding_inputs() {
     );
     f = KEY_FMT;
     f.codec_version += 1;
-    assert_ne!(a, TtsCache::make_key("sig", 0, 1.0, SRC_SR, f, "文本"), "契约版本");
+    assert_ne!(
+        a,
+        TtsCache::make_key("sig", 0, 1.0, SRC_SR, f, "文本"),
+        "契约版本"
+    );
     assert_ne!(
         a,
         TtsCache::make_key("sig", 0, 1.0, SRC_SR, KEY_FMT, "文本2"),
         "文本"
     );
     // 确定性：同输入同键（跨会话命中前提）
-    assert_eq!(a, TtsCache::make_key("sig", 0, 1.0, SRC_SR, KEY_FMT, "文本"));
+    assert_eq!(
+        a,
+        TtsCache::make_key("sig", 0, 1.0, SRC_SR, KEY_FMT, "文本")
+    );
 }
 
 #[test]

@@ -1,4 +1,4 @@
-//! OWW 运行时资产分发：把 `silero_vad.onnx` 推进设备的唤醒词资产目录。
+//! OWW 运行时资产分发：把 `silero_vad.onnx` + `libonnxruntime.so` 推进设备的唤醒词资产目录。
 //!
 //! ## 为什么需要这条链路
 //!
@@ -7,6 +7,11 @@
 //! 死锁式的：24dB 增益后 `rms=0.0066`，而门限 `0.0634` 差了近 10 倍，`gate` 永远
 //! 不开 → 一帧人声都不上行 → 服务端没有 ASR → `streamMic: no speech detected
 //! within timeout — ending turn`（设备日志原话）。表现就是"按了键、说了话、没反应"。
+//!
+//! 而且是**两件套**：模型到位后设备会尝试 `dlopen` 同目录的 `libonnxruntime.so`——
+//! 运行时缺失时同样退回 RMS（日志 `ort: open …/libonnxruntime.so: dlopen failed`）。
+//! 官方从不把这两件打进固件（12.3MB 会翻倍 OTA 载荷与 A/B 槽位），而是随 OWW
+//! 资产**带外安装**（`em_oww_assets`/`em_oww_sync`）：本模块对齐这条链路。
 //!
 //! 上游把该文件随唤醒词资产一起下发（`em_oww_assets.VAD_NAME` + `em_oww_sync`）；本服务端
 //! 用 [`install_vad`] 补上了「服务端→设备」这一段（唤醒词分类器仍只到数据卷，见
@@ -83,6 +88,26 @@ const OFFICIAL_VAD_SHA256: &str =
 const TYPED_VAD_SHA256: &str = "da5e8a9c9c07981b907e8affe5497fe604958c51b67bff07231778d701d164d0";
 /// 覆盖下载地址（内网镜像用）。与旧版入口脚本同名，部署侧无需改习惯。
 const ENV_VAD_URL: &str = "OWW_VAD_URL";
+/// ORT 运行时在设备上的路径（与 VAD 同目录，`speechgate.go` 的 dlopen 名）。
+const DEVICE_ORT_PATH: &str = "/data/local/share/echomuse/oww/libonnxruntime.so";
+/// ORT 运行时的设备侧文件名（资产清单的 key）。
+const ORT_SO_FILE: &str = "libonnxruntime.so";
+/// ORT 运行时在模型卷下的相对路径（与 VAD 同级）。
+const ORT_RELATIVE: &str = "oww/libonnxruntime.so";
+/// 官方 ORT 来源：上游 `controller/Dockerfile` 就是取 maven central 的
+/// `onnxruntime-android` AAR，解出 `jni/armeabi-v7a/libonnxruntime.so`（12.3MB），
+/// **版本与 sha256 钉死**——官方原话：AAR 重编译不能静默改变装到设备上的东西。
+const ORT_AAR_URL: &str = "https://repo1.maven.org/maven2/com/microsoft/onnxruntime/onnxruntime-android/1.19.2/onnxruntime-android-1.19.2.aar";
+const ORT_AAR_SHA256: &str = "84737dd1fdb715f0ee695c0a9864f6949b66ecb4c46ca733bc9211bf0c2a7b5f";
+/// AAR 内 armv7 运行时的固定路径。
+const ORT_AAR_ENTRY: &str = "jni/armeabi-v7a/libonnxruntime.so";
+/// 覆盖 ORT 下载地址（内网镜像用，如 maven.aliyun.com）。
+const ENV_ORT_URL: &str = "OWW_ORT_URL";
+/// AAR 下载上限：官方 AAR ≈ 16MB，给 32MB 余量（与 VAD 的 8MB 上限独立）。
+const MAX_AAR_BYTES: u64 = 32 * 1024 * 1024;
+/// 设备剩余空间下限（MB）：低于它拒绝推 ORT（官方 `FREE_FLOOR_MB` 同值）——
+/// 设备装满会以"半个 .so + 一条不知所云的 dlopen 报错"收场，宁可明确跳过。
+const FREE_FLOOR_MB: u64 = 50;
 /// GitHub 代理前缀。与入口脚本 `apply_proxy` 同语义：**只对 github.com 套用**，
 /// `off`/空表示直连。部署环境（如 compose 默认值）不直连 GitHub 时，这里必须跟着走，
 /// 否则「服务端自己下载」会比入口脚本那条路更脆。
@@ -181,34 +206,113 @@ fn auto_download(value: Option<&str>) -> AutoDownload {
 /// 下载任何字节（与 ASR/TTS 的"无条件就绪"不同）。失败只告警，不阻断启动——
 /// 缺了只影响 `POST …/oww/install-vad`，语音门本身仍能起（退化成 RMS 门限）。
 pub(crate) fn spawn_prefetch() {
-    if override_path().is_some() {
-        tracing::debug!("XIAOZHI_OWW_VAD_PATH 已指定设备语音门模型，跳过自动下载");
-        return;
-    }
     let mode = auto_download(std::env::var(ENV_AUTO_DOWNLOAD).ok().as_deref());
     if mode == AutoDownload::Off {
         tracing::debug!(
-            "{ENV_AUTO_DOWNLOAD}=off：不下载设备语音门模型（需自行预置模型卷里的 oww/silero_vad.onnx）"
+            "{ENV_AUTO_DOWNLOAD}=off：不下载设备语音门模型与运行时（需自行预置模型卷里的 oww/ 两件套）"
         );
         return;
     }
-    let path = vad_path();
+    // VAD 模型：显式覆盖路径只接管这一件（覆盖者自己负责文件内容与新鲜度）。
+    if override_path().is_some() {
+        tracing::debug!("XIAOZHI_OWW_VAD_PATH 已指定设备语音门模型，跳过自动下载");
+    } else {
+        let path = vad_path();
+        if mode == AutoDownload::Missing && is_ready(&path) {
+            tracing::debug!(path = %path.display(), "设备语音门模型已就绪，跳过下载");
+        } else {
+            tokio::spawn(async move {
+                match ensure_vad_model(mode == AutoDownload::Force).await {
+                    Ok(path) => tracing::info!(
+                        path = %path.display(),
+                        "设备语音门模型（Silero v5）已就绪：接入设备时将自动下发"
+                    ),
+                    Err(error) => tracing::warn!(
+                        %error,
+                        "设备语音门模型下载失败；设备语音门将退回 RMS 门限（说话可能无 ASR）"
+                    ),
+                }
+            });
+        }
+    }
+    // ORT 运行时：与 VAD 独立的资产、独立就绪检查——少了它，模型在也只会
+    // dlopen 失败退回 RMS（这正是"模型装好了还报 RMS threshold"的那一环）。
+    spawn_ort_prefetch(mode);
+}
+
+/// 确保 ORT 运行时就绪（后台）：官方钉版 AAR → 解出 armv7 `libonnxruntime.so` → 模型卷。
+fn spawn_ort_prefetch(mode: AutoDownload) {
+    let path = ort_path();
     if mode == AutoDownload::Missing && is_ready(&path) {
-        tracing::debug!(path = %path.display(), "设备语音门模型已就绪，跳过下载");
+        tracing::debug!(path = %path.display(), "设备语音门运行时已就绪，跳过下载");
         return;
     }
     tokio::spawn(async move {
-        match ensure_vad_model(mode == AutoDownload::Force).await {
+        match ensure_ort_model(mode == AutoDownload::Force).await {
             Ok(path) => tracing::info!(
                 path = %path.display(),
-                "设备语音门模型（Silero v5）已就绪：可由 POST /api/echomuse/devices/{{id}}/oww/install-vad 下发到设备"
+                "设备语音门运行时（onnxruntime-android armv7）已就绪：接入设备时将自动下发"
             ),
             Err(error) => tracing::warn!(
                 %error,
-                "设备语音门模型下载失败；仅影响「安装 VAD」接口，ASR/TTS 不受影响"
+                "设备语音门运行时下载失败；模型装了也会因 dlopen 失败退回 RMS 门限"
             ),
         }
     });
+}
+
+/// ORT 运行时在模型卷的位置（`$XIAOZHI_MODELS_DIR/oww/libonnxruntime.so`）。
+/// 刻意不受 `XIAOZHI_OWW_VAD_PATH` 影响：那是 VAD 文件自己的覆盖口。
+fn ort_path() -> PathBuf {
+    models_dir().join(ORT_RELATIVE)
+}
+
+/// 确保 `ort_path()` 指向官方钉版的 armv7 运行时：已就绪直接返回，否则下载 AAR、
+/// 按官方摘要校验后解包落盘。AAR 摘要不匹配直接拒绝（运行时无法像 ONNX 那样
+/// 做内容级验证，摘要就是唯一护栏——对齐上游 Dockerfile 的 `sha256sum -c`）。
+async fn ensure_ort_model(force: bool) -> Result<PathBuf, String> {
+    let path = ort_path();
+    if !force && is_ready(&path) {
+        return Ok(path);
+    }
+    let url = std::env::var(ENV_ORT_URL)
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| ORT_AAR_URL.to_owned());
+    let aar = download_with_limit(&url, MAX_AAR_BYTES).await?;
+    let digest = sha256_hex(&aar);
+    if !digest.eq_ignore_ascii_case(ORT_AAR_SHA256) {
+        return Err(format!(
+            "{url} 的 sha256={digest} 与官方钉版不符（{ORT_AAR_SHA256}），拒绝解包落盘；\
+             可用 {ENV_ORT_URL} 指向内网镜像"
+        ));
+    }
+    let runtime = extract_armv7_runtime(&aar)?;
+    if runtime.is_empty() {
+        return Err(format!("{url} 里 {ORT_AAR_ENTRY} 为空"));
+    }
+    write_atomic(&path, &runtime)?;
+    tracing::info!(
+        path = %path.display(),
+        bytes = runtime.len(),
+        %url,
+        "设备语音门运行时已下载（onnxruntime-android 1.19.2 armv7，摘要钉版 AAR 解出）"
+    );
+    Ok(path)
+}
+
+/// 从官方钉版 AAR（zip 容器）里解出 armv7 运行时。
+fn extract_armv7_runtime(aar: &[u8]) -> Result<Vec<u8>, String> {
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(aar))
+        .map_err(|error| format!("AAR 不是有效的 zip 容器：{error}"))?;
+    let mut entry = archive
+        .by_name(ORT_AAR_ENTRY)
+        .map_err(|error| format!("AAR 里找不到 {ORT_AAR_ENTRY}：{error}"))?;
+    let mut out = Vec::with_capacity(entry.size() as usize);
+    std::io::Read::read_to_end(&mut entry, &mut out)
+        .map_err(|error| format!("解压 {ORT_AAR_ENTRY} 失败：{error}"))?;
+    Ok(out)
 }
 
 /// 确保 `vad_path()` 指向一份可用模型：已就绪直接返回，否则按 [`OFFICIAL_VAD_URL`]
@@ -268,6 +372,11 @@ fn with_github_proxy(url: &str) -> String {
 }
 
 async fn download(url: &str) -> Result<Vec<u8>, String> {
+    download_with_limit(url, MAX_DOWNLOAD_BYTES).await
+}
+
+/// 上限参数化的下载：VAD 模型 8MB、ORT AAR 32MB，各对各自的假想错误页设防。
+async fn download_with_limit(url: &str, max_bytes: u64) -> Result<Vec<u8>, String> {
     let url = with_github_proxy(url);
     let client = reqwest::Client::builder()
         .connect_timeout(CONNECT_TIMEOUT)
@@ -282,14 +391,12 @@ async fn download(url: &str) -> Result<Vec<u8>, String> {
         .map_err(|error| format!("请求 {url} 失败：{error}"))?;
     let status = response.status();
     if !status.is_success() {
-        return Err(format!(
-            "{url} 返回 HTTP {status}（可换 OWW_VAD_URL 指内网镜像）"
-        ));
+        return Err(format!("{url} 返回 HTTP {status}"));
     }
     if let Some(length) = response.content_length() {
-        if length > MAX_DOWNLOAD_BYTES {
+        if length > max_bytes {
             return Err(format!(
-                "{url} 声称 {length} 字节，超过上限 {MAX_DOWNLOAD_BYTES}（疑似不是模型文件）"
+                "{url} 声称 {length} 字节，超过上限 {max_bytes}（疑似不是目标文件）"
             ));
         }
     }
@@ -300,9 +407,9 @@ async fn download(url: &str) -> Result<Vec<u8>, String> {
     if bytes.is_empty() {
         return Err(format!("{url} 返回空内容"));
     }
-    if bytes.len() as u64 > MAX_DOWNLOAD_BYTES {
+    if bytes.len() as u64 > max_bytes {
         return Err(format!(
-            "{url} 返回 {} 字节，超过上限 {MAX_DOWNLOAD_BYTES}",
+            "{url} 返回 {} 字节，超过上限 {max_bytes}",
             bytes.len()
         ));
     }
@@ -315,7 +422,14 @@ fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
         std::fs::create_dir_all(parent)
             .map_err(|error| format!("创建目录 {} 失败：{error}", parent.display()))?;
     }
-    let part = path.with_extension("onnx.part");
+    // 通用 `.part` 后缀（追加而非替换扩展名）：`silero_vad.onnx.part` /
+    // `libonnxruntime.so.part`，天然互不干扰。
+    let mut part_name = path
+        .file_name()
+        .map(|name| name.to_owned())
+        .ok_or_else(|| format!("非法目标路径 {}", path.display()))?;
+    part_name.push(".part");
+    let part = path.with_file_name(part_name);
     std::fs::write(&part, bytes)
         .map_err(|error| format!("写入 {} 失败：{error}", part.display()))?;
     std::fs::rename(&part, path).map_err(|error| {
@@ -399,34 +513,90 @@ async fn install_vad(
     }
 }
 
-/// 设备侧已装 VAD 的 sha256（typed 重写版），命中即跳过下发。
-///
-/// 仅当设备已在线（刚接入）且工具齐全时返回 Some；命令失败 / 文件不存在 / 输出非 64 位
-/// 十六进制都返回 None（表示"需要（重新）下发"）。路径是设备固件契约常量，直接内联
-/// （`shell::run` 要求 `&'static str`，不能用 `DEVICE_VAD_PATH` 拼接）。
-const VAD_SHA_CHECK: &str =
-    "busybox sha256sum /data/local/share/echomuse/oww/silero_vad.onnx 2>/dev/null | busybox awk '{print $1}'";
+/// 设备侧 OWW 资产清单（**一趟 shell**）：对齐官方 `em_oww_sync::device_state`——
+/// 目录 glob 逐文件哈希 + `df -m /data` 剩余空间，一次往返问完（官方原话
+/// "the ordinary path is one shell round trip"）。官方用 md5sum，这里用 sha256sum
+/// （busybox 既有 applet，与下发校验同一算法）；`tail -1` 取 df 数据行，多出来的
+/// 表头行不含 `%` 列、解析自然跳过。清单不含 mtime：那是官方给自定义分类器
+/// LRU 淘汰用的，语音门两件套没有淘汰语义。
+const DEVICE_STATE_CHECK: &str = "for f in /data/local/share/echomuse/oww/*.so /data/local/share/echomuse/oww/*.onnx; do [ -f \"$f\" ] && echo \"$(busybox sha256sum \"$f\" | busybox cut -d' ' -f1) $f\"; done; echo \"FREE $(busybox df -m /data | busybox tail -1)\"";
 
-/// 查设备侧 VAD 当前 sha256（None = 未装 / 工具缺失 / 查询失败）。
-async fn device_vad_sha256(id: &str) -> Option<String> {
-    let out = shell::run(id, VAD_SHA_CHECK).await.ok()?;
-    let digest = out.split_whitespace().next()?.to_ascii_lowercase();
-    (digest.len() == 64).then_some(digest)
+/// 设备侧 OWW 资产现状：文件名 → sha256，以及 /data 剩余 MB。
+struct DeviceOwwState {
+    files: HashMap<String, String>,
+    free_mb: Option<u64>,
 }
 
-/// 设备接入后自动确保语音门模型已就位。
-///
-/// 对齐官方 `em_oww_sync`：Silero VAD 随 OWW 资产**自动同步**到设备，不靠手动按钮。
-/// 仅在已批准、在线、emOS 设备接入时由 [`super::routes::handle_control_ws`] 调用；**幂等**：
-/// 设备侧 sha256 已匹配 typed 版（官方重写的那份）则跳过，否则经受限 shell 面下发——
-/// 避免每次重连都重传 1.8MB。失败只告警、不阻断语音会话。
-///
-/// 前置：服务端模型必须已就绪（`spawn_prefetch` 在 `[echomuse].enabled=true` 启动时下载；
-/// 尚未就绪时跳过，待下次接入再试）。
-pub(super) fn ensure_vad_on_connect(id: String, base_os: Option<String>) {
-    if !base_os.as_deref().is_some_and(|os| os.eq_ignore_ascii_case("emos")) {
-        return; // 仅 emOS 设备需要设备侧语音门模型（其它 base_os 由各自链路处理）
+/// 一趟读设备侧现状。**读不到 ≠ 缺失**（官方"failure to LOOK is not evidence of
+/// absence"）：返回 None 时调用方必须什么都不做——shell 面可能还没起来，刚接入
+/// 的设备大概率如此，此时改设备才是错的。
+async fn device_state(id: &str) -> Option<DeviceOwwState> {
+    let out = shell::run(id, DEVICE_STATE_CHECK).await.ok()?;
+    let mut files = HashMap::new();
+    let mut free_mb = None;
+    for line in out.lines() {
+        if let Some(row) = line.strip_prefix("FREE ") {
+            free_mb = parse_free_mb(row);
+            continue;
+        }
+        let mut fields = line.split_whitespace();
+        let digest = fields.next()?;
+        let path = fields.next()?;
+        if digest.len() == 64 {
+            if let Some(name) = path.rsplit('/').next() {
+                files.insert(name.to_owned(), digest.to_ascii_lowercase());
+            }
+        }
     }
+    Some(DeviceOwwState { files, free_mb })
+}
+
+/// 官方 `parse_free_mb` 同语义：busybox 会在长文件系统名时换行，列序号不稳定
+/// （awk 按固定列取会把 "65%" 当成可用空间），以"以 % 结尾的使用率列"为锚，
+/// 取它前面第一个数字字段。
+fn parse_free_mb(df_row: &str) -> Option<u64> {
+    let tokens: Vec<&str> = df_row.split_whitespace().collect();
+    tokens.iter().enumerate().rev().find_map(|(i, field)| {
+        let pct = field.strip_suffix('%')?;
+        pct.parse::<u8>().ok()?;
+        let prev = *tokens.get(i.checked_sub(1)?)?;
+        prev.parse::<u64>().ok()
+    })
+}
+
+/// 设备接入后自动确保语音门**两件套**（模型 + 运行时）已就位。
+///
+/// 对齐官方 `em_oww_sync::reconcile`：OWW 资产**自动同步**到设备，不靠手动按钮。
+/// 仅在已批准、在线、emOS 设备接入时由 [`super::routes::handle_control_ws`] 调用；
+/// 结构与官方同构：**一趟读设备现状** → 逐件摘要比对（已装且匹配即跳过，不重传）
+/// → 需要的才经受限 shell 面下发。两件独立同步：模型（1.8MB）到位而运行时
+/// （12.3MB）缺失时，设备照样退回 RMS（dlopen 失败）。失败只告警、不阻断语音
+/// 会话；下次接入自动重试。
+///
+/// 前置：服务端资产必须已就绪（`spawn_prefetch` 在 `[echomuse].enabled=true` 启动时
+/// 下载；尚未就绪时跳过，待下次接入再试）。
+pub(super) fn ensure_on_device_assets(id: String, base_os: Option<String>) {
+    if !base_os
+        .as_deref()
+        .is_some_and(|os| os.eq_ignore_ascii_case("emos"))
+    {
+        return; // 仅 emOS 设备需要设备侧语音门资产（其它 base_os 由各自链路处理）
+    }
+    tokio::spawn(async move {
+        let Some(state) = device_state(&id).await else {
+            tracing::debug!(
+                device_id = %id,
+                "设备 OWW 资产清单读取失败（shell 面可能未就绪）——本次不动设备，待下次接入再试"
+            );
+            return;
+        };
+        sync_vad(&id, &state).await;
+        sync_runtime(&id, &state).await;
+    });
+}
+
+/// 同步设备侧语音门模型（`silero_vad.onnx`，typed 重写版）。
+async fn sync_vad(id: &str, state: &DeviceOwwState) {
     if !is_ready(&vad_path()) {
         tracing::debug!(
             device_id = %id,
@@ -434,40 +604,107 @@ pub(super) fn ensure_vad_on_connect(id: String, base_os: Option<String>) {
         );
         return;
     }
-    tokio::spawn(async move {
-        // 幂等：设备已装 typed 版则跳过（官方"已同步不重传"同语义）。
-        if let Some(existing) = device_vad_sha256(&id).await {
-            if existing.eq_ignore_ascii_case(TYPED_VAD_SHA256) {
-                tracing::debug!(device_id = %id, "设备语音门模型已就位，跳过自动下发");
-                return;
-            }
-            tracing::info!(device_id = %id, "设备语音门模型版本不符，重新下发");
-        }
-        let asset = match vad_asset() {
-            Ok(asset) => asset,
-            Err(error) => {
-                tracing::warn!(device_id = %id, %error, "设备语音门模型读取失败，跳过自动下发");
-                return;
-            }
-        };
-        if let Err(error) = shell::run(&id, MKDIR).await {
-            tracing::warn!(device_id = %id, ?error, "设备语音门模型下发前置 mkdir 失败，跳过");
+    // 幂等：设备已装 typed 版则跳过（官方"已同步不重传"同语义）。
+    if let Some(existing) = state.files.get(VAD_NAME) {
+        if existing.eq_ignore_ascii_case(TYPED_VAD_SHA256) {
+            tracing::debug!(device_id = %id, "设备语音门模型已就位，跳过自动下发");
             return;
         }
-        match shell::stream_file(&id, &asset, DEVICE_VAD_PATH, 0o644).await {
-            Ok(transfer) => tracing::info!(
-                device_id = %id,
-                bytes = transfer.bytes,
-                sha256 = %transfer.sha256,
-                "设备语音门模型已自动下发（设备下一轮开轮即生效，无需重启）"
-            ),
-            Err(error) => tracing::warn!(
-                device_id = %id,
-                ?error,
-                "设备语音门模型自动下发失败（可经管理台手动重试 install-vad）"
-            ),
+        tracing::info!(device_id = %id, "设备语音门模型版本不符，重新下发");
+    }
+    let asset = match vad_asset() {
+        Ok(asset) => asset,
+        Err(error) => {
+            tracing::warn!(device_id = %id, %error, "设备语音门模型读取失败，跳过自动下发");
+            return;
         }
-    });
+    };
+    if let Err(error) = shell::run(id, MKDIR).await {
+        tracing::warn!(device_id = %id, ?error, "设备语音门模型下发前置 mkdir 失败，跳过");
+        return;
+    }
+    match shell::stream_file(id, &asset, DEVICE_VAD_PATH, 0o644).await {
+        Ok(transfer) => tracing::info!(
+            device_id = %id,
+            bytes = transfer.bytes,
+            sha256 = %transfer.sha256,
+            "设备语音门模型已自动下发（设备下一轮开轮即生效，无需重启）"
+        ),
+        Err(error) => tracing::warn!(
+            device_id = %id,
+            ?error,
+            "设备语音门模型自动下发失败（可经管理台手动重试 install-vad）"
+        ),
+    }
+}
+
+/// 同步设备侧 ORT 运行时：speechgate 在找到 `silero_vad.onnx` 后会 `dlopen` 同目录的
+/// `libonnxruntime.so`——运行时缺失时同样退回 RMS（且报错不知所云）。这是"模型装好
+/// 了还报 RMS threshold"的最后一环。幂等 + 失败只告警，同 VAD。
+async fn sync_runtime(id: &str, state: &DeviceOwwState) {
+    let asset = match ort_asset() {
+        Ok(asset) => asset,
+        Err(error) => {
+            tracing::debug!(device_id = %id, %error, "ORT 运行时未就绪，跳过下发（待启动下载完成后，下次接入再试）");
+            return;
+        }
+    };
+    let digest = sha256_hex(&asset);
+    if let Some(existing) = state.files.get(ORT_SO_FILE) {
+        if existing.eq_ignore_ascii_case(&digest) {
+            tracing::debug!(device_id = %id, "ORT 运行时已就位，跳过下发");
+            return;
+        }
+        tracing::info!(device_id = %id, "ORT 运行时版本不符，重新下发");
+    }
+    // 空间护栏（官方 FREE_FLOOR_MB 同值）：设备装满 → 半个 .so → dlopen 报错不知所云。
+    // 官方语义：空间检查在算完"真正要推什么"之后——已齐的设备绝不被空间挡。
+    if let Some(free) = state.free_mb {
+        if free < FREE_FLOOR_MB {
+            tracing::warn!(
+                device_id = %id,
+                free_mb = free,
+                need_mb = asset.len() / (1024 * 1024),
+                "设备剩余空间不足，跳过 ORT 运行时下发（官方下限 {FREE_FLOOR_MB}MB）"
+            );
+            return;
+        }
+    }
+    if let Err(error) = shell::run(id, MKDIR).await {
+        tracing::warn!(device_id = %id, ?error, "ORT 运行时下发前置 mkdir 失败，跳过");
+        return;
+    }
+    match shell::stream_file(id, &asset, DEVICE_ORT_PATH, 0o644).await {
+        Ok(transfer) => tracing::info!(
+            device_id = %id,
+            bytes = transfer.bytes,
+            sha256 = %transfer.sha256,
+            "ORT 运行时已自动下发（设备下一轮开轮即生效，语音门不再退回 RMS）"
+        ),
+        Err(error) => tracing::warn!(
+            device_id = %id,
+            ?error,
+            "ORT 运行时自动下发失败（12.3MB 走 shell 面，弱网可能超时；下次设备接入自动重试）"
+        ),
+    }
+}
+
+/// ORT 运行时资产：读模型卷里由 `spawn_ort_prefetch` 下载的 armv7 so。
+/// 摘要已在下载时钉过（AAR 级），落盘后只做"非空文件"检查——对自置文件不做
+/// 内容级验证（无法验证），装错由设备 dlopen 失败兜底（退回 RMS，不崩）。
+fn ort_asset() -> Result<Vec<u8>, String> {
+    let path = ort_path();
+    let bytes = std::fs::read(&path).map_err(|error| {
+        format!(
+            "ORT 运行时不可读：{}（{error}）。服务端在 [echomuse].enabled=true 启动时会自动\
+             从官方钉版 AAR 解出（OWW_ORT_URL 可指内网镜像）",
+            path.display()
+        )
+    })?;
+    if bytes.is_empty() {
+        return Err(format!("ORT 运行时是空文件：{}", path.display()));
+    }
+    Ok(bytes)
 }
 
 #[cfg(test)]

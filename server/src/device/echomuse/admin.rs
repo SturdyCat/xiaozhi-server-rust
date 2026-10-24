@@ -531,16 +531,14 @@ async fn device_command(
     json(code, reply)
 }
 
-/// `POST /api/echomuse/devices/{id}/music`（音乐面）：
-/// - DLNA 音源（服务端扫描/浏览，客户端只调接口）：
-///   `{"action":"scan"}` → 200 `{servers:[{name,location}]}`（SSDP 发现局域网
-///   MediaServer，不依赖设备在线）；`{"action":"browse","location":...}` → 200
-///   `{tracks:[{title,artist,album,url,duration}]}`（SOAP 递归列出音频）；
-///   `{"action":"play_url","url":...}` → 202 `{queued}`（服务端拉流→解码 48k mono
-///   →复用 [`super::music`] 通道逐帧推流，与语音混音）。
-/// - 本地 WAV 音源（保留，依赖 `[echomuse].music_dir` + 设备在线）：
-///   `{"action":"play","path":"a.wav"}` → 202 `{queued,seconds}`（路径防越界）；
-///   `{"action":"stop"}` → 200（epoch 作废 + `music_flush`）。
+/// `POST /api/echomuse/devices/{id}/music`（音乐面，音源仅 DLNA）：
+/// - `{"action":"scan"}` → 200 `{servers:[{name,location}]}`（SSDP 发现局域网
+///   MediaServer，不依赖设备在线）；
+/// - `{"action":"browse","location":...}` → 200 `{tracks:[{title,artist,album,url,duration}]}`
+///   （SOAP 递归列出音频）；
+/// - `{"action":"play_url","url":...}` → 202 `{queued}`（服务端拉流→解码 48k mono
+///   →复用 [`super::music`] 通道逐帧推流，与语音混音）；
+/// - `{"action":"stop"}` → 200（epoch 作废 + `music_flush`，不依赖 `music_dir`）。
 async fn device_music(
     headers: HeaderMap,
     Query(query): Query<HashMap<String, String>>,
@@ -597,19 +595,14 @@ async fn device_music(
                     serde_json::json!({ "error": "data channel offline" }),
                 );
             };
-            let plane =
-                super::music::MusicPlane::new(live.fx.clone(), live.media.clone(), data_tx);
+            let plane = super::music::MusicPlane::new(live.fx.clone(), live.media.clone(), data_tx);
             match plane.play_url(url).await {
                 Ok(()) => json(StatusCode::ACCEPTED, serde_json::json!({ "queued": true })),
                 Err(e) => json(StatusCode::BAD_REQUEST, serde_json::json!({ "error": e })),
             }
         }
-        // ── 本地 WAV 音源：保留，依赖 music_dir + 设备在线 ──
+        // ── 停止：epoch 作废 + music_flush，只依赖设备在线（音乐面音源仅 DLNA） ──
         Some("stop") => {
-            let dir = engines.config.echomuse.music_dir.clone();
-            if dir.is_empty() {
-                return json(StatusCode::NOT_FOUND, serde_json::json!({"error": "music disabled"}));
-            }
             let Some((_, live)) = super::hub_live(&id) else {
                 return json(
                     StatusCode::CONFLICT,
@@ -625,44 +618,9 @@ async fn device_music(
             super::music::MusicPlane::new(live.fx.clone(), live.media.clone(), data_tx).stop();
             json(StatusCode::OK, serde_json::json!({ "stopped": true }))
         }
-        Some("play") => {
-            let dir = engines.config.echomuse.music_dir.clone();
-            if dir.is_empty() {
-                return json(StatusCode::NOT_FOUND, serde_json::json!({"error": "music disabled"}));
-            }
-            let Some((_, live)) = super::hub_live(&id) else {
-                return json(
-                    StatusCode::CONFLICT,
-                    serde_json::json!({ "error": "device offline" }),
-                );
-            };
-            let Some(data_tx) = super::hub_data_tx(&id) else {
-                return json(
-                    StatusCode::CONFLICT,
-                    serde_json::json!({ "error": "data channel offline" }),
-                );
-            };
-            let Some(rel) = payload.get("path").and_then(|p| p.as_str()) else {
-                return json(StatusCode::BAD_REQUEST, serde_json::json!({"error": "play 需要 path"}));
-            };
-            // 路径安全：拒绝绝对路径与 `..`，拼接后必须仍在 music_dir 内。
-            if rel.starts_with('/') || rel.split(['/', '\\']).any(|seg| seg == "..") {
-                return json(StatusCode::BAD_REQUEST, serde_json::json!({"error": "path 越界"}));
-            }
-            let full = std::path::Path::new(&dir).join(rel);
-            let plane =
-                super::music::MusicPlane::new(live.fx.clone(), live.media.clone(), data_tx);
-            match plane.play_file(&full).await {
-                Ok(duration) => json(
-                    StatusCode::ACCEPTED,
-                    serde_json::json!({ "queued": true, "seconds": duration.as_secs_f64().round() as u64 }),
-                ),
-                Err(e) => json(StatusCode::BAD_REQUEST, serde_json::json!({ "error": e })),
-            }
-        }
         _ => json(
             StatusCode::BAD_REQUEST,
-            serde_json::json!({ "error": "action 支持 scan/browse/play_url/play/stop" }),
+            serde_json::json!({ "error": "action 支持 scan/browse/play_url/stop" }),
         ),
     }
 }
