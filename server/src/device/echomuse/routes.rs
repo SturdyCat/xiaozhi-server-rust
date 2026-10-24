@@ -16,6 +16,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use serde_json::Value;
+
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{ConnectInfo, Query, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -212,6 +214,11 @@ async fn control_session(
         },
     );
 
+    // 设备侧语音门模型自动下发：对齐官方 em_oww_sync——Silero VAD 随 OWW 资产自动同步到
+    // 设备，不靠手动按钮。仅在已批准、在线、emOS 设备接入时触发；幂等（设备已装 typed 版
+    // 则跳过，避免每次重连重传 1.8MB）。模型未就绪（[echomuse] 未启用下载）时静默跳过。
+    super::oww::ensure_vad_on_connect(device_id.clone(), register.base_os.clone());
+
     // control 任务：收设备事件（唤醒/按钮/旧固件 ble_adverts）+ 发 mic_start 等出站。
     // 常开唤醒流（官方接入后立即下发）：omni ch6、无门控。波束基线/AEC/影子评分
     // 的持续输入；缺了它，首个 turn 流刚起就 beam.Lock() 必落 `baseline not ready`。
@@ -316,10 +323,37 @@ fn handle_control_text(
             tracing::info!("[echomuse] device {device_id} 触发来源：本地唤醒词，开轮");
             super::turn::start_turn(live, up_tx, "本地唤醒词")
         }
-        // 动作键单击 = 无唤醒词模型的兜底入口；mute/音量走 mute_state/volume_state，不进这里。
+        // Dot2 专属适配：只有 action 键（clickType=138 / button.type=="action"）才开轮；
+        // 音量± / 禁麦由设备本地处理（ADC 静音 / 调音量，分别上报 mute_state / volume_state），
+        // 控制器不应为其开语音轮。仅"按下"（down=true）开轮——松开（down=false）忽略，
+        // 避免一次点按的按下+松开两事件重复触发；设备已静音时双保险拒绝开轮。
         "button" => {
-            tracing::info!("[echomuse] device {device_id} 触发来源：action 键，开轮");
-            super::turn::start_turn(live, up_tx, "action 键")
+            if !super::dot2::is_action_button(&v) {
+                let kind = v
+                    .get("clickType")
+                    .and_then(Value::as_i64)
+                    .map(super::dot2::Dot2Button::from_click_type)
+                    .unwrap_or(super::dot2::Dot2Button::Other);
+                tracing::debug!(
+                    "[echomuse] device {device_id} 非 action 按键（{:?}, clickType={:?}），不触发语音轮",
+                    kind,
+                    v.get("clickType")
+                );
+            } else {
+                let down = v.get("down").and_then(Value::as_bool).unwrap_or(true);
+                if !down {
+                    tracing::debug!(
+                        "[echomuse] device {device_id} action 键松开（down=false），不重复开轮"
+                    );
+                } else if live.is_muted() {
+                    tracing::debug!(
+                        "[echomuse] device {device_id} 静音状态下忽略 action 键开轮（设备侧也会拒绝 mic_start）"
+                    );
+                } else {
+                    tracing::info!("[echomuse] device {device_id} 触发来源：action 键，开轮");
+                    super::turn::start_turn(live, up_tx, "action 键")
+                }
+            }
         }
         "ble_adverts" if ble_on => {
             if let Some(list) = v.get("adverts").and_then(|a| a.as_array()) {
@@ -344,6 +378,98 @@ fn handle_control_text(
             }
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workflow::protocol::IncomingFrame;
+    use serde_json::json;
+    use std::sync::Mutex;
+    use tokio::sync::mpsc;
+
+    /// 构造一条最小会话（mic/fx 已绑出站口，start_turn 不致发送失败）。
+    fn fixture() -> super::super::runtime::LiveControl {
+        let live = super::super::runtime::LiveControl::new(None, false);
+        let (ctl_tx, _ctl_rx) = mpsc::unbounded_channel();
+        live.mic.bind(ctl_tx.clone());
+        live.fx.bind(ctl_tx);
+        live
+    }
+
+    /// 把 button JSON 喂给 handle_control_text，返回上行 channel 里是否出现了开轮 detect 帧。
+    fn fired_turn(live: &super::super::runtime::LiveControl, text: &str) -> bool {
+        let (up_tx, mut up_rx) = mpsc::unbounded_channel();
+        let ble = std::sync::Arc::new(Mutex::new(super::super::ble::BleLink::default()));
+        handle_control_text(text, "d1", live, &up_tx, &ble, false);
+        // detect 帧是 start_turn 投的首帧；若开了轮，必有一条含 "state":"detect" 的文本帧。
+        let mut found = false;
+        while let Ok(frame) = up_rx.try_recv() {
+            if let IncomingFrame::Text(t) = frame {
+                if t.contains(r#""state":"detect""#) {
+                    found = true;
+                }
+            }
+        }
+        found
+    }
+
+    #[test]
+    fn action_button_down_starts_turn() {
+        let live = fixture();
+        assert!(
+            fired_turn(&live, r#"{"type":"button","clickType":138,"down":true}"#),
+            "action 键（138）按下应开轮"
+        );
+    }
+
+    #[test]
+    fn action_button_release_does_not_start_turn() {
+        let live = fixture();
+        assert!(
+            !fired_turn(&live, r#"{"type":"button","clickType":138,"down":false}"#),
+            "action 键松开（down=false）不应开轮"
+        );
+    }
+
+    #[test]
+    fn volume_buttons_do_not_start_turn() {
+        let live = fixture();
+        assert!(!fired_turn(&live, r#"{"type":"button","clickType":115,"down":true}"#));
+        assert!(!fired_turn(&live, r#"{"type":"button","clickType":114,"down":true}"#));
+    }
+
+    #[test]
+    fn mute_button_does_not_start_turn() {
+        let live = fixture();
+        assert!(
+            !fired_turn(&live, r#"{"type":"button","clickType":113,"down":true}"#),
+            "禁麦键（113）不应开轮"
+        );
+    }
+
+    #[test]
+    fn action_button_while_muted_does_not_start_turn() {
+        let live = fixture();
+        live.update(&json!({"type":"mute_state","muted":true}));
+        assert!(
+            live.is_muted(),
+            "前置：设备应处于静音"
+        );
+        assert!(
+            !fired_turn(&live, r#"{"type":"button","clickType":138,"down":true}"#),
+            "静音状态下 action 键不应开轮"
+        );
+    }
+
+    #[test]
+    fn action_button_by_semantic_type_starts_turn() {
+        let live = fixture();
+        assert!(
+            fired_turn(&live, r#"{"type":"button","clickType":99,"down":true,"button":{"type":"action"}}"#),
+            "语义字段 button.type==action 也应开轮"
+        );
     }
 }
 

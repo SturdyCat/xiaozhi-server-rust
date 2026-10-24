@@ -37,6 +37,25 @@ futures-util = "0.3.31"
 tower-http = { version = "0.6", features = ["fs"] }
 # EchoMuse 设备发现（`[echomuse].enabled` 时广播 `_emcontroller._tcp`；纯 Rust，无系统依赖）
 mdns-sd = "0.11"
+# DLNA/UPnP 媒体服务器音频解码：symphonia 把常见格式（mp3/flac/wav/aac/m4a/ogg…）
+# 解码到 PCM，再统一重采样 48k mono 经既有音乐通道推流。XML（设备描述/SOAP/DIDL）
+# 用内置极简 scanner 解析，不另引 XML 依赖。
+# 全家族精确钉 0.5.4：顶层 "0.5" 的 caret 会把子 crate（symphonia-core 等）解析到
+# 破坏性改版的 0.5.5（Probe::format 取代 probe()、audio planes/frames 签名全变），
+# 子 crate 与顶层 feature 转发必须同版本，否则编译失败。
+symphonia = "=0.5.4"
+symphonia-core = "=0.5.4"
+symphonia-bundle-flac = "=0.5.4"
+symphonia-bundle-mp3 = "=0.5.4"
+symphonia-codec-aac = "=0.5.4"
+symphonia-codec-adpcm = "=0.5.4"
+symphonia-codec-pcm = "=0.5.4"
+symphonia-codec-vorbis = "=0.5.4"
+symphonia-format-isomp4 = "=0.5.4"
+symphonia-format-mkv = "=0.5.4"
+symphonia-format-ogg = "=0.5.4"
+symphonia-format-riff = "=0.5.4"
+symphonia-metadata = "=0.5.4"
 
 # 监听层（src/serve.rs 的手动 accept loop）：axum::serve 不暴露 per-connection socket
 # 选项，而 TCP keepalive 必须逐连接设置——设备拔电不发 FIN/RST，连接半开挂着，tokio 的

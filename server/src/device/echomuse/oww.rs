@@ -399,6 +399,77 @@ async fn install_vad(
     }
 }
 
+/// 设备侧已装 VAD 的 sha256（typed 重写版），命中即跳过下发。
+///
+/// 仅当设备已在线（刚接入）且工具齐全时返回 Some；命令失败 / 文件不存在 / 输出非 64 位
+/// 十六进制都返回 None（表示"需要（重新）下发"）。路径是设备固件契约常量，直接内联
+/// （`shell::run` 要求 `&'static str`，不能用 `DEVICE_VAD_PATH` 拼接）。
+const VAD_SHA_CHECK: &str =
+    "busybox sha256sum /data/local/share/echomuse/oww/silero_vad.onnx 2>/dev/null | busybox awk '{print $1}'";
+
+/// 查设备侧 VAD 当前 sha256（None = 未装 / 工具缺失 / 查询失败）。
+async fn device_vad_sha256(id: &str) -> Option<String> {
+    let out = shell::run(id, VAD_SHA_CHECK).await.ok()?;
+    let digest = out.split_whitespace().next()?.to_ascii_lowercase();
+    (digest.len() == 64).then_some(digest)
+}
+
+/// 设备接入后自动确保语音门模型已就位。
+///
+/// 对齐官方 `em_oww_sync`：Silero VAD 随 OWW 资产**自动同步**到设备，不靠手动按钮。
+/// 仅在已批准、在线、emOS 设备接入时由 [`super::routes::handle_control_ws`] 调用；**幂等**：
+/// 设备侧 sha256 已匹配 typed 版（官方重写的那份）则跳过，否则经受限 shell 面下发——
+/// 避免每次重连都重传 1.8MB。失败只告警、不阻断语音会话。
+///
+/// 前置：服务端模型必须已就绪（`spawn_prefetch` 在 `[echomuse].enabled=true` 启动时下载；
+/// 尚未就绪时跳过，待下次接入再试）。
+pub(super) fn ensure_vad_on_connect(id: String, base_os: Option<String>) {
+    if !base_os.as_deref().is_some_and(|os| os.eq_ignore_ascii_case("emos")) {
+        return; // 仅 emOS 设备需要设备侧语音门模型（其它 base_os 由各自链路处理）
+    }
+    if !is_ready(&vad_path()) {
+        tracing::debug!(
+            device_id = %id,
+            "设备语音门模型尚未在服务端就绪，跳过自动下发（待 [echomuse].enabled 启动下载后，下次接入再尝试）"
+        );
+        return;
+    }
+    tokio::spawn(async move {
+        // 幂等：设备已装 typed 版则跳过（官方"已同步不重传"同语义）。
+        if let Some(existing) = device_vad_sha256(&id).await {
+            if existing.eq_ignore_ascii_case(TYPED_VAD_SHA256) {
+                tracing::debug!(device_id = %id, "设备语音门模型已就位，跳过自动下发");
+                return;
+            }
+            tracing::info!(device_id = %id, "设备语音门模型版本不符，重新下发");
+        }
+        let asset = match vad_asset() {
+            Ok(asset) => asset,
+            Err(error) => {
+                tracing::warn!(device_id = %id, %error, "设备语音门模型读取失败，跳过自动下发");
+                return;
+            }
+        };
+        if let Err(error) = shell::run(&id, MKDIR).await {
+            tracing::warn!(device_id = %id, ?error, "设备语音门模型下发前置 mkdir 失败，跳过");
+            return;
+        }
+        match shell::stream_file(&id, &asset, DEVICE_VAD_PATH, 0o644).await {
+            Ok(transfer) => tracing::info!(
+                device_id = %id,
+                bytes = transfer.bytes,
+                sha256 = %transfer.sha256,
+                "设备语音门模型已自动下发（设备下一轮开轮即生效，无需重启）"
+            ),
+            Err(error) => tracing::warn!(
+                device_id = %id,
+                ?error,
+                "设备语音门模型自动下发失败（可经管理台手动重试 install-vad）"
+            ),
+        }
+    });
+}
+
 #[cfg(test)]
 #[path = "oww_tests.rs"]
 mod tests;

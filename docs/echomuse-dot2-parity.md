@@ -309,11 +309,62 @@ P0/P1/P2 与音乐面已全部落地（全量测试 851 passed）。逐项对应
 | 4.8 `0x07` 私听 | ⏸ 未动 | `ack` 不声明 `listen_session`（见 5.2），设备保持 stream 模式，现状正确 |
 | 5.1 音乐面 | ✅ | `music.rs`（WAV 解码 + 48k 重采样 + 逐帧下发任务）、`frames.rs` `0x04/0x05`、`media.rs` `music_epoch`（共享 output 预算）、`turn.rs` duck 起止、`admin.rs` `POST /api/echomuse/devices/{id}/music`（play/stop，路径越界校验）、config 键 `[echomuse].music_dir`（默认 `/data/music`） |
 | 5.2 私听会话 | ⏸ 未做 | 依赖设备端唤醒资产同步；当前 stream 模式是唯一能走通唤醒词的路径 |
+| **Dot2 专属适配层（按键识别 + 静音主权）** | ✅ | `dot2.rs`（`is_action_button` 语义字段 `button.type=="action"` 优先 + `clickType==138` 兜底、`Dot2Button` 映射、四键常量 113/114/115/138）；`routes.rs` button 分支仅 action 键且仅 `down=true` 开轮、静音双保险拒绝；`runtime.rs::LiveControl::is_muted()`；`dot2_tests.rs` + `routes.rs` 端到端共 11 用例 |
 
 真机验收（部署后观察设备日志）：
 `[beam] locked ... burst_ratio=`（不再是 `baseline not ready`）、
 `Mic streaming started` 每轮出现、`gate=true`、每轮灯效（聆听青环 → 思考 spin →
 播报 meter）、按键 0-TTFA 提示音。
+
+---
+
+## 9. Dot2 专属适配层（按键识别 + 静音主权）
+
+把 Dot2（biscuit 板 / emOS）的控制器侧按键处理从通用 echomuse 流水线里**收口成一个独立模块**，
+集中承载"只有 action 键该开语音轮"这一专属语义——通用代码不再关心具体 clickType 数字。
+
+### 9.1 按键线格式（固件事实）
+
+设备对 action 键、音量±、禁麦**都发 `type:"button"`**，只靠 `clickType`（数字）或
+`button.type`（语义字符串，新固件恒发）区分。实测 Dot2 v2.18.1：
+
+| `clickType` | `button.type` | 键 | 设备本地行为 | 控制器应否开轮 |
+|---|---|---|---|---|
+| `138` | `action` | 动作键（按下说话 / 唤醒兜底） | 无 | **是**（仅 `down==true`） |
+| `115` | `volume_up` | 音量 + | 本地调音量 + 上报 `volume_state` | 否 |
+| `114` | `volume_down` | 音量 − | 本地调音量 + 上报 `volume_state` | 否 |
+| `113` | `mute` | 禁麦 | 本地 ADC 静音 + 上报 `mute_state` | 否（静音双保险拒绝） |
+
+### 9.2 实现落点
+
+- **`dot2.rs`（新建，专属适配层）**：
+  - 四键常量 `ACTION_CLICK_TYPE=138` / `VOLUME_UP=115` / `VOLUME_DOWN=114` / `MUTE=113`；
+  - `is_action_button(v)`：优先认 `button.type=="action"`（不依赖数字取值），退认
+    `clickType==138`，其余一律否；
+  - `enum Dot2Button { Action, VolumeUp, VolumeDown, Mute, Other }` + `from_click_type()`
+    （非 action 键的 debug 日志用，便于排障时看出"这条是按了什么键"）。
+- **`routes.rs` button 分支重写**：非 action 键只打 `debug` 日志（含 `Dot2Button` 分类与
+  `clickType`）；action 键仅 `down==true` 才 `start_turn(live, up_tx, "action 键")`；
+  设备已静音（`live.is_muted()`）时双保险拒绝并打 `debug`。
+- **`runtime.rs::LiveControl::is_muted()`（新增）**：读 `mute_state.muted` 上报值；设备主权
+  静音（ADC mute + 拒绝 `mic_start`）是本保证，控制器侧再兜一层。
+- **测试**：`dot2_tests.rs`（5 用例：138/语义/音量±/禁麦/未知/缺字段映射）+ `routes.rs`
+  内联 `mod tests`（6 用例：action 按下开轮 / 松开不开 / 音量±不开 / 禁麦不开 / 静音下不开
+  / 语义字段开轮），共 11 用例。
+
+### 9.3 已修的 bug（与"官方对齐"同源）
+
+此前 `handle_control_text` 的 `button` 分支**不看 `clickType`/`button.type`**，对音量±、
+禁麦、action 一律 `start_turn`——用户实测表现即"按音量 + −、按禁麦，都被当成 action 键开了
+语音轮"。修复后语义与上游 `em_button.decide` 对齐：控制器只拒绝语音轮，不拦设备本地音量 /
+静音行为（那些由设备 ADC / 调音量自处理并上报状态）。
+
+### 9.4 下一步可继续收口的 Dot2 专属项
+
+当前层只承载"按键识别 + 静音主权"两件最影响可用性的事；其它 Dot2 专属面（biscuit 板特定
+codec / ALSA 路径、LED ring `is31fl3236` 灯效语义、12 颗灯布局等）已通过本清单 §3.1 / §4.x
+在通用层落地，未再单列——若后续要支持 Dot2 私有键（如长按配对 `pair_request` 的控制器侧
+应答），应优先加进 `dot2.rs` 的 `Dot2Button` 与对应处理，而非散落到通用 `routes.rs`。
 
 ---
 

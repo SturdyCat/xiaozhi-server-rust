@@ -12,8 +12,13 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use symphonia::core::audio::{AudioBuffer, AudioBufferRef, Signal};
+use symphonia::core::conv::IntoSample;
+use symphonia::core::sample::Sample;
+
 use tokio::sync::mpsc::UnboundedSender;
 
+use super::dlna::http_get_bytes;
 use super::media::MediaState;
 use super::{DataOut, fx::Fx};
 
@@ -65,6 +70,26 @@ impl MusicPlane {
     pub(crate) fn stop(&self) {
         self.media.stop_music();
         self.fx.music_flush();
+    }
+
+    /// 从 URL 拉取音频（DLNA 直链），下载后解码为 48k mono S16LE，复用
+    /// [`play_stream`] 逐帧推流到设备（独立音乐平面，与语音混音）。
+    /// 返回时下载/解码已在后台 spawn，不阻塞调用方；失败仅记日志。
+    pub(crate) async fn play_url(&self, url: &str) -> Result<(), String> {
+        let bytes = http_get_bytes(url).await?;
+        let pcm = tokio::task::spawn_blocking(move || decode_media_48k_mono(&bytes))
+            .await
+            .map_err(|e| format!("解码任务失败: {e}"))??;
+        let epoch = self
+            .media
+            .start_music()
+            .ok_or_else(|| "设备 data 链未就绪".to_string())?;
+        let media = self.media.clone();
+        let data_tx = self.data_tx.clone();
+        tokio::spawn(async move {
+            play_stream(media, data_tx, pcm, epoch).await;
+        });
+        Ok(())
     }
 }
 
@@ -184,6 +209,117 @@ fn resample_linear(samples: &[i16], from: u32) -> Vec<i16> {
         out.push((a + (b - a) * frac).round().clamp(i16::MIN as f64, i16::MAX as f64) as i16);
     }
     out
+}
+
+/// 解码任意受支持音频（mp3/flac/aac/m4a/ogg/wav…，经 `symphonia`）为 48 kHz
+/// mono S16LE（`Vec<u8>`），与 [`decode_wav_48k_mono`] 同输出口径，直接喂
+/// [`play_stream`]。不支持的格式返回错误。
+pub(crate) fn decode_media_48k_mono(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
+    use symphonia::core::formats::FormatOptions;
+    use symphonia::core::io::MediaSourceStream;
+    use symphonia::core::meta::MetadataOptions;
+    use symphonia::core::probe::Hint;
+    use symphonia::default::{get_codecs, get_probe};
+
+    let mss = MediaSourceStream::new(
+        Box::new(std::io::Cursor::new(bytes.to_vec())),
+        Default::default(),
+    );
+    let probed = get_probe()
+        .format(
+            &Hint::default(),
+            mss,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
+        .map_err(|e| format!("无法识别音频格式: {e}"))?;
+    let mut format = probed.format;
+    let track = format
+        .default_track()
+        .ok_or_else(|| "音频文件中没有音轨".to_string())?;
+    // 跳过空编码（如纯视频轨）。
+    if track.codec_params.codec == CODEC_TYPE_NULL {
+        return Err("音轨编码无效".into());
+    }
+    let sample_rate = track.codec_params.sample_rate.unwrap_or(48_000);
+    let n_ch = track
+        .codec_params
+        .channels
+        .map(|c| c.count())
+        .unwrap_or(1) as usize;
+    let mut decoder = get_codecs()
+        .make(&track.codec_params, &DecoderOptions::default())
+        .map_err(|e| format!("无法初始化解码器: {e}"))?;
+
+    let mut mono: Vec<i16> = Vec::new();
+    loop {
+        let packet = match format.next_packet() {
+            Ok(p) => p,
+            Err(symphonia::core::errors::Error::ResetRequired) => continue,
+            Err(_) => break,
+        };
+        match decoder.decode(&packet) {
+            Ok(buf) => collect_mono(&buf, n_ch, &mut mono),
+            Err(symphonia::core::errors::Error::ResetRequired) => {
+                let _ = decoder.reset();
+                continue;
+            }
+            Err(_) => continue,
+        }
+    }
+    if mono.is_empty() {
+        return Err("解码后无音频样本".into());
+    }
+    let out = if sample_rate == 48_000 {
+        mono
+    } else {
+        resample_linear(&mono, sample_rate)
+    };
+    let mut bytes_out = Vec::with_capacity(out.len() * 2);
+    for s in out {
+        bytes_out.extend_from_slice(&s.to_le_bytes());
+    }
+    Ok(bytes_out)
+}
+
+/// 把一帧解码后的音频（任意声道/样本类型）下混为 mono S16LE 追加到 `out`。
+///
+/// symphonia 的 `AudioBufferRef` 变体包 `Cow`（deref 到 `AudioBuffer`，planar 存储）。
+fn collect_mono(buf: &AudioBufferRef, n_ch: usize, out: &mut Vec<i16>) {
+    if n_ch == 0 {
+        return;
+    }
+    match buf {
+        AudioBufferRef::U8(b) => collect_plane(&b, n_ch, out),
+        AudioBufferRef::U16(b) => collect_plane(&b, n_ch, out),
+        AudioBufferRef::U24(b) => collect_plane(&b, n_ch, out),
+        AudioBufferRef::U32(b) => collect_plane(&b, n_ch, out),
+        AudioBufferRef::S8(b) => collect_plane(&b, n_ch, out),
+        AudioBufferRef::S16(b) => collect_plane(&b, n_ch, out),
+        AudioBufferRef::S24(b) => collect_plane(&b, n_ch, out),
+        AudioBufferRef::S32(b) => collect_plane(&b, n_ch, out),
+        AudioBufferRef::F32(b) => collect_plane(&b, n_ch, out),
+        AudioBufferRef::F64(b) => collect_plane(&b, n_ch, out),
+    }
+}
+
+/// 单样本类型版的 mono 下混：每声道样本先归一化为 f64（-1..1），平均后限幅，
+/// 避免「先转 i16 再平均」的立体声削波。
+fn collect_plane<T: Sample + IntoSample<f64>>(
+    buf: &AudioBuffer<T>,
+    n_ch: usize,
+    out: &mut Vec<i16>,
+) {
+    for i in 0..buf.frames() {
+        let mut sum = 0f64;
+        for c in 0..n_ch {
+            let v: f64 = buf.chan(c)[i].into_sample();
+            sum += v;
+        }
+        let avg = (sum / n_ch as f64).clamp(-1.0, 1.0);
+        out.push((avg * 32767.0).round() as i16);
+    }
 }
 
 #[cfg(test)]

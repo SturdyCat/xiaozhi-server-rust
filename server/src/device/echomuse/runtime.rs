@@ -185,6 +185,21 @@ pub(crate) fn offline_payload(id: &str) -> Value {
         "volume_state": null, "mute_state": null, "updated_at": null})
 }
 
+impl LiveControl {
+    /// 设备是否处于静音（设备主权：ADC 静音 + 设备拒绝任何 mic_start）。
+    /// 静音时控制器应拒绝开语音轮（双保险；设备侧才是硬保证）。
+    pub(crate) fn is_muted(&self) -> bool {
+        self.state
+            .lock()
+            .expect("echomuse runtime lock")
+            .mute_state
+            .as_ref()
+            .and_then(|m| m.get("muted"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    }
+}
+
 /// 上行报告的受限拷贝：深度截断防恶意/异常固件把大对象塞进 runtime
 /// （总字节上限已由 MAX_TELEMETRY_BYTES 把关，这里只防单键巨型值）。
 fn cloned(value: &Value) -> Value {

@@ -907,6 +907,138 @@ class EchoMuseState(scope: PagerScope) {
     }
 
     // ============================================================
+    // DLNA 音源（POST …/music scan/browse/play_url；扫描/浏览/拉流/推流全部在
+    // 服务端完成，管理台只负责「选服务器 → 浏览 → 选曲目 → 点播放」）
+    // ============================================================
+
+    /** 局域网 DLNA 媒体服务器（value=location 设备描述地址，label=友好名）。 */
+    var dlnaServers by scope.observableList<Pair<String, String>>()
+        private set
+    var dlnaServersLoaded by scope.observable(false)
+        private set
+    var dlnaServerOpen by scope.observable(false)
+    /** 已选服务器（location；非空时面板展示曲目区）。 */
+    var dlnaServerSelection by scope.observable("")
+
+    /** 当前服务器的音频曲目（value=直链 url，label=标题（艺术家 · 专辑））。 */
+    var dlnaTracks by scope.observableList<Pair<String, String>>()
+        private set
+    var dlnaTracksLoaded by scope.observable(false)
+        private set
+    var dlnaTrackOpen by scope.observable(false)
+    /** 已选曲目（直链 url）。 */
+    var dlnaTrackSelection by scope.observable("")
+
+    /** 选中服务器（下拉 onSelect）：切换服务器必须清空上一台的曲目，避免串台。 */
+    fun dlnaSelectServer(location: String) {
+        dlnaServerSelection = location
+        dlnaTracks.clear()
+        dlnaTracksLoaded = false
+        dlnaTrackSelection = ""
+    }
+
+    /**
+     * 扫描局域网 DLNA 媒体服务器（POST music {action:scan}）。SSDP 发现与设备描述
+     * 解析都在服务端完成（约 4s 窗口），不依赖设备在线；容器部署收不到组播时服务端
+     * 响应会带 hint，原样透出给用户。
+     */
+    fun dlnaScan(ctx: Pager, deviceId: String, onDone: (ok: Boolean, msg: String) -> Unit) {
+        if (actionBusy) return
+        actionBusy = true
+        post(ctx, "/api/echomuse/devices/${echoMuseUrlComponent(deviceId)}/music", JSONObject().apply {
+            put("action", "scan")
+        }) { ok, _, reason, data ->
+            actionBusy = false
+            if (!ok) {
+                onDone(false, "扫描失败：${reason.ifEmpty { "HTTP 异常" }}")
+                return@post
+            }
+            val servers = data?.array("servers")?.let { arr ->
+                (0 until arr.length()).mapNotNull { i ->
+                    val e = arr.optJSONObject(i) ?: return@mapNotNull null
+                    val location = e.text("location")
+                    if (location.isEmpty()) null else location to e.text("name")
+                }
+            } ?: emptyList()
+            dlnaServers.clear()
+            dlnaServers.addAll(servers)
+            dlnaServersLoaded = true
+            if (servers.isEmpty()) {
+                onDone(true, data?.text("hint")?.takeIf { it.isNotEmpty() }
+                    ?: "局域网未发现 DLNA 媒体服务器")
+            } else {
+                onDone(true, "发现 ${servers.size} 台 DLNA 媒体服务器，请在下拉中选择")
+            }
+        }
+    }
+
+    /** 浏览已选服务器的音频曲目（POST music {action:browse}；SOAP 递归在服务端，大库可能数秒）。 */
+    fun dlnaBrowse(ctx: Pager, deviceId: String, onDone: (ok: Boolean, msg: String) -> Unit) {
+        val location = dlnaServerSelection
+        if (location.isEmpty()) {
+            onDone(false, "请先扫描并选择一台 DLNA 媒体服务器")
+            return
+        }
+        if (actionBusy) return
+        actionBusy = true
+        post(ctx, "/api/echomuse/devices/${echoMuseUrlComponent(deviceId)}/music", JSONObject().apply {
+            put("action", "browse")
+            put("location", location)
+        }) { ok, _, reason, data ->
+            actionBusy = false
+            if (!ok) {
+                onDone(false, "浏览失败：${reason.ifEmpty { "HTTP 异常" }}")
+                return@post
+            }
+            val tracks = data?.array("tracks")?.let { arr ->
+                (0 until arr.length()).mapNotNull { i ->
+                    val e = arr.optJSONObject(i) ?: return@mapNotNull null
+                    val url = e.text("url")
+                    if (url.isEmpty()) return@mapNotNull null
+                    val title = e.text("title").ifEmpty { url }
+                    val sub = listOf(e.text("artist"), e.text("album")).filter { it.isNotEmpty() }
+                        .joinToString(" · ")
+                    url to if (sub.isEmpty()) title else "$title（$sub）"
+                }
+            } ?: emptyList()
+            dlnaTracks.clear()
+            dlnaTracks.addAll(tracks)
+            dlnaTracksLoaded = true
+            if (tracks.isEmpty()) {
+                onDone(true, "该服务器没有列出音频曲目")
+            } else {
+                onDone(true, "已列出 ${tracks.size} 个曲目，请选择播放")
+            }
+        }
+    }
+
+    /** 播放所选 DLNA 曲目（POST music {action:play_url}；服务端拉流→解码→复用音乐通道推流）。 */
+    fun dlnaPlay(ctx: Pager, deviceId: String, onDone: (ok: Boolean, msg: String) -> Unit) {
+        val url = dlnaTrackSelection
+        if (url.isEmpty()) {
+            onDone(false, "请先浏览并选择要播放的曲目")
+            return
+        }
+        if (actionBusy) return
+        actionBusy = true
+        post(ctx, "/api/echomuse/devices/${echoMuseUrlComponent(deviceId)}/music", JSONObject().apply {
+            put("action", "play_url")
+            put("url", url)
+        }) { ok, code, reason, _ ->
+            actionBusy = false
+            if (ok) {
+                onDone(true, "已排队播放：服务端正在拉流解码并推送到设备，说话会自动压低音乐")
+            } else {
+                onDone(false, when (code) {
+                    409 -> "设备离线或 data 链未就绪，播放未开始"
+                    400 -> "播放失败：${reason.ifEmpty { "曲目不可用" }}"
+                    else -> "播放失败：${reason.ifEmpty { "HTTP $code" }}"
+                })
+            }
+        }
+    }
+
+    // ============================================================
     // 实时更新：管理台 WS 事件（GET /api/admin/ws 推送），无轮询、无长挂
     // ============================================================
 

@@ -140,7 +140,9 @@ impl<'a, T: Transport> Session<'a, T> {
         // 安全上限随设备队列包数与帧长而定（见 `[audio].downlink_queue_packets`）
         let cap = self.engines.live_config().audio.max_lead_ms();
         match stats.queue_min_ms {
-            Some(depth) if depth < frame_ms => tracing::warn!(
+            // 真实断音：队列余量 < 1 帧 **且** 出现了实际真空（丢帧/续不上）才告警——
+            // 这才是设备真的"卡了一下"。
+            Some(depth) if depth < frame_ms && stats.vacuum_events > 0 => tracing::warn!(
                 turn,
                 "session {session_id} 本轮下行**断音**：设备解码队列余量最低估计 {depth}ms（< 1 帧 {frame_ms}ms）\
                  ，真空 {} 次（最长 {}ms），抖动缓冲 {lead}ms。——上游供数慢于播放（LLM 出句 / TTS 合成 RTF）\
@@ -149,6 +151,13 @@ impl<'a, T: Transport> Session<'a, T> {
                  downlink_buffer_start_ms（服务器侧水库），或降低合成耗时",
                 stats.vacuum_events,
                 stats.max_vacuum_ms
+            ),
+            // 近临界但无实际真空：多为瞬时抖动或首段填充的余量抖动，属正常噪声，
+            // 在 info 档不刷屏（RUST_LOG=debug 才可见），避免"频繁出现此警告"。
+            Some(depth) if depth < frame_ms => tracing::debug!(
+                turn,
+                "session {session_id} 本轮下行近临界：设备解码队列余量最低估计 {depth}ms（< 1 帧 {frame_ms}ms），\
+                 但无实际真空（真空 0 次）；抖动缓冲 {lead}ms，多为瞬时抖动或首段填充，无需处理",
             ),
             Some(depth) => tracing::debug!(
                 turn,

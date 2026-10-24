@@ -171,7 +171,9 @@ session … 回复（耗时 1820ms / 音频 4100ms / LLM 87 字 / 工具 0 个�
 
 RMS 门限与真实电平差近 10 倍（24dB 增益后 `rms≈0.0066` vs `threshold=0.0634`），`gate` 永远不开 → 一帧人声都不上行 → 服务端收不到音频、没有 ASR → 设备 `streamMic: no speech detected within timeout — ending turn`。用户侧表现就是"按了 action 键、说了话、没有反应"，而且灯效/监听状态看起来都正常（那些是另一条链路）。
 
-修复：`POST /api/echomuse/devices/{id}/oww/install-vad`（无 body）。服务端读模型卷里的 `$XIAOZHI_MODELS_DIR/oww/silero_vad.onnx`（容器默认 `/data/models/oww/silero_vad.onnx`，**由服务端在启用 EchoMuse 时启动后下载**，见下），经受限 shell 面 **base64 heredoc** 写到设备该路径，设备侧 `busybox sha256sum` 与发送端一致才 `mv` 落位（不一致删 `.part`，目标文件保持原样）。成功 200：
+**下发方式（对齐官方，自动为主）**：官方把 `silero_vad.onnx` 随 OWW 资产**自动**同步到设备（`em_oww_sync`），不靠手动按钮。本服务端同语义：`echomuse/oww.rs::ensure_vad_on_connect` 在**已批准的 emOS 设备接入**时（`routes.rs` 的 `hub_insert` 之后）自动触发——幂等（设备侧 `busybox sha256sum` 已等于 typed 版摘要则跳过，不重传 1.8MB）；模型在服务端尚未就绪时跳过、待下次接入再试；失败只告警、不阻断语音会话。设备下一轮开轮即生效，**无需重启设备**。
+
+手动接口保留为兜底（自动下发失败后可在管理台重试）：`POST /api/echomuse/devices/{id}/oww/install-vad`（无 body）。服务端读模型卷里的 `$XIAOZHI_MODELS_DIR/oww/silero_vad.onnx`（容器默认 `/data/models/oww/silero_vad.onnx`，**由服务端在启用 EchoMuse 时启动后下载**，见下），经受限 shell 面 **base64 heredoc** 写到设备该路径，设备侧 `busybox sha256sum` 与发送端一致才 `mv` 落位（不一致删 `.part`，目标文件保持原样）。成功 200：
 
 ```json
 {"device_id":"…","installed":true,"file":"silero_vad.onnx","path":"/data/local/share/echomuse/oww/silero_vad.onnx","bytes":1806511,"sha256":"da5e8a9c…","applies":"next-turn"}
@@ -185,6 +187,26 @@ RMS 门限与真实电平差近 10 倍（24dB 增益后 `rms≈0.0066` vs `thres
 - **必须是 v5**：设备按 `input[1,N] + sr + h/c[2,1,64]`、640 样本一步、带递归状态调用。v4（512 样本、无状态）看着像模型，装上每轮都判静音。
 - 设备缺 `busybox base64 -d` / `busybox sha256sum` 时 502（`no_base64_decoder` / `no_hash_tool`），**一个字节都不发**；校验不符 502 `verify_failed`。
 - 同一把 shell 锁：传输期间该设备不接受其它系统操作（`busy` 409），120s 上限。
+
+### 按键识别与静音主权（Dot2 专属适配）
+
+设备对所有物理按键（action 键、音量±、禁麦）**都发同一种 `type:"button"` 事件**，只靠数字 `clickType` 或（新固件恒带的）语义字段 `button.type` 区分。实测 Dot2 v2.18.1 映射：
+
+| `clickType` | 语义字段 `button.type` | 键 | 设备本地行为 |
+|---|---|---|---|
+| `138` | `action` | 动作键（按下说话 / 唤醒兜底入口） | 控制器应开语音轮，且**仅 `down==true`（按下）**才开 |
+| `115` | `volume_up` | 音量 + | 设备本地调音量，上报 `volume_state` |
+| `114` | `volume_down` | 音量 − | 设备本地调音量，上报 `volume_state` |
+| `113` | `mute` | 禁麦 | 设备本地 ADC 静音，上报 `mute_state` |
+
+控制器侧规则（集中实现于 [`dot2.rs`](<../server/src/device/echomuse/dot2.rs>)）：
+
+- **只有 action 键才开语音轮**。识别用双重保险：优先认语义字段 `button.type=="action"`（不依赖数字取值），退而认数字 `clickType==138`。音量±（114/115）、禁麦（113）的语义字段不是 `action`、数字也非 138，绝不会误开轮。
+- **只有按下（`down==true`）开轮**：松开事件（`down==false`）忽略，避免一次点按的按下+松开两事件重复触发。
+- **静音双保险**：设备已静音（上报 `mute_state.muted==true`）时，控制器侧也拒绝开轮（`runtime.rs::LiveControl::is_muted()`）——设备侧才是硬保证（本机 ADC 静音 + 拒绝任何 `mic_start`），控制器只是再兜一层。
+- 音量 / 禁麦由设备本地处理，控制器**不应**为其开语音轮（上游 `em_button.decide` 同语义：控制器只拒绝语音轮，不拦设备本地行为）。
+
+> **已修的 bug**：此前 `handle_control_text` 的 `button` 分支不看 `clickType`/`button.type`，对音量±、禁麦、action 一律开轮——表现就是"按音量+ −、按禁麦，都被当成 action 键开了语音轮"。现已收敛到 `dot2.rs`：非 action 键只打 `debug` 日志，不再开轮；`routes.rs` 末尾 + `dot2_tests.rs` 共 11 个单测覆盖映射与开轮判定（action 按下开轮 / 松开不开 / 音量±不开 / 禁麦不开 / 静音下不开 / 语义字段开轮）。
 
 ### emOS Web 管理（安全子集）
 

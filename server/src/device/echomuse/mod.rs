@@ -70,6 +70,8 @@ pub(crate) mod oww;
 pub(crate) mod registry;
 pub(crate) mod routes;
 pub(crate) mod runtime;
+pub(crate) mod dot2;
+pub(crate) mod dlna;
 pub(crate) mod music;
 mod settings;
 pub(crate) mod shell;

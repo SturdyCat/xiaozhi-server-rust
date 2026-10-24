@@ -323,7 +323,7 @@ impl AudioConfig {
 
     /// 配置规范化：
     /// ① 帧长非法（0）→ 回落到固件默认 60ms（否则节流失效、`2×帧长` 也会算错）；
-    /// ② 把超限的 `downlink_lead_ms` 收敛到安全上限并告警；
+    /// ② 把超限的 `downlink_lead_ms` 收敛到安全上限、置 0 的纠正回默认值（都告警）；
     /// ③ 水库三参数自洽（容量上限、关闭水库则关起跑闸、闸门不超过容量、最长等待 ≥ 闸门）。
     ///
     /// "调得越大越稳"在这里**不成立**：超过上限后开局预充本身就超队容量，会被固件静默丢弃
@@ -352,6 +352,17 @@ impl AudioConfig {
                 default_frame_ms()
             );
             self.downlink_frame_duration_ms = default_frame_ms();
+        }
+        // lead=0 = 完全关闭开局预充/抖动缓冲：设备解码队列从空开始烧，长回复必然
+        // 掉到"队列余量 < 1 帧"，日志反复报断音（哪怕实际真空=0）。这是误配而非合理
+        // 选择（"不想要打断延迟"应调小而非置 0），统一纠正回默认值。
+        if self.downlink_lead_ms == 0 {
+            let default_lead = default_downlink_lead_ms();
+            tracing::warn!(
+                "[audio].downlink_lead_ms=0 等于关闭抖动缓冲：设备解码队列无预充，长回复必然频繁触发断音警告，\
+                 已回落到默认 {default_lead}ms。若在意打断后的\"停口\"延迟，请调小（如 240ms）而非置 0"
+            );
+            self.downlink_lead_ms = default_lead;
         }
         let cap = self.max_lead_ms();
         if self.downlink_lead_ms > cap {
