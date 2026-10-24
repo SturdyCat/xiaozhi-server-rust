@@ -56,11 +56,11 @@
 
 ## 3. 公共控件与图标
 
-[纯 UI 契约](<../client/shared/src/commonMain/kotlin/com/xiaozhi/admin/UiContracts.kt>)区分可用性、动作阶段/结果、选择、混合勾选及业务继承三态，不能用一个 loading/checked 字段混装。
+[纯 UI 契约](<../client/shared/src/commonMain/kotlin/com/xiaozhi/admin/ui/Contracts.kt>)区分可用性、动作阶段/结果、选择、混合勾选及业务继承三态，不能用一个 loading/checked 字段混装。
 
-[按钮封装](<../client/shared/src/commonMain/kotlin/com/xiaozhi/admin/AdminButtons.kt>)保留官方 Button 的交互、标题与无障碍语义；图标 Canvas 与加载 Canvas 都是不可交互的兄弟视图，而不是图片属性或 Button 内任意子节点。加载指示器使用声明式旋转动画并随生命周期移除，不用定时器旋转字符。静态图标和 spinner 共用一个位置，选择态与动作成功态独立。
+[按钮封装](<../client/shared/src/commonMain/kotlin/com/xiaozhi/admin/ui/Button.kt>)保留官方 Button 的交互、标题与无障碍语义；图标 Canvas 与加载 Canvas 都是不可交互的兄弟视图，而不是图片属性或 Button 内任意子节点。加载指示器使用声明式旋转动画并随生命周期移除，不用定时器旋转字符。静态图标和 spinner 共用一个位置，选择态与动作成功态独立。
 
-19 个 `IconToken` 的几何是[内嵌 pathData](<../client/shared/src/commonMain/kotlin/com/xiaozhi/admin/AdminIcons.kt>)（viewBox 24、描边 1.8 round cap，仅 settings 含三个 fill 旋钮），经 `appIcon` 用 Kuikly Canvas 即时绘制；[AdminIconVectors.kt](<../client/shared/src/commonMain/kotlin/com/xiaozhi/admin/AdminIconVectors.kt>) 是最小 SVG path 解析器（M/L/H/V/C/S/Q/T/A/Z、隐式重复、S/T 反射、弧转贝塞尔），图层解析结果惰性缓存一次。方法对齐 xiaoya-player 的 TvIcons，2026-10 从 `assets/common/icons` 资产迁入代码——原三端宿主实现（Apple XzSvgView/CGPath、Web 内联 SVG DOM、构建期内联资源表）随 macApp 资源缺包图标全空白一并废除，现无任何图标资源文件与端宿主实现，`IconToken↔几何` 一一对应由 `:shared:verifyAdminIcons` 护栏锁定。普通位图继续使用官方 Image；图标不进入图片加载器，不派生 PNG，也不栅格化为 UIImage。图标几何为自研原创（CC0-1.0）。
+19 个 `IconToken` 的几何是[内嵌 pathData](<../client/shared/src/commonMain/kotlin/com/xiaozhi/admin/ui/Icons.kt>)（viewBox 24、描边 1.8 round cap，仅 settings 含三个 fill 旋钮），经 `appIcon` 用 Kuikly Canvas 即时绘制；[AdminIconVectors.kt](<../client/shared/src/commonMain/kotlin/com/xiaozhi/admin/ui/IconVectors.kt>) 是最小 SVG path 解析器（M/L/H/V/C/S/Q/T/A/Z、隐式重复、S/T 反射、弧转贝塞尔），图层解析结果惰性缓存一次。方法对齐 xiaoya-player 的 TvIcons，2026-10 从 `assets/common/icons` 资产迁入代码——原三端宿主实现（Apple XzSvgView/CGPath、Web 内联 SVG DOM、构建期内联资源表）随 macApp 资源缺包图标全空白一并废除，现无任何图标资源文件与端宿主实现，`IconToken↔几何` 一一对应由 `:shared:verifyAdminIcons` 护栏锁定。普通位图继续使用官方 Image；图标不进入图片加载器，不派生 PNG，也不栅格化为 UIImage。图标几何为自研原创（CC0-1.0）。
 
 ## 4. 配置与音频不变量
 

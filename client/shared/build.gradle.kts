@@ -127,8 +127,8 @@ val verifyAdminIcons by tasks.registering {
     group = "verification"
     description = "Verify embedded vector icon coverage: token-to-geometry 1:1, Canvas rendering, no bitmap/resource fallback"
     val adminDir = layout.projectDirectory.dir("src/commonMain/kotlin/com/xiaozhi/admin")
-    val contracts = adminDir.file("UiContracts.kt")
-    val mappingFile = adminDir.file("AdminIcons.kt")
+    val contracts = adminDir.file("ui/Contracts.kt")
+    val mappingFile = adminDir.file("ui/Icons.kt")
     inputs.files(contracts, mappingFile)
     doLast {
         val enumBody = Regex("enum class IconToken\\s*\\{([^}]+)}")

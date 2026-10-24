@@ -1,5 +1,6 @@
 package com.xiaozhi.admin
 
+import com.xiaozhi.admin.ui.*
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
