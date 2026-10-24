@@ -320,6 +320,165 @@ async fn loopback_fixed_info_accepts_text_input_and_mixed_split_output() {
 }
 
 #[tokio::test]
+async fn loopback_stream_file_round_trips_base64_and_verifies() {
+    let _g = em::hub_tests::HUB_LOCK.lock().unwrap();
+    let id = "shell-wire-stream";
+    let (url, server, path) = server(id, "device-secret").await;
+    let (_ctl, _rx) = online(id, localhost(), true);
+    // 100KB 让正文跨多个 32KB 块，顺带覆盖分块发送。
+    let payload: Vec<u8> = (0..100_000u32).map(|i| (i % 251) as u8).collect();
+    let expect = payload.clone();
+    let operation = tokio::spawn(async move {
+        stream_file(
+            id,
+            &payload,
+            "/data/local/share/echomuse/oww/silero_vad.onnx",
+            0o644,
+        )
+        .await
+    });
+    let device = tokio::task::spawn_blocking(move || {
+        let (mut ws, _) = tungstenite::connect(request(&url, "device-secret")).unwrap();
+        // 1) 探测：必须是一次往返问完解码器与哈希工具。
+        let tungstenite::Message::Text(probe) = ws.read().unwrap() else {
+            panic!("probe must be text")
+        };
+        assert!(probe.contains("base64 -d") && probe.contains("sha256sum"));
+        ws.send(tungstenite::Message::Text(
+            "DECODER:ok\nHASH:ok\n__EM_PROBE__\n".into(),
+        ))
+        .unwrap();
+        // 2) heredoc 头 + 正文，直到定界符出现。
+        let mut raw = String::new();
+        loop {
+            match ws.read().unwrap() {
+                tungstenite::Message::Text(text) => {
+                    raw.push_str(&text);
+                    if raw.contains("\n__END_B64_42__\n") {
+                        break;
+                    }
+                }
+                other => panic!("unexpected frame {other:?}"),
+            }
+        }
+        assert!(raw.contains("chmod 644"), "mode must travel with the file");
+        assert!(raw.contains(".part"), "must land in .part, never in place");
+        ws.send(tungstenite::Message::Text("TRANSFER_OK\n".into()))
+            .unwrap();
+        // 3) 校验命令：解码正文，确认是发送端那份字节。
+        let tungstenite::Message::Text(verify) = ws.read().unwrap() else {
+            panic!("verify must be text")
+        };
+        assert!(
+            verify.contains("VERIFY_OK") && verify.contains("sha256sum"),
+            "verify frame was {verify:?}"
+        );
+        let start = raw.find('\n').unwrap() + 1;
+        let end = raw.find("\n__END_B64_42__").unwrap();
+        let b64: String = raw[start..end].split_whitespace().collect();
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .unwrap();
+        assert!(
+            verify.contains(&sha256_hex(&decoded)),
+            "verify must carry the sender digest"
+        );
+        ws.send(tungstenite::Message::Text("VERIFY_OK\n".into()))
+            .unwrap();
+        let _ = ws.read();
+        decoded
+    });
+    let transfer = tokio::time::timeout(Duration::from_secs(10), operation)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(transfer.bytes, expect.len());
+    assert_eq!(transfer.sha256, sha256_hex(&expect));
+    assert_eq!(device.await.unwrap(), expect);
+    server.abort();
+    em::hub_remove(id);
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
+async fn loopback_stream_file_sends_nothing_without_a_decoder() {
+    let _g = em::hub_tests::HUB_LOCK.lock().unwrap();
+    let id = "shell-wire-nob64";
+    let (url, server, path) = server(id, "device-secret").await;
+    let (_ctl, _rx) = online(id, localhost(), true);
+    let operation =
+        tokio::spawn(async move { stream_file(id, b"payload", "/data/tmp/out.bin", 0o644).await });
+    let device = tokio::task::spawn_blocking(move || {
+        let (mut ws, _) = tungstenite::connect(request(&url, "device-secret")).unwrap();
+        ws.read().unwrap();
+        ws.send(tungstenite::Message::Text(
+            "DECODER:none\nHASH:ok\n__EM_PROBE__\n".into(),
+        ))
+        .unwrap();
+        // 缺解码器时一个字节都不许发：下一条只能是关闭。
+        match ws.read() {
+            Ok(tungstenite::Message::Close(_)) | Err(_) => {}
+            other => panic!("no data may follow a failed probe: {other:?}"),
+        }
+    });
+    assert!(matches!(
+        operation.await.unwrap(),
+        Err(ShellError::NoDecoder)
+    ));
+    device.await.unwrap();
+    server.abort();
+    em::hub_remove(id);
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
+async fn loopback_stream_file_reports_checksum_mismatch_as_failure() {
+    let _g = em::hub_tests::HUB_LOCK.lock().unwrap();
+    let id = "shell-wire-badsum";
+    let (url, server, path) = server(id, "device-secret").await;
+    let (_ctl, _rx) = online(id, localhost(), true);
+    let operation =
+        tokio::spawn(async move { stream_file(id, b"payload", "/data/tmp/out.bin", 0o644).await });
+    let device = tokio::task::spawn_blocking(move || {
+        let (mut ws, _) = tungstenite::connect(request(&url, "device-secret")).unwrap();
+        ws.read().unwrap();
+        ws.send(tungstenite::Message::Text(
+            "DECODER:ok\nHASH:ok\n__EM_PROBE__\n".into(),
+        ))
+        .unwrap();
+        let mut raw = String::new();
+        loop {
+            match ws.read().unwrap() {
+                tungstenite::Message::Text(text) => {
+                    raw.push_str(&text);
+                    if raw.contains("\n__END_B64_42__\n") {
+                        break;
+                    }
+                }
+                other => panic!("unexpected frame {other:?}"),
+            }
+        }
+        ws.send(tungstenite::Message::Text("TRANSFER_OK\n".into()))
+            .unwrap();
+        ws.read().unwrap();
+        ws.send(tungstenite::Message::Text(
+            "VERIFY_BAD:00000000000000000000000000000000\n".into(),
+        ))
+        .unwrap();
+        let _ = ws.read();
+    });
+    assert!(matches!(
+        operation.await.unwrap(),
+        Err(ShellError::VerifyFailed)
+    ));
+    device.await.unwrap();
+    server.abort();
+    em::hub_remove(id);
+    let _ = std::fs::remove_file(path);
+}
+
+#[tokio::test]
 async fn loopback_disconnect_without_marker_is_error_and_cleans_slot() {
     let _g = em::hub_tests::HUB_LOCK.lock().unwrap();
     let id = "shell-wire-eof";

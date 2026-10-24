@@ -169,6 +169,10 @@ async fn run(config: Config, config_store: Arc<dyn ConfigStore>) -> Result<()> {
             None => config.server.port,
         };
         crate::device::echomuse::spawn_mdns(mdns_port);
+        // 设备语音门模型（Silero v5）只在启用 EchoMuse 时才需要：后台按官方源补一份
+        // 到模型卷（`$XIAOZHI_MODELS_DIR/oww/silero_vad.onnx`），供「安装 VAD」接口下发。
+        // 不阻断启动、失败只告警；未启用 EchoMuse 的部署不会下载它。
+        crate::device::echomuse::oww::spawn_prefetch();
     }
     // ESPHome Native API 桥（可选模块）：`--features esp_home` 编译期开关 +
     // `[esp_home].enabled` 运行期开关，默认关闭。暴露 Dot 2 状态（binary_sensor：

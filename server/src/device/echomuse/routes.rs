@@ -44,6 +44,13 @@ const CLAIM_FAIL: &str = "[echomuse] /em/data 无待认领设备（control 未�
 /// 超时后按"唯一待认领设备"的旧规则兜底，不无限挂住连接。
 const IDENTIFY_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// `/data` 链路空闲保活间隔：官方 controller 在同一条 data WS 上周期性发协议层
+/// WS Ping（见 `tools/echomuse_mock_device.py` 的 `recv_message`：`0x9 → 0xA`）。
+/// 缺了它，链路长时间无字节（监听中设备语音门未开时尤其如此）会被设备侧读超时或
+/// 中间设备以 `close 1006` 踢掉——真机日志里每 ~15-20s 重拨一次就是这个。
+/// 15s 一拍，短于常见 30s 空闲阈值，也不至于刷屏。
+const DATA_PING_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
+
 /// 挂载 EchoMuse 路由（`[echomuse].enabled=true` 时由 [`crate::gateway::ws::router`] 调）。
 pub fn em_routes() -> axum::Router<Arc<Engines>> {
     use axum::routing::get;
@@ -380,8 +387,19 @@ async fn data_loop(
     if let Some(Message::Binary(raw)) = prelude {
         uplink.on_binary(&raw, &management.turn, &up_tx, &ble, ble_on);
     }
+    // 周期 Ping 保活（对齐官方 controller）。interval 首拍立即就绪，先消费掉，
+    // 避免建链瞬间抢在下行首帧之前发一帧。
+    let mut ping = tokio::time::interval(DATA_PING_INTERVAL);
+    ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    ping.tick().await;
     loop {
         tokio::select! {
+            // 保活：写失败说明对端已断，退出。
+            _ = ping.tick() => {
+                if sink.send(Message::Ping(Vec::new().into())).await.is_err() {
+                    break;
+                }
+            }
             inbound = stream.next() => {
                 match inbound {
                     // 协议：/data 设备方向除首帧 Text identify 外恒为二进制；此后再收到
@@ -391,7 +409,14 @@ async fn data_loop(
                     Some(Ok(Message::Binary(raw))) => {
                         uplink.on_binary(&raw, &management.turn, &up_tx, &ble, ble_on);
                     }
-                    Some(Ok(Message::Text(_))) => {}
+                    // 心跳/控制帧不是断链信号：Ping 由 axum 自动回 Pong，Pong 是设备
+                    // 回我们的心跳。此前 `_ => break` 会把设备对我们 Ping 的那次 Pong
+                    // 当作致命帧——等于自己发的心跳把自己踢掉，正是 1006 循环的成因。
+                    Some(Ok(Message::Text(_)))
+                    | Some(Ok(Message::Ping(_)))
+                    | Some(Ok(Message::Pong(_))) => {}
+                    Some(Ok(Message::Close(_))) => break,
+                    // 读错误 / 流结束：真断链。
                     _ => break,
                 }
             }

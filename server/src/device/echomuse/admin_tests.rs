@@ -220,6 +220,38 @@ fn filter_settings_allowlist_and_types() {
 }
 
 #[test]
+fn filter_settings_accepts_audio_chain_keys() {
+    // 音频链路键（波束/AEC/AGC/VAD/增益）：用于现场排障，
+    // `beamformingEnabled:false` 退回单麦，一步验证波束是否把信号吃掉了。
+    // ⚠️ 0 / -1 都是合法值（0 值不是"未设置"），不能按真值/正数拒绝。
+    let (ok, err) = filter_settings(&serde_json::json!({
+        "beamformingEnabled": false,
+        "beamAngle": -1.0,
+        "aecEnabled": true,
+        "agcEnabled": false,
+        "vadThreshold": 0.004,
+        "micGainDb": 0
+    }));
+    assert!(err.is_none(), "{err:?}");
+    assert_eq!(ok.len(), 6);
+    // 越界 / 类型错一律拒绝（设备侧也会 clamp，但服务端先挡）。
+    assert!(filter_settings(&serde_json::json!({"micGainDb": 43}))
+        .1
+        .is_some());
+    assert!(filter_settings(&serde_json::json!({"beamAngle": -2}))
+        .1
+        .is_some());
+    assert!(filter_settings(&serde_json::json!({"vadThreshold": 0}))
+        .1
+        .is_some());
+    assert!(
+        filter_settings(&serde_json::json!({"beamformingEnabled": "off"}))
+            .1
+            .is_some()
+    );
+}
+
+#[test]
 fn settings_plan_offline_persists_without_delivery() {
     let (code, body, outs) =
         settings_plan(true, false, true, &serde_json::json!({"owwThreshold": 0.4}));

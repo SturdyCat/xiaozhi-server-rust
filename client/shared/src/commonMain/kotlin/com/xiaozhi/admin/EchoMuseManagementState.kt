@@ -9,6 +9,25 @@ import com.tencent.kuikly.core.reactive.handler.observable
 import com.tencent.kuikly.core.reactive.handler.observableList
 
 /**
+ * 「设备管理」面板内的分区 tab 下标（渲染见 `EchoMuseManagementCard.kt` 的 `tabBar`）：
+ * 状态与音量 / 系统信息 / 日志 / 维护。日志单独一档，便于长时间盯设备日志。
+ */
+const val EM_MANAGE_TAB_STATUS = 0
+const val EM_MANAGE_TAB_SYSTEM = 1
+const val EM_MANAGE_TAB_LOGS = 2
+const val EM_MANAGE_TAB_MAINT = 3
+
+/** 日志来源白名单 id ↔ 下拉文案。id 必须与服务端 `log_command` 的 match 分支逐一对应。 */
+private val EM_LOG_SOURCES = listOf(
+    "server" to "设备服务日志（/tmp/server.log）",
+    "messages" to "当前系统日志（messages）",
+    "messages_last" to "上次系统日志（messages.last）",
+    "last_kmsg_prev" to "上次内核日志（last_kmsg.prev）",
+    "supervisor" to "启动监督日志（supervisor.log）",
+    "net" to "网络日志（net.log）",
+)
+
+/**
  * emOS 管理子集；API 合同由服务端约束，不接收 shell 命令、路径或 OTA 输入。
  * 一次只展开一台设备，只在用户点击时请求。切设备/连接状态变化使在途回包失效，
  * 避免把旧设备的输出、离线前的 runtime 误展示成当前状态。
@@ -31,17 +50,17 @@ class EchoMuseManagementState(scope: PagerScope) {
     var result by scope.observable("")
         private set
     var confirmReboot by scope.observable(false)
-    var logSource by scope.observable("messages")
+
+    /** 当前分区 tab 下标（[EM_MANAGE_TAB_STATUS] 起）；切设备时回到「状态与音量」。 */
+    var tabIndex by scope.observable(EM_MANAGE_TAB_STATUS)
+
+    /** 日志来源 id（默认 [EM_LOG_SOURCES] 第一项 = 设备自身的 server.log）。 */
+    var logSource by scope.observable(EM_LOG_SOURCES.first().first)
     var sourceOpen by scope.observable(false)
     val logSources by scope.observableList<Pair<String, String>>()
 
     init {
-        logSources.addAll(listOf(
-            "messages" to "当前系统日志（messages）",
-            "messages_last" to "上次系统日志（messages.last）",
-            "last_kmsg_prev" to "上次内核日志（last_kmsg.prev）",
-            "supervisor" to "启动监督日志（supervisor.log）",
-        ))
+        logSources.addAll(EM_LOG_SOURCES)
     }
     var infoOutput by scope.observable("")
         private set
@@ -91,6 +110,7 @@ class EchoMuseManagementState(scope: PagerScope) {
             volumeDraft = ""
             sourceOpen = false
             confirmReboot = false
+            tabIndex = EM_MANAGE_TAB_STATUS
         }
         base = baseUrl
         token = authToken
@@ -117,7 +137,8 @@ class EchoMuseManagementState(scope: PagerScope) {
         result = ""
         confirmReboot = false
         sourceOpen = false
-        logSource = "messages"
+        logSource = EM_LOG_SOURCES.first().first
+        tabIndex = EM_MANAGE_TAB_STATUS
         infoLoaded = false
         logsLoaded = false
         infoOutput = ""

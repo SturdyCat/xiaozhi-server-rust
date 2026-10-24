@@ -20,12 +20,18 @@ pub(super) const INFO: &str =
 // reboot. Redirect all inherited fds so closing this short shell won't kill it.
 pub(super) const REBOOT: &str = "(sleep 1; kill -TERM 1) </dev/null >/dev/null 2>&1 &";
 
+/// 固定日志源白名单（客户端下拉的 id 必须与这里逐一对应，见 `EchoMuseManagementState`
+/// 的 `EM_LOG_SOURCES`）。`server` 是设备上**本机服务进程**的日志（EchoMuse 控制器把
+/// 自己的运行日志写到 `/tmp/server.log`）——它就是原先必须插数据线、开串口 console 才能
+/// `cat` 到的那份，远程读它就不必再接线；`net` 是网络协商日志。
 pub(super) fn log_command(source: &str) -> Option<&'static str> {
     match source {
+        "server" => Some("tail -c 49152 /tmp/server.log"),
         "messages" => Some("tail -c 49152 /run/messages"),
         "messages_last" => Some("tail -c 49152 /data/emos/messages.last"),
         "last_kmsg_prev" => Some("tail -c 49152 /data/emos/last_kmsg.prev"),
         "supervisor" => Some("tail -c 49152 /data/local/etc/echomuse/supervisor.log"),
+        "net" => Some("tail -c 49152 /run/net.log"),
         _ => None,
     }
 }
@@ -48,7 +54,9 @@ pub(super) fn routes() -> axum::Router<Arc<Engines>> {
 ///   默认可管理的语义移除）。
 /// - 设备侧继续看 `echomuse.token`（空 = 局域网信任设备；非空 = 设备必须带 `X-Em-Token`），
 ///   与 shell/BLE 闸门同一口径。
-fn system_gate(
+///
+/// 也供 `oww.rs`（OWW 资产下发）复用：同样是"管理面鉴权 + 已批准 emOS + 在线且已认证"。
+pub(super) fn system_gate(
     engines: &Engines,
     headers: &HeaderMap,
     query: &HashMap<String, String>,
@@ -170,7 +178,7 @@ async fn get_logs(
         .unwrap_or("messages");
     let Some(command) = log_command(source) else {
         return bad_request(
-            "source must be messages / messages_last / last_kmsg_prev / supervisor",
+            "source must be server / messages / messages_last / last_kmsg_prev / supervisor / net",
         );
     };
     match shell::run(&id, command).await {

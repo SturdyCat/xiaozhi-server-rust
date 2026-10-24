@@ -36,7 +36,15 @@ where
             _ = &mut changed => break false,
             inbound = stream.next() => match inbound {
                 Some(Ok(Message::Binary(raw))) => incoming(&raw),
-                Some(Ok(Message::Text(_))) => {},
+                // 心跳/控制帧不是断链信号：Ping 由 axum 自动回 Pong，Pong 是设备回我们
+                // 的心跳。此前 `_ => break false` 会把一次 Pong 当作"发送失败"返回 false，
+                // 上层 data_loop 随即 `if !written { break }` 断开整条链（设备侧 close
+                // 1006）——等于服务端自己的保活把自己踢下线。
+                Some(Ok(Message::Text(_)))
+                | Some(Ok(Message::Ping(_)))
+                | Some(Ok(Message::Pong(_))) => {}
+                Some(Ok(Message::Close(_))) => break false,
+                // 读错误 / 流结束：真断链，放弃本次写。
                 _ => break false,
             }
         }

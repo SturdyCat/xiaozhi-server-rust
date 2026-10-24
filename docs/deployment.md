@@ -11,6 +11,7 @@
 - **缺失则自动下载**到挂载的 `/data/models`（从官方 GitHub Release 拉整包 tar.bz2 本地解压，幂等 + 断点续传）。
 - 默认直连原始地址；compose 配置 `GITHUB_PROXY` 才走代理。下载地址可用 `SENSEVOICE_URL` / `KOKORO_URL` / `SILERO_VAD_URL` 覆盖为完整直链（内网镜像）。
 - 行为开关 `XIAOZHI_AUTO_DOWNLOAD_MODELS`：`missing`（默认）/ `force` / `off`。
+- **设备语音门模型不在入口脚本里下载**：它只在 `[echomuse].enabled=true` 时由 server 进程按官方源（openWakeWord v0.5.1 的 `silero_vad.onnx`，Silero v5，输入/输出两段 sha256 都按上游 `controller/Dockerfile` 钉住）补一份到 `/data/models/oww/silero_vad.onnx`；未启用 EchoMuse 的部署不会为它下任何字节。失败只告警，不影响 ASR/TTS，只让「安装 VAD」接口 500。`OWW_VAD_URL` 可覆盖为内网镜像，`XIAOZHI_OWW_VAD_PATH` 指向别处时不再自动下载。它与 `SILERO_VAD_URL`（服务端 ASR 切段用）用途不同，服务端读取时会把它转成设备要求的 typed 字段布局。
 
 > 不手动预置模型也能直接 `docker compose up`。离线/内网环境：先 `SENSEVOICE_URL=<内网镜像> ./server/scripts/download_models.sh /host/data/models` 预置再挂载，或设 `XIAOZHI_AUTO_DOWNLOAD_MODELS=off`。
 

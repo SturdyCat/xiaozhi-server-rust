@@ -16,11 +16,24 @@ use futures_util::StreamExt;
 use tokio::sync::{mpsc::UnboundedSender, oneshot};
 use tokio::time::{timeout_at, Instant};
 
+use base64::Engine;
+use sha2::{Digest, Sha256};
+
 use super::{registry::Registry, runtime::LiveControl, ControlOut};
 use crate::runtime::Engines;
 
 pub(super) const MAX_OUTPUT: usize = 64 * 1024;
 const OP_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// 文件传输整体上限：1.8MB 模型在局域网实测 2–5s，120s 覆盖 5–7% 丢包链路
+/// （上游同值）。超时不是"再等等"，而是**结果未知**——调用方不得当成已装。
+const TRANSFER_TIMEOUT: Duration = Duration::from_secs(120);
+/// heredoc 定界符：base64 字母表不含 `_`，正文不可能撞上，故可安全独占一行。
+const B64_DELIM: &str = "__END_B64_42__";
+const PROBE_MARKER: &str = "__EM_PROBE__";
+/// 单帧文本块大小。设备 shell 是非 pty 的普通管道，分块只影响往返次数：
+/// 逐行（76B）发 1.8MB 要三万多帧，32KB 一块只需约 75 帧。
+const WRITE_CHUNK: usize = 32 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ShellError {
@@ -38,6 +51,13 @@ pub(super) enum ShellError {
     OutputLimit,
     InvalidMarker,
     CommandFailed(u16),
+    /// 设备上连 `busybox base64 -d` / `python` 都没有：一个字节都没发出去。
+    NoDecoder,
+    /// 设备上没有 `busybox sha256sum`：拒绝发无校验的字节（坏文件只在加载时才
+    /// 炸，且报错不指向文件本身）。
+    NoHashTool,
+    /// 设备侧校验和与发送端不一致：`.part` 已被删除，目标路径保持原样。
+    VerifyFailed,
 }
 
 impl ShellError {
@@ -76,6 +96,21 @@ impl ShellError {
                 502,
                 "command_failed",
                 "device command returned nonzero status",
+            ),
+            Self::NoDecoder => (
+                502,
+                "no_base64_decoder",
+                "device has no base64 decoder — no data was sent",
+            ),
+            Self::NoHashTool => (
+                502,
+                "no_hash_tool",
+                "device has no sha256 tool — refusing to send unverified bytes",
+            ),
+            Self::VerifyFailed => (
+                502,
+                "verify_failed",
+                "device checksum did not match — target file left untouched",
             ),
         };
         let mut body = serde_json::json!({"error": error, "code": code});
@@ -368,6 +403,167 @@ async fn run_timed(
     tokio::select! {
         _ = op.ctl.closed() => Err(ShellError::Offline),
         result = timeout_at(op.deadline, work) => result.unwrap_or(Err(ShellError::Timeout)),
+    }
+}
+
+/// 一次成功传输的凭证：只有设备回算的 sha256 与发送端一致才算数（退出码和
+/// 字节数都不足以证明内容正确——上游实测 shell 传输产过"长度对、内容错"的文件）。
+pub(super) struct Transfer {
+    pub bytes: usize,
+    pub sha256: String,
+}
+
+/// `data` 的 sha256 十六进制摘要（传输校验与 E2E 报告共用同一口径）。
+pub(super) fn sha256_hex(data: &[u8]) -> String {
+    Sha256::digest(data)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// 把一个文件写到设备的 `dest` 上（**只接受服务端常量路径**：`&'static str`
+/// 让"不把请求参数拼进 shell 命令"成为类型约束）。
+///
+/// 协议与上游 `controller/em_shell.py::stream_file` 同构：
+/// 1. 一次往返探测 `busybox base64 -d` 与 `busybox sha256sum`，缺任一都不发字节；
+/// 2. base64 heredoc 解码直落 `{dest}.part`；
+/// 3. 设备侧算 sha256 与发送端比对，一致才 `mv` 覆盖目标。
+///
+/// 为什么不是 curl/wget：设备固件不保证带，而 busybox 是 emOS 既有工具（`/system`
+/// 的 df/md5sum 都走它）；为什么要 `.part` + 校验：模型/so 文件损坏只在加载那一刻
+/// 炸，报错不指向文件本身，中途断链绝不能污染目标路径。
+pub(super) async fn stream_file(
+    id: &str,
+    data: &[u8],
+    dest: &'static str,
+    mode: u32,
+) -> Result<Transfer, ShellError> {
+    let (ctl, live) = super::hub_live(id).ok_or(ShellError::Offline)?;
+    let (op, rx) = Operation::reserve(id, ctl, &live, TRANSFER_TIMEOUT)?;
+    let digest = sha256_hex(data);
+    let work = async {
+        op.ctl
+            .send(ControlOut::Json(r#"{"type":"shell_open"}"#.into()))
+            .map_err(|_| ShellError::Offline)?;
+        let mut socket = rx.await.map_err(|_| ShellError::Transport)?;
+        if !live_matches(id, &op.ctl) {
+            return Err(ShellError::Offline);
+        }
+        let result = push(&mut socket, data, dest, mode, &digest, op.deadline).await;
+        let _ = socket.send(Message::Close(None)).await;
+        if !live_matches(id, &op.ctl) {
+            return Err(ShellError::Offline);
+        }
+        result
+    };
+    tokio::select! {
+        _ = op.ctl.closed() => Err(ShellError::Offline),
+        result = timeout_at(op.deadline, work) => result.unwrap_or(Err(ShellError::Timeout)),
+    }
+}
+
+async fn push(
+    socket: &mut WebSocket,
+    data: &[u8],
+    dest: &str,
+    mode: u32,
+    digest: &str,
+    deadline: Instant,
+) -> Result<Transfer, ShellError> {
+    // 1) 探测：同一次往返问完解码器与哈希工具，先发完再发字节。
+    let probe = format!(
+        "if echo dGVzdA== | busybox base64 -d >/dev/null 2>&1; then echo DECODER:ok; \
+         else echo DECODER:none; fi; \
+         if echo x | busybox sha256sum >/dev/null 2>&1; then echo HASH:ok; \
+         else echo HASH:none; fi; echo {PROBE_MARKER}"
+    );
+    send_text(socket, probe).await?;
+    let probe_out = read_until(socket, PROBE_MARKER, deadline).await?;
+    if !probe_out.contains("DECODER:ok") {
+        return Err(ShellError::NoDecoder);
+    }
+    if !probe_out.contains("HASH:ok") {
+        return Err(ShellError::NoHashTool);
+    }
+
+    // 2) heredoc 解码直落 `.part`（`>` 截断上次残留，目标路径保持原样）。
+    let part = format!("{dest}.part");
+    send_text(
+        socket,
+        format!(
+            "busybox base64 -d << '{B64_DELIM}' > {part} && chmod {mode:o} {part} && echo TRANSFER_OK\n"
+        ),
+    )
+    .await?;
+
+    // 3) 正文按块发：块边界切在 base64 字母中间不影响流式解码；末尾补换行让
+    //    定界符独占一行（heredoc 结束条件就是"整行等于定界符"）。
+    let encoded = base64::engine::general_purpose::STANDARD.encode(data);
+    for chunk in encoded.as_bytes().chunks(WRITE_CHUNK) {
+        send_text(socket, String::from_utf8_lossy(chunk).into_owned()).await?;
+    }
+    send_text(socket, format!("\n{B64_DELIM}\n")).await?;
+    read_until(socket, "TRANSFER_OK", deadline).await?;
+
+    // 4) 校验 + 原子替换：设备算出来的摘要才是唯一判据，不一致就删掉 `.part`。
+    send_text(
+        socket,
+        format!(
+            "GOT=$(busybox sha256sum {part} 2>/dev/null); GOT=${{GOT%% *}}; \
+             if [ \"$GOT\" = \"{digest}\" ]; then mv {part} {dest} && chmod {mode:o} {dest} \
+             && echo VERIFY_OK; else rm -f {part}; echo \"VERIFY_BAD:$GOT\"; fi"
+        ),
+    )
+    .await?;
+    let verify_out = read_until(socket, "VERIFY_", deadline).await?;
+    if !verify_out.contains("VERIFY_OK") {
+        return Err(ShellError::VerifyFailed);
+    }
+    Ok(Transfer {
+        bytes: data.len(),
+        sha256: digest.to_string(),
+    })
+}
+
+async fn send_text(socket: &mut WebSocket, text: String) -> Result<(), ShellError> {
+    socket
+        .send(Message::Text(text.into()))
+        .await
+        .map_err(|_| ShellError::Transport)
+}
+
+/// 读到 `needle` 出现为止（跨帧聚合，容忍 Binary/Text 混排与 Ping）。
+async fn read_until(
+    socket: &mut WebSocket,
+    needle: &str,
+    deadline: Instant,
+) -> Result<String, ShellError> {
+    let mut buffer = String::new();
+    loop {
+        let message = match timeout_at(deadline, socket.next()).await {
+            Err(_) => return Err(ShellError::Timeout),
+            Ok(None) | Ok(Some(Err(_))) => return Err(ShellError::Transport),
+            Ok(Some(Ok(message))) => message,
+        };
+        match message {
+            Message::Text(text) => buffer.push_str(&text),
+            Message::Binary(bytes) => buffer.push_str(&String::from_utf8_lossy(&bytes)),
+            Message::Ping(payload) => {
+                socket
+                    .send(Message::Pong(payload))
+                    .await
+                    .map_err(|_| ShellError::Transport)?;
+            }
+            Message::Pong(_) => {}
+            Message::Close(_) => return Err(ShellError::Transport),
+        }
+        if buffer.contains(needle) {
+            return Ok(buffer);
+        }
+        // 固定命令的输出只有几行；超限说明设备回了非预期内容，立刻收手。
+        if buffer.len() > MAX_OUTPUT * 4 {
+            return Err(ShellError::OutputLimit);
+        }
     }
 }
 

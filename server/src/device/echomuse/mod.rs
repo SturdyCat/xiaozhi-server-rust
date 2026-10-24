@@ -61,6 +61,8 @@ mod hub_tests;
 pub(crate) mod listen;
 #[cfg(test)]
 mod listen_tests;
+mod onnx_typed;
+pub(crate) mod oww;
 pub(crate) mod registry;
 pub(crate) mod routes;
 pub(crate) mod runtime;

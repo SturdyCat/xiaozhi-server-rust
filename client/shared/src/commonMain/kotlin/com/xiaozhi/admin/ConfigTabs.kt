@@ -2,16 +2,11 @@ package com.xiaozhi.admin
 
 import com.xiaozhi.admin.ui.*
 
-import com.tencent.kuikly.core.base.CursorType
 import com.tencent.kuikly.core.base.ViewContainer
 import com.tencent.kuikly.core.directives.vbind
 import com.tencent.kuikly.core.directives.vfor
 import com.tencent.kuikly.core.pager.Pager
-import com.tencent.kuikly.core.views.ScrollParams
 import com.tencent.kuikly.core.views.Scroller
-import com.tencent.kuikly.core.views.TabItem
-import com.tencent.kuikly.core.views.Tabs
-import com.tencent.kuikly.core.views.Text
 import com.tencent.kuikly.core.views.View
 
 /** Workflow selection above this layout; exactly two local tabs, each with its own left menu. */
@@ -60,43 +55,25 @@ fun ViewContainer<*, *>.renderConfigLayout(
     }
 }
 
+/**
+ * 工作区顶栏的两个 tab（配置 / 测试）：走组件库 [tabBar]（官方 Tabs 封装、无 PageList 版），
+ * 固定宽 112、指示条内缩 34，与切换前的既有视觉一致。
+ */
 private fun ViewContainer<*, *>.nodeWorkspaceTabs(form: ConfigFormState) {
-    val tabs = listOf(NodeWorkspaceTab.Configuration to "配置", NodeWorkspaceTab.Testing to "测试")
-    Tabs {
-        attr {
-            height(44f)
-            backgroundColor(AdminColors.sidebarBg)
-            defaultInitIndex(if (form.workspaceTab == NodeWorkspaceTab.Testing) 1 else 0)
-            scrollParams(ScrollParams(
-                offsetX = if (form.workspaceTab == NodeWorkspaceTab.Testing) 112f else 0f,
-                offsetY = 0f, contentWidth = 224f, contentHeight = 44f, viewWidth = 112f, viewHeight = 44f, isDragging = false,
-            ))
-            // Official Tabs slider: a rounded pill slides beneath the selected label.
-            indicatorAlignCenter()
-            indicatorInTabItem {
-                View {
-                    attr {
-                        absolutePosition(left = 34f, right = 34f, bottom = 5f)
-                        height(3f)
-                        borderRadius(1.5f)
-                        backgroundColor(AdminColors.accent)
-                    }
-                }
-            }
-        }
-        for ((tab, label) in tabs) {
-            TabItem { _ ->
-                attr { width(112f); height(44f); allCenter(); cursor(CursorType.POINTER) }
-                Text {
-                    attr {
-                        text(label); fontSize(AdminType.body); fontWeightMedium()
-                        color(if (form.workspaceTab == tab) AdminColors.accentTintText else AdminColors.textSecondary)
-                    }
-                }
-                event { click { form.selectWorkspaceTab(tab) } }
-            }
-        }
-    }
+    val tabs = listOf(
+        NodeWorkspaceTab.Configuration to "配置",
+        NodeWorkspaceTab.Testing to "测试",
+    )
+    // 选中下标跟着 form.workspaceTab 走：tabBar 内部按 index 合成 scrollParams 驱动指示条
+    tabBar(
+        tabs = tabs.map { it.second },
+        selectedIndex = { tabs.indexOfFirst { it.first == form.workspaceTab }.coerceAtLeast(0) },
+        onSelect = { form.selectWorkspaceTab(tabs[it].first) },
+        itemWidth = 112f,
+        barHeight = 44f,
+        indicatorInset = 34f,
+        background = AdminColors.sidebarBg,
+    )
 }
 
 private fun ViewContainer<*, *>.workspaceContent(

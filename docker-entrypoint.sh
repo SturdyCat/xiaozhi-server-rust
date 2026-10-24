@@ -13,8 +13,8 @@
 #                                 missing : 仅在关键文件缺失时下载（按模型粒度幂等跳过）
 #                                 force   : 忽略已就绪检查，强制重新下载
 #                                 off     : 不下载（依赖挂载/预置模型）
-#   SENSEVOICE_URL / KOKORO_URL / SILERO_VAD_URL  可覆盖默认下载地址（完整直链，内网镜像用；
-#                                 显式覆盖不会被二次套代理）
+#   SENSEVOICE_URL / KOKORO_URL / SILERO_VAD_URL  可覆盖默认下载地址
+#                                 （完整直链，内网镜像用；显式覆盖不会被二次套代理）
 #   GITHUB_PROXY                  GitHub 代理前缀（**默认空 = 直连原始地址**）。
 #                                 是否走代理由 docker compose 决定：配置了 GITHUB_PROXY 才套用
 #                                 （部署环境无法直连 github.com 时按需配置）；off 亦表示直连。
@@ -26,7 +26,11 @@
 #   - SenseVoice INT8 : sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09（model.int8.onnx + tokens.txt）
 #   - Kokoro INT8     : kokoro-int8-multi-lang-v1_1（中英双语；model.int8.onnx/voices.bin/
 #                       tokens.txt/espeak-ng-data/lexicon-zh.txt/lexicon-us-en.txt/dict）
-#   - Silero VAD      : silero_vad.onnx
+#   - Silero VAD      : silero_vad.onnx（服务端 ASR 切段用，sherpa 自己解析）
+#
+# 设备语音门模型（`oww/silero_vad.onnx`，EchoMuse 专用）**不在这里下载**：
+# 它只在 `[echomuse].enabled=true` 时由服务端（server 进程）按官方源补一份，见
+# `server/src/device/echomuse/oww.rs`。没开 EchoMuse 的部署不为它下任何字节。
 
 set -eu
 

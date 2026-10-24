@@ -81,11 +81,11 @@ internal fun ViewContainer<*, *>.echoMuseDeviceCard(
             vif({ state.confirmDeleteId == row.deviceId }) { echoMuseDeleteConfirm(row, state, toast, ctx) }
         },
         body = {
-            // 卡内左右分栏：与配置工作区同一 menuPaneRow 原语（左菜单 │ 1px 纵向分隔线 │ 右面板），
-            // 菜单列用同一底色 sidebarBg，左右两侧才看得出是「菜单 + 内容」而非两块并排文本
+            // 卡内左右分栏：与配置工作区同一 menuPaneRow 原语（左菜单 │ 1px 纵向分隔线 │ 右面板）。
+            // 菜单列**不设独立底色**（沿用卡片 cardBg）：sidebarBg 是页面色，铺在卡片里会比卡片
+            // 暗一档，看起来像嵌了块异物；「菜单 + 内容」的区分交给那条 1px 分隔线。
             menuPaneRow(
                 menuWidth = ECHOMUSE_MENU_WIDTH,
-                menuBackground = AdminColors.sidebarBg,
                 panelPaddingLeft = AdminSpace.md,
                 menu = {
                     View {

@@ -15,6 +15,10 @@ async fn shell_failures_have_distinct_non_success_http_contracts() {
         (ShellError::Transport, 502, "shell_transport"),
         (ShellError::OutputLimit, 502, "output_limit"),
         (ShellError::CommandFailed(7), 502, "command_failed"),
+        // 文件下发（shell::stream_file）：三种失败都明确"没有干净结果"。
+        (ShellError::NoDecoder, 502, "no_base64_decoder"),
+        (ShellError::NoHashTool, 502, "no_hash_tool"),
+        (ShellError::VerifyFailed, 502, "verify_failed"),
     ] {
         let response = error.response();
         assert_eq!(response.status().as_u16(), expected);
@@ -31,7 +35,14 @@ async fn shell_failures_have_distinct_non_success_http_contracts() {
 
 #[test]
 fn log_sources_are_closed_allowlist_and_scripts_are_fixed() {
-    for source in ["messages", "messages_last", "last_kmsg_prev", "supervisor"] {
+    for source in [
+        "server",
+        "messages",
+        "messages_last",
+        "last_kmsg_prev",
+        "supervisor",
+        "net",
+    ] {
         assert!(log_command(source).unwrap().starts_with("tail -c 49152 /"));
     }
     for source in [
@@ -43,6 +54,8 @@ fn log_sources_are_closed_allowlist_and_scripts_are_fixed() {
     ] {
         assert!(log_command(source).is_none());
     }
+    // 设备本机服务日志：原先只能插数据线开 console 才 cat 得到，现在走同一白名单远程读
+    assert_eq!(log_command("server"), Some("tail -c 49152 /tmp/server.log"));
     assert_eq!(log_command("messages"), Some("tail -c 49152 /run/messages"));
     assert_eq!(
         log_command("messages_last"),
@@ -52,6 +65,7 @@ fn log_sources_are_closed_allowlist_and_scripts_are_fixed() {
         log_command("last_kmsg_prev"),
         Some("tail -c 49152 /data/emos/last_kmsg.prev")
     );
+    assert_eq!(log_command("net"), Some("tail -c 49152 /run/net.log"));
     assert!(REBOOT.contains("kill -TERM 1"));
     assert!(!REBOOT.contains("/system/bin/reboot"));
     assert!(

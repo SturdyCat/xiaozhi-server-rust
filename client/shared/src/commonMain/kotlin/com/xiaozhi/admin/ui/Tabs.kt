@@ -1,5 +1,6 @@
 package com.xiaozhi.admin.ui
 
+import com.tencent.kuikly.core.base.Color
 import com.tencent.kuikly.core.base.CursorType
 import com.tencent.kuikly.core.base.PagerScope
 import com.tencent.kuikly.core.base.ViewBuilder
@@ -41,6 +42,90 @@ class TabUiState(scope: PagerScope) {
 
 /** 单个标签页：title = tab 项文案；content 在该页的 Scroller 闭包内执行（节点挂进该页）。 */
 class TabPage(val title: String, val content: ViewBuilder)
+
+/**
+ * 标签栏（官方 [Tabs] 封装，**无 PageList 版**）：只画 tab 项与滑动指示条，
+ * 内容由调用方用 `vif` 就地切换。
+ *
+ * 与 [tabbedPanel] 的分工：那个是「整页翻页」（需要显式 pageWidth/pageHeight、
+ * 每页自带 Scroller，适合整块工作区）；这里是「面板内分区」，内容随容器高度自适应，
+ * 适合卡片里的小范围切分（如 EchoMuse 设备管理的 状态/信息/日志/维护）。
+ *
+ * 为什么能脱离 PageList 工作：官方 Tabs 的指示条位置与 tab 选中态只从
+ * `scrollParams`（滚动进度）或 `defaultInitIndex` 推导，并由 [TabsAttr.scrollParams]
+ * 在变更时回调 `updateIndicatorPositionIfNeed`。这里按「固定宽 tab × 选中下标」
+ * 合成一份「已滚到第 index 页」的 [ScrollParams] 喂回去，于是：
+ * 点 tab → 调用方改下标 observable → attr 闭包重跑 → 指示条滑动 + TabItem.selected 回写。
+ *
+ * ⚠️ 因此每个 tab **等宽**（[itemWidth]）：等宽才能让合成的滚动参数与真实 tab 帧对上
+ * （自适应宽度下指示条会算偏）。tab 文案因此要短。
+ * ⚠️ 必须在目标容器闭包内**非限定**调用（经 ctx. 调用会把节点挂到 Pager 根容器）。
+ */
+fun ViewContainer<*, *>.tabBar(
+    tabs: List<String>,
+    selectedIndex: () -> Int,
+    onSelect: (Int) -> Unit,
+    itemWidth: Float = 96f,
+    barHeight: Float = 44f,
+    indicatorInset: Float = 30f,
+    /** 标签栏底色；null = 透明（沿用父容器底色，如卡片内）。 */
+    background: Color? = null,
+) {
+    if (tabs.isEmpty()) return
+    Tabs {
+        attr {
+            // Tabs 源码强约束：必须显式 height，否则运行时 throwRuntimeError
+            this.height(barHeight)
+            background?.also { backgroundColor(it) }
+            val index = selectedIndex().coerceIn(0, tabs.lastIndex)
+            defaultInitIndex(index)
+            scrollParams(
+                ScrollParams(
+                    offsetX = itemWidth * index,
+                    offsetY = 0f,
+                    contentWidth = itemWidth * tabs.size,
+                    contentHeight = barHeight,
+                    viewWidth = itemWidth,
+                    viewHeight = barHeight,
+                    isDragging = false,
+                ),
+            )
+            indicatorAlignCenter()
+            // 官方指示条：TabItem 底部短条（absolutePosition 到 tab 帧内的右下），随下标滑动
+            indicatorInTabItem {
+                View {
+                    attr {
+                        absolutePosition(left = indicatorInset, right = indicatorInset, bottom = 5f)
+                        height(3f)
+                        borderRadius(1.5f)
+                        backgroundColor(AdminColors.accent)
+                    }
+                }
+            }
+        }
+        tabs.forEachIndexed { index, title ->
+            TabItem { state ->
+                attr {
+                    width(itemWidth)
+                    this.height(barHeight)
+                    allCenter()
+                    // tab 是点击目标：悬停指针
+                    cursor(CursorType.POINTER)
+                }
+                Text {
+                    attr {
+                        text(title)
+                        fontSize(AdminType.body)
+                        fontWeightMedium()
+                        // state.selected 是官方 TabItem 的响应式选中态（由 Tabs 回写）
+                        if (state.selected) color(AdminColors.accentTintText) else color(AdminColors.textSecondary)
+                    }
+                }
+                event { click { onSelect(index) } }
+            }
+        }
+    }
+}
 
 /**
  * 标签页面板：**官方 Tabs + PageList 原生联动结构**（对齐官方文档

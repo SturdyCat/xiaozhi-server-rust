@@ -172,7 +172,9 @@ VOLUME ["/data"]
 #   XIAOZHI_CONFIG_DB：配置库文件（/data 内；空库首启以内置默认启动并落库）
 #   XIAOZHI_ADMIN_DIR：管理页静态目录覆盖（见 main.rs load_config），指向上方 /app/web
 #   XIAOZHI_AUTO_DOWNLOAD_MODELS：missing(默认,缺失才下) | force | off
-#   （模型统一从 HuggingFace 直连下载，无需代理；SENSEVOICE_URL/KOKORO_URL/SILERO_VAD_URL 可覆盖为内网镜像仓库 ID）
+#   （模型统一从 HuggingFace 直连下载，无需代理；SENSEVOICE_URL/KOKORO_URL/SILERO_VAD_URL 可覆盖为内网镜像地址）
+#   OWW_VAD_URL 只被 server 进程读取：下发到 EchoMuse 设备的语音门模型（Silero v5，
+#   官方来源 openWakeWord v0.5.1 release），且仅在 [echomuse].enabled=true 时下载。
 # 注意：不得内置 RUST_LOG 默认值——RUST_LOG 显式存在时 main.rs 的日志过滤兜底
 #   （info + ort::logging 压 warn，见 default_log_filter）永不生效，ort 明细会刷屏。
 #   需要调级别时在 compose 的 environment 里按需设置 RUST_LOG。

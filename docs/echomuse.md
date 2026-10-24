@@ -122,7 +122,7 @@ session … 回复（耗时 1820ms / 音频 4100ms / LLM 87 字 / 工具 0 个�
 - `GET /api/echomuse/devices/{id}` → 单台（同上形状）；不存在 404 `{"error":"device not found"}`。
 - `POST /api/echomuse/devices/{id}/approve`，body `{"label":"客厅音箱"}`（label 可省）→ 200 + 该设备 JSON（`approved=true`，label trim 后非空才改名）；不存在 404。
 - `POST /api/echomuse/devices/{id}/command`，body `{"action":"wifi","ssid":"...","psk":"..."}`：在线（hub 有 control 通道）返回 202 `{"queued":true}` 并下发 `wifi_change`；不在线 409，action 非法 / wifi 缺 ssid 400。旧 `action:reboot` 不再下发固件不认识的消息，改用下述需要确认的系统重启接口。WiFi 当前仍只报告排队，不代表切换结果已确认。
-- `POST /api/echomuse/devices/{id}/settings`，body 为**部分更新**的每设备配置，与已有键合并保存。白名单：`wakeWordEnabled`/`wakeSound`/`bleProxyEnabled`/`bleProxyConnections`（bool）、`owwModel`（string）、`owwOnDevice`（`off|shadow|on`）、`wakeSoundLevel`（`quiet|medium|loud`）、`owwThreshold`（大于 0、不超过 1 的数字）、`wakeMic`（0~6 整数）；白名单外、类型错或越界 400。旧持久化的本地唤醒 bool / 提示音数字在推送时兼容转换，不再发送会导致 Go 整条 config 解析失败的旧类型。在线返回 202 并排队 `config`（`wakeWordEnabled` 单独一条）；离线返回 200 保存待下次接入。`delivered:true` 只代表下发通道接受，不等于设备执行确认。
+- `POST /api/echomuse/devices/{id}/settings`，body 为**部分更新**的每设备配置，与已有键合并保存。白名单：`wakeWordEnabled`/`wakeSound`/`bleProxyEnabled`/`bleProxyConnections`（bool）、`owwModel`（string）、`owwOnDevice`（`off|shadow|on`）、`wakeSoundLevel`（`quiet|medium|loud`）、`owwThreshold`（大于 0、不超过 1 的数字）、`wakeMic`（0~6 整数）；**音频链路**：`beamformingEnabled`/`aecEnabled`/`agcEnabled`（bool）、`beamAngle`（-1~360，-1=自动追踪最响源）、`vadThreshold`（大于 0、不超过 1）、`micGainDb`（0~42 整数）；白名单外、类型错或越界 400。音频链路键对应上游 `config.go` 的 `ConfigMessage`，**0/-1 都是合法值**（指针类型区分"未设置"与"设为零"）；设备默认 `beamformingEnabled=true / beamAngle=-1 / aecEnabled=true / agcEnabled=true / vadThreshold=0.004 / micGainDb=24`。排障价值：波束 baseline 校准不出来导致 mic 静音时，`beamformingEnabled:false` 退回单麦（`wakeMic`，默认 0=中心麦）可一步验证"是不是波束把信号吃掉了"。旧持久化的本地唤醒 bool / 提示音数字在推送时兼容转换，不再发送会导致 Go 整条 config 解析失败的旧类型。在线返回 202 并排队 `config`（`wakeWordEnabled` 单独一条）；离线返回 200 保存待下次接入。`delivered:true` 只代表下发通道接受，不等于设备执行确认。
 - **唤醒词模型（`owwModel`）语义**（对照上游 wilbowes/EchoMuse @858987c）：存储为空表示**设备默认** `hey_jarvis_v0.1`（上游 `device/internal/config/config.go` 的 `OWW_MODEL` 缺省，人读唤醒词 "hey jarvis"，面板据此显示默认唤醒词）；修改即随 `config` 下发 `owwModel`，设备 `Apply` 只认**非空**值——所以"恢复默认"必须显式发 `hey_jarvis_v0.1`，发空串不会重置。设备本地评分（`owwOnDevice=on`）只认设备已预装的分类器：官方内置共四款 `hey_jarvis_v0.1`/`alexa_v0.1`/`hey_mycroft_v0.1`/`hey_rhasspy_v0.1`（上游 `em_oww_assets.py` `STOCK_MODELS`，开通时全部预装；`timer`/`weather` 是意图模型不算唤醒词），切到设备没有的模型会听不到唤醒词（上游 #191）；本服务器不做上游 shell 面的模型自动分发，设备只消费本地已装的分类器，面板下拉列官方四款并追加服务端 `oww-models/` 的已上传清单（`GET /api/files?path=oww-models`，端点见下方"文件管理 API"一节），已存自定义值原样保留。人读名规则同上游 `display_name`：去 `_v<数字>` 后缀、下划线转空格。自定义模型全流程见下节。
 - **唤醒词面板官方信息移植**（对照上游 `controller/static/dashboard.jsx` Wake word 卡，HEAD e2f2f4e）：「唤醒词检测位置」下拉用官方标签与顺序（`On this Echo` 官方推荐 / `On the controller`），`shadow` 是开发者诊断档、仅设备已处于该档时作为选项显示（服务端仍接受三值，恢复需设备先处于 shadow 或走 API）；选中档位附官方解释文案。灵敏度滑杆移植官方量程 **0.1~0.975、步进 0.025、Precise↔Eager 反向**（左严格右积极；上限 0.975 因 openWakeWord 分数是低于 1.0 即饱和的 sigmoid、判定为 `score≥threshold`，1.0 永不唤醒，官方实测 18,021 帧峰值 0.999），轨外历史值读数保真、把手钉在端点，拖动才写入量程内新值；服务端白名单仍是 `(0,1]` 不变。提示音附官方语义（听到唤醒词播放短促上升音），档位仅开关打开时显示。
 - `DELETE /api/echomuse/devices/{id}`（客户端用等价别名 `POST .../delete`，NetworkModule 只有 GET/POST）→ 200 `{"removed":true,"device_id"}`；不存在 404。只删静态登记（批准/唤醒词设置一并清除），不断开在线会话，设备再次 register 会重新登记——用于清理 mock/联调设备。
@@ -148,9 +148,35 @@ session … 回复（耗时 1820ms / 音频 4100ms / LLM 87 字 / 工具 0 个�
 1. **训练**：`cd oww_forge && docker compose -f docker-compose.deploy.yml up -d forge-ui`（`http://<host>:8769`；NVIDIA GPU 用 `:latest` CUDA 镜像，其余含 Apple Silicon 一律 `:latest-cpu`，Docker on macOS 无 GPU 透传）；CLI 等价 `forge.py assets|new|piper-voices|google-tts|build|test`。首次资产下载约 25GB（ACAV100M 负样本特征 ~17GB、验证集、AudioSet/FMA、MIT RIR、piper LibriTTS-R）。
 2. **创建**：`forge.py new "hey biscuit"`（UI 可逗号分隔多个拼写变体覆盖口音，训练前可试听每个拼写），生成 `data/wakewords/<name>/config.yml`。选 **3–4 音节**短语（短词天生弱）；可调 `n_samples`（默认 30k，难词 50k–100k）、`custom_negative_phrases`（把实测误唤醒词加进去重训，最便宜的修复）、`target_false_positives_per_hour`/`max_negative_weight`（误唤醒 vs 漏唤醒的权衡）；口音/语言走 `piper-voices --language`、Google TTS 混入或真实录音（20–50 条即有可测提升）；非英语在 config 设 `language`。
 3. **训练与验证**：`forge.py build <name>`（GPU 约 1–2h，CPU 过夜；可中断续跑，`build --from-step augment|train`），产物 `data/models/<name>.onnx`。`forge.py test <name> --wav <录音>` 验证：自己声音近 1.0、普通语音近 0.0；不达标回第 2 步加负样本/变体/录音重训。
-4. **分类器进服务端 `oww-models/`，再自行进设备**：设备按 `owwModel` 值取**文件名主干**在 `/data/local/share/echomuse/oww/` 找 `<主干>.onnx`（上游 `device/internal/wakeword/shadow/open.go` `ModelStem`：以 `.onnx` 结尾取 basename 主干，否则原样透传；主干同时是评分 key，须唯一、仅字母数字 `_.-`、≤64 字符）。上游控制器会先上传（`POST /api/oww_models/upload` 落 `oww_models/` 数据卷）再经 shell 面自动同步资产、**装好才切**；本服务器只覆盖「上传进服务端数据卷」这一段——训练产物经管理台文件页（或 `POST /api/files/upload?path=oww-models/<主干>.onnx`）传到服务端 `oww-models/`，设备设置页下拉即会列出；但**没有** 服务端→设备的自动分发，模型文件仍需自行进入设备本地 `/data/local/share/echomuse/oww/`（如 TWRP/adb push）——设备只认本地已装的分类器。若该设备从未装过 OWW 运行时还需 `libonnxruntime.so`/`melspectrogram.onnx`/`embedding_model.onnx` 三件（上游镜像 `/app/models/oww_runtime`，或用官方 controller 开通一次自动装齐）。
+4. **分类器进服务端 `oww-models/`，再自行进设备**：设备按 `owwModel` 值取**文件名主干**在 `/data/local/share/echomuse/oww/` 找 `<主干>.onnx`（上游 `device/internal/wakeword/shadow/open.go` `ModelStem`：以 `.onnx` 结尾取 basename 主干，否则原样透传；主干同时是评分 key，须唯一、仅字母数字 `_.-`、≤64 字符）。上游控制器会先上传（`POST /api/oww_models/upload` 落 `oww_models/` 数据卷）再经 shell 面自动同步资产、**装好才切**；本服务器只覆盖「上传进服务端数据卷」这一段——训练产物经管理台文件页（或 `POST /api/files/upload?path=oww-models/<主干>.onnx`）传到服务端 `oww-models/`，设备设置页下拉即会列出；但**唤醒词分类器仍没有服务端→设备的自动分发**，文件需自行进入设备本地 `/data/local/share/echomuse/oww/`（如 TWRP/adb push）——设备只认本地已装的分类器（**语音门模型 `silero_vad.onnx` 是例外，已支持一键下发，见下节**）。若该设备从未装过 OWW 运行时还需 `libonnxruntime.so`/`melspectrogram.onnx`/`embedding_model.onnx` 三件（上游镜像 `/app/models/oww_runtime`，或用官方 controller 开通一次自动装齐）。
 5. **设置 `owwModel`**：**必须先确认设备本地已装同名分类器再下发模型**——服务端上传只解决「有地方放」，不等于「设备已装」；顺序反了且 `owwOnDevice=on` 时设备听不到任何唤醒词（只剩按钮；上游 #191，上游有 hold-back 保护而本服务器没有）。面板下拉列官方四款 + 服务端 `oww-models/` 已上传的自定义模型（已存自定义值原样显示）；设置自定义值走 `POST /api/echomuse/devices/{id}/settings`，body `{"owwModel":"<主干>.onnx"}`（上游风格绝对路径亦可，只要 `.onnx` 结尾且主干与文件名一致）；确认 `owwOnDevice=on`、`owwThreshold` 合适（oww_forge 建议值仅 advisory）。恢复默认显式发 `hey_jarvis_v0.1`。
 6. **验收**：`GET .../system/logs?source=messages` 应出现 shadow 加载成功行（`onnxruntime …, model <主干>`；加载失败只 log 一次并退回按钮唤醒，不会主动告警）；最终以喊新唤醒词有响应为准，把设置下发成功当设备已换词是错误结论。
+
+### 设备语音门退化成 RMS（缺 `silero_vad.onnx`）
+
+设备端语音门（`device/internal/client/speechgate.go`）优先用 Silero VAD 判断"这一段是不是人声"；`/data/local/share/echomuse/oww/silero_vad.onnx` 缺失时退回**纯 RMS 门限**，设备日志会出现：
+
+```
+[data] speech gate: RMS threshold (/data/local/share/echomuse/oww/silero_vad.onnx not installed)
+[data] VAD diag: rms=0.00661 threshold=0.06340 gain=24dB clipped=0 gate=false active=false agc=true
+```
+
+RMS 门限与真实电平差近 10 倍（24dB 增益后 `rms≈0.0066` vs `threshold=0.0634`），`gate` 永远不开 → 一帧人声都不上行 → 服务端收不到音频、没有 ASR → 设备 `streamMic: no speech detected within timeout — ending turn`。用户侧表现就是"按了 action 键、说了话、没有反应"，而且灯效/监听状态看起来都正常（那些是另一条链路）。
+
+修复：`POST /api/echomuse/devices/{id}/oww/install-vad`（无 body）。服务端读模型卷里的 `$XIAOZHI_MODELS_DIR/oww/silero_vad.onnx`（容器默认 `/data/models/oww/silero_vad.onnx`，**由服务端在启用 EchoMuse 时启动后下载**，见下），经受限 shell 面 **base64 heredoc** 写到设备该路径，设备侧 `busybox sha256sum` 与发送端一致才 `mv` 落位（不一致删 `.part`，目标文件保持原样）。成功 200：
+
+```json
+{"device_id":"…","installed":true,"file":"silero_vad.onnx","path":"/data/local/share/echomuse/oww/silero_vad.onnx","bytes":1806511,"sha256":"da5e8a9c…","applies":"next-turn"}
+```
+
+- **不用重启设备**：设备每轮开轮都 `stat` 一次该文件（`openSilero` 注释 "Cheap when it is absent"），装好后**下一轮**语音门就走 Silero。
+- **模型来源与官方一致**：上游 `controller/Dockerfile` 的 `silero` 阶段取的是 **openWakeWord v0.5.1 release 资产** `https://github.com/dscripka/openWakeWord/releases/download/v0.5.1/silero_vad.onnx`（**Silero v5**），并用 `sha256sum -c` 钉住输入 `a35ebf52…5af28` 与重写后的输出 `da5e8a9c…164d0`。本服务端照搬这条来源与两段摘要（`oww.rs::OFFICIAL_VAD_URL/OFFICIAL_VAD_SHA256/TYPED_VAD_SHA256`）。
+- **只在启用时下载**：`[echomuse].enabled=true` 时，server 在启动阶段（与 mDNS 广播同一分支）后台补一份到 `$XIAOZHI_MODELS_DIR/oww/silero_vad.onnx`；**未启用 EchoMuse 的部署不会为它下载任何字节**，容器入口脚本也不再无条件拉它。同时遵守共用总开关 `XIAOZHI_AUTO_DOWNLOAD_MODELS`：`off` 不下（需自行预置）、`force` 忽略已有文件重下、未设/未知按 `missing`（缺失才下）。下载失败只告警、不阻断启动——缺失只让本接口 500，ASR/TTS 不受影响。`OWW_VAD_URL` 可覆盖为内网镜像；文件在 github.com 上，因此也遵守 `GITHUB_PROXY`（只对 github.com 套前缀，`off` 表示直连）；`XIAOZHI_OWW_VAD_PATH` 指向别处的文件时**不自动下载**（不往用户指定位置写）。
+- 落地前按摘要分类：等于官方输出摘要 → 已是 typed，直接下发；等于官方输入摘要 → 读取时重写；两者都不是 → 必须能解析成 ONNX 才接受（自建模型），否则拒绝落盘。刻意不与 sherpa 的 `/data/models/silero_vad.onnx` 共用：那份是服务端切段用的原始模型，装到设备会崩。
+- **必须是 typed-field 重写版**：原始副本权重以 protobuf `raw_data` 存放，armv7 上的 ORT 1.19 在 `CreateSession` 直接 SIGBUS（上游 `controller/tools/silero_typed.py` 就是做这件事）。服务端在**读取时**就地转换（`echomuse/onnx_typed.rs`，与 Python 版逐比特等价，1,806,511 B / sha256 `da5e8a9c…d164d0`），已经是 typed 的文件原样使用、不改写磁盘。装错文件不会静默生效——设备回算校验会失败。
+- **必须是 v5**：设备按 `input[1,N] + sr + h/c[2,1,64]`、640 样本一步、带递归状态调用。v4（512 样本、无状态）看着像模型，装上每轮都判静音。
+- 设备缺 `busybox base64 -d` / `busybox sha256sum` 时 502（`no_base64_decoder` / `no_hash_tool`），**一个字节都不发**；校验不符 502 `verify_failed`。
+- 同一把 shell 锁：传输期间该设备不接受其它系统操作（`busy` 409），120s 上限。
 
 ### emOS Web 管理（安全子集）
 
@@ -161,12 +187,13 @@ EchoMuse 设备卡展开管理区后，显式读取运行状态、系统信息�
 | `GET /runtime` | `{device_id,session_id,online,stats,listen_state,volume_state,mute_state,updated_at}`；保存设备上报的最新状态，stats 只保留已知标量字段（每帧最多 16 KiB、字符串最多 256 字节），无上报为 null；`connected_secs` 不是设备 uptime |
 | `POST /volume`，body `{"level":0}` | 仅已批准的在线 emOS，整数 0~127，且设备声明 speaker；下发 `volume_set`，202 `{queued:true,applied:false,level}`；实际音量以稍后 `volume_state` 为准，不持久化为开机音量 |
 | `GET /system/info` | 固定的 emOS / 内核 / uptime / 内存 / 磁盘诊断命令，200 `{device_id,output,exit_code:0}`；不接受 command/path/url |
-| `GET /system/logs?source=messages` | 固定源 `messages`（运行期）、`messages_last`（关机保存）、`last_kmsg_prev`（上次内核）、`supervisor`（EchoMuse 启动监督）；返回同上并附 source，只取有界尾部 |
+| `GET /system/logs?source=server` | 固定源 `server`（设备本机服务日志 `/tmp/server.log`，原先只能插数据线开 console 才能 `cat`）、`messages`（运行期）、`messages_last`（关机保存）、`last_kmsg_prev`（上次内核）、`supervisor`（EchoMuse 启动监督）、`net`（网络协商日志 `/run/net.log`）；返回同上并附 source，只取有界尾部（48 KiB） |
 | `POST /system/reboot`，body `{"confirm":true}` | 通过受限 shell 向 emOS PID 1 发 TERM，使用 init 自己的同步/停止服务/只读重挂流程；202 `{dispatched:true,rebooted:false}` 仅确认重启请求已发出，实际重启必须观察重新连接 |
+| `POST /oww/install-vad` | 把模型卷里的 `oww/silero_vad.onnx`（读取时就地转成 typed-field 布局的 Silero v5）经受限 shell 面推到设备 `/data/local/share/echomuse/oww/silero_vad.onnx`，设备侧 sha256 校验通过才落位；200 `{installed:true,file,path,bytes,sha256,applies:"next-turn"}`。用于修复"语音门退化成 RMS → 说了话不上行 → 没有 ASR"，见下节 |
 
-系统诊断/日志/重启仅限**已登记、已批准、当前在线且上报 `base_os=emos`** 的设备；同时要求非空 `[server].expected_token` 和 `[echomuse].token`。网页用 `?token=<URL 编码后的管理 token>` 打开管理台（对整个 token 做 `encodeURIComponent`，尤其是 `+`、`=`、`&` 等字符；勿附无值的裸查询参数）。设备 shell 回拨除设备 token 外，还须匹配当前已认证 control 的 TCP 来源 IP 和会话探针，且必须存在服务端发起的待处理请求；不接受自发 shell。每台设备一次只允许一项操作，超时、断开、取消均释放占用；单次 15 秒总超时，命令输出与完成标记聚合上限 64 KiB，未收到完成标记或退出非零不返回成功。
+系统诊断/日志/重启仅限**已登记、已批准、当前在线且上报 `base_os=emos`** 的设备。管理面鉴权按「局域网默认可管理」：`[server].expected_token` 为空（默认）时管理台免 token 直接可用，配置了 token 即收紧为必须鉴权。网页用 `?token=<URL 编码后的管理 token>` 打开管理台（对整个 token 做 `encodeURIComponent`，尤其是 `+`、`=`、`&` 等字符；勿附无值的裸查询参数）。设备 shell 回拨除设备 token 外，还须匹配当前已认证 control 的 TCP 来源 IP 和会话探针，且必须存在服务端发起的待处理请求；不接受自发 shell。每台设备一次只允许一项操作，超时、断开、取消均释放占用；单次 15 秒总超时，命令输出与完成标记聚合上限 64 KiB，未收到完成标记或退出非零不返回成功。
 
-系统接口错误以 `{error,code}` 回报：未知设备 404、未批准 403、不支持的 OS 422、离线/占用 409、未配置凭据 503、超时 504、传输或命令执行失败 502。设备 token 不会发给浏览器，管理接口继续使用统一管理鉴权。诊断日志可能含网络标识，复制或分享前应人工检查。
+系统接口错误以 `{error,code}` 回报：未知设备 404、未批准 403、不支持的 OS 422、离线/占用 409、控制对端不可用 503、超时 504、传输或命令执行失败 502。设备 token 不会发给浏览器，管理接口继续使用统一管理鉴权。诊断日志可能含网络标识，复制或分享前应人工检查。
 
 **验证边界**：本次覆盖自动化测试与 Web/macOS 编译，不等同于浏览器交互或真机验证。受保护管理功能的现成凭据入口在 Web；macOS 原生宿主目前未提供管理 token 输入，编译通过不代表可连接非空管理 token 的服务端。WiFi、BLE、shell 拨回、日志路径与 PID 1 重启仍需在目标固件上验收；不要对未核实的日志内容、上线状态或 API 202 声称设备已经执行成功。`tools/echomuse_mock_device.py` 当前只覆盖语音回路。emOS OTA 仍刻意未实现：它需要读取每台设备本机 boot、保留内核/DTB、重建镜像、校验刷写和 trial 回滚，不能套用 ESP OTA，也不能发布通用 boot.img。
 
@@ -188,6 +215,7 @@ BLE 回归包括真实 loopback HTTP 路由的鉴权/配置/批准门禁、六�
 ## 维护约束
 
 - 帧型按**方向**分命名空间（`0x04/0x05` 下行是音乐帧、上行是哨兵），解析只走 `frames::parse_uplink`；`0x06`/`0x08` 是蓝牙代理帧（`ble_proxy` 开启才翻译，`ble.rs` 消费）。
+- **`/data` 空闲保活 + 心跳不是断链**：服务端在 data 链上每 15s 发一条协议层 WS Ping（对齐官方 controller；mock 设备 `recv_message` 的 `0x9 → 0xA` 即此契约）。缺了它，链路长时间无字节（监听中设备语音门未开时尤其如此）会被设备读超时/中间设备以 `close 1006` 踢掉，设备每 ~15-20s 重拨一次。⚠️ `data_loop` 与 `data_writer::write_frame` 都必须把 `Message::Ping`/`Message::Pong` 当**非致命**（忽略即可，axum 自动回 Pong），只有 `Close`/读错误/流结束才收尾——曾用 `_ => break`，结果设备回我们 Ping 的那次 Pong 被当致命帧，自己把自己踢下线。
 - `/em/data` 认领：真机固件拨通后**先发一条 Text identify** `{"type":"identify","device_id":…}`（data 面唯一约定的文本帧，上游 `device/internal/client/data.go` 同款），服务端读首帧按其 device_id 精确认领（多台设备并存也对号入座）；mock/测试路径可省 identify，此时显式 `?device_id=` 优先，否则仅当恰好一台未认领时取它。identify 之后 data 面恒为二进制，再收到的 Text 一律忽略不断链。认领取走 `data_rx`，data 任务退出经 `hub_restore_data` 归还（探针校验同会话，防旧认领顶掉新 register 的条目）——链路闪断后设备重拨立即再认领，不必等下次 register；hub 条目存活到会话结束（管理面在线判定/GATT 下发依赖这一点）。
 - `GET /em/status` 只读状态查询：`{"enabled":bool,"devices":[{"device_id","connected_secs"}]}`，devices 取 hub 当前 key（= 处于会话中的在线设备）；关闭时也返回 200 + `enabled:false`（排查用，不 404、无鉴权）。
 - 帧编解码、能力协商形状、transport 翻译、hub 认领/归还、蓝牙代理状态机与 GATT 请求构造的回归在 `server/src/device/echomuse/tests.rs`、`hub_tests.rs` 与 `ble_tests.rs`（channel 直驱不起真实 WS）；真机联调用 `tools/echomuse_mock_device.py`。注册表 `APP_SECTION_HOT` 已登记 `echomuse: RestartOnly`（护栏测试会抓遗漏）。

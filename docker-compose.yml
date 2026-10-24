@@ -57,11 +57,14 @@ services:
       # GitHub 代理前缀（和以前一样：配置了才走代理，不配置直连原始地址）。
       # 直连 github.com / release-assets 不可达的环境按需配置；off 亦表示直连。
       GITHUB_PROXY: "https://tvv.tw/"
-      # 下载地址可被 SENSEVOICE_URL/KOKORO_URL/SILERO_VAD_URL 覆盖为完整直链（内网镜像，
-      # 显式 URL 不会被二次套代理），需要时自行添加。
+      # 下载地址可被 SENSEVOICE_URL/KOKORO_URL/SILERO_VAD_URL 覆盖为完整直链
+      # （内网镜像，显式 URL 不会被二次套代理），需要时自行添加。
+      # 设备语音门模型（oww/silero_vad.onnx）不在这里下载：仅当 [echomuse].enabled=true
+      # 时由 server 进程按官方源补一份，可用 OWW_VAD_URL 覆盖为内网镜像。
     volumes:
       # ★ 唯一数据卷：宿主 ./server-data ↔ 容器 /data，**内部分目录**各司其职：
       #   /data/models/SenseVoiceSmall 等   模型（首启缺失时入口脚本自动下载，持久化）
+      #   /data/models/oww/silero_vad.onnx  下发到 EchoMuse 设备的语音门模型（启用 echomuse 时自动下载）
       #   /data/data.db                     配置+记忆共用的 SQLite 库（配置唯一真源：
       #                                管理页「保存配置」写 cfg_documents；空库首启自举默认配置）
       #   /data/firmware/<功能>/<型号>/<板型|_>/

@@ -47,6 +47,7 @@ pub(crate) fn admin_routes() -> axum::Router<Arc<Engines>> {
         .route("/api/echomuse/devices/{id}/command", post(device_command))
         .route("/api/echomuse/devices/{id}/settings", post(device_settings))
         .merge(super::system::routes())
+        .merge(super::oww::routes())
 }
 
 // ---- 响应构造（纯函数，测试直驱） ----
@@ -139,9 +140,20 @@ fn command_out(body: &serde_json::Value) -> Result<String, &'static str> {
 }
 
 /// settings 白名单：唤醒词相关且设备实际执行的 config 键（协议 camelCase，
-/// 部分"零值忽略"更新；其余设备键走默认，不需要管理面暴露）。
+/// 部分"零值忽略"更新）。
 /// `bleProxyEnabled`/`bleProxyConnections` 是蓝牙代理的每设备开关（接入时由
 /// `config_baseline` 打基线，单台可覆盖，例如关连接留扫描）。
+///
+/// **音频链路子集**（官方 `device/internal/config/config.go` 的 `ConfigMessage`
+/// 全量字段里与"听到 / 听清"直接相关的那几项）：
+/// - 设备默认值：`beamformingEnabled=true`、`beamAngle=-1`（自动追踪最响源）、
+///   `aecEnabled=true`、`agcEnabled=true`、`vadThreshold=0.004`、`micGainDb=24`
+///   （设备侧 clamp 0..42）、`adcDigitalGain=88`、`adcMicpga=40`。
+/// - 服务端此前一个都不下发，设备只吃存储值/默认值；波束 baseline 校准不出来
+///   导致 mic 静音时，管理面无从干预。暴露出来是为了现场排障：
+///   `beamformingEnabled:false` 退回单麦（`wakeMic`，默认 0=中心麦）可一步验证
+///   "是不是波束把信号吃掉了"；`micGainDb` / `vadThreshold` 用于调门限；
+///   `aecEnabled` / `agcEnabled` 用于 A/B。
 const SETTINGS_KEYS: &[(&str, &str)] = &[
     ("wakeWordEnabled", "bool"),
     ("owwOnDevice", "off|shadow|on"),
@@ -152,6 +164,13 @@ const SETTINGS_KEYS: &[(&str, &str)] = &[
     ("wakeMic", "integer 0..6"),
     ("bleProxyEnabled", "bool"),
     ("bleProxyConnections", "bool"),
+    // 音频链路（0 值是合法设置，设备按指针类型区分"未设置"与"设为零"）
+    ("beamformingEnabled", "bool"),
+    ("beamAngle", "number -1..360"),
+    ("aecEnabled", "bool"),
+    ("agcEnabled", "bool"),
+    ("vadThreshold", "(0,1]"),
+    ("micGainDb", "integer 0..42"),
 ];
 
 /// 过滤并校验 settings body：只留白名单键且类型匹配（`number` 接受整/浮）。
@@ -176,6 +195,8 @@ pub(crate) fn filter_settings(
             "off|shadow|on" => matches!(v.as_str(), Some("off" | "shadow" | "on")),
             "quiet|medium|loud" => matches!(v.as_str(), Some("quiet" | "medium" | "loud")),
             "integer 0..6" => v.as_u64().is_some_and(|n| n <= 6),
+            "integer 0..42" => v.as_u64().is_some_and(|n| n <= 42),
+            "number -1..360" => v.as_f64().is_some_and(|n| (-1.0..=360.0).contains(&n)),
             "(0,1]" => v.as_f64().is_some_and(|n| n > 0.0 && n <= 1.0),
             _ => v.is_number(),
         };
