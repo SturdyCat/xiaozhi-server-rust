@@ -31,10 +31,11 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{Map, Value};
 
 use super::ConfigStore;
+use crate::config::defaults::{self, AlignReport, CURRENT_DEFAULTS_VERSION};
 use crate::config::Config;
 
-/// 配置库迁移编号（只增不改）。
-const CFG_LATEST_VERSION: i64 = 1;
+/// 配置库迁移编号（只增不改）。m2 = `cfg_documents.defaults_version`。
+const CFG_LATEST_VERSION: i64 = 2;
 
 /// SQLite 配置后端。
 pub struct SqliteConfigStore {
@@ -84,6 +85,53 @@ impl SqliteConfigStore {
         Ok(true)
     }
 
+    /// **存量配置的默认值对齐**（启动时调用一次；规则见 [`crate::config::defaults`]）。
+    ///
+    /// 返回 `None` = 无需处理（空库 / 已是当前默认值版本 / 库内文档解析失败——最后一种
+    /// 只告警不写库，避免用"半个配置"覆盖用户的库）。返回 `Some(report)` = 已对齐并落库。
+    ///
+    /// 为什么必须做：库里存的是**显式值**，serde 的默认值只对缺失键生效。老库把
+    /// `[wakeup].enabled` 存成 `false` 后，代码把默认改成 `true` 也永远不会生效
+    /// ——表现为"重装/重建容器后仍要手动打开唤醒问候语"。
+    pub fn align_defaults(&self) -> Result<Option<AlignReport>> {
+        let row: Option<(String, i64)> = {
+            let conn = self.conn();
+            conn.query_row(
+                "SELECT doc, defaults_version FROM cfg_documents WHERE id = 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+            .context("读取 cfg_documents 失败")?
+        };
+        let Some((doc, version)) = row else {
+            return Ok(None);
+        };
+        let version = version.clamp(0, u32::MAX as i64) as u32;
+        if version >= CURRENT_DEFAULTS_VERSION {
+            return Ok(None);
+        }
+        let mut value: serde_json::Value =
+            serde_json::from_str(&doc).context("解析配置库中的 Config 失败")?;
+        let report = defaults::align(&mut value, version);
+        let mut cfg: Config = match serde_json::from_value(value) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(
+                    "配置库默认值对齐跳过：库内配置无法解析为合法 Config（{e}）。\
+                     请先在管理台保存一次配置修复它，之后重启即可继续对齐。"
+                );
+                return Ok(None);
+            }
+        };
+        // 写回前走一遍规范形状（旧写法搬到规范位置、非法值收敛），与保存路径同口径
+        // ——否则库里的文档会与「文档即规范形状」的约定不一致。
+        cfg.normalize();
+        self.write_doc(&cfg, "defaults-migration")
+            .context("默认值对齐写库失败")?;
+        Ok(Some(report))
+    }
+
     /// 取锁（中毒后继续用：单条 SQL 失败不该让配置能力永久不可用）。
     fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
         self.conn.lock().unwrap_or_else(|e| e.into_inner())
@@ -102,7 +150,10 @@ impl SqliteConfigStore {
     }
 
     /// 写 `cfg_documents`（BEGIN IMMEDIATE 抢占写锁）+ 落一份到 `cfg_revisions`
-    /// （`source` 区分来源：save / bootstrap / preset:<name> / rollback）。
+    /// （`source` 区分来源：save / bootstrap / preset:<name> / rollback / defaults-migration）。
+    ///
+    /// `defaults_version` 一律写 [`CURRENT_DEFAULTS_VERSION`]：能走到这里就说明文档是
+    /// 当前代码产出的（已按最新默认值规范化），以后升级默认值不必再对齐这一份。
     fn write_doc(&self, cfg: &Config, source: &str) -> Result<()> {
         let doc = serde_json::to_string(cfg).context("序列化配置失败")?;
         let now = now_ms();
@@ -110,12 +161,13 @@ impl SqliteConfigStore {
         let mut conn = self.conn();
         let tx = conn.transaction().context("开启事务失败")?;
         tx.execute(
-            "INSERT INTO cfg_documents (id, doc, revision, updated_at, updated_by)
-             VALUES (1, ?1, ?2, ?3, ?4)
+            "INSERT INTO cfg_documents (id, doc, revision, updated_at, updated_by, defaults_version)
+             VALUES (1, ?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(id) DO UPDATE SET
                doc=excluded.doc, revision=excluded.revision,
-               updated_at=excluded.updated_at, updated_by=excluded.updated_by",
-            params![doc, rev, now, source],
+               updated_at=excluded.updated_at, updated_by=excluded.updated_by,
+               defaults_version=excluded.defaults_version",
+            params![doc, rev, now, source, CURRENT_DEFAULTS_VERSION],
         )
         .context("写入 cfg_documents 失败")?;
         // revision 是内容指纹：与已有历史完全一致（如密钥打码回传、无实质变更的保存）
@@ -143,6 +195,7 @@ fn migrate(conn: &Connection) -> Result<()> {
     for v in (applied + 1)..=CFG_LATEST_VERSION {
         let ddl = match v {
             1 => MIGRATION_1,
+            2 => MIGRATION_2,
             _ => anyhow::bail!("配置库迁移编号 {v} 未定义（代码与库版本不匹配）"),
         };
         conn.execute_batch(ddl)
@@ -419,6 +472,15 @@ CREATE TABLE IF NOT EXISTS cfg_presets (
     created_at  INTEGER NOT NULL,
     note        TEXT
 );
+"#;
+
+/// m2：记录「这份文档是在哪一代默认值下产生的」（见 `config/defaults.rs`）。
+///
+/// 老库没有这一列 → `DEFAULT 0` 表示"从未对齐过"，启动时按 `defaults::BATCHES`
+/// 逐条对齐一次（只对齐"仍是旧默认"的项，用户显式改过的保留）。之后每次写库
+/// （保存/导入/自举）都会写成当前版本，因此对齐只发生一次。
+const MIGRATION_2: &str = r#"
+ALTER TABLE cfg_documents ADD COLUMN defaults_version INTEGER NOT NULL DEFAULT 0;
 "#;
 
 #[cfg(test)]

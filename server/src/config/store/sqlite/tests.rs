@@ -164,3 +164,142 @@ fn backup_produces_file() {
     let _ = std::fs::remove_file(&backup);
     let _ = std::fs::remove_file(&path);
 }
+
+// ---- 存量配置默认值对齐（config/defaults.rs）----
+
+/// 造一份"旧版本落库"的文档：标准行为全为旧默认（false），版本记为 0。
+fn insert_legacy_doc(store: &SqliteConfigStore, mutate: impl FnOnce(&mut Config)) {
+    let mut cfg = Config::default();
+    cfg.wakeup.enabled = false;
+    cfg.command.enabled = false;
+    cfg.nlu.enabled = false;
+    cfg.soul.enabled = false;
+    cfg.memory.enabled = false;
+    cfg.memory.recall_enabled = false;
+    cfg.memory.extraction_enabled = false;
+    cfg.echomuse.enabled = false;
+    cfg.llm.enabled = false;
+    mutate(&mut cfg);
+    let doc = serde_json::to_string(&cfg).unwrap();
+    store
+        .conn()
+        .execute(
+            "INSERT INTO cfg_documents (id, doc, revision, updated_at, updated_by, defaults_version)
+             VALUES (1, ?1, 'legacy-rev', 0, 'test', 0)
+             ON CONFLICT(id) DO UPDATE SET doc=excluded.doc",
+            rusqlite::params![doc],
+        )
+        .unwrap();
+}
+
+#[test]
+fn align_defaults_migrates_legacy_document() {
+    let (store, path) = tmp_store("align_legacy");
+    insert_legacy_doc(&store, |_| {});
+    let report = store.align_defaults().unwrap().expect("旧库必须被对齐");
+    assert_eq!(report.from_version, 0);
+    assert_eq!(
+        report.changed.len(),
+        crate::config::defaults::STANDARD_BEHAVIOR_ON.len()
+    );
+    let loaded = store.load().unwrap();
+    assert!(loaded.wakeup.enabled, "唤醒问候语必须被打开");
+    assert_eq!(loaded.wakeup.greeting, "我在");
+    assert!(loaded.command.enabled && loaded.nlu.enabled);
+    assert!(loaded.memory.enabled && loaded.memory.recall_enabled);
+    assert!(loaded.echomuse.enabled && loaded.llm.enabled);
+    // 版本已推进 + 留了一条可回滚的历史
+    let ver: i64 = store
+        .conn()
+        .query_row(
+            "SELECT defaults_version FROM cfg_documents WHERE id = 1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        ver as u32,
+        crate::config::defaults::CURRENT_DEFAULTS_VERSION
+    );
+    let n: i64 = store
+        .conn()
+        .query_row(
+            "SELECT COUNT(*) FROM cfg_revisions WHERE source = 'defaults-migration'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(n, 1, "对齐必须留 history（可用 revision 回滚）");
+    // 幂等：第二次不再动库
+    assert!(store.align_defaults().unwrap().is_none());
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn align_defaults_keeps_user_customized_switches() {
+    let (store, path) = tmp_store("align_keep");
+    // 用户当年手动打开过技能级联（true ≠ 旧默认 false）→ 必须原样保留
+    insert_legacy_doc(&store, |cfg| cfg.nlu.enabled = true);
+    let report = store.align_defaults().unwrap().expect("仍需对齐其余项");
+    assert!(
+        report.kept.contains(&"nlu.enabled".to_string()),
+        "{}",
+        report.summary()
+    );
+    let loaded = store.load().unwrap();
+    assert!(loaded.nlu.enabled);
+    assert!(loaded.wakeup.enabled, "没动过的项照常对齐");
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn align_defaults_noop_on_fresh_bootstrap() {
+    let (store, path) = tmp_store("align_fresh");
+    assert!(store.bootstrap_default_if_empty().unwrap());
+    // 自举写入的就是当前默认值 → 对齐无事可做（不重复写库）
+    assert!(store.align_defaults().unwrap().is_none());
+    let _ = std::fs::remove_file(&path);
+}
+
+/// 老库（只有 m1、没有 `defaults_version` 列）→ 打开时自动补列并完成对齐。
+#[test]
+fn legacy_db_without_column_is_migrated() {
+    let dir = std::env::temp_dir().join(format!("xz_cfg_test_m1_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("legacy.db");
+    let _ = std::fs::remove_file(&path);
+    {
+        // 手工造一个"发布版 m1 库"：建表 + 记 version=1 + 写旧默认文档
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE _cfg_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
+             CREATE TABLE cfg_documents (
+                 id INTEGER PRIMARY KEY CHECK (id = 1),
+                 doc TEXT NOT NULL, revision TEXT NOT NULL,
+                 updated_at INTEGER NOT NULL, updated_by TEXT
+             );
+             CREATE TABLE cfg_revisions (
+                 revision TEXT PRIMARY KEY, doc TEXT NOT NULL, created_at INTEGER NOT NULL,
+                 source TEXT NOT NULL, author TEXT, note TEXT
+             );
+             INSERT INTO _cfg_migrations (version, applied_at) VALUES (1, 0);",
+        )
+        .unwrap();
+        let mut cfg = Config::default();
+        cfg.wakeup.enabled = false;
+        cfg.command.enabled = false;
+        let doc = serde_json::to_string(&cfg).unwrap();
+        conn.execute(
+            "INSERT INTO cfg_documents (id, doc, revision, updated_at, updated_by)
+             VALUES (1, ?1, 'legacy', 0, 'bootstrap')",
+            rusqlite::params![doc],
+        )
+        .unwrap();
+    }
+    let store = SqliteConfigStore::open(path.to_str().unwrap()).unwrap();
+    let report = store.align_defaults().unwrap().expect("老库必须被对齐");
+    assert!(report.changed.iter().any(|c| c.path == "wakeup.enabled"));
+    let loaded = store.load().unwrap();
+    assert!(loaded.wakeup.enabled && loaded.command.enabled);
+    let _ = std::fs::remove_file(&path);
+}

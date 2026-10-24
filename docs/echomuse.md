@@ -139,7 +139,7 @@ session … 回复（耗时 1820ms / 音频 4100ms / LLM 87 字 / 工具 0 个�
 | `POST /api/files/delete`（body `{"path"}`）/ `DELETE /api/files?path=` | 删文件或目录（递归）；缺失 404；受保护 403；根目录 400。POST 别名给 Kuikly 客户端（只有 GET/POST） |
 | `GET /api/files/download?path=` | 附件下载（octet-stream + `Content-Disposition: attachment`）；缺失 404，目录 400 |
 
-`data.db`/`data.db-wal`/`data.db-shm` 受保护：**任意层级**最后一段命中即禁删、禁覆盖（403，那是 SQLite 配置+记忆库文件）。`oww-models/` 是唤醒词模型目录（不预创建，上传/建目录按需生成）；服务端只负责存储与列出，**不做**服务端→设备的模型分发。
+`data.db`/`data.db-wal`/`data.db-shm` 受保护：**任意层级**最后一段命中即禁删、禁覆盖（403，那是 SQLite 配置+记忆库文件）。`oww-models/` 是唤醒词模型目录（不预创建，上传/建目录按需生成；**但目录不存在时 `GET /api/files?path=oww-models` 回空清单 200 而非 404**——管理台每次启动都会查它填唤醒词下拉，按 404 会让客户端每次启动刷一条假的错误日志）；服务端只负责存储与列出，**不做**服务端→设备的模型分发。
 
 ### 自定义唤醒词流程（oww_forge 训练 → 分类器进设备 → `owwModel` 指向）
 

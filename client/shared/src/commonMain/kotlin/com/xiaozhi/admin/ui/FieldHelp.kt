@@ -1,7 +1,5 @@
-package com.xiaozhi.admin
+package com.xiaozhi.admin.ui
 
-import com.tencent.kuikly.core.base.Border
-import com.tencent.kuikly.core.base.BorderStyle
 import com.tencent.kuikly.core.base.CursorType
 import com.tencent.kuikly.core.base.PagerScope
 import com.tencent.kuikly.core.base.ViewContainer
@@ -77,24 +75,15 @@ fun ViewContainer<*, *>.infoBadge(title: String, help: String) {
         attr {
             size(18f, 18f)
             marginLeft(6f)
-            borderRadius(9f)
-            border(Border(1f, BorderStyle.SOLID, AdminColors.textTertiary))
-            alignItemsCenter()
-            justifyContentCenter()
+            allCenter()
             // 可点击目标：悬停指针，提示可点
             cursor(CursorType.POINTER)
         }
         event {
             click { state.show(title, help) }
         }
-        Text {
-            attr {
-                fontSize(11f)
-                fontWeightMedium()
-                color(AdminColors.textTertiary)
-                text("i")
-            }
-        }
+        // 图标走官方 Canvas 矢量（不再用「i」字符 + 手绘圆形描边：字重与圆圈直径随字号漂移）
+        appIcon({ IconToken.Info }, size = 16f, tint = { AdminColors.textTertiary })
     }
 }
 
@@ -113,14 +102,8 @@ fun ViewContainer<*, *>.fieldHelpDialog() {
             showAlert(state.visible)
             inWindow(true)
             customContentView {
-                View {
-                    attr {
-                        width(modalWidth())
-                        backgroundColor(AdminColors.cardBg)
-                        borderRadius(AdminShape.radiusLg)
-                        border(Border(1f, BorderStyle.SOLID, AdminColors.divider))
-                        padding(AdminSpace.cardPadding)
-                    }
+                // 弹层壳与卡片同一套外观（cardBg/圆角/1px 边框/cardPadding），宽度按窗口算
+                dialogSurface(width = modalWidth) {
                     Text {
                         attr {
                             fontSize(AdminType.section)
@@ -144,7 +127,7 @@ fun ViewContainer<*, *>.fieldHelpDialog() {
                             }
                         }
                     }
-                    View { attr { height(AdminSpace.sm) } }
+                    vGap(AdminSpace.sm)
                     secondaryButton("知道了") { state.dismiss() }
                 }
             }

@@ -15,6 +15,9 @@ sherpa = ["dep:sherpa-onnx", "dep:audiopus"]
 # 不静态链 onnxruntime/onnx——否则与 sherpa-onnx-sys 的静态 onnx 对象符号重复，链接失败。
 # 仅类型检查用 `DOCS_RS=1 cargo check --features nlu`；真实推理需模型文件（见 config.example.toml [nlu]）。
 nlu = ["dep:ort", "dep:tokenizers"]
+# ESPHome Native API 桥（`[esp_home].enabled` 时监听 6053，把 Dot 2 暴露为标准 ESPHome
+# 节点；纯 Rust，无系统依赖）。默认关闭：不加该 feature 时零依赖、零监听、零行为变化。
+esp_home = ["dep:esphome-native-api"]
 
 [dependencies]
 axum = { version = "0.8.4", features = ["ws"] }
@@ -28,7 +31,7 @@ thiserror = "1.0.69"
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 # 日志时间戳本地化（app::logtime）：控制台 fmt 层与 /api/logs 日志流共用的唯一时间出口
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
+chrono = { version = "0.4.20", default-features = false, features = ["clock"] }
 uuid = { version = "1.11.0", features = ["v4"] }
 futures-util = "0.3.31"
 tower-http = { version = "0.6", features = ["fs"] }
@@ -39,6 +42,11 @@ mdns-sd = "0.11"
 sherpa-onnx = { version = "1.13.8", optional = true }
 audiopus = { version = "0.2", optional = true }
 
+# 仅在 esp_home feature 下引入：ESPHome Native API 协议（protobuf + noise_psk 加密），
+# 托管 Hello/DeviceInfo/Ping 握手与加密；我们只补「实体列表 + 状态应答」（该 crate 的
+# 高层 EspHomeServer 在 v3.0.0 仍是空壳，见 src/device/esp_home/server.rs 模块文档）。
+esphome-native-api = { version = "3.0.0", optional = true }
+
 # 仅在 nlu feature 下引入（ONNX Runtime 动态库 + 分词器）
 # 精确钉 rc.10：caret 会被锁到 rc.14（要求 ONNX Runtime >=1.31），与镜像内 1.22.1 dylib 不配对
 ort = { version = "=2.0.0-rc.10", optional = true, features = ["load-dynamic"] }
@@ -48,9 +56,15 @@ hmac = "0.13.0"
 sha2 = "0.11.0"
 base64 = "0.23.1"
 httpdate = "1.0.3"
-rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }
+rustls = { version = "0.23.18", default-features = false, features = ["std", "ring"] }
 webpki-roots = "0.26"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
+
+[dev-dependencies]
+# 仅测试用：`esphome-native-api` 内部用 `log` 打协议日志（握手/读取循环终止原因），
+# 而主程序用 tracing。测试里装一个 env_logger 才能看到 crate 的真实错误，
+# 否则 `rx` 莫名 Closed 时只能看到客户端侧的 `UnexpectedEof`。
+env_logger = "0.11"
 
 [profile.release]
 opt-level = 3

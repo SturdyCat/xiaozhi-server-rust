@@ -1,5 +1,7 @@
 package com.xiaozhi.admin
 
+import com.xiaozhi.admin.ui.*
+
 /**
  * Compiled navigation metadata, not executable/downloaded UI plugins.
  * Stable section IDs preserve links and config paths; renderers stay explicit ViewContainer

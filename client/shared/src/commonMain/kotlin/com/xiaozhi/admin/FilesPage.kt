@@ -1,5 +1,7 @@
 package com.xiaozhi.admin
 
+import com.xiaozhi.admin.ui.*
+
 import com.tencent.kuikly.core.base.CursorType
 import com.tencent.kuikly.core.base.ViewContainer
 import com.tencent.kuikly.core.directives.vfor
@@ -84,12 +86,12 @@ private fun ViewContainer<*, *>.filesHeader(state: FilesState, toast: ToastState
         secondaryButton("刷新", loading = { state.loading }, loadingText = "刷新中…", icon = IconToken.Refresh) {
             state.refresh(ctx)
         }
-        View { attr { width(AdminSpace.sm) } }
+        hGap(AdminSpace.sm)
         secondaryButton("新建文件夹", icon = IconToken.Folder) {
             state.mkdirDraft = ""
             state.mkdirOpen = !state.mkdirOpen
         }
-        View { attr { width(AdminSpace.sm) } }
+        hGap(AdminSpace.sm)
         primaryButton(
             "上传模型或文件",
             loading = { state.uploading },
@@ -134,7 +136,7 @@ private fun ViewContainer<*, *>.filesMkdirForm(state: FilesState, toast: ToastSt
             primaryButton("创建", loading = { state.actionBusy }, loadingText = "创建中…") {
                 state.mkdir(ctx) { ok, msg -> toast.show(msg, if (ok) "ok" else "error") }
             }
-            View { attr { width(AdminSpace.sm) } }
+            hGap(AdminSpace.sm)
             secondaryButton("取消") {
                 state.mkdirOpen = false
                 state.mkdirDraft = ""
@@ -197,7 +199,7 @@ private fun ViewContainer<*, *>.filesEntryRow(
         }
         // 受保护文件：只在偏离时打标，且不给删除入口（服务端也会 403）
         if (entry.isProtected) {
-            View { attr { width(AdminSpace.sm) } }
+            hGap(AdminSpace.sm)
             statusBadge(state = { "busy" }, text = { "保护" })
         } else {
             View {
@@ -215,7 +217,7 @@ private fun ViewContainer<*, *>.filesEntryRow(
                     ) {
                         state.remove(ctx, entry) { ok, msg -> toast.show(msg, if (ok) "ok" else "error") }
                     }
-                    View { attr { width(AdminSpace.xs) } }
+                    hGap(AdminSpace.xs)
                     secondaryButton("取消") { state.confirmDelete = "" }
                 }
             }

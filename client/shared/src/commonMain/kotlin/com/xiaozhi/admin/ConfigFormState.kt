@@ -1,5 +1,7 @@
 package com.xiaozhi.admin
 
+import com.xiaozhi.admin.ui.*
+
 import com.tencent.kuikly.core.base.PagerScope
 import com.tencent.kuikly.core.pager.Pager
 import com.tencent.kuikly.core.reactive.collection.ObservableList

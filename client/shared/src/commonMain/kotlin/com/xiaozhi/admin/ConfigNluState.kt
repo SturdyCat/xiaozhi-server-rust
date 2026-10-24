@@ -1,5 +1,7 @@
 package com.xiaozhi.admin
 
+import com.xiaozhi.admin.ui.*
+
 import com.tencent.kuikly.core.pager.Pager
 import com.tencent.kuikly.core.base.PagerScope
 import com.tencent.kuikly.core.nvi.serialization.json.JSONArray
@@ -57,7 +59,7 @@ class SlotDraft(scope: PagerScope) {
 
 class NluSectionState(private val scope: PagerScope) {
 
-    var enabled by scope.observable("false")
+    var enabled by scope.observable("true")
     /// 轻量模型执行阈值（0~1，越高越保守；1.0 = 关闭模型级）。
     var modelThreshold by scope.observable("0.9")
     /// 最高分领先其他技能最高分的最小差值（防相近指令歧义误触发）。
@@ -153,7 +155,7 @@ class NluSectionState(private val scope: PagerScope) {
         root.put(
             "nlu",
             JSONObject().apply {
-                put("enabled", enabled.toBooleanStrictOrNull() ?: false)
+                put("enabled", enabled.toBooleanStrictOrNull() ?: true)
                 // 留空/非法 = 回落服务端默认；服务端会在刷新时做范围校验（0~1）。
                 put("model_threshold", modelThreshold.trim().toDoubleOrNull() ?: 0.9)
                 put("model_margin", modelMargin.trim().toDoubleOrNull() ?: 0.1)
@@ -166,7 +168,7 @@ class NluSectionState(private val scope: PagerScope) {
     /** 用服务端 `/api/config` 回包填充（缺键保留当前草稿；数组如实重建）。 */
     fun fill(obj: JSONObject) {
         obj.optJSONObject("nlu")?.let { n ->
-            enabled = n.optBoolean("enabled", enabled.toBooleanStrictOrNull() ?: false).toString()
+            enabled = n.optBoolean("enabled", enabled.toBooleanStrictOrNull() ?: true).toString()
             modelThreshold = n.optDouble("model_threshold", modelThreshold.trim().toDoubleOrNull() ?: 0.9).toString()
             modelMargin = n.optDouble("model_margin", modelMargin.trim().toDoubleOrNull() ?: 0.1).toString()
             n.optJSONArray("intents")?.let { arr ->

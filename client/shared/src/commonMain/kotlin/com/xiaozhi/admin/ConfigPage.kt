@@ -1,10 +1,11 @@
 package com.xiaozhi.admin
 
+import com.xiaozhi.admin.ui.*
+
 import com.tencent.kuikly.core.annotations.Page
 import com.tencent.kuikly.core.base.ViewBuilder
 import com.tencent.kuikly.core.directives.vif
 import com.tencent.kuikly.core.pager.Pager
-import com.tencent.kuikly.core.views.View
 
 /**
  * 管理后台 · 配置页（config），位于 shared 公共层，跨端复用（web / Android / iOS / OHOS）。
@@ -75,7 +76,7 @@ class ConfigPage : Pager(), FieldHelpHost {
                     secondaryButton("重新加载") {
                         ctx.form.reload(ctx)
                     }
-                    View { attr { width(AdminSpace.sm) } }
+                    hGap(AdminSpace.sm)
                 }
                 // 三态按钮：saving → 「保存中…」灰底拦截点击；接口返回后短暂显示
                 // 「✓ 已保存 / ✕ 保存失败」（form.saveResult，约 2s 后自动回落）。

@@ -1,5 +1,7 @@
 package com.xiaozhi.admin
 
+import com.xiaozhi.admin.ui.*
+
 import com.tencent.kuikly.core.base.CursorType
 import com.tencent.kuikly.core.base.ViewContainer
 import com.tencent.kuikly.core.directives.vfor
@@ -70,20 +72,15 @@ private fun ViewContainer<*, *>.healthBannerRow(row: HealthRow, onJump: (section
                 text(row.display)
             }
         }
-        View { attr { width(AdminSpace.sm) } }
+        hGap(AdminSpace.sm)
         statusBadge(
             state = { if (row.phase == "failed") "error" else "busy" },
             text = { if (row.phase == "failed") "异常" else "降级" },
         )
         View { attr { flex(1f) } }
         if (row.jumpable) {
-            Text {
-                attr {
-                    fontSize(AdminType.micro)
-                    color(AdminColors.accent)
-                    text("去修复 ›")
-                }
-            }
+            // 行尾指示箭头走官方 Canvas 矢量图标（不再用「›」字符当图标）
+            appIcon({ IconToken.ChevronRight }, size = 14f, tint = { AdminColors.accent })
         }
     }
     // 原因摘要（含「怎么修」）：横幅里也直接可见，不用点进健康卡
@@ -179,42 +176,29 @@ private fun ViewContainer<*, *>.healthCardRow(row: HealthRow, onJump: (section: 
                 paddingTop(AdminSpace.sm)
                 paddingBottom(AdminSpace.xs)
             }
-            View {
-                attr {
-                    flexDirectionRow()
-                    alignItemsCenter()
-                    // 可跳转行悬停指针
-                    if (row.jumpable) {
-                        cursor(CursorType.POINTER)
-                    }
-                }
-                if (row.jumpable) {
-                    event { click { onJump(row.configSection) } }
-                }
-                Text {
-                    attr {
-                        flex(1f)
-                        fontSize(AdminType.body)
-                        fontWeightMedium()
-                        color(AdminColors.textPrimary)
-                        text(row.display)
-                    }
-                }
-                if (row.activeImpl.isNotEmpty()) {
-                    Text {
-                        attr {
-                            fontSize(AdminType.micro)
-                            color(AdminColors.textTertiary)
-                            marginRight(AdminSpace.sm)
-                            text(row.activeImpl)
+            // 偏离行标题：整行可跳转（headerRow 的 onClick 自带指针），右侧实现名 + 徽标
+            headerRow(
+                title = row.display,
+                actions = {
+                    if (row.activeImpl.isNotEmpty()) {
+                        Text {
+                            attr {
+                                fontSize(AdminType.micro)
+                                color(AdminColors.textTertiary)
+                                marginRight(AdminSpace.sm)
+                                text(row.activeImpl)
+                            }
                         }
                     }
-                }
-                statusBadge(
-                    state = { if (row.phase == "failed") "error" else "busy" },
-                    text = { if (row.phase == "failed") "异常" else "降级" },
-                )
-            }
+                    statusBadge(
+                        state = { if (row.phase == "failed") "error" else "busy" },
+                        text = { if (row.phase == "failed") "异常" else "降级" },
+                    )
+                },
+                tone = HeaderTone.PRIMARY,
+                bottomGap = 0f,
+                onClick = if (row.jumpable) ({ onJump(row.configSection) }) else null,
+            )
             // 原因必须显示（怎么修就在 last_error 里）
             if (row.reason.isNotEmpty()) {
                 Text {
@@ -227,13 +211,17 @@ private fun ViewContainer<*, *>.healthCardRow(row: HealthRow, onJump: (section: 
                 }
             }
             if (row.jumpable) {
-                Text {
-                    attr {
-                        fontSize(AdminType.micro)
-                        color(AdminColors.accent)
-                        marginTop(AdminSpace.xs)
-                        text("点击跳到「${sectionLabel(row.configSection)}」配置项 ›")
+                View {
+                    attr { flexDirectionRow(); alignItemsCenter(); marginTop(AdminSpace.xs) }
+                    Text {
+                        attr {
+                            fontSize(AdminType.micro)
+                            color(AdminColors.accent)
+                            text("点击跳到「${sectionLabel(row.configSection)}」配置项")
+                        }
                     }
+                    hGap(4f)
+                    appIcon({ IconToken.ChevronRight }, size = 12f, tint = { AdminColors.accent })
                 }
             }
         }

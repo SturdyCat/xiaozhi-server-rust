@@ -253,6 +253,43 @@ fn op_delete_matrix_file_dir_recursive_protected_and_missing() {
 }
 
 #[test]
+fn op_list_optional_dir_missing_is_empty_200() {
+    let root = temp_root("op-list-opt");
+    std::fs::create_dir_all(&root).unwrap();
+
+    // `oww-models/` 未创建（没人传过唤醒词模型）：空清单 200，而不是 404——
+    // 管理台每次启动都会无条件查它，404 会变成一条假的客户端错误日志。
+    let (listed_root, entries) = op_list(&root, OWW_MODELS_DIR).unwrap();
+    assert_eq!(listed_root, std::fs::canonicalize(&root).unwrap());
+    assert!(entries.is_empty(), "缺失的可选业务目录应回空清单");
+
+    // 白名单只认顶层精确名：其它缺失路径、以及它的子路径仍 404。
+    assert_eq!(
+        op_list(&root, "missing").unwrap_err().status,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        op_list(&root, "oww-models/sub").unwrap_err().status,
+        StatusCode::NOT_FOUND
+    );
+
+    // 目录建起来后照常列出内容（上传/建目录仍是按需创建，不预创建）。
+    op_mkdir(&root, OWW_MODELS_DIR).unwrap();
+    std::fs::write(root.join(OWW_MODELS_DIR).join("a.onnx"), b"x").unwrap();
+    let (_, entries) = op_list(&root, OWW_MODELS_DIR).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].name, "a.onnx");
+
+    // 存储根本身不存在时仍是 404（首次部署/卷未挂载），行为不变。
+    let absent = root.join("no-such-root");
+    assert_eq!(
+        op_list(&absent, OWW_MODELS_DIR).unwrap_err().status,
+        StatusCode::NOT_FOUND
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn op_download_and_op_list_contract_edges() {
     let root = temp_root("op-dl");
     std::fs::create_dir_all(root.join("sub")).unwrap();

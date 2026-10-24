@@ -170,6 +170,15 @@ async fn run(config: Config, config_store: Arc<dyn ConfigStore>) -> Result<()> {
         };
         crate::device::echomuse::spawn_mdns(mdns_port);
     }
+    // ESPHome Native API 桥（可选模块）：`--features esp_home` 编译期开关 +
+    // `[esp_home].enabled` 运行期开关，默认关闭。暴露 Dot 2 状态（binary_sensor：
+    // 在线/聆听/思考/播报/静音）+ 音量控制（number），并在设备侧 BLE 代理开启时
+    // 宣告 `bluetooth_proxy`（Dot 2 当 BLE 代理）。见
+    // docs/research/emx-integration-analysis.md §4.1.1 / §4.1.2。
+    #[cfg(feature = "esp_home")]
+    if config.esp_home.enabled {
+        crate::device::esp_home::spawn(config.esp_home.clone(), engines.clone());
+    }
     // 管理客户端发现（常驻、无配置项）：广播 `_xiaozhi-admin._tcp`，macApp 等
     // 非 web 客户端经 Bonjour 浏览后自动连接，免手填 IP（见 app/discovery.rs）。
     crate::device::discovery::spawn_admin_mdns(config.server.port);
@@ -248,6 +257,15 @@ fn load_config_inner() -> (Config, Arc<dyn ConfigStore>) {
                 }
                 Ok(false) => {}
                 Err(e) => tracing::warn!("空配置库自举写默认配置失败（以内置默认启动）: {e:#}"),
+            }
+            // 存量配置的默认值对齐：老库把「标准行为」存成了显式 false，代码把默认值
+            // 改成 true 也不会生效（serde 的默认值只对**缺失键**生效）。这里按库内
+            // `defaults_version` 对齐一次：仍是旧默认的项 → 打开；用户显式改过的项 → 保留。
+            // 见 `config/defaults.rs`（为什么不能用"一律写默认值"解决）。
+            match store.align_defaults() {
+                Ok(Some(report)) => tracing::info!("{}", report.summary()),
+                Ok(None) => {}
+                Err(e) => tracing::warn!("存量配置默认值对齐失败（本次按库内原值启动）: {e:#}"),
             }
             let config = match store.load() {
                 Ok(c) => c,

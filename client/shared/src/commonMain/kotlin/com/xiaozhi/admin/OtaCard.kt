@@ -1,5 +1,7 @@
 package com.xiaozhi.admin
 
+import com.xiaozhi.admin.ui.*
+
 import com.tencent.kuikly.core.base.ViewContainer
 import com.tencent.kuikly.core.directives.vfor
 import com.tencent.kuikly.core.directives.vif
@@ -76,7 +78,7 @@ fun ViewContainer<*, *>.otaCard(ota: OtaState, toast: ToastState, ctx: Pager) {
         }
         actionRow {
             secondaryButton("选择 .bin 文件") { ota.pick(ctx) }
-            View { attr { width(AdminSpace.sm) } }
+            hGap(AdminSpace.sm)
             // 三态按钮：未选包不可点 → 上传中… → ✓ 已上传 / ✕ 上传失败（约 2s 回落）
             primaryButton(
                 "上传固件",
@@ -131,46 +133,26 @@ private fun ViewContainer<*, *>.otaEntryBlock(
             flexDirectionColumn()
             marginTop(AdminSpace.md)
         }
-        View {
-            attr {
-                flexDirectionRow()
-                alignItemsCenter()
-            }
-            Text {
-                attr {
-                    flex(1f)
-                    fontSize(AdminType.body)
-                    fontWeightMedium()
-                    color(AdminColors.textPrimary)
-                    text(row.title)
+        // 条目标题行（左标题 │ 右偏离徽标）+ 副标题 + 细节：全部走组件库行组件
+        headerRow(
+            title = row.title,
+            actions = {
+                // 旧版条目（无型号信息）只在偏离时打标——它是"需要处理"的状态
+                if (row.legacy) {
+                    statusBadge(state = { "busy" }, text = { "旧版" })
                 }
-            }
-            // 旧版条目（无型号信息）只在偏离时打标——它是"需要处理"的状态
-            if (row.legacy) {
-                statusBadge(state = { "busy" }, text = { "旧版" })
-            }
-        }
-        Text {
-            attr {
-                fontSize(AdminType.caption)
-                color(AdminColors.textSecondary)
-                text(row.subtitle)
-            }
-        }
-        Text {
-            attr {
-                fontSize(AdminType.micro)
-                color(AdminColors.textTertiary)
-                marginTop(4f)
-                text(row.matchNote)
-            }
-        }
+            },
+            tone = HeaderTone.PRIMARY,
+            bottomGap = 0f,
+        )
+        captionLine(row.subtitle)
+        detailLine(row.matchNote)
         actionRow {
             vif({ ota.confirmKey == row.key }) {
                 primaryButton("确认删除", danger = { true }) {
                     ota.remove(ctx, row) { ok, msg -> toast.show(msg, if (ok) "ok" else "error") }
                 }
-                View { attr { width(AdminSpace.sm) } }
+                hGap(AdminSpace.sm)
                 secondaryButton("取消") { ota.confirmKey = "" }
             }
             vif({ ota.confirmKey != row.key }) {

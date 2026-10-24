@@ -39,7 +39,21 @@ use crate::runtime::Engines;
 /// `.onnx` 传到这里，设备设置页的模型下拉据 `GET /api/files?path=oww-models` 列出。
 /// 服务端不主动建目录（upload/mkdir 按需创建）；且**不做** 服务端→设备的模型分发，
 /// 设备只消费本地已装的模型（见 `docs/echomuse.md` 自定义唤醒词一节）。
+/// 缺失时的列表语义见 [`OPTIONAL_DIRS`]。
 pub const OWW_MODELS_DIR: &str = "oww-models";
+
+/// 「允许缺失」的业务目录（相对存储根）：**不存在时 `GET /api/files` 返回空清单 200**，
+/// 而不是 404。
+///
+/// 为什么需要这个白名单：管理台一打开（`AdminPage.refreshAll`）就会无条件查一次
+/// `oww-models/` 来填唤醒词下拉，而该目录在没人上传过模型前本就不存在。按 404 返回会
+/// 让**每次启动都刷一条客户端错误日志**（Kuikly `NetworkModule` 对任何非 2xx 一律
+/// `[kuikly error]Received a non-success status code: 404`，业务侧静默也压不住），
+/// 看起来像故障、实际是正常初始态。
+///
+/// 边界：只对**顶层**目录名精确命中生效，子路径（`oww-models/x`）与其它未知路径仍走
+/// 404；上传/建目录依然按需创建，不预创建任何目录（保持「存储层不造业务副作用」）。
+const OPTIONAL_DIRS: [&str; 1] = [OWW_MODELS_DIR];
 
 /// 单文件上传上限：与固件托管同值（模型 ~1MB，音频/文档留足余量）。
 pub const MAX_FILE_BYTES: usize = crate::device::firmware::MAX_FIRMWARE_BYTES;
@@ -220,18 +234,25 @@ fn internal(what: &str, e: std::io::Error) -> OpError {
     OpError::new(StatusCode::INTERNAL_SERVER_ERROR, format!("{what}: {e}"))
 }
 
-/// 列表：返回 canonical 根（响应的 `root` 字段）+ 排序条目。缺失 404；存在但不是目录 400。
+/// 列表：返回 canonical 根（响应的 `root` 字段）+ 排序条目。
+///
+/// 一般路径缺失 404、存在但不是目录 400；但 [`OPTIONAL_DIRS`] 里的业务目录缺失时按
+/// **空目录 200** 返回（见常量说明）。
 pub(super) fn op_list(root: &Path, rel: &str) -> Result<(PathBuf, Vec<Entry>), OpError> {
+    // 根尚不存在（首次部署、卷未挂载）与「目录不存在」同一语义：404。
+    let root_c = std::fs::canonicalize(root).map_err(|_| not_found("目录", rel))?;
     let dir = resolve_in(root, rel).ok_or_else(|| not_found("目录", rel))?;
-    if !dir.exists() {
-        return Err(not_found("目录", rel));
+    if dir.is_dir() {
+        let entries = list_entries(&dir).map_err(|e| internal("读取目录失败", e))?;
+        return Ok((root_c, entries));
     }
-    if !dir.is_dir() {
+    if dir.exists() {
         return Err(bad(format!("路径不是目录: {rel}")));
     }
-    let entries = list_entries(&dir).map_err(|e| internal("读取目录失败", e))?;
-    let root_c = std::fs::canonicalize(root).map_err(|e| internal("读取存储根失败", e))?;
-    Ok((root_c, entries))
+    if OPTIONAL_DIRS.contains(&rel) {
+        return Ok((root_c, Vec::new()));
+    }
+    Err(not_found("目录", rel))
 }
 
 /// 建目录：父目录一并创建；目录已存在 = 幂等成功；同名文件已存在 = 409。

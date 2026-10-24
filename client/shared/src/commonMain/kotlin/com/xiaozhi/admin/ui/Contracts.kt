@@ -1,4 +1,4 @@
-package com.xiaozhi.admin
+package com.xiaozhi.admin.ui
 
 /** Pure UI contracts: no Kuikly context, network, JSON, plugin host, or native bridge. */
 sealed class Availability {

@@ -13,6 +13,9 @@ use tokio::sync::oneshot;
 mod http;
 #[path = "ble_request.rs"]
 mod request;
+// 服务内门面只在 ESPHome 桥编译时才需要；无该 feature 时不引入，避免 unused 警告。
+#[cfg(feature = "esp_home")]
+pub(crate) use http::{gatt_call, read_snapshot, BleSnapshot};
 pub(crate) use request::build_gatt_request;
 
 pub(crate) const GATT_WAIT: Duration = Duration::from_secs(35);
@@ -24,7 +27,7 @@ const MAX_ITEM_BYTES: usize = 4096;
 pub(super) const MAX_PENDING: usize = 16;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum BleError {
+pub(crate) enum BleError {
     NotFound,
     Unapproved,
     Unsupported,

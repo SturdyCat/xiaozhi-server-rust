@@ -1,5 +1,7 @@
 package com.xiaozhi.admin
 
+import com.xiaozhi.admin.ui.*
+
 import com.tencent.kuikly.core.base.Border
 import com.tencent.kuikly.core.base.BorderStyle
 import com.tencent.kuikly.core.base.BoxShadow
@@ -93,14 +95,12 @@ fun ViewContainer<*, *>.ToastHost(state: ToastState, topOffset: Float = TOAST_TO
                         marginRight(AdminSpace.xs)
                         backgroundColor(toastAccent(state.current?.level ?: "info"))
                     }
-                    Text {
-                        attr {
-                            fontSize(AdminType.micro)
-                            fontWeightMedium()
-                            color(AdminColors.textOnAccent)
-                            text(toastGlyph(state.current?.level ?: "info"))
-                        }
-                    }
+                    // 状态图标走官方 Canvas 矢量（✓/✕/i 文本字形在不同字体下粗细/基线不一致）
+                    appIcon(
+                        { toastGlyph(state.current?.level ?: "info") },
+                        size = 12f,
+                        tint = { AdminColors.textOnAccent },
+                    )
                 }
                 // 跟随内容：长文案自动折行（上限 [TOAST_TEXT_MAX_LINES] 行）
                 Text {
@@ -132,9 +132,9 @@ private fun toastStroke(level: String): Color = when (level) {
     else -> AdminColors.dividerStrong
 }
 
-/** 图标字形：✓ 成功 / ✕ 失败 / i 提示（纯文本字形，无图片资源依赖，跨端一致）。 */
-private fun toastGlyph(level: String): String = when (level) {
-    "ok" -> "✓"
-    "error" -> "✕"
-    else -> "i"
+/** 状态图标：成功=对勾 / 失败=叉 / 提示=信息（官方矢量图标，无图片资源依赖，跨端一致）。 */
+private fun toastGlyph(level: String): com.xiaozhi.admin.ui.IconToken = when (level) {
+    "ok" -> com.xiaozhi.admin.ui.IconToken.Check
+    "error" -> com.xiaozhi.admin.ui.IconToken.Close
+    else -> com.xiaozhi.admin.ui.IconToken.Info
 }

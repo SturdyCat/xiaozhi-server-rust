@@ -1,5 +1,7 @@
 package com.xiaozhi.admin
 
+import com.xiaozhi.admin.ui.*
+
 import com.tencent.kuikly.core.base.PagerScope
 import com.tencent.kuikly.core.nvi.serialization.json.JSONArray
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
@@ -20,14 +22,15 @@ import com.tencent.kuikly.core.reactive.handler.observableList
  * 个字（默认 5，0 = 不限制）的长句携带信息，一律放行给大模型；② 按 `keywords` 匹配
  * （`matchMode`：exact/contains）。两者都通过才命中，命中则先说 `reply`，再用 MCP 让设备结束
  * 聆听（音频通道保留、下次唤醒不重连）；MCP 不可用时降级为断开本次会话。
- * `enabled = false`（默认）时行为与没有这段完全一致。
+ * `enabled` 默认 **true**（标准行为：说「退下」即可结束聆听）；显式关闭后行为与没有这段
+ * 完全一致（零开销）。
  *
  * ⚠️ `keywords` 是数组字段，在表单里是**多行文本**（每行一个词），读写时统一转换
  * （与 `[soul].traits` 等数组字段同一约定）。
  */
 class CommandSectionState(private val scope: PagerScope) {
 
-    var enabled by scope.observable("false")
+    var enabled by scope.observable("true")
     /// 指令词表：每行一个词（归一化后比较；「退下吧。」等价于「退下」）。
     var keywords by scope.observable("退下\n闭嘴\n关闭")
     /// exact（整句相等，默认、安全）| contains（句中出现即命中，⚠️ 会让「关闭闹钟」也断线）。
@@ -78,7 +81,7 @@ class CommandSectionState(private val scope: PagerScope) {
         root.put(
             "command",
             JSONObject().apply {
-                put("enabled", enabled.toBooleanStrictOrNull() ?: false)
+                put("enabled", enabled.toBooleanStrictOrNull() ?: true)
                 put("keywords", lines(keywords))
                 put("match_mode", matchMode)
                 // 留空/非数字 = 回落到默认 5；负数钳到 0（服务端 0 = 不限制）
@@ -91,7 +94,7 @@ class CommandSectionState(private val scope: PagerScope) {
     /** 用服务端 `/api/config` 回包填充（缺键保留当前值；`keywords` 为空数组时如实显示空）。 */
     fun fill(obj: JSONObject) {
         obj.optJSONObject("command")?.let { c ->
-            enabled = c.optBoolean("enabled", enabled.toBooleanStrictOrNull() ?: false).toString()
+            enabled = c.optBoolean("enabled", enabled.toBooleanStrictOrNull() ?: true).toString()
             // 数组缺键 = 老服务端（保留当前草稿）；空数组 = 用户确实清空了词表（如实显示）
             c.optJSONArray("keywords")?.let { keywords = joinLines(it) }
             matchMode = c.optString("match_mode", matchMode)

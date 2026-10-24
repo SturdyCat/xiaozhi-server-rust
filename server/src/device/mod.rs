@@ -3,6 +3,8 @@
 
 pub mod discovery;
 pub mod echomuse;
+/// ESPHome Native API 桥（可选 feature `esp_home`）：把 Dot 2 暴露为标准 ESPHome 节点。
+pub mod esp_home;
 pub mod firmware;
 pub mod registry;
 pub mod voices;

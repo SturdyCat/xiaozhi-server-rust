@@ -19,6 +19,31 @@
 - 新字段同步[配置样例](<../../config.example.toml>)、[注册表元数据](<../plugins/registry/AGENTS.md>)、客户端映射与往返测试；不要在文档复制默认值/热生效表。
 - [overlay](<overlay.rs>)只合并白名单会话参数，生效配置=全局规范化配置⊕设备增量；全局引擎构建不受影响。
 
+## 默认值与存量配置对齐（[defaults.rs](<defaults.rs>)）
+
+配置库里存的是**显式值**，serde 的 `#[serde(default)]` 只对"键缺失"生效——所以把某个默认值从
+`false` 改成 `true`，老库（含"重装系统但保留 `./server-data` 卷"的场景）仍会是 `false`。这一层就是
+为它准备的：
+
+- `CURRENT_DEFAULTS_VERSION` + `BATCHES`：默认值变更**版本化登记**。每次改默认值就往
+  `BATCHES` 追加一批（版本 +1），已发布批次永不修改；`STANDARD_BEHAVIOR_ON` 是 v1 的
+  "标准行为默认开启"清单。
+- 启动时 `SqliteConfigStore::align_defaults()` 按库里 `cfg_documents.defaults_version` 对齐，
+  三条规则：键缺失/`null` → 补新默认；**值等于旧默认** → 视为没动过、对齐到新默认；值不等于旧默认
+  → 用户显式自定义、原样保留（`kept` 只记日志）。写库留 `cfg_revisions(source="defaults-migration")`
+  可回滚，版本推进后不再重复执行。
+- 只处理 `cfg_documents`：设备 overlay 只在用户显式保存时才有内容（没有"旧默认整份文档"），
+  预设是用户主动快照，动它等于篡改。
+- 改默认值的完整动作：① 插件 `Default` + serde `default_*()`（单一权威）；②
+  [注册表字段](<../plugins/registry/AGENTS.md>) `default_hint`；③ 客户端表单状态初值
+  （`client/shared/.../Config*State.kt`）；④ `BATCHES` 追加登记 + `CURRENT_DEFAULTS_VERSION` +1；
+  ⑤ [配置样例](<../../config.example.toml>)。漂移由 `defaults/tests.rs` 的
+  `targets_match_code_defaults` 与 `registry/tests.rs` 兜底。
+- 部署核对：升级后启动日志会打印一行 `配置库默认值对齐 v0 → v1：…`（写明哪些键被打开、
+  哪些按用户自定义保留）；`docker compose logs` 可见。库内进度可查
+  `SELECT defaults_version FROM cfg_documents`，逐项现值可查
+  `POST /api/config/db/query` → `SELECT json_extract(doc,'$.wakeup.enabled') ...`。
+
 本级说明 · [HTTP 契约](<../gateway/ws/config/AGENTS.md>) · [配置测试](<tests.rs>) · [存储测试](<store/sqlite/tests.rs>)
 
 

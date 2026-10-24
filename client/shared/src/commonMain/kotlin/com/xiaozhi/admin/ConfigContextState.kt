@@ -1,5 +1,7 @@
 package com.xiaozhi.admin
 
+import com.xiaozhi.admin.ui.*
+
 import com.tencent.kuikly.core.base.PagerScope
 import com.tencent.kuikly.core.nvi.serialization.json.JSONArray
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
@@ -22,7 +24,7 @@ import com.tencent.kuikly.core.reactive.handler.observableList
 class ContextSectionState(private val scope: PagerScope) {
 
     // ===== [soul] 人格档案 =====
-    var soulEnabled by scope.observable("false")
+    var soulEnabled by scope.observable("true")
     /// 内置人格预设（默认灵魂）：留空的字段由它补，填了的字段逐字段覆盖它；`none` = 完全自定义。
     var soulPreset by scope.observable("xiaozhi")
     /// 预设/预览动作的反馈（载入结果、预览摘要、错误）。
@@ -54,7 +56,7 @@ class ContextSectionState(private val scope: PagerScope) {
     var soulExamples by scope.observable("")
 
     // ===== [memory] 图记忆 =====
-    var memoryEnabled by scope.observable("false")
+    var memoryEnabled by scope.observable("true")
     var memoryBackend by scope.observable("graph")
     var memoryDbPath by scope.observable("/data/data.db")
     var memoryDbBusyTimeoutMs by scope.observable("5000")
@@ -169,7 +171,7 @@ class ContextSectionState(private val scope: PagerScope) {
      * internal：设备个性化（P1-5）构建 overlay 时整段复用（`[soul]` 在白名单内全段可覆盖）。
      */
     internal fun soulJson(): JSONObject = JSONObject().apply {
-        put("enabled", soulEnabled.toBooleanStrictOrNull() ?: false)
+        put("enabled", soulEnabled.toBooleanStrictOrNull() ?: true)
         put("preset", soulPreset)
         put("name", soulName)
         put("self_intro", soulSelfIntro)
@@ -217,7 +219,7 @@ class ContextSectionState(private val scope: PagerScope) {
         body.put(
             "memory",
             JSONObject().apply {
-                put("enabled", memoryEnabled.toBooleanStrictOrNull() ?: false)
+                put("enabled", memoryEnabled.toBooleanStrictOrNull() ?: true)
                 put("engine", memoryBackend)
                 put("db_path", memoryDbPath)
                 put("db_busy_timeout_ms", memoryDbBusyTimeoutMs.toIntOrNull() ?: 5000)
@@ -269,7 +271,7 @@ class ContextSectionState(private val scope: PagerScope) {
 
     fun fill(obj: JSONObject) {
         obj.optJSONObject("soul")?.let { s ->
-            soulEnabled = boolStr(s.optBoolean("enabled", soulEnabled.toBooleanStrictOrNull() ?: false))
+            soulEnabled = boolStr(s.optBoolean("enabled", soulEnabled.toBooleanStrictOrNull() ?: true))
             // P6.x：内置预设键（旧服务端/旧文件没有它 → 保留当前值）
             soulPreset = s.optString("preset", soulPreset)
             soulName = s.optString("name", soulName)
@@ -294,7 +296,7 @@ class ContextSectionState(private val scope: PagerScope) {
             soulExamples = joinLines(s.optJSONArray("examples"))
         }
         obj.optJSONObject("memory")?.let { m ->
-            memoryEnabled = boolStr(m.optBoolean("enabled", memoryEnabled.toBooleanStrictOrNull() ?: false))
+            memoryEnabled = boolStr(m.optBoolean("enabled", memoryEnabled.toBooleanStrictOrNull() ?: true))
             // `engine` 是 P4 起的规范键；旧服务端回 `backend`，一并兼容读
             memoryBackend = m.optString("engine", m.optString("backend", memoryBackend))
             memoryDbPath = m.optString("db_path", memoryDbPath)

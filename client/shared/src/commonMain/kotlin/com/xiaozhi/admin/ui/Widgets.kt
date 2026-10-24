@@ -1,7 +1,9 @@
-package com.xiaozhi.admin
+package com.xiaozhi.admin.ui
 
-import com.tencent.kuikly.core.base.Border
-import com.tencent.kuikly.core.base.BorderStyle
+
+// 紧凑断点口径由壳页提供（见 ConfigWorkspaceViews 的 adminContentWidth）
+import com.xiaozhi.admin.workspaceIsCompact
+import com.tencent.kuikly.core.base.Color
 import com.tencent.kuikly.core.base.CursorType
 import com.tencent.kuikly.core.base.ViewBuilder
 import com.tencent.kuikly.core.base.ViewContainer
@@ -42,20 +44,8 @@ fun ViewContainer<*, *>.dropdownField(
 ) {
     val modalWidth = { (getPager().pageData.pageViewWidth - 2 * AdminSpace.md).coerceAtMost(340f).coerceAtLeast(0f) }
     fieldLabel(label, help)
-    View {
-        attr {
-            flexDirectionRow()
-            alignItemsCenter()
-            height(48f)
-            backgroundColor(AdminColors.fieldBg)
-            border(Border(1f, BorderStyle.SOLID, AdminColors.divider))
-            borderRadius(AdminShape.radiusSm)
-            paddingLeft(AdminSpace.sm)
-            paddingRight(AdminSpace.sm)
-            // 下拉框是点击目标（弹选择层）：悬停指针
-            cursor(CursorType.POINTER)
-        }
-        event { click { onToggle() } }
+    // 输入域壳统一走 fieldBox（fieldBg/1px 边框/radiusSm/内距的唯一出处）
+    fieldBox(onClick = onToggle) {
         Text {
             attr {
                 flex(1f)
@@ -64,13 +54,12 @@ fun ViewContainer<*, *>.dropdownField(
                 text(currentLabel())
             }
         }
-        Text {
-            attr {
-                fontSize(AdminType.caption)
-                color(AdminColors.textSecondary)
-                text(if (isOpen()) "▴" else "▾")
-            }
-        }
+        // 展开态箭头：官方 Canvas 矢量图标（不再用 ▾/▴ 字符当图标，字重与描边都不可控）
+        appIcon(
+            { if (isOpen()) IconToken.ChevronUp else IconToken.ChevronDown },
+            size = 16f,
+            tint = { AdminColors.textSecondary },
+        )
     }
     // 官方 AlertDialog 弹层（Modal 渲染，KRModalView iOS/macOS Catalyst 均有实现）
     AlertDialog {
@@ -78,14 +67,7 @@ fun ViewContainer<*, *>.dropdownField(
             showAlert(isOpen())
             inWindow(true)
             customContentView {
-                View {
-                    attr {
-                        width(modalWidth())
-                        backgroundColor(AdminColors.cardBg)
-                        borderRadius(AdminShape.radiusLg)
-                        border(Border(1f, BorderStyle.SOLID, AdminColors.divider))
-                        padding(AdminSpace.cardPadding)
-                    }
+                dialogSurface(width = modalWidth) {
                     Text {
                         attr {
                             fontSize(AdminType.section)
@@ -142,7 +124,7 @@ fun ViewContainer<*, *>.dropdownField(
                             }
                         }
                     }
-                    View { attr { height(AdminSpace.sm) } }
+                    vGap(AdminSpace.sm)
                     secondaryButton("取消") { onToggle() }
                 }
             }
@@ -183,7 +165,7 @@ fun ViewContainer<*, *>.waveformPlayer(
             cursor(CursorType.POINTER)
         }
         event { click { if (enabled()) onToggle() } }
-        // 播放/停止圆钮（禁用=中性灰，与按钮家族禁用态一致）
+        // 播放/停止圆钮（禁用=中性灰，与按钮家族禁用态一致）；图标走官方 Canvas 矢量
         View {
             attr {
                 width(44f)
@@ -192,13 +174,11 @@ fun ViewContainer<*, *>.waveformPlayer(
                 allCenter()
                 backgroundColor(if (enabled()) AdminColors.accent else AdminColors.disabledBg)
             }
-            Text {
-                attr {
-                    fontSize(AdminType.title)
-                    color(AdminColors.textOnAccent)
-                    text(if (playing()) "‖" else "▶")
-                }
-            }
+            appIcon(
+                { if (playing()) IconToken.Stop else IconToken.Play },
+                size = 20f,
+                tint = { AdminColors.textOnAccent },
+            )
         }
         // 波形柱（32 根，等宽；已播放点亮 accent）
         View {
@@ -247,6 +227,27 @@ fun ViewContainer<*, *>.waveformPlayer(
 /** 波形柱数量（getAudioState 返回 64 桶，渲染 32 根柱：两桶取一）。 */
 private const val WAVE_BARS = 32
 
+// ===================== 状态圆点 =====================
+
+/**
+ * 状态圆点（在线/离线、菜单告警、徽标前置点）：官方 View + radiusPill 的纯色小圆。
+ *
+ * 此前全站有 4 处各自写 `width(8f); height(8f); borderRadius(radiusPill); backgroundColor(…)`，
+ * 直径有 8/5 两种、圆角写法有 radiusPill 与硬编码 3f——收敛成一个 [size] 参数。
+ * [color] 是 lambda：状态色在 attr 闭包内求值，observable 变化即时变色。
+ * 与相邻元素的间距由调用处 [hGap] 给出（不内置 margin，避免和两侧留白重复计算）。
+ */
+fun ViewContainer<*, *>.dot(color: () -> Color, size: Float = 8f) {
+    View {
+        attr {
+            width(size)
+            height(size)
+            borderRadius(AdminShape.radiusPill)
+            backgroundColor(color())
+        }
+    }
+}
+
 // ===================== 状态徽标 =====================
 
 /**
@@ -273,22 +274,17 @@ fun ViewContainer<*, *>.statusBadge(state: () -> String, text: () -> String) {
                 else -> backgroundColor(AdminColors.insetBg)
             }
         }
-        View {
-            attr {
-                width(8f)
-                height(8f)
-                borderRadius(AdminShape.radiusPill)
-                marginRight(6f)
-                backgroundColor(
-                    when (state()) {
-                        "connected" -> AdminColors.accent
-                        "recording", "error" -> AdminColors.danger
-                        "busy" -> AdminColors.warning
-                        else -> AdminColors.textPlaceholder
-                    },
-                )
-            }
-        }
+        dot(
+            color = {
+                when (state()) {
+                    "connected" -> AdminColors.accent
+                    "recording", "error" -> AdminColors.danger
+                    "busy" -> AdminColors.warning
+                    else -> AdminColors.textPlaceholder
+                }
+            },
+        )
+        hGap(6f)
         Text {
             attr {
                 fontSize(AdminType.micro)
@@ -381,5 +377,6 @@ fun ViewContainer<*, *>.largeTitleBar(
             }
         }
     }
-    View { attr { height(1f); backgroundColor(AdminColors.divider) } }
+    // 栏底边线：紧贴下一分区，不带尾距（顶部标题栏属于上下布局的上分区）
+    dividerH(trailingGap = 0f)
 }

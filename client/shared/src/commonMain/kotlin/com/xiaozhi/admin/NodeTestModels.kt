@@ -1,5 +1,7 @@
 package com.xiaozhi.admin
 
+import com.xiaozhi.admin.ui.*
+
 /** Shared read-only test contracts; no JSON or platform/Kuikly dependency. */
 enum class TestInputKind {
     None, Text, Audio, Unsupported;

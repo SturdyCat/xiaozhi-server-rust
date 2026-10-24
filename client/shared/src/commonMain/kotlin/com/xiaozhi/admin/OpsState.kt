@@ -1,5 +1,7 @@
 package com.xiaozhi.admin
 
+import com.xiaozhi.admin.ui.*
+
 import com.tencent.kuikly.core.base.PagerScope
 import com.tencent.kuikly.core.module.NetworkModule
 import com.tencent.kuikly.core.nvi.serialization.json.JSONArray
@@ -46,6 +48,13 @@ internal fun network(ctx: Pager): NetworkModule = ctx.acquireModule(NetworkModul
  *
  * 五个数据源共用同一套错误口径（HTTP 状态码 + 网络错误），避免各写一份后行为漂移
  * ——"有的页面失败有提示、有的页面永远转圈"正是这么来的。
+ *
+ * 404 单独加一句提示：服务端有若干端点**按设计**返回 404 而不是空列表（最典型是
+ * `[echomuse].enabled=false` 时 `/api/echomuse/` 下的管理面接口全部 404，见
+ * `device/echomuse/admin.rs`），光显示 "HTTP 404" 会被误读成"服务端挂了"。带上成因
+ * 说明后，界面上的就地错误就能自解释是「未启用 / 版本过旧」而非故障。
+ *
+ * ⚠️ 注释里不要出现斜杠加星号的组合（Kotlin 块注释可嵌套，会吞掉后面整个文件）。
  */
 internal fun getJson(
     ctx: Pager,
@@ -55,7 +64,13 @@ internal fun getJson(
     network(ctx).requestGet(url, JSONObject()) { data, success, errorMsg, resp ->
         val code = resp.statusCode
         val ok = success && (code == null || code in 200..299)
-        onDone(ok, data, if (ok) "" else (if (errorMsg.isNotEmpty()) errorMsg else "HTTP $code"))
+        val reason = when {
+            ok -> ""
+            errorMsg.isNotEmpty() -> errorMsg
+            code == 404 -> "HTTP 404（该端点不存在，或服务端未启用对应功能）"
+            else -> "HTTP $code"
+        }
+        onDone(ok, data, reason)
     }
 }
 

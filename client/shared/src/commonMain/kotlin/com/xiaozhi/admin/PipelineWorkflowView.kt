@@ -1,5 +1,7 @@
 package com.xiaozhi.admin
 
+import com.xiaozhi.admin.ui.*
+
 import com.tencent.kuikly.core.base.Border
 import com.tencent.kuikly.core.base.BorderStyle
 import com.tencent.kuikly.core.base.CursorType
@@ -31,14 +33,19 @@ fun ViewContainer<*, *>.pipelineWorkflowHeader(
             paddingTop(topInset)
             backgroundColor(AdminColors.sidebarBg)
         }
+        // 标题行：统一 headerRow（左标题 │ 右操作）；高度由外层 44 固定，故不留底距
         View {
-            attr { height(44f); flexDirectionRow(); alignItemsCenter(); paddingLeft(AdminSpace.md); paddingRight(AdminSpace.md) }
-            Text { attr { text("语音工作流"); fontSize(AdminType.micro); fontWeightMedium(); color(AdminColors.textSecondary) } }
-            View { attr { flex(1f) } }
-            appButton("全局设置", variant = ButtonVariant.TEXT, icon = IconToken.Settings) {
-                form.openConfigSection("server")
-                onSelect()
-            }
+            attr { height(44f); paddingLeft(AdminSpace.md); paddingRight(AdminSpace.md) }
+            headerRow(
+                title = { headerTitle("语音工作流", HeaderTone.MICRO) },
+                actions = {
+                    appButton("全局设置", variant = ButtonVariant.TEXT, icon = IconToken.Settings) {
+                        form.openConfigSection("server")
+                        onSelect()
+                    }
+                },
+                bottomGap = 0f,
+            )
         }
         Scroller {
             attr { height(76f); flexDirectionRow(); showScrollerIndicator(false) }
@@ -56,7 +63,8 @@ fun ViewContainer<*, *>.pipelineWorkflowHeader(
                 }
             }
         }
-        View { attr { height(1f); backgroundColor(AdminColors.divider) } }
+        // 轨道底边线：紧贴下方 Tabs，无尾距
+        dividerH(trailingGap = 0f)
     }
 }
 

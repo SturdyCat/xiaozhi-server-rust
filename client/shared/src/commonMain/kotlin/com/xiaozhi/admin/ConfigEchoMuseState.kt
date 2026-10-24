@@ -1,5 +1,7 @@
 package com.xiaozhi.admin
 
+import com.xiaozhi.admin.ui.*
+
 import com.tencent.kuikly.core.base.PagerScope
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.reactive.handler.observable
@@ -13,14 +15,15 @@ import com.tencent.kuikly.core.reactive.handler.observable
  * `ConfigCards.echomuseConfigCard`。
  *
  * 语义（服务端为唯一权威，见 `server/src/app/echomuse/mod.rs::EchomuseConfig`）：
- * `enabled=false`（默认）时不挂 em 路由、不广播 mDNS，行为与没有这段完全一致；
+ * `enabled` 默认 **true**（开机即用：挂 em 路由并广播 mDNS）；显式关闭时零路由、零 mDNS，
+ * 行为与没有这段完全一致；
  * `token` 是同网段设备的接入凭据（`X-Em-Token` 头，空 = 不校验）。
  * ⚠️ 该段属 **RestartOnly**：开启/关闭需重启服务端生效（生效档位提示由
  * `/api/config/schema` 的 sectionNote 下发，客户端不手写另一套）。
  */
 class EchoMuseSectionState(private val scope: PagerScope) {
 
-    var enabled by scope.observable("false")
+    var enabled by scope.observable("true")
     /// 接入令牌。服务端已打码（GET 只回 `has_token` presence），表单里永远没有明文；
     /// 留空保存 = 「不修改盘上已存值」（见 `putSecret` 与服务端 `SECRET_PATHS`）。
     var token by scope.observable("")
@@ -40,7 +43,7 @@ class EchoMuseSectionState(private val scope: PagerScope) {
         root.put(
             "echomuse",
             JSONObject().apply {
-                put("enabled", enabled.toBooleanStrictOrNull() ?: false)
+                put("enabled", enabled.toBooleanStrictOrNull() ?: true)
                 putSecret("token", token)
                 put("welcome", welcome)
             },
@@ -50,7 +53,7 @@ class EchoMuseSectionState(private val scope: PagerScope) {
     /** 用服务端 `/api/config` 回包填充（缺键保留当前值，不静默改成默认值）。 */
     fun fill(obj: JSONObject) {
         obj.optJSONObject("echomuse")?.let { e ->
-            enabled = e.optBoolean("enabled", enabled.toBooleanStrictOrNull() ?: false).toString()
+            enabled = e.optBoolean("enabled", enabled.toBooleanStrictOrNull() ?: true).toString()
             token = e.optString("token", token)
             tokenConfigured = e.optBoolean("has_token", token.isNotBlank())
             welcome = e.optString("welcome", welcome)

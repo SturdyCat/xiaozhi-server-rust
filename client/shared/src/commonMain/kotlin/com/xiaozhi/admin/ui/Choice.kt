@@ -1,4 +1,4 @@
-package com.xiaozhi.admin
+package com.xiaozhi.admin.ui
 
 import com.tencent.kuikly.core.base.Border
 import com.tencent.kuikly.core.base.BorderStyle
@@ -40,7 +40,7 @@ fun <T> ViewContainer<*, *>.segmentedChoice(
     fieldLabel(label)
     buttonGroup {
         options.forEachIndexed { index, option ->
-            if (index > 0) View { attr { width(AdminSpace.xs) } }
+            if (index > 0) hGap(AdminSpace.xs)
             appButton(
                 text = option.label,
                 variant = ButtonVariant.SECONDARY,
@@ -165,13 +165,8 @@ fun <T> ViewContainer<*, *>.choiceMenu(
             showAlert(isOpen())
             inWindow(true)
             customContentView {
-                View {
-                    attr {
-                        width(menuWidth())
-                        padding(AdminSpace.cardPadding)
-                        borderRadius(AdminShape.radiusLg)
-                        backgroundColor(AdminColors.cardBg)
-                    }
+                // 弹层壳与卡片同一套外观（无边框轻量版），不再自绘背景/圆角/内边距
+                dialogSurface(width = menuWidth, bordered = false) {
                     Text { attr { text(label); fontSize(AdminType.section); color(AdminColors.textPrimary) } }
                     Scroller {
                         attr { height(320f); marginTop(AdminSpace.sm) }

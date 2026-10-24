@@ -1,5 +1,7 @@
 package com.xiaozhi.admin
 
+import com.xiaozhi.admin.ui.*
+
 import com.tencent.kuikly.core.base.ViewContainer
 import com.tencent.kuikly.core.directives.vfor
 import com.tencent.kuikly.core.directives.vif
@@ -125,14 +127,7 @@ private fun ViewContainer<*, *>.nluIntentList(form: ConfigFormState, nlu: NluSec
 
 /** 一条意图的编辑块：名称 / 模板 / 动作 / 应答语 + 删除。 */
 private fun ViewContainer<*, *>.nluIntentBlock(form: ConfigFormState, nlu: NluSectionState, d: IntentDraft) {
-    View {
-        attr {
-            marginTop(AdminSpace.sm)
-            padding(AdminSpace.sm)
-            backgroundColor(AdminColors.insetBg)
-            borderRadius(AdminShape.radiusSm)
-        }
-        View {
+    insetPanel {        View {
             attr {
                 flexDirectionRow()
                 alignItemsCenter()
@@ -229,14 +224,7 @@ private fun ViewContainer<*, *>.nluSlotList(form: ConfigFormState, nlu: NluSecti
 
 /** 一条槽位的编辑块：名称 / 值表 / 可缺省 + 删除。 */
 private fun ViewContainer<*, *>.nluSlotBlock(form: ConfigFormState, nlu: NluSectionState, s: SlotDraft) {
-    View {
-        attr {
-            marginTop(AdminSpace.sm)
-            padding(AdminSpace.sm)
-            backgroundColor(AdminColors.insetBg)
-            borderRadius(AdminShape.radiusSm)
-        }
-        View {
+    insetPanel {        View {
             attr {
                 flexDirectionRow()
                 alignItemsCenter()

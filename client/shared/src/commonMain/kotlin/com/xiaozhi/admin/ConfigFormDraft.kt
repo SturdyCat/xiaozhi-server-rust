@@ -1,5 +1,7 @@
 package com.xiaozhi.admin
 
+import com.xiaozhi.admin.ui.*
+
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 
 // 只从当前草稿构建 JSON，不持有副本、不填回表单、不自行持久化。

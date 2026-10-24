@@ -35,6 +35,7 @@ use serde::{Deserialize, Serialize};
 
 // 引擎子配置段随插件走（定义在各插件 mod.rs），此处转发以维持 `crate::config::*` 路径稳定：
 pub use crate::device::echomuse::EchomuseConfig;
+pub use crate::device::esp_home::EspHomeConfig;
 pub use crate::plugins::aiui::AiuiConfig;
 pub use crate::plugins::asr::AsrConfig;
 pub use crate::plugins::command::CommandConfig;
@@ -45,6 +46,9 @@ pub use crate::plugins::soul::SoulConfig;
 pub use crate::plugins::tts::TtsConfig;
 pub use crate::plugins::vad::VadConfig;
 pub use crate::plugins::wakeup::WakeConfig;
+
+/// 标准行为默认值的版本化对齐（存量配置迁移，见 `config/defaults.rs`）。
+pub mod defaults;
 
 /// 每设备配置 overlay（白名单合并 / 落盘路径，见 `config/overlay.rs`）。
 pub mod overlay;
@@ -169,6 +173,12 @@ pub struct Config {
     /// 默认开启（开机即用）；关闭时零路由、零 mDNS、行为与没有这个入口完全一致。
     #[serde(default)]
     pub echomuse: EchomuseConfig,
+    /// ESPHome Native API 桥（`[esp_home]`）：把 Dot 2 状态暴露为标准 ESPHome 实体，
+    /// 供 HA / homeCore / 任意 native-api 客户端直接驱动。阶段 A 仅 `binary_sensor`
+    /// （在线/聆听/思考/播报），阶段 B 再加控制面与 `bluetooth_proxy`（BLE 代理控小米）。
+    /// **默认关闭**（可选模块，需 `--features esp_home` 编译 + `enabled=true` 才监听）。
+    #[serde(default)]
+    pub esp_home: EspHomeConfig,
     #[serde(default)]
     pub playback: PlaybackConfig,
 }
@@ -445,6 +455,7 @@ impl Default for Config {
             nlu: NluConfig::default(),
             wakeup: WakeConfig::default(),
             echomuse: EchomuseConfig::default(),
+            esp_home: EspHomeConfig::default(),
             playback: PlaybackConfig::default(),
         };
         c.normalize();
@@ -471,6 +482,7 @@ impl Config {
         self.command.normalize();
         self.wakeup.normalize();
         self.echomuse.normalize();
+        self.esp_home.normalize();
     }
 
     /// 是否处于「真实音频模式」：`sherpa` feature（唯一路径，无 mock）。

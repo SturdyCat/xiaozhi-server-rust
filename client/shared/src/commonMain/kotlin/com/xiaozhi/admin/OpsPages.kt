@@ -1,11 +1,11 @@
 package com.xiaozhi.admin
 
-import com.tencent.kuikly.core.base.ViewBuilder
+import com.xiaozhi.admin.ui.*
+
 import com.tencent.kuikly.core.base.ViewContainer
 import com.tencent.kuikly.core.directives.vfor
 import com.tencent.kuikly.core.directives.vif
 import com.tencent.kuikly.core.pager.Pager
-import com.tencent.kuikly.core.views.Scroller
 import com.tencent.kuikly.core.views.Text
 import com.tencent.kuikly.core.views.View
 
@@ -27,39 +27,14 @@ import com.tencent.kuikly.core.views.View
  * （见 `ConfigFormState` 文件头的 Kuikly DSL 绑定说明）。
  */
 
-/** 运维页通用滚动容器：统一左右留白与上下边距（各页只关心卡片本身）。 */
-fun ViewContainer<*, *>.opsScroller(content: ViewBuilder) {
-    Scroller {
-        attr {
-            flex(1f)
-            paddingLeft(AdminSpace.xl)
-            paddingRight(AdminSpace.xl)
-            paddingTop(AdminSpace.xxl)
-            paddingBottom(AdminSpace.xxxl)
-        }
-        // ⚠️ ViewBuilder 值须显式传接收者调用（同 tabbedPanel 内 page.content(this)）
-        content(this)
-    }
-}
-
-/** 页内统一的「摘要 + 刷新」头行。 */
+/** 页内统一的「摘要 + 刷新」头行（统一走 [headerRow]：左摘要、右操作）。 */
 internal fun ViewContainer<*, *>.opsHeader(summary: () -> String, loading: () -> Boolean, onRefresh: () -> Unit) {
-    View {
-        attr {
-            flexDirectionRow()
-            alignItemsCenter()
-            marginBottom(AdminSpace.sm)
-        }
-        Text {
-            attr {
-                flex(1f)
-                fontSize(AdminType.body)
-                color(AdminColors.textSecondary)
-                text(summary())
-            }
-        }
-        secondaryButton("刷新", loading = loading, loadingText = "刷新中…", icon = IconToken.Refresh) { onRefresh() }
-    }
+    headerRow(
+        title = { headerTitle(summary(), HeaderTone.BODY) },
+        actions = {
+            secondaryButton("刷新", loading = loading, loadingText = "刷新中…", icon = IconToken.Refresh) { onRefresh() }
+        },
+    )
 }
 
 /** 首次加载失败的就地错误（带"怎么修"）。 */
@@ -139,40 +114,6 @@ fun ViewContainer<*, *>.renderOpsOverview(
     }
 }
 
-/** 概览卡片里的一行指标：名称 + 值 + 一行解释。 */
-private fun ViewContainer<*, *>.metricRow(name: String, value: String, hint: String) {
-    View {
-        attr {
-            flexDirectionColumn()
-            paddingTop(AdminSpace.xs)
-            paddingBottom(AdminSpace.xs)
-        }
-        View {
-            attr {
-                flexDirectionRow()
-                alignItemsCenter()
-            }
-            Text {
-                attr {
-                    flex(1f)
-                    fontSize(AdminType.body)
-                    color(AdminColors.textSecondary)
-                    text(name)
-                }
-            }
-            Text {
-                attr {
-                    fontSize(AdminType.title)
-                    fontWeightMedium()
-                    color(AdminColors.textPrimary)
-                    text(value)
-                }
-            }
-        }
-        textNote(hint, micro = true)
-    }
-}
-
 // ============================================================
 // 设备
 // ============================================================
@@ -208,27 +149,19 @@ fun ViewContainer<*, *>.renderOpsDevices(
 
     vfor({ devices.devices }) { row ->
         groupedCard(row.deviceId.ifEmpty { "(设备未报 Device-Id)" }) {
-            View {
-                attr {
-                    flexDirectionRow()
-                    alignItemsCenter()
-                    paddingBottom(AdminSpace.xs)
-                }
-                Text {
-                    attr {
-                        flex(1f)
-                        fontSize(AdminType.caption)
-                        color(AdminColors.textSecondary)
-                        text(row.subtitle)
+            // 条目标题行（副标题 + 右侧偏离徽标）：统一走 headerRow
+            headerRow(
+                title = { headerTitle(row.subtitle, HeaderTone.CAPTION) },
+                actions = {
+                    // 只在偏离时打标：在线是正常态，不显示徽标；离线/测试台才提示
+                    if (!row.online) {
+                        statusBadge(state = { "idle" }, text = { "已断开" })
+                    } else if (row.isTest) {
+                        statusBadge(state = { "busy" }, text = { "测试台" })
                     }
-                }
-                // 只在偏离时打标：在线是正常态，不显示徽标；离线/测试台才提示
-                if (!row.online) {
-                    statusBadge(state = { "idle" }, text = { "已断开" })
-                } else if (row.isTest) {
-                    statusBadge(state = { "busy" }, text = { "测试台" })
-                }
-            }
+                },
+                bottomGap = AdminSpace.xs,
+            )
             Text {
                 attr {
                     fontSize(AdminType.caption)
@@ -322,22 +255,11 @@ fun ViewContainer<*, *>.renderOpsSessions(sessions: SessionsState, ctx: Pager) {
 
     vfor({ sessions.sessions }) { row ->
         groupedCard(row.deviceId.ifEmpty { "(未知设备)" }) {
-            View {
-                attr {
-                    flexDirectionRow()
-                    alignItemsCenter()
-                    paddingBottom(AdminSpace.xs)
-                }
-                Text {
-                    attr {
-                        flex(1f)
-                        fontSize(AdminType.caption)
-                        color(AdminColors.textSecondary)
-                        text(row.subtitle)
-                    }
-                }
-                statusBadge(state = { row.badgeState }, text = { row.phaseText })
-            }
+            headerRow(
+                title = { headerTitle(row.subtitle, HeaderTone.CAPTION) },
+                actions = { statusBadge(state = { row.badgeState }, text = { row.phaseText }) },
+                bottomGap = AdminSpace.xs,
+            )
             // 最近一次识别到的原话：无需等对话记录刷新就能看到"它刚听到什么"
             if (row.lastUserText.isNotEmpty()) {
                 Text {
@@ -383,7 +305,7 @@ fun ViewContainer<*, *>.renderOpsConversations(conversations: ConversationsState
         )
         actionRow {
             primaryButton("筛选", icon = IconToken.Funnel) { conversations.filterBy(ctx, conversations.filterDraft.trim()) }
-            View { attr { width(AdminSpace.sm) } }
+            hGap(AdminSpace.sm)
             secondaryButton("全部", icon = IconToken.Close) { conversations.filterBy(ctx, "") }
         }
         if (conversations.deviceFilter.isNotEmpty()) {
@@ -403,13 +325,7 @@ fun ViewContainer<*, *>.renderOpsConversations(conversations: ConversationsState
 
     vfor({ conversations.conversations }) { row ->
         groupedCard(row.sessionId) {
-            Text {
-                attr {
-                    fontSize(AdminType.caption)
-                    color(AdminColors.textSecondary)
-                    text(row.subtitle)
-                }
-            }
+            captionLine(row.subtitle)
             for (turn in row.turns) {
                 conversationTurn(turn)
             }
@@ -486,14 +402,7 @@ fun ViewContainer<*, *>.renderOpsUsage(usage: UsageState, ctx: Pager) {
         metricRow("已计量轮次", "${usage.globalTurns}", "只有上游返回 usage 的轮次才计入")
         metricRow("上下文压力", "${usage.globalPressure}", "输入侧总量（含缓存读写），**不含输出**：它才是推给模型的上下文规模")
         vif({ usage.globalSummary.isNotEmpty() }) {
-            Text {
-                attr {
-                    fontSize(AdminType.caption)
-                    color(AdminColors.textSecondary)
-                    marginTop(AdminSpace.xs)
-                    text(usage.globalSummary)
-                }
-            }
+            captionLine({ usage.globalSummary }, topGap = AdminSpace.xs)
         }
         textNote("只记 token，不做金额换算——单价随模型/渠道/时段变化，内置价目表必然过期。", micro = true)
     }
@@ -520,13 +429,7 @@ fun ViewContainer<*, *>.renderOpsUsage(usage: UsageState, ctx: Pager) {
                                 text(row.sessionId)
                             }
                         }
-                        Text {
-                            attr {
-                                fontSize(AdminType.caption)
-                                color(AdminColors.textSecondary)
-                                text("${row.turns} 轮 · 合计 ${row.total}")
-                            }
-                        }
+                        captionLine("${row.turns} 轮 · 合计 ${row.total}")
                     }
                     textNote("输入 ${row.input} · 输出 ${row.output} · 上下文压力 ${row.pressure}", micro = true)
                     dividerH()

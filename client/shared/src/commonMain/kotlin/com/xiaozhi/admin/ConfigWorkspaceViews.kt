@@ -1,6 +1,7 @@
 package com.xiaozhi.admin
 
-import com.tencent.kuikly.core.base.CursorType
+import com.xiaozhi.admin.ui.*
+
 import com.tencent.kuikly.core.base.ViewContainer
 import com.tencent.kuikly.core.directives.vbind
 import com.tencent.kuikly.core.directives.vfor
@@ -8,7 +9,6 @@ import com.tencent.kuikly.core.directives.vif
 import com.tencent.kuikly.core.pager.IPager
 import com.tencent.kuikly.core.pager.Pager
 import com.tencent.kuikly.core.views.Scroller
-import com.tencent.kuikly.core.views.Text
 import com.tencent.kuikly.core.views.View
 
 /** Width below the global workflow, excluding the persistent primary shell sidebar. */
@@ -37,13 +37,13 @@ internal fun ViewContainer<*, *>.workspaceMenu(form: ConfigFormState, meta: Plug
     val position = form.workflowPosition
     Scroller {
         attr { flex(1f); showScrollerIndicator(false); paddingTop(AdminSpace.xs); paddingBottom(AdminSpace.lg) }
-        workspaceMenuHeading(if (form.workspaceTab == NodeWorkspaceTab.Configuration) "配置项目" else "测试项目")
+        groupLabel(if (form.workspaceTab == NodeWorkspaceTab.Configuration) "配置项目" else "测试项目", inset = AdminSpace.xs, topGap = AdminSpace.sm)
         if (form.workspaceTab == NodeWorkspaceTab.Testing) {
             val entries = workspaceTests(form)
-            if (entries.isEmpty()) workspaceMenuHeading("暂无测试")
+            if (entries.isEmpty()) groupLabel("暂无测试", inset = AdminSpace.xs, topGap = AdminSpace.sm)
             for (node in position?.nodes.orEmpty()) {
                 val tests = entries.filter { it.node.id == node.id }
-                if (position?.isCore == false && tests.isNotEmpty()) workspaceMenuHeading(node.label)
+                if (position?.isCore == false && tests.isNotEmpty()) groupLabel(node.label, inset = AdminSpace.xs, topGap = AdminSpace.sm)
                 for (entry in tests) {
                     workspaceMenuItem(entry.descriptor.label, ctx, IconToken.Play,
                         selected = { selectedWorkspaceTest(form)?.let { it.node.id == node.id && it.descriptor.id == entry.descriptor.id } == true },
@@ -51,7 +51,7 @@ internal fun ViewContainer<*, *>.workspaceMenu(form: ConfigFormState, meta: Plug
                 }
             }
         } else if (position != null) {
-            if (position.nodes.isEmpty()) workspaceMenuHeading("暂无扩展")
+            if (position.nodes.isEmpty()) groupLabel("暂无扩展", inset = AdminSpace.xs, topGap = AdminSpace.sm)
             for (node in position.nodes) {
                 workspaceMenuItem(if (position.isCore) "模型与参数" else node.label, ctx, node.icon,
                     selected = { !form.showingNodeStatus && form.selectedFlowNodeId == node.id },
@@ -76,15 +76,6 @@ internal fun ViewContainer<*, *>.workspaceMenu(form: ConfigFormState, meta: Plug
     }
 }
 
-private fun ViewContainer<*, *>.workspaceMenuHeading(label: String) {
-    Text {
-        attr {
-            text(label); fontSize(AdminType.micro); color(AdminColors.textTertiary)
-            marginLeft(AdminSpace.xs); marginRight(AdminSpace.xs); marginTop(AdminSpace.sm); marginBottom(AdminSpace.xs)
-        }
-    }
-}
-
 private fun ViewContainer<*, *>.workspaceMenuItem(
     label: String,
     ctx: Pager,
@@ -93,31 +84,23 @@ private fun ViewContainer<*, *>.workspaceMenuItem(
     warning: () -> Boolean = { false },
     onClick: () -> Unit,
 ) {
-    View {
-        attr {
-            minHeight(44f); flexDirectionRow(); alignItemsCenter()
-            marginLeft(4f); marginRight(4f); padding(AdminSpace.xs); borderRadius(AdminShape.radiusSm)
-            backgroundColor(if (selected()) AdminColors.sidebarSelectedBg else AdminColors.transparent)
-            cursor(CursorType.POINTER); accessibility("$label${if (selected()) "，已选中" else ""}")
-        }
-        event { click { onClick() } }
-        vif({ !workspaceIsCompact(ctx) }) {
-            View {
-                attr { marginRight(AdminSpace.xs); touchEnable(false) }
-                appIcon({ icon }, size = 16f, tint = { if (selected()) AdminColors.accentTintText else AdminColors.textTertiary })
+    // 统一菜单项组件（WORKSPACE 档）：紧凑窗口隐藏图标、窄菜单可折三行
+    menuListItem(
+        label = label,
+        isSelected = selected,
+        onClick = onClick,
+        icon = icon,
+        style = MenuItemStyle.WORKSPACE,
+        showIcon = !workspaceIsCompact(ctx),
+        // 窄菜单收字号，避免三个字以上折成四行
+        fontSize = if (workspaceIsCompact(ctx)) AdminType.micro else AdminType.caption,
+        trailing = {
+            vif({ warning() }) {
+                hGap(3f)
+                dot({ AdminColors.warning }, size = 5f)
             }
-        }
-        Text {
-            attr {
-                flex(1f); text(label); lines(3); fontWeightMedium()
-                fontSize(if (workspaceIsCompact(ctx)) AdminType.micro else AdminType.caption)
-                color(if (selected()) AdminColors.accentTintText else AdminColors.textPrimary); touchEnable(false)
-            }
-        }
-        vif({ warning() }) {
-            View { attr { size(5f, 5f); borderRadius(3f); marginLeft(3f); backgroundColor(AdminColors.warning); touchEnable(false) } }
-        }
-    }
+        },
+    )
 }
 
 /**
@@ -139,42 +122,40 @@ fun ViewContainer<*, *>.renderGlobalConfigLayout(
     toast: ToastState,
     ctx: Pager,
 ) {
-    View {
-        attr { flex(1f); flexDirectionColumn() }
-        menuPaneRow(
-            menuWidth = if (workspaceIsCompact(ctx)) 92f else 192f,
-            fillHeight = true,
-            menuBackground = AdminColors.sidebarBg,
-            // 与工作流左菜单同一口径：菜单是静态项，只在选中 section 变化时重建
-            menu = { vbind({ form.configSection }) { globalConfigMenu(form, meta, ctx) } },
-            panel = {
-                Scroller {
-                    attr {
-                        flex(1f); showScrollerIndicator(false)
-                        val compact = workspaceIsCompact(ctx)
-                        paddingLeft(if (compact) AdminSpace.xs else AdminSpace.lg)
-                        paddingRight(if (compact) AdminSpace.xs else AdminSpace.lg)
-                        paddingTop(AdminSpace.md); paddingBottom(AdminSpace.xxl)
-                    }
-                    // 与工作区同一重建口径：路由/快照变化才重建整块内容
-                    vfor({ form.configSectionList }) { _ ->
-                        View {
-                            attr { flexDirectionColumn() }
-                            renderConfigSection(form, meta, health, mcp, ota, toast, ctx, form.configSection)
-                        }
+    // 左右布局：全局 section 菜单 │ 1px 分隔线 │ 同一套配置卡片
+    menuPaneRow(
+        menuWidth = if (workspaceIsCompact(ctx)) 92f else 192f,
+        fillHeight = true,
+        menuBackground = AdminColors.sidebarBg,
+        // 与工作流左菜单同一口径：菜单是静态项，只在选中 section 变化时重建
+        menu = { vbind({ form.configSection }) { globalConfigMenu(form, meta, ctx) } },
+        panel = {
+            Scroller {
+                attr {
+                    flex(1f); showScrollerIndicator(false)
+                    val compact = workspaceIsCompact(ctx)
+                    paddingLeft(if (compact) AdminSpace.xs else AdminSpace.lg)
+                    paddingRight(if (compact) AdminSpace.xs else AdminSpace.lg)
+                    paddingTop(AdminSpace.md); paddingBottom(AdminSpace.xxl)
+                }
+                // 与工作区同一重建口径：路由/快照变化才重建整块内容
+                vfor({ form.configSectionList }) { _ ->
+                    View {
+                        attr { flexDirectionColumn() }
+                        renderConfigSection(form, meta, health, mcp, ota, toast, ctx, form.configSection)
                     }
                 }
-            },
-        )
-    }
+            }
+        },
+    )
 }
 
 /** 全局配置左菜单：只列没有流程节点的 section，按 [ConfigSections.globalGroups] 分组。 */
 private fun ViewContainer<*, *>.globalConfigMenu(form: ConfigFormState, meta: PluginMetaState, ctx: Pager) {
     Scroller {
         attr { flex(1f); showScrollerIndicator(false); paddingTop(AdminSpace.xs); paddingBottom(AdminSpace.lg) }
-        for ((groupLabel, sections) in ConfigSections.globalGroups) {
-            workspaceMenuHeading(groupLabel)
+        for ((groupName, sections) in ConfigSections.globalGroups) {
+            groupLabel(groupName)
             for (section in sections) {
                 workspaceMenuItem(section.label, ctx, globalSectionIcon(section.id),
                     selected = { form.configSection == section.id },

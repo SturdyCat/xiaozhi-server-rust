@@ -1,5 +1,7 @@
 package com.xiaozhi.admin
 
+import com.xiaozhi.admin.ui.*
+
 import com.tencent.kuikly.core.base.CursorType
 import com.tencent.kuikly.core.base.ViewContainer
 import com.tencent.kuikly.core.directives.vbind
@@ -22,41 +24,39 @@ fun ViewContainer<*, *>.renderConfigLayout(
     toast: ToastState,
     ctx: Pager,
 ) {
-    View {
-        attr { flex(1f); flexDirectionColumn() }
-        nodeWorkspaceTabs(form)
-        View {
-            attr { height(1f); backgroundColor(AdminColors.divider) }
-        }
-        // 左菜单 │ 1px 分隔线 │ 右面板：与 EchoMuse 设备卡共用 menuPaneRow 原语
-        menuPaneRow(
-            menuWidth = if (workspaceIsCompact(ctx)) 92f else 192f,
-            fillHeight = true,
-            menuBackground = AdminColors.sidebarBg,
-            menu = {
-                // Rebuild menu structure only when changing tab or workflow position.
-                vbind({ "${form.workflowPosition?.id ?: "global"}@${form.workspaceTab}" }) {
-                    workspaceMenu(form, meta, ctx)
-                }
-            },
-            panel = {
-                Scroller {
-                    attr {
-                        flex(1f); showScrollerIndicator(false)
-                        val compact = workspaceIsCompact(ctx)
-                        paddingLeft(if (compact) AdminSpace.xs else AdminSpace.lg)
-                        paddingRight(if (compact) AdminSpace.xs else AdminSpace.lg)
-                        paddingTop(AdminSpace.md); paddingBottom(AdminSpace.xxl)
+    // 上下布局：Tabs 栏 │ 1px 分隔线 │ 工作区；工作区内部再左右分栏（左菜单 │ 面板）
+    splitColumn(fillHeight = true, trailingGap = 0f) {
+        auto { nodeWorkspaceTabs(form) }
+        grow {
+            menuPaneRow(
+                menuWidth = if (workspaceIsCompact(ctx)) 92f else 192f,
+                fillHeight = true,
+                menuBackground = AdminColors.sidebarBg,
+                menu = {
+                    // Rebuild menu structure only when changing tab or workflow position.
+                    vbind({ "${form.workflowPosition?.id ?: "global"}@${form.workspaceTab}" }) {
+                        workspaceMenu(form, meta, ctx)
                     }
-                    vfor({ form.configSectionList }) { _ ->
-                        View {
-                            attr { flexDirectionColumn() }
-                            workspaceContent(form, meta, health, mcp, ota, toast, ctx)
+                },
+                panel = {
+                    Scroller {
+                        attr {
+                            flex(1f); showScrollerIndicator(false)
+                            val compact = workspaceIsCompact(ctx)
+                            paddingLeft(if (compact) AdminSpace.xs else AdminSpace.lg)
+                            paddingRight(if (compact) AdminSpace.xs else AdminSpace.lg)
+                            paddingTop(AdminSpace.md); paddingBottom(AdminSpace.xxl)
+                        }
+                        vfor({ form.configSectionList }) { _ ->
+                            View {
+                                attr { flexDirectionColumn() }
+                                workspaceContent(form, meta, health, mcp, ota, toast, ctx)
+                            }
                         }
                     }
-                }
-            },
-        )
+                },
+            )
+        }
     }
 }
 

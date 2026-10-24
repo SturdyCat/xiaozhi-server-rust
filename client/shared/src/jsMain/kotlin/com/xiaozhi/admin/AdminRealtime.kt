@@ -1,5 +1,7 @@
 package com.xiaozhi.admin
 
+import com.xiaozhi.admin.ui.*
+
 import kotlinx.browser.window
 import org.w3c.dom.WebSocket
 

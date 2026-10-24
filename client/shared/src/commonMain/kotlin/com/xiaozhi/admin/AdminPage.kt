@@ -1,5 +1,7 @@
 package com.xiaozhi.admin
 
+import com.xiaozhi.admin.ui.*
+
 import com.tencent.kuikly.core.annotations.Page
 import com.tencent.kuikly.core.base.CursorType
 import com.tencent.kuikly.core.base.ViewBuilder
@@ -192,178 +194,25 @@ class AdminPage : Pager(), FieldHelpHost {
                 backgroundColor(AdminColors.windowBg)
             }
 
-            View {
-                attr {
-                    flex(1f)
-                    flexDirectionRow()
-                }
-
-                // ===== 侧边栏：宽屏常驻；窄屏隐藏（改顶栏汉堡 + 抽屉浮层，见文件末尾）=====
-                vif({ !isNarrow() }) {
-                    adminSidebar(ctx, topInset)
-                    // 侧边栏右侧 1px 分隔
-                    View {
-                        attr {
-                            width(1f)
-                            backgroundColor(AdminColors.divider)
-                        }
-                    }
-                }
-
-                // ===== 内容区 =====
-                View {
-                    attr {
-                        flex(1f)
-                        flexDirectionColumn()
-                        paddingTop(topInset)
-                    }
-
-                    largeTitleBar(
-                        title = {
-                            // 配置 section：编辑目标为设备时标题带设备号（P1-5「当前编辑对象」）
-                            if (ctx.selectedSection == "config") {
-                                if (ctx.form.editDeviceId.isEmpty()) "节点管理" else "节点管理 · 设备 ${ctx.form.editDeviceId}"
-                            } else {
-                                AdminNav.label(ctx.selectedSection)
-                            }
-                        },
-                        // 窄屏：汉堡按钮开抽屉（宽屏 vif 不渲染，常驻侧边栏承担导航）
-                        leading = {
-                            vif({ isNarrow() }) {
-                                hamburgerButton { ctx.drawerOpen = true }
-                            }
-                        },
-                        stackActions = { editableSection() && workspaceIsCompact(ctx) &&
-                            (ctx.form.conflict || ctx.form.editDeviceId.isNotEmpty()) },
-                        trailing = {
-                            vif({ editableSection() && ctx.form.conflict }) {
-                                // 过期写入（409）：草稿仍在本地，给一个「重新加载」出口
-                                secondaryButton("重新加载") { ctx.form.reload(ctx, ctx.apiBase) }
-                                View { attr { width(AdminSpace.sm) } }
-                            }
-                            // 保存按钮：构建期文案参数 → 用 vif 切换两份按钮响应编辑对象
-                            //（全局 = POST /api/config；设备 = 白名单差量 PUT overlay）
-                            // 「全局配置」页共用同一按钮：它保存的也是整份全局配置。
-                            vif({ editableSection() && ctx.form.editDeviceId.isEmpty() }) {
-                                primaryButton(
-                                    "保存配置",
-                                    loading = { ctx.form.saving },
-                                    loadingText = "保存中…",
-                                    result = { ctx.form.saveResult },
-                                    successText = "✓ 已保存",
-                                    errorText = "✕ 保存失败",
-                                ) {
-                                    // toast 在**接口返回后**由回调触发（不能紧随 save() 取 statusMsg：
-                                    // 那时请求还没回来，会弹出上一条旧消息）
-                                    ctx.form.save(ctx, ctx.apiBase) { msg, level -> ctx.showToast(msg, level) }
-                                }
-                            }
-                            vif({ ctx.selectedSection == "config" && ctx.form.editDeviceId.isNotEmpty() }) {
-                                primaryButton(
-                                    "保存设备配置",
-                                    loading = { ctx.form.saving },
-                                    loadingText = "保存中…",
-                                    result = { ctx.form.saveResult },
-                                    successText = "✓ 已保存",
-                                    errorText = "✕ 保存失败",
-                                ) {
-                                    ctx.form.save(ctx, ctx.apiBase) { msg, level -> ctx.showToast(msg, level) }
-                                }
-                            }
-                        },
+            // 左右布局：侧边栏 │ 1px 分隔线 │ 内容区
+            // 窄屏（< NARROW_BREAKPOINT）时侧边栏 pane 不渲染，分隔线随之一起消失；
+            // 内容区 pane 常驻，窗口拉伸跨断点不会重建标题栏与当前 section。
+            splitRow(fillHeight = true) {
+                fixed(
+                    size = ADMIN_SIDEBAR_WIDTH,
+                    show = { !isNarrow() },
+                    background = AdminColors.sidebarBg,
+                ) { adminSidebar(ctx, topInset) }
+                grow {
+                    adminContentArea(
+                        ctx = ctx,
+                        topInset = topInset,
+                        isNarrow = isNarrow,
+                        editableSection = editableSection,
+                        twoColumn = twoColumn,
+                        contentPageWidth = contentPageWidth,
+                        contentPageHeight = contentPageHeight,
                     )
-
-                    // ===== section 切换：vif 闭包内读取 selectedSection（observable）=====
-                    vif({ ctx.selectedSection == "overview" }) {
-                        opsScroller {
-                            renderOpsOverview(ctx.stats, ctx.plugins, ctx.engineHealth, ctx) { section ->
-                                // 横幅跳转：菜单归属由 form.onSectionRouted 统一按 section 判定
-                                //（有流程节点 → 语音流程；服务 / MCP / OTA / AIUI… → 全局配置）
-                                ctx.form.openConfigSection(section)
-                            }
-                        }
-                    }
-                    vif({ ctx.selectedSection == "testbench" }) {
-                        // 测试台（P1-3）：mac-only（菜单已在 web 隐藏）。mac actual 按 Pager 缓存
-                        // TestBenchState，切走再切回来连接/录音状态不丢；⚠️ 非限定调用挂进内容区
-                        renderTestbenchSection(ctx, ctx.form, twoColumn, contentPageWidth, contentPageHeight)
-                    }
-                    vif({ ctx.selectedSection == "devices" }) {
-                        opsScroller {
-                            renderOpsDevices(
-                                ctx.devices,
-                                ctx.form,
-                                // 「个性化配置」入口（P1-5）：以该设备为编辑目标跳配置 section
-                                //（editDeviceId 置位后 load 走「全局基线 + overlay」分支）
-                                { id ->
-                                    ctx.form.editDeviceId = id
-                                    ctx.form.load(ctx, ctx.apiBase)
-                                    // 设备 overlay 只覆盖流程节点参数：先回到「语音流程」的流程位置，
-                                    // 否则会停在上一轮的全局 section 上（overlay 里没有那些字段）
-                                    ctx.form.openWorkflowPage()
-                                    ctx.selectedSection = "config"
-                                },
-                                ctx,
-                            )
-                        }
-                    }
-                    vif({ ctx.selectedSection == "echomuse" }) {
-                        opsScroller {
-                            renderEchoMuse(
-                                ctx.echomuse,
-                                ctx.toast,
-                                ctx,
-                                isActive = { ctx.selectedSection == "echomuse" },
-                                // 唤醒词面板的「管理模型文件」入口：跳「文件」页的 oww-models/ 目录
-                                onOpenModelFiles = {
-                                    ctx.files.openPath(ctx, OWW_MODELS_DIR)
-                                    ctx.selectedSection = "files"
-                                },
-                            )
-                        }
-                    }
-                    vif({ ctx.selectedSection == "sessions" }) {
-                        opsScroller { renderOpsSessions(ctx.sessions, ctx) }
-                    }
-                    vif({ ctx.selectedSection == "conversations" }) {
-                        opsScroller { renderOpsConversations(ctx.conversations, ctx) }
-                    }
-                    vif({ ctx.selectedSection == "usage" }) {
-                        opsScroller { renderOpsUsage(ctx.usage, ctx) }
-                    }
-                    vif({ ctx.selectedSection == "metrics" }) {
-                        opsScroller { renderOpsMetrics(ctx.metrics, ctx) }
-                    }
-                    vif({ ctx.selectedSection == "files" }) {
-                        opsScroller { renderFilesSection(ctx.files, ctx.toast, ctx) }
-                    }
-                    vif({ ctx.selectedSection == "config" }) {
-                        // Workflow sits at the top of the voice config content area only,
-                        // then drives the local tabs and their left/right workspace.
-                        // 右上「全局设置」按钮经 form.onSectionRouted 切到独立菜单「全局配置」。
-                        pipelineWorkflowHeader(ctx.form, ctx)
-                        renderConfigLayout(
-                            ctx.form,
-                            ctx.plugins,
-                            ctx.engineHealth,
-                            ctx.mcpTools,
-                            ctx.ota,
-                            ctx.toast,
-                            ctx,
-                        )
-                    }
-                    vif({ ctx.selectedSection == "settings" }) {
-                        // 全局配置：无工作流轨道、无配置/测试 Tab——只有全局 section 分组菜单 + 表单。
-                        renderGlobalConfigLayout(
-                            ctx.form,
-                            ctx.plugins,
-                            ctx.engineHealth,
-                            ctx.mcpTools,
-                            ctx.ota,
-                            ctx.toast,
-                            ctx,
-                        )
-                    }
                 }
             }
 
@@ -400,6 +249,172 @@ class AdminPage : Pager(), FieldHelpHost {
     }
 }
 
+/** 主壳内容区（顶部标题栏 + 当前 section）：[splitRow] 右分区的实现，宽/窄屏共用同一份。 */
+private fun ViewContainer<*, *>.adminContentArea(
+    ctx: AdminPage,
+    topInset: Float,
+    isNarrow: () -> Boolean,
+    editableSection: () -> Boolean,
+    twoColumn: () -> Boolean,
+    contentPageWidth: () -> Float,
+    contentPageHeight: () -> Float,
+) {
+    View {
+        attr {
+            flex(1f)
+            flexDirectionColumn()
+            paddingTop(topInset)
+        }
+
+        largeTitleBar(
+            title = {
+                // 配置 section：编辑目标为设备时标题带设备号（P1-5「当前编辑对象」）
+                if (ctx.selectedSection == "config") {
+                    if (ctx.form.editDeviceId.isEmpty()) "节点管理" else "节点管理 · 设备 ${ctx.form.editDeviceId}"
+                } else {
+                    AdminNav.label(ctx.selectedSection)
+                }
+            },
+            // 窄屏：汉堡按钮开抽屉（宽屏 vif 不渲染，常驻侧边栏承担导航）
+            leading = {
+                vif({ isNarrow() }) {
+                    hamburgerButton { ctx.drawerOpen = true }
+                }
+            },
+            stackActions = { editableSection() && workspaceIsCompact(ctx) &&
+                (ctx.form.conflict || ctx.form.editDeviceId.isNotEmpty()) },
+            trailing = {
+                vif({ editableSection() && ctx.form.conflict }) {
+                    // 过期写入（409）：草稿仍在本地，给一个「重新加载」出口
+                    secondaryButton("重新加载") { ctx.form.reload(ctx, ctx.apiBase) }
+                    hGap(AdminSpace.sm)
+                }
+                // 保存按钮：构建期文案参数 → 用 vif 切换两份按钮响应编辑对象
+                //（全局 = POST /api/config；设备 = 白名单差量 PUT overlay）
+                // 「全局配置」页共用同一按钮：它保存的也是整份全局配置。
+                vif({ editableSection() && ctx.form.editDeviceId.isEmpty() }) {
+                    primaryButton(
+                        "保存配置",
+                        loading = { ctx.form.saving },
+                        loadingText = "保存中…",
+                        result = { ctx.form.saveResult },
+                        successText = "✓ 已保存",
+                        errorText = "✕ 保存失败",
+                    ) {
+                        // toast 在**接口返回后**由回调触发（不能紧随 save() 取 statusMsg：
+                        // 那时请求还没回来，会弹出上一条旧消息）
+                        ctx.form.save(ctx, ctx.apiBase) { msg, level -> ctx.showToast(msg, level) }
+                    }
+                }
+                vif({ ctx.selectedSection == "config" && ctx.form.editDeviceId.isNotEmpty() }) {
+                    primaryButton(
+                        "保存设备配置",
+                        loading = { ctx.form.saving },
+                        loadingText = "保存中…",
+                        result = { ctx.form.saveResult },
+                        successText = "✓ 已保存",
+                        errorText = "✕ 保存失败",
+                    ) {
+                        ctx.form.save(ctx, ctx.apiBase) { msg, level -> ctx.showToast(msg, level) }
+                    }
+                }
+            },
+        )
+
+        // ===== section 切换：vif 闭包内读取 selectedSection（observable）=====
+        vif({ ctx.selectedSection == "overview" }) {
+            pageScroller {
+                renderOpsOverview(ctx.stats, ctx.plugins, ctx.engineHealth, ctx) { section ->
+                    // 横幅跳转：菜单归属由 form.onSectionRouted 统一按 section 判定
+                    //（有流程节点 → 语音流程；服务 / MCP / OTA / AIUI… → 全局配置）
+                    ctx.form.openConfigSection(section)
+                }
+            }
+        }
+        vif({ ctx.selectedSection == "testbench" }) {
+            // 测试台（P1-3）：mac-only（菜单已在 web 隐藏）。mac actual 按 Pager 缓存
+            // TestBenchState，切走再切回来连接/录音状态不丢；⚠️ 非限定调用挂进内容区
+            renderTestbenchSection(ctx, ctx.form, twoColumn, contentPageWidth, contentPageHeight)
+        }
+        vif({ ctx.selectedSection == "devices" }) {
+            pageScroller {
+                renderOpsDevices(
+                    ctx.devices,
+                    ctx.form,
+                    // 「个性化配置」入口（P1-5）：以该设备为编辑目标跳配置 section
+                    //（editDeviceId 置位后 load 走「全局基线 + overlay」分支）
+                    { id ->
+                        ctx.form.editDeviceId = id
+                        ctx.form.load(ctx, ctx.apiBase)
+                        // 设备 overlay 只覆盖流程节点参数：先回到「语音流程」的流程位置，
+                        // 否则会停在上一轮的全局 section 上（overlay 里没有那些字段）
+                        ctx.form.openWorkflowPage()
+                        ctx.selectedSection = "config"
+                    },
+                    ctx,
+                )
+            }
+        }
+        vif({ ctx.selectedSection == "echomuse" }) {
+            pageScroller {
+                renderEchoMuse(
+                    ctx.echomuse,
+                    ctx.toast,
+                    ctx,
+                    isActive = { ctx.selectedSection == "echomuse" },
+                    // 唤醒词面板的「管理模型文件」入口：跳「文件」页的 oww-models/ 目录
+                    onOpenModelFiles = {
+                        ctx.files.openPath(ctx, OWW_MODELS_DIR)
+                        ctx.selectedSection = "files"
+                    },
+                )
+            }
+        }
+        vif({ ctx.selectedSection == "sessions" }) {
+            pageScroller { renderOpsSessions(ctx.sessions, ctx) }
+        }
+        vif({ ctx.selectedSection == "conversations" }) {
+            pageScroller { renderOpsConversations(ctx.conversations, ctx) }
+        }
+        vif({ ctx.selectedSection == "usage" }) {
+            pageScroller { renderOpsUsage(ctx.usage, ctx) }
+        }
+        vif({ ctx.selectedSection == "metrics" }) {
+            pageScroller { renderOpsMetrics(ctx.metrics, ctx) }
+        }
+        vif({ ctx.selectedSection == "files" }) {
+            pageScroller { renderFilesSection(ctx.files, ctx.toast, ctx) }
+        }
+        vif({ ctx.selectedSection == "config" }) {
+            // Workflow sits at the top of the voice config content area only,
+            // then drives the local tabs and their left/right workspace.
+            // 右上「全局设置」按钮经 form.onSectionRouted 切到独立菜单「全局配置」。
+            pipelineWorkflowHeader(ctx.form, ctx)
+            renderConfigLayout(
+                ctx.form,
+                ctx.plugins,
+                ctx.engineHealth,
+                ctx.mcpTools,
+                ctx.ota,
+                ctx.toast,
+                ctx,
+            )
+        }
+        vif({ ctx.selectedSection == "settings" }) {
+            // 全局配置：无工作流轨道、无配置/测试 Tab——只有全局 section 分组菜单 + 表单。
+            renderGlobalConfigLayout(
+                ctx.form,
+                ctx.plugins,
+                ctx.engineHealth,
+                ctx.mcpTools,
+                ctx.ota,
+                ctx.toast,
+                ctx,
+            )
+        }
+    }
+}
+
 /** 窄屏断点（P1-4）：低于此宽度侧边栏改抽屉。与 twoPane 的 900 双列断点各自独立。 */
 internal const val NARROW_BREAKPOINT = 768f
 internal const val ADMIN_SIDEBAR_WIDTH = 240f
@@ -424,7 +439,7 @@ private fun ViewContainer<*, *>.adminSidebar(ctx: AdminPage, topInset: Float) {
         for (item in AdminNav.visible(IS_MACOS)) {
             if (item.group != lastGroup) {
                 lastGroup = item.group
-                navGroupHeader(item.group)
+                groupLabel(item.group, inset = AdminSpace.md + AdminSpace.sm)
             }
             sidebarItem(
                 item.label,
@@ -468,42 +483,21 @@ private fun ViewContainer<*, *>.adminSidebar(ctx: AdminPage, topInset: Float) {
 }
 
 /** 侧边栏分组小标题（P1-4）：micro 灰字，左缘对齐导航项文字（sm 外距 + md 内距 = 28）。 */
-private fun ViewContainer<*, *>.navGroupHeader(title: String) {
-    Text {
-        attr {
-            fontSize(AdminType.micro)
-            color(AdminColors.textTertiary)
-            marginLeft(AdminSpace.md + AdminSpace.sm)
-            marginTop(AdminSpace.md)
-            marginBottom(AdminSpace.xs)
-            text(title)
-        }
-    }
-}
-
-/** 汉堡按钮（窄屏开抽屉）：44x44 触控目标内画三条 2px 横线，右留 sm 与标题隔开。 */
+/**
+ * 汉堡按钮（窄屏开抽屉）：44x44 触控目标 + 官方 Canvas 矢量 [IconToken.Menu]。
+ * 三条横线不再手绘 —— 图标库已有 Menu，手画的线宽/间距无法跟随图标集统一调整。
+ */
 private fun ViewContainer<*, *>.hamburgerButton(onClick: () -> Unit) {
     View {
         attr {
             width(44f)
             height(44f)
-            alignItemsCenter()
-            justifyContentCenter()
+            allCenter()
             marginRight(AdminSpace.sm)
             // 点击目标：悬停指针
             cursor(CursorType.POINTER)
         }
         event { click { onClick() } }
-        for (i in 0 until 3) {
-            View {
-                attr {
-                    width(18f)
-                    height(2f)
-                    borderRadius(AdminShape.radiusPill)
-                    backgroundColor(AdminColors.textPrimary)
-                    marginTop(if (i == 0) 0f else 4f)
-                }
-            }
-        }
+        appIcon({ IconToken.Menu }, size = 20f, tint = { AdminColors.textPrimary })
     }
 }

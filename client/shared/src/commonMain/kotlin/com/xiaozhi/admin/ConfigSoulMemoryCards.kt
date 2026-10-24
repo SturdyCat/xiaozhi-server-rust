@@ -1,9 +1,10 @@
 package com.xiaozhi.admin
 
+import com.xiaozhi.admin.ui.*
+
 import com.tencent.kuikly.core.base.ViewContainer
 import com.tencent.kuikly.core.directives.vif
 import com.tencent.kuikly.core.pager.Pager
-import com.tencent.kuikly.core.views.View
 
 // ============================================================
 // 「灵魂」「记忆」两个配置卡（从 ConfigCards.kt 拆出，见 AGENTS.md §5.10）
@@ -80,9 +81,9 @@ fun ViewContainer<*, *>.soulConfigCard(form: ConfigFormState, ctx: Pager) {
                     sm.syncSoulPresets(ctx, form.serverBase)
                     sm.loadDefaultSoul(ctx, form.serverBase) { form.markDirty() }
                 }
-                View { attr { width(AdminSpace.sm) } }
+                hGap(AdminSpace.sm)
                 secondaryButton("清空人格字段") { sm.clearSoulProfile { form.markDirty() } }
-                View { attr { width(AdminSpace.sm) } }
+                hGap(AdminSpace.sm)
                 secondaryButton("预览最终提示词") { sm.previewSoul(ctx, form.serverBase) }
             }
             vif({ sm.soulPresetMsg.isNotEmpty() }) {
@@ -242,9 +243,9 @@ fun ViewContainer<*, *>.memoryConfigCard(form: ConfigFormState, ctx: Pager) {
             // ===== 状态（读页）：先让用户看到"到底有没有在工作" =====
             actionRow {
                 secondaryButton("刷新状态") { sm.refreshStatus(ctx, form.serverBase) }
-                View { attr { width(AdminSpace.sm) } }
+                hGap(AdminSpace.sm)
                 secondaryButton("立即维护") { sm.maintain(ctx, form.serverBase, dryRun = false) }
-                View { attr { width(AdminSpace.sm) } }
+                hGap(AdminSpace.sm)
                 secondaryButton("演练保留策略") { sm.maintain(ctx, form.serverBase, dryRun = true) }
             }
             vif({ sm.memoryStatusMsg.isNotEmpty() }) {
@@ -463,7 +464,7 @@ fun ViewContainer<*, *>.memoryConfigCard(form: ConfigFormState, ctx: Pager) {
             actionRow {
                 secondaryButton("清空记忆") { sm.clear(ctx, form.serverBase) }
                 vif({ sm.memoryClearMsg.isNotEmpty() }) {
-                    View { attr { width(AdminSpace.sm) } }
+                    hGap(AdminSpace.sm)
                     textNote(sm.memoryClearMsg, tone = "error", micro = true)
                 }
             }

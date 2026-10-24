@@ -1,4 +1,4 @@
-package com.xiaozhi.admin
+package com.xiaozhi.admin.ui
 
 import com.tencent.kuikly.core.base.Animation
 import com.tencent.kuikly.core.base.Color

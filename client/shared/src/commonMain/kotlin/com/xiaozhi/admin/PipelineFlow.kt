@@ -1,5 +1,7 @@
 package com.xiaozhi.admin
 
+import com.xiaozhi.admin.ui.*
+
 /** One navigation source, including when two nodes share a configuration controller. */
 data class ConfigSelection(
     val sectionId: String,

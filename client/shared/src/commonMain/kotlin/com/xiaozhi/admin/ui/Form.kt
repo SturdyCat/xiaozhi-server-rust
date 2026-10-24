@@ -1,13 +1,14 @@
-package com.xiaozhi.admin
+package com.xiaozhi.admin.ui
 
-import com.tencent.kuikly.core.base.Attr
+
+// 字段帮助徽标与「输入需补 text()」的平台无关开关（后者是 expect/actual）
+import com.xiaozhi.admin.INPUT_NEEDS_TEXT_PROP
 import com.tencent.kuikly.core.base.Border
 import com.tencent.kuikly.core.base.BorderStyle
 import com.tencent.kuikly.core.base.CursorType
 import com.tencent.kuikly.core.base.ViewBuilder
 import com.tencent.kuikly.core.base.ViewContainer
 import com.tencent.kuikly.core.directives.vif
-import com.tencent.kuikly.core.reactive.handler.observable
 import com.tencent.kuikly.core.views.Input
 import com.tencent.kuikly.core.views.Switch
 import com.tencent.kuikly.core.views.Text
@@ -41,6 +42,74 @@ internal val DECIMAL_INPUT_FILTER: (String) -> String = { raw ->
     }
 }
 
+// ===================== 输入域外壳 =====================
+
+/**
+ * 输入域外壳：fieldBg 底 + 1px divider 边框 + radiusSm + 左右内距 sm。
+ *
+ * **所有输入类控件共用这一个壳**（单行 [labeledField]、多行 [labeledTextArea]、
+ * 下拉 [dropdownField]）：官方 Input/TextArea 是叶子组件、不带 padding，
+ * 边框与内边距只能由外层容器承担（见 [labeledField] 的注释）。此前这三处各抄了一遍
+ * 四件套，改色/改圆角要改三处。
+ *
+ * 内容槽里的控件用 `flex(1f)` + 透明背景铺满壳。
+ */
+fun ViewContainer<*, *>.fieldBox(
+    height: Float = FIELD_HEIGHT,
+    verticalPadding: Float = 0f,
+    /** 整域可点（下拉框）：悬停指针 + 点击回调。 */
+    onClick: (() -> Unit)? = null,
+    content: ViewBuilder,
+) {
+    View {
+        attr {
+            flexDirectionRow()
+            alignItemsCenter()
+            this.height(height)
+            backgroundColor(AdminColors.fieldBg)
+            border(Border(1f, BorderStyle.SOLID, AdminColors.divider))
+            borderRadius(AdminShape.radiusSm)
+            paddingLeft(AdminSpace.sm)
+            paddingRight(AdminSpace.sm)
+            if (verticalPadding > 0f) {
+                paddingTop(verticalPadding)
+                paddingBottom(verticalPadding)
+            }
+            if (onClick != null) cursor(CursorType.POINTER)
+        }
+        if (onClick != null) event { click { onClick() } }
+        content(this)
+    }
+}
+
+/** 单行/下拉输入域的默认高度（触屏友好）。 */
+const val FIELD_HEIGHT: Float = 48f
+
+/**
+ * 「名称 + 可选 ⓘ」左组：占满余宽，名称与 ⓘ 紧挨（不贴行尾）。
+ * [fieldLabel]（标签行）与 [switchRow]（开关行）共用，避免同一段结构写两遍。
+ * [primary]=true 用 textPrimary（开关行的名称是主体信息），否则 textSecondary（字段标签）。
+ */
+fun ViewContainer<*, *>.labelWithHelp(label: String, help: String = "", primary: Boolean = false) {
+    View {
+        attr {
+            flex(1f)
+            flexDirectionRow()
+            alignItemsCenter()
+        }
+        Text {
+            attr {
+                fontSize(AdminType.body)
+                fontWeightMedium()
+                color(if (primary) AdminColors.textPrimary else AdminColors.textSecondary)
+                text(label)
+            }
+        }
+        // ⓘ 紧跟名称（不贴到行尾），help 为空时调用方不传 → 不渲染
+        if (help.isNotEmpty()) infoBadge(label, help)
+    }
+}
+
 /**
  * 字段标题行：左「中文名 + 可选 ⓘ」，右「可选控制按钮」，两端对齐。
  *
@@ -48,9 +117,6 @@ internal val DECIMAL_INPUT_FILTER: (String) -> String = { raw ->
  * [help] 非空才挂 ⓘ（点开弹层看完整说明），空的字段不画 icon——不制造"每个字段都有解释"的噪音。
  * [trailing] 用于该功能的控制动作（获取模型列表 / 探测音色目录 / 生成模型…）：
  * 放在名称右侧而不是另起一行，标题与动作的归属关系一眼可见。
- *
- * ⚠️ 标签侧是 `flex(1f)` 容器、名称与 ⓘ 紧跟在一起（不贴行尾）；名称过长时按可用宽度换行，
- * 动作按钮始终贴右端。名称本身要短——"每行一条""0~1"这类填写说明属于 [help]，不塞进名字。
  */
 fun ViewContainer<*, *>.fieldLabel(
     label: String,
@@ -64,23 +130,7 @@ fun ViewContainer<*, *>.fieldLabel(
             marginTop(AdminSpace.fieldGap)
             marginBottom(AdminSpace.xs)
         }
-        View {
-            attr {
-                flex(1f)
-                flexDirectionRow()
-                alignItemsCenter()
-            }
-            Text {
-                attr {
-                    fontSize(AdminType.body)
-                    fontWeightMedium()
-                    color(AdminColors.textSecondary)
-                    text(label)
-                }
-            }
-            // ⓘ 紧跟名称（不贴到行尾），help 为空时调用方不传 → 不渲染
-            if (help.isNotEmpty()) infoBadge(label, help)
-        }
+        labelWithHelp(label, help)
         if (trailing != null) trailing(this)
     }
 }
@@ -113,17 +163,7 @@ fun ViewContainer<*, *>.labeledField(
     trailing: ViewBuilder? = null,
 ) {
     fieldLabel(label, help, trailing)
-    View {
-        attr {
-            flexDirectionRow()
-            alignItemsCenter()
-            height(height)
-            backgroundColor(AdminColors.fieldBg)
-            border(Border(1f, BorderStyle.SOLID, AdminColors.divider))
-            borderRadius(AdminShape.radiusSm)
-            paddingLeft(AdminSpace.sm)
-            paddingRight(AdminSpace.sm)
-        }
+    fieldBox(height = height) {
         Input {
             attr {
                 flex(1f)
@@ -231,17 +271,7 @@ fun ViewContainer<*, *>.labeledTextArea(
     trailing: ViewBuilder? = null,
 ) {
     fieldLabel(label, help, trailing)
-    View {
-        attr {
-            height(height)
-            backgroundColor(AdminColors.fieldBg)
-            border(Border(1f, BorderStyle.SOLID, AdminColors.divider))
-            borderRadius(AdminShape.radiusSm)
-            paddingLeft(AdminSpace.sm)
-            paddingRight(AdminSpace.sm)
-            paddingTop(AdminSpace.xs)
-            paddingBottom(AdminSpace.xs)
-        }
+    fieldBox(height = height, verticalPadding = AdminSpace.xs) {
         TextArea {
             attr {
                 flex(1f)
@@ -276,7 +306,7 @@ fun ViewContainer<*, *>.labeledTextArea(
 }
 
 /** 卡片内动作行：按钮/徽标靠右且垂直居中，窄屏自动换行；顶部留 sm(12) 间距。
- * 元素间距由调用处 `View { width(12f) }` 控制。 */
+ * 元素之间的横向间距用 [hGap]（官方 flex 无 gap，占位收敛在组件库里）。 */
 fun ViewContainer<*, *>.actionRow(content: ViewBuilder) {
     View {
         attr {
@@ -307,22 +337,7 @@ fun ViewContainer<*, *>.switchRow(label: String, checked: Boolean, help: String 
             height(52f)
             marginTop(AdminSpace.fieldGap)
         }
-        View {
-            attr {
-                flex(1f)
-                flexDirectionRow()
-                alignItemsCenter()
-            }
-            Text {
-                attr {
-                    fontSize(AdminType.body)
-                    fontWeightMedium()
-                    color(AdminColors.textPrimary)
-                    text(label)
-                }
-            }
-            if (help.isNotEmpty()) infoBadge(label, help)
-        }
+        labelWithHelp(label, help, primary = true)
         Switch {
             attr {
                 width(46f)

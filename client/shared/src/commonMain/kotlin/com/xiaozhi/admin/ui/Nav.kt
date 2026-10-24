@@ -1,10 +1,7 @@
-package com.xiaozhi.admin
+package com.xiaozhi.admin.ui
 
-import com.tencent.kuikly.core.base.CursorType
 import com.tencent.kuikly.core.base.ViewContainer
 import com.tencent.kuikly.core.directives.vif
-import com.tencent.kuikly.core.views.Text
-import com.tencent.kuikly.core.views.View
 
 /**
  * 管理台**导航常量表**与侧边栏原语（commonMain：web 与 macOS 共用）。
@@ -116,63 +113,18 @@ fun ViewContainer<*, *>.sidebarItem(
     icon: IconToken? = null,
     onClick: () -> Unit,
 ) {
-    View {
-        attr {
-            height(44f)
-            flexDirectionRow()
-            alignItemsCenter()
-            marginLeft(AdminSpace.sm)
-            marginRight(AdminSpace.sm)
-            paddingLeft(AdminSpace.md)
-            paddingRight(AdminSpace.md)
-            borderRadius(AdminShape.radiusMd)
-            backgroundColor(if (isSelected()) AdminColors.sidebarSelectedBg else AdminColors.transparent)
-            // 桌面端悬停指针：菜单是点击目标，不是文本输入区（web 靠 h5App 的 cursor 处理器落 CSS）
-            cursor(CursorType.POINTER)
-        }
-        event { click { if (enabled) onClick() } }
-        // 左侧选中指示条（3px 品牌绿竖条，vif 响应式）
-        vif({ isSelected() }) {
-            View {
-                attr {
-                    width(3f)
-                    height(20f)
-                    borderRadius(AdminShape.radiusPill)
-                    backgroundColor(AdminColors.accent)
-                    marginRight(AdminSpace.sm)
-                }
+    // 统一菜单项组件（[menuListItem] 的 MAIN 档）：尺寸/选中条/图标/字色只有一处实现
+    menuListItem(
+        label = label,
+        isSelected = isSelected,
+        onClick = onClick,
+        icon = icon,
+        style = MenuItemStyle.MAIN,
+        enabled = enabled,
+        trailing = {
+            vif({ showDot() }) {
+                dot({ AdminColors.warning })
             }
-        }
-        if (icon != null) {
-            appIcon({ icon }, size = 18f, tint = { if (!enabled) AdminColors.disabledText else if (isSelected()) AdminColors.accentTintText else AdminColors.textTertiary })
-            View { attr { width(AdminSpace.sm) } }
-        }
-        Text {
-            attr {
-                flex(1f)
-                fontSize(AdminType.body)
-                fontWeightMedium()
-                color(
-                    if (!enabled) {
-                        AdminColors.textTertiary
-                    } else if (isSelected()) {
-                        AdminColors.accentTintText
-                    } else {
-                        AdminColors.textPrimary
-                    },
-                )
-                text(label)
-            }
-        }
-        vif({ showDot() }) {
-            View {
-                attr {
-                    width(8f)
-                    height(8f)
-                    borderRadius(AdminShape.radiusPill)
-                    backgroundColor(AdminColors.warning)
-                }
-            }
-        }
-    }
+        },
+    )
 }

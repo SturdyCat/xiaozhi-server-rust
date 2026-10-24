@@ -2,6 +2,11 @@
 # 配置真源是 SQLite 配置库（XIAOZHI_CONFIG_DB → --config-db → /data/data.db）：
 # 空库以内置默认启动并落库，改配置走管理页 / PUT /api/config（写库）。
 # 本文件仅 enumerates 全部可配字段及默认值/注释，供初始化与查阅。
+#
+# 默认值口径：唤醒问候语 / 指令闸门 / 技能级联 / 人格档案 / 记忆 / EchoMuse 入口 / LLM 对话
+# 这些「标准行为」默认 enabled = true —— 装机零配置即可用，不想要可在管理页显式关闭。
+# 存量配置库在启动时按 defaults_version 自动对齐：仍是旧默认的项跟随新默认，用户显式
+# 改过的项原样保留（见 server/src/config/defaults.rs）。
 
 [server]
 # 监听端口：服务器永远监听 0.0.0.0，仅端口可配（外部可达性由端口映射/防火墙决定）
@@ -296,6 +301,36 @@ welcome = "我已连接，喊我的唤醒词或按一下按键就能开始对话
                                     # ⚠️ [echomuse] 段 RestartOnly：改完需重启服务端生效。
 # mDNS 广播地址无配置项：启动时动态探测部署机默认出口的局域网 IPv4，部署在哪台
 # 机器就广播哪个 IP。docker 容器部署探测到的是容器内网 IP，请改用 host 网络。
+
+# ===== ESPHome Native API 桥（可选模块，默认关闭）：把 Dot 2 暴露成标准 ESPHome 节点，
+#       HA / homeCore / 任意 native-api 客户端连上来就能发现并驱动，不必为每个新设备
+#       ／新协议在服务端加端点。
+#       ⚠️ 需 `cargo build --features esp_home`（或不加该 feature 时本段完全不生效：
+#          零依赖、零监听、零行为变化）。
+#       ⚠️ 暴露的实体：binary_sensor（在线 / 聆听中 / 思考中 / 播报中 / 静音，均只读）
+#          + number（音量 0..127，可写 → 下发 volume_set 给设备）。
+#       ⚠️ 静音只有设备上报（mute_state）、协议无 mute_set，故为只读传感器——不做
+#          "点了没反应"的假开关。LED / 打断同理（无下发路径），暂不暴露。
+#       ⚠️ bluetooth_proxy（Dot 2 当 BLE 代理）：ble_proxy=true **且** [echomuse].ble_proxy=true
+#          才向客户端宣告。能力只报真实具备的位（被动扫描 + 主动连接）：
+#          配对 / 清缓存 / 描述符读写设备侧没有实现，一律不报、请求时明确回错误；
+#          notify 只能转发设备已自动推送的事件流（设备不支持按 handle 订阅）。
+#          设计与能力边界见 docs/research/emx-integration-analysis.md §4.1.2 / §4.1.3。
+#       ⚠️ 改动本段需**重启**生效。
+[esp_home]
+enabled = false                     # true = 在 port 上提供 ESPHome Native API（默认关闭）
+port = 6053                         # ESPHome 官方默认端口；与 [server].port 无关、互不影响
+encryption_key = ""                 # noise_psk（base64 的 32 字节，ESPHome 生成的那串）；
+                                    # 留空 = 明文，仅限可信局域网。生产建议设置。
+device_name = "xiaozhi-dot2"        # 节点名（mDNS 实例名 + <name>.local 主机名前缀）
+friendly_name = "EchoMuse Dot 2"    # HA 里显示的名字
+model = "EchoMuse Dot 2"            # 上报的型号
+manufacturer = "xiaozhi"            # 上报的厂商
+suggested_area = ""                 # HA 首次添加时的默认区域（留空 = 不指定）
+mdns = true                         # 广播 _esphomelib._tcp 供 HA 自动发现；失败只告警，
+                                    # 可用 IP:port 手动添加（容器内探测不到局域网 IP 时常见）
+ble_proxy = true                    # 宣告 BLE 代理能力；还需 [echomuse].ble_proxy 也为 true
+                                    # 才真正生效——后者才是设备扫描/连接的总闸。
 
 # ===== AIUI 全链路（极速超拟人链路）：启用后设备流水线切换为 VAD 切段 → AIUI 云端闭环
 #       （识别 + 大模型 + 合成一体，发音人目录见 AIUI 文档 3.9），本地 ASR/LLM/TTS 引擎闲置。

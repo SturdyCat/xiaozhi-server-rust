@@ -1,5 +1,7 @@
 package com.xiaozhi.admin
 
+import com.xiaozhi.admin.ui.*
+
 import com.tencent.kuikly.core.base.ViewContainer
 import com.tencent.kuikly.core.directives.vif
 import com.tencent.kuikly.core.pager.Pager
@@ -67,8 +69,7 @@ private fun ViewContainer<*, *>.nodeTestAction(form: ConfigFormState, ctx: Pager
             textNote({ (state.availability(descriptor) as? Availability.Disabled)?.reason.orEmpty() }, tone = { "warn" }, micro = true)
         }
         vif({ state.runState(descriptor.id).result != null }) {
-            View {
-                attr { flexDirectionColumn(); padding(AdminSpace.sm); backgroundColor(AdminColors.insetBg); borderRadius(AdminShape.radiusSm) }
+            insetPanel(topGap = 0f) {
                 textNote({ "本次输入：${state.runState(descriptor.id).inputSummary}" }, micro = true)
                 textNote({ state.runState(descriptor.id).result?.let {
                     "快照 ${it.revision.take(16)} · ${if (it.contextMode == "pipeline_preview") "串联预览" else "隔离节点"} · 请求 ${it.requestId.take(16)}"

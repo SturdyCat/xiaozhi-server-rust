@@ -364,3 +364,58 @@ async fn gatt<S: Context>(
 #[cfg(test)]
 #[path = "ble_http_tests.rs"]
 mod tests;
+
+// ==== 服务内组件门面 ========================================================
+//
+// ESPHome `bluetooth_proxy` 桥（`device/esp_home/bluetooth.rs`）与未来的小米设备类
+// 适配器都**只经这里**访问设备 BLE，不各自复制一套 hub/BLE 交互。
+//
+// 复用 HTTP 路由的同一套语义：`Capture` 负责设备审批、能力声明、管理认证、
+// 会话一致性与数据链就绪校验，`execute` 负责请求号关联与超时。区别只有一处：
+// 调用方是进程内可信模块，故不经过 HTTP 的设备 token 鉴权。
+
+/// 设备 BLE 快照：连接槽、最近事件（`notify` / `disconnected`）、广播缓存。
+#[cfg(feature = "esp_home")]
+#[derive(Debug, Clone, Default)]
+pub(crate) struct BleSnapshot {
+    /// 设备上报的连接槽（`{"free","limit","addrs"}`），未上报为 `None`。
+    pub slots: Option<Value>,
+    /// 最近事件（最多 50 条，含 `t:"notify"` 与 `t:"disconnected"`）。
+    pub events: Vec<Value>,
+    /// 广播缓存（按 addr 去重后的最新一份，已按 addr 排序）。
+    pub adverts: Vec<Value>,
+}
+
+/// 发一条 GATT 命令到设备并等应答。`request` 必须已是设备控制帧格式
+/// （`{"t":"connect"|...}`），可用 [`build_gatt_request`] 从 HTTP 形态转换。
+#[cfg(feature = "esp_home")]
+pub(crate) async fn gatt_call(
+    config: &Config,
+    id: &str,
+    request: Value,
+    wait: Duration,
+) -> Result<Value, BleError> {
+    let capture = Capture::new(registry::global(config), id, None, true)?;
+    execute(&capture, request, wait).await
+}
+
+/// 读一次设备 BLE 快照（只读，不涉及控制通道命令）。
+///
+/// ⚠️ 锁顺序必须与 [`snapshot`] 路由一致：先取 BLE 锁读快照并**释放**，再调
+/// `current()` 复核会话。若持着 BLE 锁去调 `current()`（内部会再取 BLE 锁）会自锁死。
+#[cfg(feature = "esp_home")]
+pub(crate) fn read_snapshot(config: &Config, id: &str) -> Result<BleSnapshot, BleError> {
+    let capture = Capture::new(registry::global(config), id, None, false)?;
+    let (slots, events, adverts) = {
+        let link = capture.link.lock().expect("echomuse BLE lock");
+        let (slots, events) = link.state_snapshot();
+        let (_, adverts) = link.adverts_snapshot();
+        (slots, events, adverts)
+    };
+    capture.current(false)?;
+    Ok(BleSnapshot {
+        slots,
+        events,
+        adverts,
+    })
+}

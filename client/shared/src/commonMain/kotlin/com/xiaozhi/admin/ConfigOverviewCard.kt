@@ -1,5 +1,7 @@
 package com.xiaozhi.admin
 
+import com.xiaozhi.admin.ui.*
+
 import com.tencent.kuikly.core.base.ViewContainer
 import com.tencent.kuikly.core.directives.vfor
 import com.tencent.kuikly.core.directives.vif
@@ -108,36 +110,22 @@ private fun ViewContainer<*, *>.capabilityRow(row: CapabilityRow) {
         attr {
             flexDirectionColumn()
         }
-        View {
-            attr {
-                flexDirectionRow()
-                alignItemsCenter()
-                paddingTop(AdminSpace.sm)
-                paddingBottom(AdminSpace.xs)
-            }
-            Text {
-                attr {
-                    flex(1f)
-                    fontSize(AdminType.body)
-                    fontWeightMedium()
-                    color(AdminColors.textPrimary)
-                    text(row.display)
-                }
-            }
-            // 只在偏离时打标（正常=「运行中」不打徽标）
-            pluginStatusBadge(row.phase, row.enabled)
-        }
-        Text {
-            attr {
-                fontSize(AdminType.caption)
-                color(AdminColors.textSecondary)
-                text(
-                    if (row.implDisplay.isEmpty()) row.hotHint
-                    else if (row.hotHint.isEmpty()) row.implDisplay
-                    else "${row.implDisplay} · ${row.hotHint}"
-                )
-            }
-        }
+        // 能力行标题：左能力名 │ 右偏离徽标
+        headerRow(
+            title = row.display,
+            actions = {
+                // 只在偏离时打标（正常=「运行中」不打徽标）
+                pluginStatusBadge(row.phase, row.enabled)
+            },
+            tone = HeaderTone.PRIMARY,
+            topGap = AdminSpace.sm,
+            bottomGap = AdminSpace.xs,
+        )
+        captionLine(
+            if (row.implDisplay.isEmpty()) row.hotHint
+            else if (row.hotHint.isEmpty()) row.implDisplay
+            else "${row.implDisplay} · ${row.hotHint}",
+        )
         // ⚠️ 降级/异常必须显示原因：用户看到「异常」却查不到原因，是最容易招致"这功能没用"的形态
         vif({ row.reason.isNotEmpty() }) {
             Text {

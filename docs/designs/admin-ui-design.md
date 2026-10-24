@@ -74,7 +74,7 @@ DSH 的"800×800 居中 modal + 遮罩 + 焦点陷阱"在 Kuikly 下**不可实�
 ```
 
 - **总览页**：`largeTitleBar` + 计数摘要 + `groupedCard("官方能力"/"外部能力")` + `cardRow` 列表；
-- **能力详情**：官方 `Tabs + PageList`（`AdminComponents.kt:tabbedPanel`，**必须显式传 `pageItemWidth/Height`**）分「配置 / 状态 / 日志」三个 `TabPage`；
+- **能力详情**：官方 `Tabs + PageList`（`ui/Tabs.kt` 的 `tabbedPanel`，**必须显式传 `pageItemWidth/Height`**）分「配置 / 状态 / 日志」三个 `TabPage`；
 - **导航表**：Kotlin 侧 `data class SectionDescriptor(id, order, label)` 常量表，集中定义、启动期校验 id 唯一与 order 稳定（**不模拟运行时槽位**，见 §5.7）。
 
 #### 5.3 状态呈现规范（照抄 DSH 的"只在偏离时打标"，但**补上原因**）
@@ -153,7 +153,7 @@ DSH 两档（都在 Kuikly 官方 `AlertDialog` 能力内）：
 | **槽位机制本身**（`slots.register/inject`、四类 kind、`declare module` 类型合并、`chain` 竞选） | 本项目 Kuikly 侧**没有运行时 UI 插件加载** | 只借"声明 + 有序注册表 + 加载期校验"的思想 → **Kotlin 编译期常量表**，不模拟 keyed/chain |
 | `settings-models` 的模型目录编辑器（Fetch models / input types 复选 / Restore defaults） | 我们配置是 TOML 固定字段，照搬会产生**无法保存的字段** | 只借「测试连接 → 返回模型列表 → 下拉选择」 |
 
-#### 5.8 设计 token 口径（补进 `AdminTheme.kt` 的常量）
+#### 5.8 设计 token 口径（补进 [`ui/Theme.kt`](<../client/shared/src/commonMain/kotlin/com/xiaozhi/admin/ui/Theme.kt>) 的常量）
 
 DSH 全部走语义 token（`--dsw-alias-*` / `--dsw-radius-*` / `--dsw-elevation-*`，focus ring 2px）。实测可对齐的间距/字号口径：
 
@@ -168,7 +168,7 @@ DSH 全部走语义 token（`--dsw-alias-*` / `--dsw-radius-*` / `--dsw-elevatio
 | 状态点 | 槽 `10px`、实心核 `6px` |
 | 左导航 | 宽 `188px`、项高 `40px` |
 
-`AdminTheme.kt` 已有 `AdminColors/AdminShape/AdminType/AdminSpace` 同类抽象 → 按上表补齐常量即可，**不新增组件**。
+[`ui/Theme.kt`](<../client/shared/src/commonMain/kotlin/com/xiaozhi/admin/ui/Theme.kt>) 已有 `AdminColors/AdminShape/AdminType/AdminSpace` 同类抽象 → 按上表补齐常量即可，**不新增组件**。
 
 #### 5.9 兼容与迁移（UI 侧）
 
@@ -181,7 +181,7 @@ DSH 全部走语义 token（`--dsw-alias-*` / `--dsw-radius-*` / `--dsw-elevatio
 配置表单此前把 TOML key 直接当标签（`min_silence_duration`、`extractor.api_base`、`enabled（…）`），解释性长段落又堆在字段下方，一眼看不出"这个框该填什么"。现行口径三条：
 
 1. **标签用中文见名知意**（CPU / AI / Token / AppID / MCP 这类通用术语保留英文），配置 key 不上界面。解释里也不要复述标签。
-2. **复杂字段才挂 ⓘ**：`labeledField/labeledIntField/labeledDecimalField/labeledTextArea/switchRow/dropdownField` 的 `help` 参数非空时，名称右侧渲染 `infoBadge`；点开是官方 `AlertDialog` 弹层（[FieldHelp.kt](<../../client/shared/src/commonMain/kotlin/com/xiaozhi/admin/FieldHelp.kt>)）。见名知意的字段（端口 / 语速 / 声道数）**不挂** icon——不是每个字段都需要解释。原来常驻的 `Text` caption 长段落搬进 `help`，界面只留风险提示。
+2. **复杂字段才挂 ⓘ**：`labeledField/labeledIntField/labeledDecimalField/labeledTextArea/switchRow/dropdownField` 的 `help` 参数非空时，名称右侧渲染 `infoBadge`；点开是官方 `AlertDialog` 弹层（[ui/FieldHelp.kt](<../../client/shared/src/commonMain/kotlin/com/xiaozhi/admin/ui/FieldHelp.kt>)）。见名知意的字段（端口 / 语速 / 声道数）**不挂** icon——不是每个字段都需要解释。原来常驻的 `Text` caption 长段落搬进 `help`，界面只留风险提示。
 3. **该功能的控制动作靠右**：`fieldLabel(label, help, trailing)` 把「获取模型列表 / 测试凭据 / 探测音色目录 / 生成 NLU 模型 / 重建索引 / 添加意图」放在名称同一行的右端（左名右控、两端对齐），不再另起 `actionRow` 与字段脱节。
 
 实现约束：徽标与弹层都经 `getPager()` 回溯到页面持有的 `FieldHelpState`（`FieldHelpHost`），**不用全局单例 observable**——脱离 `PagerScope` 的 observable 不会驱动任何页面重建。弹层每页只在根部渲染一次（`fieldHelpDialog()`），避免每字段一个 AlertDialog 把节点数翻倍。

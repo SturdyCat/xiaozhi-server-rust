@@ -82,6 +82,17 @@ targets:
         # 声明本身不会打包图片，仍须保留上面的 Assets.xcassets 资源输入。
         CFBundleIconFile: AppIcon
         CFBundleIconName: AppIcon
+        # ⚠️ Xcode 27 起的两项强制项（构建时提示 "Support for all orientations will
+        #    soon be required" / "Launch screens will soon be required"）：
+        #    1) UILaunchScreen 为空字典即声明"使用默认启动屏"，Catalyst 下不生成额外 UI；
+        #    2) UISupportedInterfaceOrientations 三个方向都给——本 App 是可自由缩放窗口的
+        #       管理台，限制方向会让 Catalyst 在部分窗口比例下拒绝布局。
+        #    缺这两项只是警告（不阻塞构建），但不补会在后续 SDK 变成硬性校验。
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
     preBuildScripts:
       # 守卫：本 App 只能以 Mac Catalyst 构建（UIKit 渲染器）。误选原生 "My Mac"
       # 运行目标时，编译会在 'UIKit/UIKit.h' file not found 上报难懂的错误；

@@ -1,5 +1,7 @@
 package com.xiaozhi.admin
 
+import com.xiaozhi.admin.ui.*
+
 import com.tencent.kuikly.core.base.ViewContainer
 import com.tencent.kuikly.core.directives.vfor
 import com.tencent.kuikly.core.directives.vif
@@ -83,46 +85,32 @@ private fun ViewContainer<*, *>.deviceBlock(row: DeviceToolsRow) {
             flexDirectionColumn()
             marginTop(AdminSpace.md)
         }
-        View {
-            attr {
-                flexDirectionRow()
-                alignItemsCenter()
-                paddingBottom(AdminSpace.xs)
-            }
-            Text {
-                attr {
-                    flex(1f)
-                    fontSize(AdminType.body)
-                    fontWeightMedium()
-                    color(AdminColors.textPrimary)
-                    text(row.deviceId.ifEmpty { "(设备未报 id)" })
+        // 设备块标题行：左设备号 │ 右偏离徽标（统一 headerRow）
+        headerRow(
+            title = row.deviceId.ifEmpty { "(设备未报 id)" },
+            actions = {
+                // 只在偏离时打标：在线是正常态，不占视觉；断开才显示（数据是"上次探测"）
+                if (!row.online) {
+                    statusBadge(state = { "idle" }, text = { "已断开" })
                 }
-            }
-            // 只在偏离时打标：在线是正常态，不占视觉；断开才显示（数据是"上次探测"）
-            if (!row.online) {
-                statusBadge(state = { "idle" }, text = { "已断开" })
-            }
-            // P1-10 指令闸门兼容标记：偏离态才占视觉（兼容 = 正常态不显示）
-            if (row.commandGate == "will_degrade") {
-                statusBadge(state = { "busy" }, text = { row.commandGateLabel })
-            }
-        }
+                // P1-10 指令闸门兼容标记：偏离态才占视觉（兼容 = 正常态不显示）
+                if (row.commandGate == "will_degrade") {
+                    statusBadge(state = { "busy" }, text = { row.commandGateLabel })
+                }
+            },
+            tone = HeaderTone.PRIMARY,
+            bottomGap = AdminSpace.xs,
+        )
         if (row.commandGate == "compatible") {
-            Text {
-                attr {
-                    fontSize(AdminType.caption)
-                    color(AdminColors.textSecondary)
-                    text("✓ ${row.commandGateLabel}（说「退下」会保持连接）")
-                }
+            // 兼容标记：对勾走矢量图标，文案里不再塞「✓」字符
+            View {
+                attr { flexDirectionRow(); alignItemsCenter() }
+                appIcon({ IconToken.Check }, size = 12f, tint = { AdminColors.textSecondary })
+                hGap(4f)
+                captionLine("${row.commandGateLabel}（说「退下」会保持连接）")
             }
         }
-        Text {
-            attr {
-                fontSize(AdminType.caption)
-                color(AdminColors.textSecondary)
-                text(row.subtitle)
-            }
-        }
+        captionLine(row.subtitle)
         Text {
             attr {
                 fontSize(AdminType.caption)
@@ -186,13 +174,7 @@ private fun ViewContainer<*, *>.toolBlock(tool: McpToolRow) {
             }
         }
         if (tool.description.isNotEmpty()) {
-            Text {
-                attr {
-                    fontSize(AdminType.caption)
-                    color(AdminColors.textSecondary)
-                    text(tool.description)
-                }
-            }
+            captionLine(tool.description)
         }
         dividerH()
     }

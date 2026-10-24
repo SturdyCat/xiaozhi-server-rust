@@ -1,5 +1,7 @@
 package com.xiaozhi.admin
 
+import com.xiaozhi.admin.ui.*
+
 import com.tencent.kuikly.core.base.ViewContainer
 import com.tencent.kuikly.core.directives.vfor
 import com.tencent.kuikly.core.directives.vif
@@ -50,7 +52,7 @@ private fun ViewContainer<*, *>.sectionReadinessBanner(meta: PluginMetaState, se
             }
             statusBadge(state = { badgeState }, text = { badgeText })
             vif({ row.reason.isNotEmpty() }) {
-                View { attr { width(AdminSpace.sm) } }
+                hGap(AdminSpace.sm)
                 Text {
                     attr {
                         flex(1f)
@@ -90,7 +92,7 @@ fun ViewContainer<*, *>.renderConfigSection(
         // 改动影响高亮：上次保存的 hot 投影到当前 section 头部（仅确有非即时影响时显示）
         vif({ form.saveImpactNote.isNotEmpty() }) {
             textNote(form.saveImpactNote, tone = "warn", micro = true)
-            View { attr { height(AdminSpace.sm) } }
+            vGap(AdminSpace.sm)
         }
         // 编辑对象横幅（P1-5）：设备个性化目标时显示（全局模式不渲染）
         editTargetBanner(form, toast, ctx)
@@ -151,22 +153,6 @@ fun ViewContainer<*, *>.advancedToggleRow(form: ConfigFormState) {
     ) { form.showAdvanced = !form.showAdvanced }
 }
 
-/** 配置左侧导航的分组标题（如「语音与对话」）。 */
-fun ViewContainer<*, *>.configGroupHeader(label: String) {
-    Text {
-        attr {
-            fontSize(AdminType.micro)
-            fontWeightMedium()
-            color(AdminColors.textTertiary)
-            text(label)
-            marginLeft(AdminSpace.sm)
-            marginRight(AdminSpace.sm)
-            marginTop(AdminSpace.md)
-            marginBottom(AdminSpace.xs)
-        }
-    }
-}
-
 // ============================================================
 // 各配置分组卡（renderForm 与测试台 tab 右栏共用；字段变更统一 markDirty）
 // ============================================================
@@ -205,7 +191,7 @@ fun ViewContainer<*, *>.editTargetBanner(form: ConfigFormState, toast: ToastStat
             )
             actionRow {
                 secondaryButton("返回全局") { form.backToGlobal(ctx) }
-                View { attr { width(AdminSpace.sm) } }
+                hGap(AdminSpace.sm)
                 secondaryButton("恢复全局配置") {
                     form.clearDeviceOverlay(ctx) { msg, level -> toast.show(msg, level) }
                 }
@@ -269,7 +255,7 @@ fun ViewContainer<*, *>.presetCard(form: ConfigFormState, ctx: Pager) {
                     }
                 }
                 secondaryButton("应用") { form.applyPreset(ctx, form.serverBase, name) }
-                View { attr { width(AdminSpace.sm) } }
+                hGap(AdminSpace.sm)
                 secondaryButton("删除") { form.deletePreset(ctx, form.serverBase, name) }
             }
         }

@@ -1,8 +1,7 @@
 package com.xiaozhi.admin
 
-import com.tencent.kuikly.core.base.Border
-import com.tencent.kuikly.core.base.BorderStyle
-import com.tencent.kuikly.core.base.CursorType
+import com.xiaozhi.admin.ui.*
+
 import com.tencent.kuikly.core.base.ViewContainer
 import com.tencent.kuikly.core.directives.vif
 import com.tencent.kuikly.core.pager.Pager
@@ -13,7 +12,7 @@ import com.tencent.kuikly.core.views.View
 /**
  * 一台 EchoMuse 设备卡片的渲染（页面壳体见 `EchoMusePage.kt`，菜单状态见 [EchoMuseState]）。
  *
- * 布局（自绘容器，视觉与 [groupedCard] 一致——标题要自定义 header，不走 groupedCard(title)）：
+ * 布局（[splitCard]：上下布局「header │ 卡内左右分栏」，外观壳复用 [cardSurface]）：
  *
  * ```
  * ┌────────────────────────────────────────────────┐
@@ -42,9 +41,14 @@ private const val ECHOMUSE_MENU_WIDTH = 150f
 /**
  * 唤醒词面板里滑杆之外的全部固定占位（滚动页左右留白 + 卡内边距 + 左菜单 + 竖分隔线 +
  * 面板左内距 + 右侧阈值读数）。滑杆宽度 = 内容区宽 − 本占位，见 [echoMuseSliderWidth]。
+ *
+ * 卡内边距与 [cardSurface] 同口径（紧凑窗口 sm、常规 cardPadding），两处必须一致，
+ * 否则窄窗下滑杆会算得过宽而溢出卡片。
  */
-private val ECHOMUSE_SLIDER_CHROME: Float =
-    AdminSpace.xl * 2 + AdminSpace.cardPadding * 2 + ECHOMUSE_MENU_WIDTH + 1f + AdminSpace.md + 48f + AdminSpace.sm
+private fun echoMuseSliderChrome(ctx: Pager): Float =
+    AdminSpace.xl * 2 +
+        (if (workspaceIsCompact(ctx)) AdminSpace.sm else AdminSpace.cardPadding) * 2 +
+        ECHOMUSE_MENU_WIDTH + 1f + AdminSpace.md + 48f + AdminSpace.sm
 
 /** 滑杆最小宽度（窄窗兜底；低于此值宁可窄也不为负）。 */
 private const val ECHOMUSE_SLIDER_MIN_WIDTH = 120f
@@ -59,7 +63,7 @@ private const val ECHOMUSE_SLIDER_MIN_WIDTH = 120f
  * 不能用 flex；读取放在 attr 闭包内，窗口宽度变化时随 `pageViewWidth` 响应式更新。
  */
 private fun echoMuseSliderWidth(ctx: Pager): Float =
-    (adminContentWidth(ctx) - ECHOMUSE_SLIDER_CHROME).coerceAtLeast(ECHOMUSE_SLIDER_MIN_WIDTH)
+    (adminContentWidth(ctx) - echoMuseSliderChrome(ctx)).coerceAtLeast(ECHOMUSE_SLIDER_MIN_WIDTH)
 
 /** 一台 EchoMuse 设备卡片：header（标题+状态+删除）+ 卡内左菜单/右内容面板（EchoMusePage 调用）。 */
 internal fun ViewContainer<*, *>.echoMuseDeviceCard(
@@ -69,89 +73,81 @@ internal fun ViewContainer<*, *>.echoMuseDeviceCard(
     ctx: Pager,
     onOpenModelFiles: () -> Unit = {},
 ) {
-    // 自绘等价 groupedCard 的容器（cardBg/radiusLg/1px divider/cardPadding/marginBottom gutter）
-    View {
-        attr {
-            flexDirectionColumn()
-            backgroundColor(AdminColors.cardBg)
-            borderRadius(AdminShape.radiusLg)
-            border(Border(1f, BorderStyle.SOLID, AdminColors.divider))
-            padding(AdminSpace.cardPadding)
-            marginBottom(AdminSpace.gutter)
-        }
-        echoMuseCardHeader(row, state)
-        vif({ state.confirmDeleteId == row.deviceId }) { echoMuseDeleteConfirm(row, state, toast, ctx) }
-        dividerH()
-        // 卡内左右分栏：与配置工作区同一 menuPaneRow 原语（左菜单 │ 1px 纵向分隔线 │ 右面板）
-        menuPaneRow(
-            menuWidth = ECHOMUSE_MENU_WIDTH,
-            panelPaddingLeft = AdminSpace.md,
-            menu = {
-                for ((itemId, itemLabel, itemIcon) in echoMuseMenuItems(row)) {
-                    echoMuseMenuItem(
-                        itemIcon,
-                        itemLabel,
-                        isSelected = { state.activeMenuItem(row) == itemId },
-                    ) { state.selectMenu(row, itemId) }
-                }
-            },
-            panel = { echoMusePanel(row, state, toast, ctx, onOpenModelFiles) },
-        )
-    }
+    // 卡片 = 上下布局「header │ 卡内左右分栏」：外观壳由 cardSurface 统一提供，
+    // 卡内左右走 menuPaneRow（同一套 splitRow 原语），不再自绘卡片容器与分隔线。
+    splitCard(
+        header = {
+            echoMuseCardHeader(row, state)
+            vif({ state.confirmDeleteId == row.deviceId }) { echoMuseDeleteConfirm(row, state, toast, ctx) }
+        },
+        body = {
+            // 卡内左右分栏：与配置工作区同一 menuPaneRow 原语（左菜单 │ 1px 纵向分隔线 │ 右面板），
+            // 菜单列用同一底色 sidebarBg，左右两侧才看得出是「菜单 + 内容」而非两块并排文本
+            menuPaneRow(
+                menuWidth = ECHOMUSE_MENU_WIDTH,
+                menuBackground = AdminColors.sidebarBg,
+                panelPaddingLeft = AdminSpace.md,
+                menu = {
+                    View {
+                        attr {
+                            flexDirectionColumn()
+                            paddingTop(AdminSpace.xs)
+                            paddingBottom(AdminSpace.xs)
+                        }
+                        for ((itemId, itemLabel, itemIcon) in echoMuseMenuItems(row)) {
+                            echoMuseMenuItem(
+                                itemIcon,
+                                itemLabel,
+                                isSelected = { state.activeMenuItem(row) == itemId },
+                            ) { state.selectMenu(row, itemId) }
+                        }
+                    }
+                },
+                panel = { echoMusePanel(row, state, toast, ctx, onOpenModelFiles) },
+            )
+        },
+    )
 }
 
 // ============================================================
 // header：标题 + 在线状态 + 删除（icon 按钮 + 行内二次确认）
 // ============================================================
 
-/** 卡片 header：左 = 标题 + 在线状态点（+ 待批准徽标）；右 = 删除记录 icon 按钮。 */
+/**
+ * 卡片 header：走统一 [headerRow]（左标题 + 状态徽标 │ 右删除按钮），
+ * 不再手写 `flexDirectionRow + View { flex(1f) }` 的弹性占位。
+ */
 private fun ViewContainer<*, *>.echoMuseCardHeader(row: EchoMuseDeviceRow, state: EchoMuseState) {
+    headerRow(
+        title = row.title,
+        meta = { echoMuseStatusMeta(row) },
+        actions = { echoMuseDeleteButton(state, row.deviceId) },
+    )
+}
+
+/** 标题右侧的状态元信息：在线/离线圆点 + 未批准时的「待批准」徽标。 */
+private fun ViewContainer<*, *>.echoMuseStatusMeta(row: EchoMuseDeviceRow) {
     View {
         attr {
             flexDirectionRow()
             alignItemsCenter()
-            paddingBottom(AdminSpace.sm)
-        }
-        Text {
-            attr {
-                fontSize(AdminType.section)
-                fontWeightMedium()
-                color(AdminColors.textPrimary)
-                text(row.title)
-            }
+            marginLeft(AdminSpace.sm)
         }
         // 在线状态：绿点「在线」/ 灰点「离线」，文字色随状态
-        View {
+        dot({ if (row.online) AdminColors.accent else AdminColors.textPlaceholder })
+        hGap(AdminSpace.xs)
+        Text {
             attr {
-                flexDirectionRow()
-                alignItemsCenter()
-                marginLeft(AdminSpace.sm)
-            }
-            View {
-                attr {
-                    width(8f)
-                    height(8f)
-                    borderRadius(AdminShape.radiusPill)
-                    marginRight(AdminSpace.xs)
-                    backgroundColor(if (row.online) AdminColors.accent else AdminColors.textPlaceholder)
-                }
-            }
-            Text {
-                attr {
-                    fontSize(AdminType.caption)
-                    color(if (row.online) AdminColors.accentTintText else AdminColors.textTertiary)
-                    text(if (row.online) "在线" else "离线")
-                }
+                fontSize(AdminType.caption)
+                color(if (row.online) AdminColors.accentTintText else AdminColors.textTertiary)
+                text(if (row.online) "在线" else "离线")
             }
         }
         // 未批准：状态旁保留「待批准」徽标
         if (!row.approved) {
-            View { attr { width(AdminSpace.sm) } }
+            hGap(AdminSpace.sm)
             statusBadge(state = { "busy" }, text = { "待批准" })
         }
-        // 中间弹性撑开：删除按钮与标题左右两端对齐
-        View { attr { flex(1f) } }
-        echoMuseDeleteButton(state, row.deviceId)
     }
 }
 
@@ -196,7 +192,7 @@ private fun ViewContainer<*, *>.echoMuseDeleteConfirm(
                     if (ok) state.refresh(ctx)
                 }
             }
-            View { attr { width(AdminSpace.sm) } }
+            hGap(AdminSpace.sm)
             secondaryButton("取消", icon = IconToken.Close) { state.confirmDeleteId = "" }
         }
         textNote(
@@ -228,7 +224,7 @@ private fun echoMuseMenuItems(row: EchoMuseDeviceRow): List<Triple<String, Strin
     }
 
 /**
- * 卡片内紧凑菜单项（左图标 + 文字，图标随选中态着色）：高 36、radiusSm，
+ * 卡片内紧凑菜单项：统一走 [menuListItem] 的 CARD 档（36 高、图标 16、body 字号），
  * 选中 = sidebarSelectedBg 底 + accentTintText 文字，未选中 textSecondary。
  * ⚠️ isSelected 必须是 lambda 且只在 attr 闭包内求值
  * （Kuikly 仅跟踪闭包内的 observable 读取，同 AdminNav.sidebarItem 的教训）。
@@ -239,33 +235,13 @@ private fun ViewContainer<*, *>.echoMuseMenuItem(
     isSelected: () -> Boolean,
     onClick: () -> Unit,
 ) {
-    View {
-        attr {
-            height(36f)
-            flexDirectionRow()
-            alignItemsCenter()
-            paddingLeft(AdminSpace.sm)
-            paddingRight(AdminSpace.sm)
-            borderRadius(AdminShape.radiusSm)
-            backgroundColor(if (isSelected()) AdminColors.sidebarSelectedBg else AdminColors.transparent)
-            // 菜单是点击目标：悬停指针
-            cursor(CursorType.POINTER)
-        }
-        event { click { onClick() } }
-        appIcon(
-            { icon },
-            size = 16f,
-            tint = { if (isSelected()) AdminColors.accentTintText else AdminColors.textTertiary },
-        )
-        Text {
-            attr {
-                marginLeft(AdminSpace.xs)
-                fontSize(AdminType.body)
-                color(if (isSelected()) AdminColors.accentTintText else AdminColors.textSecondary)
-                text(label)
-            }
-        }
-    }
+    menuListItem(
+        label = label,
+        isSelected = isSelected,
+        onClick = onClick,
+        icon = icon,
+        style = MenuItemStyle.CARD,
+    )
 }
 
 // ============================================================
@@ -300,20 +276,20 @@ private fun ViewContainer<*, *>.echoMuseOverviewPanel(
     state: EchoMuseState,
     toast: ToastState,
 ) {
-    echoMuseInfoRow("设备号", row.deviceId)
+    infoRow("设备号", row.deviceId)
     // 未改名时标题就是设备号，「设备名」行不重复渲染
     if (row.renamed) {
-        echoMuseInfoRow("设备名", row.label)
+        infoRow("设备名", row.label)
     }
-    echoMuseInfoRow("状态", if (row.online) "在线" else "离线")
+    infoRow("状态", if (row.online) "在线" else "离线")
     if (row.version.isNotEmpty()) {
-        echoMuseInfoRow("版本", row.version)
+        infoRow("版本", row.version)
     }
     if (row.board.isNotEmpty()) {
-        echoMuseInfoRow("板型", row.board)
+        infoRow("板型", row.board)
     }
     if (row.baseOs.isNotEmpty()) {
-        echoMuseInfoRow("系统", row.baseOs)
+        infoRow("系统", row.baseOs)
     }
     if (row.metaText.isNotEmpty()) {
         textNote(row.metaText, micro = true)
@@ -332,32 +308,6 @@ private fun ViewContainer<*, *>.echoMuseOverviewPanel(
 }
 
 /** 概览面板的键值行：左键 caption textSecondary（定宽对齐），右值 caption textPrimary。 */
-private fun ViewContainer<*, *>.echoMuseInfoRow(label: String, value: String) {
-    View {
-        attr {
-            flexDirectionRow()
-            alignItemsCenter()
-            paddingTop(AdminSpace.xs)
-        }
-        Text {
-            attr {
-                width(72f)
-                fontSize(AdminType.caption)
-                color(AdminColors.textSecondary)
-                text(label)
-            }
-        }
-        Text {
-            attr {
-                flex(1f)
-                fontSize(AdminType.caption)
-                color(AdminColors.textPrimary)
-                text(value)
-            }
-        }
-    }
-}
-
 /** 批准面板：可填 label 后确认批准（POST approve，成功后刷新列表）。 */
 private fun ViewContainer<*, *>.echoMuseApprovePanel(
     row: EchoMuseDeviceRow,

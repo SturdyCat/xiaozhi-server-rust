@@ -7,7 +7,7 @@
 - 错误一律 JSON `{"error"}`：路径非法/以根为目标 400，受保护名 403（文案说明是配置/记忆库文件），缺失 404，冲突 409，超限 413。鉴权与 `/api/config` 同（`auth_ok`：`expected_token` 空 = 不校验，头或 `?token=` 均可）；**`[echomuse].enabled` 不作用于此模块**（通用存储管理，非设备面）。
 - `data.db`/`data.db-wal`/`data.db-shm` 受保护（任意层级**最后一段**命中即受保护）：删除与上传覆盖/新建一律 403——那是 SQLite 配置+记忆库。
 - 路径校验拒绝 `..`/`.`/空段（`//`、前导 `/`）/反斜杠/NUL，尾斜杠仅作目录习惯写法去掉；解析对最近存在祖先 `canonicalize` 并校验根内（防符号链接外逃）；上传经临时文件 + rename 原子落盘（与固件同款模式）。删除的 POST 别名是 Kuikly NetworkModule 只有 GET/POST 的既有惯例。
-- `OWW_MODELS_DIR = "oww-models"` 不预创建（upload/mkdir 按需生成）；服务端只存储与列出，**不做**服务端→设备的模型分发。
+- `OWW_MODELS_DIR = "oww-models"` 不预创建（upload/mkdir 按需生成）；但它是 `OPTIONAL_DIRS` 白名单成员：**目录缺失时 `GET /api/files?path=oww-models` 回空清单 200，而不是 404**。原因是管理台每次启动（`AdminPage.refreshAll`）都会无条件查它填唤醒词下拉，目录在首次上传前本就不存在，按 404 会让客户端每次启动都刷一条 `[kuikly error] ... 404`——那是正常初始态，不是故障。白名单只认顶层精确名，子路径与其它未知路径仍 404，且不改变「按需创建」。服务端只存储与列出，**不做**服务端→设备的模型分发。
 - 回归拆两份（共享夹具 `temp_root`/`canonical`/`json` 在前者，兄弟模块经 `super::tests::` 复用）：纯函数矩阵（路径校验/受保护名/防外逃/列表排序/操作契约/路由无冲突）在 [tests.rs](<tests.rs>)；真实 loopback HTTP（`TestContext` 起 axum，**不起**真实 Engines：鉴权门禁、上传→列表→下载→删除回路、覆盖/受保护/穿越矩阵）在 [http_tests.rs](<http_tests.rs>)。逻辑拆分同固件：路径与契约决策在父模块，HTTP 提取在 [http.rs](<http.rs>)。
 
 ## 上级入口
