@@ -117,25 +117,22 @@ async fn owning_data_restore_rearms_capture_but_old_restore_cannot_cancel_new_co
     let old = hub_claim_data(id).unwrap();
     let (up, mut rx) = mpsc::unbounded_channel();
     // Use the same captured LiveControl that production data_loop uses.
-    super::turn::start_turn(&old.management, &up, "action 键");
-    rx.try_recv().unwrap();
-    rx.try_recv().unwrap();
+    super::turn::start_turn(&old.management, &up, "action 键", false);
+    rx.try_recv().unwrap(); // 按键轮只有一条 listen start
     hub_restore_data(id, old.data_rx, &old.data_tx);
     let again = hub_claim_data(id).unwrap();
     assert!(Arc::ptr_eq(&old.management, &again.management));
-    super::turn::start_turn(&again.management, &up, "action 键");
-    assert!(matches!(rx.try_recv().unwrap(), IncomingFrame::Text(t) if t.contains("detect")));
-    rx.try_recv().unwrap();
+    super::turn::start_turn(&again.management, &up, "action 键", false);
+    assert!(matches!(rx.try_recv().unwrap(), IncomingFrame::Text(t) if t.contains("start")));
 
     let _new_ctl = insert_online(id);
     let fresh = hub_claim_data(id).unwrap();
     assert!(!Arc::ptr_eq(&again.management, &fresh.management));
-    super::turn::start_turn(&fresh.management, &up, "action 键");
-    rx.try_recv().unwrap();
+    super::turn::start_turn(&fresh.management, &up, "action 键", false);
     rx.try_recv().unwrap();
     // Stale data claim cannot clear replacement's turn or return its receiver.
     hub_restore_data(id, again.data_rx, &again.data_tx);
-    super::turn::start_turn(&fresh.management, &up, "action 键");
+    super::turn::start_turn(&fresh.management, &up, "action 键", false);
     assert!(rx.try_recv().is_err());
     fresh
         .management

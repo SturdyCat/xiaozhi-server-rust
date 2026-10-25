@@ -464,7 +464,7 @@ async fn 开轮聆听先detect再listen_start且重复唤醒零副作用() {
     let (ctl_tx, _ctl_rx) = mpsc::unbounded_channel();
     live.mic.bind(ctl_tx.clone());
     live.fx.bind(ctl_tx);
-    super::turn::start_turn(&live, &up_tx, "本地唤醒词");
+    super::turn::start_turn(&live, &up_tx, "本地唤醒词", true);
     match up_rx.recv().await {
         Some(IncomingFrame::Text(t)) => {
             assert!(
@@ -484,7 +484,7 @@ async fn 开轮聆听先detect再listen_start且重复唤醒零副作用() {
         other => panic!("次帧应是文本帧: {other:?}"),
     }
     // 已在聆听：重复唤醒零副作用（不重复 mic_start、不再投帧）。
-    super::turn::start_turn(&live, &up_tx, "本地唤醒词");
+    super::turn::start_turn(&live, &up_tx, "本地唤醒词", true);
     assert!(up_rx.try_recv().is_err(), "重复唤醒不得再投帧");
 }
 

@@ -22,9 +22,12 @@ fn begin(
     up: &UnboundedSender<IncomingFrame>,
     rx: &mut tokio::sync::mpsc::UnboundedReceiver<IncomingFrame>,
 ) {
-    start_turn(live, up, "action 键");
-    assert!(matches!(rx.try_recv().unwrap(), IncomingFrame::Text(_)));
-    assert!(matches!(rx.try_recv().unwrap(), IncomingFrame::Text(_)));
+    start_turn(live, up, "action 键", false);
+    // 按键轮只投一条 listen start（无 detect：手动按键不播唤醒问候）。
+    assert!(matches!(
+        rx.try_recv().unwrap(),
+        IncomingFrame::Text(t) if t.contains(r#""state":"start""#)
+    ));
 }
 #[tokio::test]
 async fn native_partial_pcm_precedes_end_without_codec_padding_or_replay() {

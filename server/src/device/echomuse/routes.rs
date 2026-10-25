@@ -207,8 +207,13 @@ async fn control_session(
     let ble = Arc::new(std::sync::Mutex::new(BleLink::default()));
     let live = Arc::new(super::runtime::LiveControl::new(peer, authenticated));
     // 采集指令与灯效/提示音绑定本会话的 control 出站（同一条 FIFO，保序）。
+    // 灯效能力随 register 的 capabilities 传入（官方 `led_anim_capable`：
+    // 新固件本地渲染动画，旧固件退回静态 leds 帧）。
     live.mic.bind(ctl_tx.clone());
-    live.fx.bind(ctl_tx.clone());
+    live.fx.bind_with_caps(
+        ctl_tx.clone(),
+        register.capabilities.iter().any(|c| c == "led_anim"),
+    );
     hub_insert(
         &device_id,
         super::PendingDevice {
@@ -331,7 +336,7 @@ fn handle_control_text(
         // 来源标签随 detect 的 text 透传给会话层（会话日志据此区分唤醒词 vs 按键）。
         "oww_wake" => {
             tracing::info!("[echomuse] device {device_id} 触发来源：本地唤醒词，开轮");
-            super::turn::start_turn(live, up_tx, "本地唤醒词")
+            super::turn::start_turn(live, up_tx, "本地唤醒词", true)
         }
         // Dot2 专属适配：只有 action 键（clickType=138 / button.type=="action"）才开轮；
         // 音量± / 禁麦由设备本地处理（ADC 静音 / 调音量，分别上报 mute_state / volume_state），
@@ -360,8 +365,11 @@ fn handle_control_text(
                         "[echomuse] device {device_id} 静音状态下忽略 action 键开轮（设备侧也会拒绝 mic_start）"
                     );
                 } else {
+                    // 手动按键 ≠ 唤醒词命中：对齐官方 `_button_voice_turn` 的
+                    // `is_wakeword=False`——直接进聆听（亮聆听环）、不播唤醒问候「我在」、
+                    // 不播唤醒提示音。用户按这个键就是"我要说话"。
                     tracing::info!("[echomuse] device {device_id} 触发来源：action 键，开轮");
-                    super::turn::start_turn(live, up_tx, "action 键")
+                    super::turn::start_turn(live, up_tx, "action 键", false)
                 }
             }
         }
@@ -400,24 +408,33 @@ mod tests {
     use tokio::sync::mpsc;
 
     /// 构造一条最小会话（mic/fx 已绑出站口，start_turn 不致发送失败）。
-    fn fixture() -> super::super::runtime::LiveControl {
+    ///
+    /// 必须**把接收端交还调用方**：`start_turn` 的 `mic.stop()/beam_lock()/turn_stream()`
+    /// 是 `send()`，接收端若随函数结束 drop，发送立即失败 → 开轮按 NoSpeech 收口、
+    /// 一条 `listen start` 都不会投。以前 detect 在收口前就发了，掩盖了这个断链。
+    fn fixture() -> (
+        super::super::runtime::LiveControl,
+        mpsc::UnboundedReceiver<super::super::ControlOut>,
+    ) {
         let live = super::super::runtime::LiveControl::new(None, false);
-        let (ctl_tx, _ctl_rx) = mpsc::unbounded_channel();
+        let (ctl_tx, ctl_rx) = mpsc::unbounded_channel();
         live.mic.bind(ctl_tx.clone());
         live.fx.bind(ctl_tx);
-        live
+        (live, ctl_rx)
     }
 
-    /// 把 button JSON 喂给 handle_control_text，返回上行 channel 里是否出现了开轮 detect 帧。
+    /// 把 button JSON 喂给 handle_control_text，返回上行 channel 里是否出现了开轮 `listen start` 帧。
+    ///
+    /// 按键轮**不发** `state=detect`（那是唤醒词专用的"叫醒我"信号，会话层收到才播
+    /// 「我在」），所以这里认 `start`；末尾那条也是 `start_turn` 一定投的帧。
     fn fired_turn(live: &super::super::runtime::LiveControl, text: &str) -> bool {
         let (up_tx, mut up_rx) = mpsc::unbounded_channel();
         let ble = std::sync::Arc::new(Mutex::new(super::super::ble::BleLink::default()));
         handle_control_text(text, "d1", live, &up_tx, &ble, false);
-        // detect 帧是 start_turn 投的首帧；若开了轮，必有一条含 "state":"detect" 的文本帧。
         let mut found = false;
         while let Ok(frame) = up_rx.try_recv() {
             if let IncomingFrame::Text(t) = frame {
-                if t.contains(r#""state":"detect""#) {
+                if t.contains(r#""state":"start""#) {
                     found = true;
                 }
             }
@@ -427,7 +444,7 @@ mod tests {
 
     #[test]
     fn action_button_down_starts_turn() {
-        let live = fixture();
+        let (live, _ctl) = fixture();
         assert!(
             fired_turn(&live, r#"{"type":"button","clickType":138,"down":true}"#),
             "action 键（138）按下应开轮"
@@ -436,7 +453,7 @@ mod tests {
 
     #[test]
     fn action_button_release_does_not_start_turn() {
-        let live = fixture();
+        let (live, _ctl) = fixture();
         assert!(
             !fired_turn(&live, r#"{"type":"button","clickType":138,"down":false}"#),
             "action 键松开（down=false）不应开轮"
@@ -445,7 +462,7 @@ mod tests {
 
     #[test]
     fn volume_buttons_do_not_start_turn() {
-        let live = fixture();
+        let (live, _ctl) = fixture();
         assert!(!fired_turn(
             &live,
             r#"{"type":"button","clickType":115,"down":true}"#
@@ -458,7 +475,7 @@ mod tests {
 
     #[test]
     fn mute_button_does_not_start_turn() {
-        let live = fixture();
+        let (live, _ctl) = fixture();
         assert!(
             !fired_turn(&live, r#"{"type":"button","clickType":113,"down":true}"#),
             "禁麦键（113）不应开轮"
@@ -467,7 +484,7 @@ mod tests {
 
     #[test]
     fn action_button_while_muted_does_not_start_turn() {
-        let live = fixture();
+        let (live, _ctl) = fixture();
         live.update(&json!({"type":"mute_state","muted":true}));
         assert!(live.is_muted(), "前置：设备应处于静音");
         assert!(
@@ -478,7 +495,7 @@ mod tests {
 
     #[test]
     fn action_button_by_semantic_type_starts_turn() {
-        let live = fixture();
+        let (live, _ctl) = fixture();
         assert!(
             fired_turn(
                 &live,

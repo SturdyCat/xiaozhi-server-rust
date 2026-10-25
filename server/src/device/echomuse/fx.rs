@@ -25,12 +25,28 @@ const SPEAKING_TTL: u64 = 120;
 #[derive(Debug, Default, Clone)]
 pub(crate) struct Fx {
     ctl: OnceLock<UnboundedSender<ControlOut>>,
+    /// 设备 `register.capabilities` 是否声明 `led_anim`（官方 `led_anim_capable`）。
+    /// 未绑定时按 `true` 处理——绝大多数在网固件都支持，静默降级没有收益。
+    led_anim: OnceLock<bool>,
 }
 
 impl Fx {
     /// 绑定 control 出站通道（与 [`super::mic::MicControl`] 同一条 FIFO，保序）。
     pub(crate) fn bind(&self, ctl: UnboundedSender<ControlOut>) {
         let _ = self.ctl.set(ctl);
+    }
+
+    /// 绑定通道 + 设备动画能力（对齐官方 `Device.led_anim_capable`：能力表来自
+    /// hello/register 的 `capabilities`）。旧固件不认 `led_anim`，官方对它退回
+    /// 静态 `leds` 帧——这里同语义，不自造第三条路径。
+    pub(crate) fn bind_with_caps(&self, ctl: UnboundedSender<ControlOut>, led_anim: bool) {
+        self.bind(ctl);
+        let _ = self.led_anim.set(led_anim);
+    }
+
+    /// 设备能否本地渲染 `led_anim`（官方 `device.led_anim_capable`）。
+    fn led_anim_capable(&self) -> bool {
+        self.led_anim.get().copied().unwrap_or(true)
     }
 
     /// 以既有通道构造（transport 侧：已持有 ctl_tx 克隆）。
@@ -47,18 +63,36 @@ impl Fx {
     }
 
     /// 聆听态：实心绿环。`listening:true` 标记聆听环（方向 overlay 依赖它）。
+    ///
+    /// 对齐官方 `leds_listening`：`led_anim` 可用 → 发动画；不可用 → 退回
+    /// 静态 `leds` 帧（12 颗同色 + `listening:true`）。这是官方**唯一**的
+    /// 聆听反馈路径，按键轮也走它（按键不播唤醒问候，灯就是全部反馈）。
     pub(crate) fn listening(&self) -> bool {
+        if self.led_anim_capable() {
+            return self.send(
+                serde_json::json!({
+                    "type": "led_anim",
+                    "anim": {"pattern": "solid", "colors": [LISTENING], "listening": true, "ttlSec": 30},
+                })
+                .to_string(),
+            );
+        }
+        // 旧固件：官方 `set_leds(led_scene["listening"], listening=True)`，载荷是
+        // `[(r,g,b)] * 12`（`em_scenes._solid`），原样照发。
+        let palette: Vec<[u8; 3]> = (0..12).map(|_| LISTENING).collect();
         self.send(
-            serde_json::json!({
-                "type": "led_anim",
-                "anim": {"pattern": "solid", "colors": [LISTENING], "listening": true, "ttlSec": 30},
-            })
-            .to_string(),
+            serde_json::json!({"type": "leds", "leds": palette, "listening": true}).to_string(),
         )
     }
 
     /// 思考态：本地 spinner（80ms/拍），10s 死信。
+    ///
+    /// 旧固件（无 `led_anim`）官方是**控制器逐帧渲染** spinner（`leds_spin_green`
+    /// 的 else 分支）；本项目不做那个兼容层——不发好过发错，功能不受影响。
     pub(crate) fn thinking(&self) -> bool {
+        if !self.led_anim_capable() {
+            return false;
+        }
         self.send(
             serde_json::json!({
                 "type": "led_anim",
@@ -70,6 +104,9 @@ impl Fx {
 
     /// 播报态：环随播放电平起伏（设备侧 ALSA 写入处 RMS）。
     pub(crate) fn speaking(&self) -> bool {
+        if !self.led_anim_capable() {
+            return false;
+        }
         self.send(
             serde_json::json!({
                 "type": "led_anim",
@@ -81,6 +118,9 @@ impl Fx {
 
     /// 无语音收口：一次慢脉冲——"我听着，但什么都没听到"（1s 自清）。
     pub(crate) fn nospeech(&self) -> bool {
+        if !self.led_anim_capable() {
+            return false;
+        }
         self.send(
             serde_json::json!({
                 "type": "led_anim",

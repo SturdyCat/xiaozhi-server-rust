@@ -23,7 +23,20 @@ impl BoundedTurn {
     /// `text` 字段透传给会话层——ESP 协议里 detect 的 `text` 本就是唤醒词（见
     /// `session::wakeup` 模块注释），echomuse 没有唤醒词文本，用它携带来源标签，
     /// 会话日志因此能区分"叫醒的"还是"按键开的"（会话层不感知设备类型）。
-    fn begin(&self, up: &UnboundedSender<IncomingFrame>, source: &str) -> Option<u64> {
+    /// `is_wakeword` = 这一轮是不是**设备端唤醒词命中**开的（对齐官方
+    /// `em_controller._run_voice_locked(is_wakeword=...)`）。
+    ///
+    /// 只有唤醒词命中才发 `listen state=detect`——会话层把它当"用户刚叫醒我"，
+    /// 据此播唤醒问候（`[wakeup]` 的「我在」）。**手动按键是"我要说话"，
+    /// 不是"我在叫你"**：官方 `_button_voice_turn` 传 `is_wakeword=False`，
+    /// 按键轮直接进聆听、不问候。此前一律发 detect 导致按 action 键先答一句
+    /// 「我在」，把聆听态盖成播报态——用户既没看到聆听灯，也得多等一句话。
+    fn begin(
+        &self,
+        up: &UnboundedSender<IncomingFrame>,
+        source: &str,
+        is_wakeword: bool,
+    ) -> Option<u64> {
         let mut state = self.0.lock().expect("echomuse turn lock");
         if state.active {
             return None;
@@ -31,12 +44,14 @@ impl BoundedTurn {
         state.generation = state.generation.wrapping_add(1);
         state.active = true;
         state.token = Arc::new(AtomicBool::new(true));
-        let detect = serde_json::json!({
-            "type": "listen",
-            "state": "detect",
-            "text": source,
-        });
-        let _ = up.send(IncomingFrame::Text(detect.to_string()));
+        if is_wakeword {
+            let detect = serde_json::json!({
+                "type": "listen",
+                "state": "detect",
+                "text": source,
+            });
+            let _ = up.send(IncomingFrame::Text(detect.to_string()));
+        }
         Some(state.generation)
     }
 
@@ -103,15 +118,18 @@ impl BoundedTurn {
 /// 了还在说"），`led_anim` 聆听环 + `play_cue` 唤醒音立即给用户反馈。
 ///
 /// `source` = 触发来源标签，随 detect 的 `text` 透传（见 [`BoundedTurn::begin`] 注释）。
+/// `is_wakeword` = 唤醒词命中开的轮（`true`）还是手动按键开的轮（`false`）：
+/// 前者播唤醒问候 + 唤醒提示音，后者**都不做**，直接给聆听环等用户说话。
 /// 同步下发：control 出站是 FIFO channel，无 await 竞态窗口；通道已断时立即按
 /// NoSpeech 收口，绝不能留下一个"自认为在聆听"的门等不到任何音频。
 pub(super) fn start_turn(
     live: &super::runtime::LiveControl,
     up: &UnboundedSender<IncomingFrame>,
     source: &str,
+    is_wakeword: bool,
 ) {
     let (turn, mic, fx) = (&live.turn, &live.mic, &live.fx);
-    let Some(generation) = turn.begin(up, source) else {
+    let Some(generation) = turn.begin(up, source, is_wakeword) else {
         return; // 已有一轮在进行：忽略重复触发（与会话层语义一致）
     };
     fx.speaker_flush(); // 打断：旧回答的缓冲音频立即作废
@@ -130,8 +148,14 @@ pub(super) fn start_turn(
     }
     // 反馈：聆听环 + 唤醒音（wakeSound 开启时设备才发声）。fx 与 mic 同一条
     // FIFO channel，先灯后音的顺序就是发给设备的顺序。
+    //
+    // `wake_cue` 只属于**唤醒词命中**（官方 `play_cue("wake")` 也只在唤醒路径发，
+    // 按键路径 `_button_voice_turn` 不发）。按键是用户主动说话，不需要"我听到了
+    // 你叫我"的确认音；聆听环就是他要的反馈。
     fx.listening();
-    fx.wake_cue();
+    if is_wakeword {
+        fx.wake_cue();
+    }
     // 会话层语义：采集门已开（设备侧指令已入队）。保持 detect → start 的顺序，
     // 会话层据此进入"可收音频"状态。
     let state = turn.0.lock().expect("echomuse turn lock");

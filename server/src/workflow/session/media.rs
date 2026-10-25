@@ -57,16 +57,50 @@ pub(super) fn native_pcm(chunk: &AudioChunk) -> Option<Vec<f32>> {
     )
 }
 
+/// 设备 VAD 会话的上行累积：**拼成单一连续段**（对齐官方 controller——`0x01` PCM 逐块
+/// 进同一队列、`0x04` 哨兵才收口整段送 STT）。逐块 push 会让 `recognize_segments`
+/// 对每 160ms 碎片各跑一次 ASR，太短识别为空且静默跳过（真机表现：说了话、零日志、
+/// 零响应）。
+fn accumulate_device_pcm(pending: &mut Vec<Vec<f32>>, pcm: &[f32]) {
+    match pending.last_mut() {
+        Some(acc) => acc.extend_from_slice(pcm),
+        None => pending.push(pcm.to_vec()),
+    }
+}
+
 impl<T: Transport> Session<'_, T> {
     pub(super) async fn handle_utterance_end(
         &mut self,
         reason: crate::workflow::protocol::UtteranceEnd,
     ) {
+        // 设备 VAD 会话：收口日志是现场唯一的"听到话了"信号——直通后服务端不再跑
+        // VAD，原先由切段触发的日志一并消失，缺了它只能靠猜（"说完没反应"无从下手）。
+        let device_ms = if self.device_vad && self.real_audio && !self.is_test {
+            let samples: usize = self.pending_segments.iter().map(Vec::len).sum();
+            Some(samples.saturating_mul(1000) / self.params.uplink_sr.max(1) as usize)
+        } else {
+            None
+        };
         let segments = super::utterance::finish_utterance(
             self.vad.as_mut(),
             &mut self.pending_segments,
             reason,
         );
+        if let Some(ms) = device_ms {
+            match reason {
+                crate::workflow::protocol::UtteranceEnd::Speech => tracing::info!(
+                    "session {} 设备 VAD 收口：{ms}ms 语音（{} 段）→ ASR",
+                    self.session_id,
+                    segments.len()
+                ),
+                crate::workflow::protocol::UtteranceEnd::NoSpeech => {
+                    tracing::info!(
+                        "session {} 设备 VAD 收口：本轮未检测到语音（{ms}ms 已丢弃）",
+                        self.session_id
+                    )
+                }
+            }
+        }
         if self.real_audio && !self.close_requested && !self.is_test && !segments.is_empty() {
             self.recognize_segments(segments).await;
         }
@@ -101,9 +135,9 @@ impl<T: Transport> Session<'_, T> {
         }
         if self.device_vad {
             // 设备端 speech gate 已判"这是人声"（Silero VAD 生效）：跳过服务端检测，
-            // PCM 直接进 pending，等设备 0x04（UtteranceEnd::Speech）整段送 ASR。
+            // 累积为单一连续段，等设备 0x04（UtteranceEnd::Speech）整段送 ASR。
             // 双 VAD 口径不一致会吞字，且每帧重复推理白占一个 VAD 池名额。
-            self.pending_segments.push(pcm.to_vec());
+            accumulate_device_pcm(&mut self.pending_segments, pcm);
             return;
         }
         let mut segments = Vec::new();

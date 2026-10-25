@@ -43,8 +43,8 @@ mDNS 广播地址**无配置项**：启动时动态探测部署机默认出口�
 | EchoMuse 事件 | 会话语义 | 说明 |
 |---|---|---|
 | data 面 Text identify（拨通后首帧） | 按 `device_id` 精确认领 data 出站口 | data 面唯一文本帧；此后恒为二进制，再收 Text 忽略不断链 |
-| `oww_wake`（设备本地唤醒词命中） | `listen state=detect` → `listen state=start` + 下发 `mic_start{lock_mic:true}` | bounded turn：设备自己做 VAD，结束发哨兵；`detect` 先投（`[wakeup]` 唤醒问候语的触发点，问候关闭时仅多一行会话日志）；detect 的 `text` 携带来源标签 `"本地唤醒词"`，echomuse 层同步打 `触发来源：本地唤醒词` 日志 |
-| `button`（动作键） | 同上 | 无唤醒词模型时的兜底入口；detect 的 `text` 携带 `"action 键"`，echomuse 层同步打 `触发来源：action 键` 日志——会话层日志（`收到唤醒上报（唤醒词/来源：…）`）据此区分"叫醒的"还是"按键开的" |
+| `oww_wake`（设备本地唤醒词命中） | `listen state=detect` → `listen state=start` + 下发 `mic_start{lock_mic:true}` | bounded turn：设备自己做 VAD，结束发哨兵；`detect` 先投（`[wakeup]` 唤醒问候语的触发点，问候关闭时仅多一行会话日志）；detect 的 `text` 携带来源标签 `"本地唤醒词"`，echomuse 层同步打 `触发来源：本地唤醒词` 日志。**只有唤醒词这一条路径发 `detect`** |
+| `button`（动作键） | 只发 `listen state=start`（**不发 `detect`**）+ `mic_start{lock_mic:true}` | 对齐官方 `_button_voice_turn` → `_run_voice_locked(is_wakeword=False)`：手动按键是"我要说话"，直接进聆听、亮聆听环，**不播唤醒问候「我在」、不播唤醒提示音**（cue 只属于唤醒词）。以前一律发 detect，导致按键先答一句「我在」并把聆听态盖成播报态 |
 | `0x01`/`0x07` mic PCM（16k S16LE） | 上行 Opus 二进制帧 | 服务端用同一 `OpusFrameEncoder` 编码，攒满 60ms 一包；`0x07` 会话头（session u32 + seq u16 BE）已剥离 |
 | `0x04`（VAD 结束） | 补齐残 PCM 后投 typed `EndOfUtterance(Speech)` | core 合并已切段与 VAD flush 尾段、reset 后识别；立即允许下次唤醒，不等回复 EOS |
 | `0x05`（无语音超时） | 丢弃残 PCM 后投 typed `EndOfUtterance(NoSpeech)` | core 丢弃已切段与尾段、reset，不触发 ASR/LLM；重复/空闲哨兵幂等 |
@@ -56,11 +56,11 @@ mDNS 广播地址**无配置项**：启动时动态探测部署机默认出口�
 
 能力协商：`ack.features` 只声明 `output_chain`（音效链双向声明，设备在 ALSA 写入处自跑 EQ/低音保护/限幅；config 键全部透传管理台）；`ble_connect` + `ble_adverts_data` 仅在 `[echomuse].ble_proxy=true` **且**设备 register 声明 `ble_connect` 时条件追加（协议要求双向声明才启用）。**不声明** `listen_session`（不走 `0x07` 私听会话，设备保持 stream 模式）——按协议"未声明即降级"静默关闭；未知帧型/未知 JSON 双向忽略。
 
-采集时序（对齐官方 controller，`mic.rs`）：接入 ack 后先 `mic_start{lock_mic:false}` 起常开唤醒流（喂波束基线/影子评分，约 3 秒后 `baselineReady`）；开轮 `speaker_flush → duck → mic_stop → beam_lock → mic_start{lock_mic:true}` + `led_anim`(listening) + `play_cue`；收口 `mic_stop → beam_unlock → mic_start{lock_mic:false}`（无语音时另发 `led_anim`(nospeech)）。灯效五态（聆听/思考/播报/无语音/熄灭）与 `speaker_flush`/`duck`/`music_flush` 见 `fx.rs`。
+采集时序（对齐官方 controller，`mic.rs`）：接入 ack 后先 `mic_start{lock_mic:false}` 起常开唤醒流（喂波束基线/影子评分，约 3 秒后 `baselineReady`）；开轮 `speaker_flush → duck → mic_stop → beam_lock → mic_start{lock_mic:true}` + `led_anim`(listening)，**`play_cue` 仅唤醒词轮追加**（官方 `play_cue("wake")` 只在唤醒路径发，按键路径不发）；收口 `mic_stop → beam_unlock → mic_start{lock_mic:false}`（无语音时另发 `led_anim`(nospeech)）。灯效五态（聆听/思考/播报/无语音/熄灭）与 `speaker_flush`/`duck`/`music_flush` 见 `fx.rs`，全部 shape 取自官方 `em_scenes.resolve`：`led_anim` 可用时发动画，不可用（旧固件 caps 无 `led_anim`）时聆听退回静态 `leds` 帧——与官方 `leds_listening` 同一分支口径。
 
 **音乐面**（`audio_mix`，下行 `0x04`/`0x05` 独立平面）：语音轮次只 `duck`（压低 `duckDb`）不暂停；`music_flush` 只在用户停止时下发（丢弃设备缓冲、不可恢复）。音乐帧与语音帧共用 output 预算与 2s 水库——语音占满时音乐自然让路，无需显式优先级。管理面入口见下节 `POST …/music`。
 
-**唤醒声音的分工**：设备唤醒时本地先播一声自带提示音（`wake_cue`，音量/开关走管理台「EchoMuse → 唤醒词设置」的 `wakeSoundLevel`）；服务器侧问候语由全局 `[wakeup]` 控制（默认「我在」，支持换行多句随机，EchoMuse 唤醒经 `detect` 代发触发）——两者可并存，嫌设备提示音刺耳就把它调 quiet/关掉，留服务器问候。
+**唤醒声音的分工**：设备唤醒时本地先播一声自带提示音（`wake_cue`，音量/开关走管理台「EchoMuse → 唤醒词设置」的 `wakeSoundLevel`；设备端默认 `WAKE_SOUND=false`）；服务器侧问候语由全局 `[wakeup]` 控制（默认「我在」，支持换行多句随机，EchoMuse 唤醒经 `detect` 代发触发）——两者可并存，嫌设备提示音刺耳就把它调 quiet/关掉，留服务器问候。**手动按 action 键两者都不触发**（对齐官方 `is_wakeword=False`）：听见的只有聆听环，用户随即说话。
 
 ### 会话日志口径（默认 `RUST_LOG` 未设 = info 档）
 
@@ -68,10 +68,12 @@ mDNS 广播地址**无配置项**：启动时动态探测部署机默认出口�
 
 ```
 [echomuse] device G090… 触发来源：本地唤醒词，开轮          （按键则显示 action 键）
-session … 收到唤醒上报（唤醒词/来源："本地唤醒词"）
+session … 收到唤醒上报（唤醒词/来源："本地唤醒词"）          （仅唤醒词轮有；按键轮没有这一行）
 session … 用户：现在几点了（识别 213ms）
 session … 回复（耗时 1820ms / 音频 4100ms / LLM 87 字 / 工具 0 个，下发 2 句）：现在是下午三点二十分…
 ```
+
+按键轮的 info 档就是「`触发来源：action 键，开轮` → `用户：…` → `回复…`」，**中间的唤醒上报/问候语整段不存在**——这正是"按键 = 我要说话"应有的样子。
 
 分段延迟/水库水位/下载缓冲/吞吐/首帧 TTFA/下行平顺等**每轮诊断明细已全部降为 debug**（异常时除外：断音与吞吐 <0.98× 恒为 warn）。排障时 `RUST_LOG=debug`（或 `RUST_LOG=xiaozhi_server_rust=workflow=debug`）恢复全量。
 
@@ -175,7 +177,9 @@ RMS 门限与真实电平差近 10 倍（24dB 增益后 `rms≈0.0066` vs `thres
 
 **是两件套，缺一照样退回 RMS**：模型到位后设备会 `dlopen` 同目录的 `libonnxruntime.so`（ORT 运行时），缺失时日志报 `ort: open …/libonnxruntime.so: dlopen failed`，语音门**仍退回 RMS**（且报错不知所云）。官方从不把这两件打进固件（12.3MB 会翻倍 OTA 载荷与 A/B 槽位），而是带外安装。本服务端对齐：`spawn_ort_prefetch` 在启动时从官方钉版的 `onnxruntime-android-1.19.2.aar`（maven central，AAR 级 sha256 钉死，`OWW_ORT_URL` 可指内网镜像）解出 `jni/armeabi-v7a/libonnxruntime.so` 落模型卷 `oww/`，接入时与 VAD 一起幂等下发；推前做设备剩余空间检查（官方 `FREE_FLOOR_MB=50` 同值，装满会以"半个 .so"收场）。注意 shell 面传输 12.3MB 较慢（120s 上限），弱网失败会在下次接入自动重试。
 
-**设备 VAD 生效后，服务端跳过 VAD 直接 ASR**：EchoMuse 承载的语音契约是"设备端 speech gate 判定人声才上行，`0x04`/`0x05` 明确收口"——服务端再跑一遍 Silero VAD 属于重复检测：每帧二次推理白占一个 VAD 池名额，且双 VAD 口径不一致会**吞字**（设备上行的是"gate 通过的音频"，服务端 VAD 若把个别帧判为非语音，句首/句中就被切掉）。因此 `session/start.rs` 判定上行格式为 `echo_mic()` 的会话**不借 VAD 实例**（`vad=None` + `device_vad=true`），`media.rs::handle_pcm` 把 PCM 直接缓冲进 `pending_segments`，等设备 `UtteranceEnd::Speech`（0x04）时整段送 ASR（`utterance.rs::finish_utterance` 对 `None` 直通、不 flush 不 reset）；`NoSpeech`（0x05）丢弃全部 pending。级联与 AIUI 全链路共用 `recognize_segments`，两条识别路径同样受益。ESP/浏览器等"设备端没做 VAD"的承载不变（服务端 VAD 照旧）。
+**设备 VAD 生效后，服务端跳过 VAD 直接 ASR**：EchoMuse 承载的语音契约是"设备端 speech gate 判定人声才上行，`0x04`/`0x05` 明确收口"——服务端再跑一遍 Silero VAD 属于重复检测：每帧二次推理白占一个 VAD 池名额，且双 VAD 口径不一致会**吞字**（设备上行的是"gate 通过的音频"，服务端 VAD 若把个别帧判为非语音，句首/句中就被切掉）。因此 `session/start.rs` 判定上行格式为 `echo_mic()` 的会话**不借 VAD 实例**（`vad=None` + `device_vad=true`），`media.rs::handle_pcm` 把 PCM **累积成单一连续段**（`accumulate_device_pcm`），等设备 `UtteranceEnd::Speech`（0x04）时整段送 ASR（`utterance.rs::finish_utterance` 对 `None` 直通、不 flush 不 reset）；`NoSpeech`（0x05）丢弃全部 pending。级联与 AIUI 全链路共用 `recognize_segments`，两条识别路径同样受益。ESP/浏览器等"设备端没做 VAD"的承载不变（服务端 VAD 照旧）。
+
+⚠️ **必须整段累积，不能逐块成段**：官方 controller 是把 `0x01` PCM 逐块塞进**同一队列**、收到 `0x04` 哨兵才收口整段送 STT（`em_controller._stream_mic_audio`）。`recognize_segments` 对每个 segment 各跑一次 ASR、空结果静默 `continue`——若把每块 160ms 上行当独立段，一句 3s 的话会被切成 ~19 段，每段太短识别为空 → 端到端表现"说了话、零日志、零响应"（真机踩过）。设备 VAD 会话收口时打一行 info：`session … 设备 VAD 收口：1800ms 语音（1 段）→ ASR`——这是直通后现场唯一"听到话了"的信号，排查"说完没反应"先看它：没有这行 = 设备端 gate 没开（上行都没发出），有这行但无 `用户：…` = ASR 侧问题。
 
 **与官方下发流程逐项对照**（对照物：`em_oww_assets.py` / `em_oww_sync.py` / 设备端 `speechgate.go`，一次性摆明，避免反复修差异）：
 
@@ -229,6 +233,28 @@ RMS 门限与真实电平差近 10 倍（24dB 增益后 `rms≈0.0066` vs `thres
 - 音量 / 禁麦由设备本地处理，控制器**不应**为其开语音轮（上游 `em_button.decide` 同语义：控制器只拒绝语音轮，不拦设备本地行为）。
 
 > **已修的 bug**：此前 `handle_control_text` 的 `button` 分支不看 `clickType`/`button.type`，对音量±、禁麦、action 一律开轮——表现就是"按音量+ −、按禁麦，都被当成 action 键开了语音轮"。现已收敛到 `dot2.rs`：非 action 键只打 `debug` 日志，不再开轮；`routes.rs` 末尾 + `dot2_tests.rs` 共 11 个单测覆盖映射与开轮判定（action 按下开轮 / 松开不开 / 音量±不开 / 禁麦不开 / 静音下不开 / 语义字段开轮）。
+
+### 交互面：官方实现是唯一来源
+
+**规则**：任何设备交互（灯、提示音、麦克、音量、静音、音乐、按键反馈）在动手前先到官方 `controller/em_controller.py`、`controller/em_scenes.py`、`device/cmd/server.go`、`device/internal/client/control.go` 里找对应实现，**语义、时序、载荷形状照抄**；官方没有的交互就不加。理由：官方那套是真机验证过的（含旧固件兼容、静默降级、死信 TTL），自己另发明一套必然在某个边界上与设备/固件打架。
+
+| 交互 | 官方实现 | 本项目 | 状态 |
+|---|---|---|---|
+| 手动按键开轮 | `_button_voice_turn` → `_run_voice_locked(is_wakeword=False)` | `turn.rs::start_turn(…, false)` | ✅ 对齐 |
+| 唤醒词开轮 | `_run_voice_locked(is_wakeword=True)` | `start_turn(…, true)` | ✅ 对齐 |
+| 开轮指令序列 | `mic_stop → mic_start_turn`（`lock_mic:true`）+ `beam_lock` | `speaker_flush → duck → mic_stop → beam_lock → mic_start{lock_mic:true}` | ✅（flush/duck 是 xiaozhi 侧能力，官方在播放器层做同样的事） |
+| 轮末回常开流 | `mic_stop → mic_start`（`_button_voice_turn` 尾部） | `turn_ended` | ✅ 对齐 |
+| 聆听灯 | `leds_listening`：`led_anim_capable` → `listening_anim`，否则 `set_leds(listening, True)` | `fx.listening()` 同分支（caps 来自 register） | ✅ 对齐 |
+| 思考灯 | `leds_spin_green` → `spin_anim` | `fx.thinking()` | ✅ 对齐 |
+| 播报灯 | `meter_anim` + `meter_ttl(audio_seconds)` | `fx.speaking()`（固定长死信 + 收尾主动 `off`） | ✅ 等价（不靠 TTL 熄灯） |
+| 无语音收口 | `nospeech_anim`（pulse 900ms / ttl 1s） | `fx.nospeech()` 同参 | ✅ 对齐 |
+| 轮末熄灯 | `_leds_turn_end` → `leds_off` | `fx.off()`（播报收尾） | ✅ 对齐 |
+| 唤醒提示音 | `play_cue("wake")`，**仅唤醒路径** | `fx.wake_cue()`，仅 `is_wakeword` | ✅ 对齐（本轮修正） |
+| 打断 | `speaker_flush` | `fx.speaker_flush()` | ✅ 对齐 |
+| 音乐协调 | `duck` / `music_flush`（语音轮只 duck） | `fx.duck_on/duck_off/music_flush` | ✅ 对齐 |
+| 静音红环 | 设备本地（`RestoreMuteRing`），控制器不画 | 设备本地 | ✅ 不需要控制器 |
+| 音量 | 设备本地 + `volume_state` 上报；控制器只转发 `volume_set` | `routes.rs` 透传 | ✅ 对齐 |
+| 错误反馈 | `error_anim`（pulse 220ms / ttl 1s）用于 `no_tts`/`tts_error`/`timeout` | 未做——会话层还没有"轮失败"的统一 outcome 钩子 | ⏸ 待对齐 |
 
 ### emOS Web 管理（安全子集）
 
