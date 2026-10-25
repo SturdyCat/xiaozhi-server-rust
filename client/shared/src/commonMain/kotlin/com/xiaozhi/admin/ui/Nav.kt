@@ -48,6 +48,9 @@ object AdminNav {
         NavDescriptor("conversations", 30, "对话记录", GROUP_OBSERVE),
         NavDescriptor("usage", 40, "用量", GROUP_OBSERVE),
         NavDescriptor("metrics", 45, "延迟", GROUP_OBSERVE),
+        // 控制台（官方 dashboard 的 CONSOLE / 命令行）：实时服务器日志流 GET /api/logs，
+        // 服务端已有实现、此前客户端未建页面消费（见 ConsoleState / ConsolePage）。
+        NavDescriptor("console", 47, "控制台", GROUP_OBSERVE),
         // 语音流程：只装流程节点（VAD/ASR/NLU/LLM/TTS 与挂在连接点上的分支），配置/测试双 Tab
         NavDescriptor("config", 50, "语音流程", GROUP_CONFIG),
         // 全局配置：没有流程节点的 section（能力总览 / 预设 / AIUI / 服务 / EchoMuse 接入 / MCP / OTA）。

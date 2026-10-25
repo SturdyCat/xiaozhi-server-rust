@@ -30,10 +30,10 @@ actual val PLATFORM_WS_SUPPORTED: Boolean = false
  * （pagerBaseUrl 为空串），空 base 兜底本地默认地址（尽力值）。
  * `token` 非空编码进查询参数（服务端 auth_ok 的 `?token=` 兜底口径）。
  */
-actual fun adminRealtimeUrl(base: String, token: String): String {
+actual fun adminRealtimeUrl(base: String, token: String, path: String): String {
     val b = base.ifEmpty { "http://127.0.0.1:8000" }
     val scheme = if (b.startsWith("https://", ignoreCase = true)) "wss" else "ws"
-    val url = "$scheme://${b.substringAfter("://")}/api/admin/ws"
+    val url = "$scheme://${b.substringAfter("://")}$path"
     return if (token.isEmpty()) url else "$url?token=${echoMuseUrlComponent(token)}"
 }
 

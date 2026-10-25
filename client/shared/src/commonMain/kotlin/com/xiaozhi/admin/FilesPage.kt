@@ -69,18 +69,28 @@ private fun ViewContainer<*, *>.filesHeader(state: FilesState, toast: ToastState
                 "存储目录",
                 isCurrent = { state.path.isEmpty() },
             ) { state.openPath(ctx, "") }
+            // ⚠️ vfor item 闭包内**有且仅一个**孩子节点：分隔线与段名必须包进同一个
+            // View，否则进入任意子目录（crumbs 首次非空）时 throwRuntimeError
+            // 「vfor creator闭包内必须需要且仅一个孩子节点的生成」，整个更新事务中断
+            // ——表现为点目录不进入、EchoMuse 跳 oww-models/ 也停在原地。
             vfor({ state.crumbs }) { crumb ->
-                Text {
+                View {
                     attr {
-                        fontSize(AdminType.body)
-                        color(AdminColors.textTertiary)
-                        text(" / ")
+                        flexDirectionRow()
+                        alignItemsCenter()
                     }
+                    Text {
+                        attr {
+                            fontSize(AdminType.body)
+                            color(AdminColors.textTertiary)
+                            text(" / ")
+                        }
+                    }
+                    filesCrumb(
+                        crumb.first,
+                        isCurrent = { state.path == crumb.second },
+                    ) { state.openPath(ctx, crumb.second) }
                 }
-                filesCrumb(
-                    crumb.first,
-                    isCurrent = { state.path == crumb.second },
-                ) { state.openPath(ctx, crumb.second) }
             }
         }
         secondaryButton("刷新", loading = { state.loading }, loadingText = "刷新中…", icon = IconToken.Refresh) {

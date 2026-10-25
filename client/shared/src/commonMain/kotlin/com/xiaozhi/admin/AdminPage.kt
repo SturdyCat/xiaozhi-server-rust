@@ -107,6 +107,9 @@ class AdminPage : Pager(), FieldHelpHost {
     /** 「延迟」大盘（`GET /api/metrics`，P0-5 事件总线订阅者的只读投影）。 */
     val metrics = MetricsState(this)
 
+    /** 「控制台」（官方 dashboard 的 CONSOLE / 命令行）：实时服务器日志流 `GET /api/logs`。 */
+    val console = ConsoleState(this)
+
     /** 当前选中的导航项（[AdminNav] 的 id）。 */
     var selectedSection by observable(AdminNav.DEFAULT)
 
@@ -163,6 +166,8 @@ class AdminPage : Pager(), FieldHelpHost {
         usage.load(this, base)
         metrics.load(this, base)
         engineHealth.load(this, base)
+        // 控制台：连日志流（服务端 /api/logs 已有实现；仅客户端此前未建页面消费）
+        console.connect(base, token)
     }
 
     override fun createExternalModules(): Map<String, Module> = platformExternalModules()
@@ -381,6 +386,9 @@ private fun ViewContainer<*, *>.adminContentArea(
         }
         vif({ ctx.selectedSection == "metrics" }) {
             pageScroller { renderOpsMetrics(ctx.metrics, ctx) }
+        }
+        vif({ ctx.selectedSection == "console" }) {
+            pageScroller { renderConsole(ctx.console, ctx.toast, ctx) }
         }
         vif({ ctx.selectedSection == "files" }) {
             pageScroller { renderFilesSection(ctx.files, ctx.toast, ctx) }

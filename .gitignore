@@ -33,3 +33,5 @@ __pycache__/
 
 # 技能库第三方引用（KuiklyUI 源码参考，119M，不入库）
 .agents/skills/**/references/
+
+**/*.log

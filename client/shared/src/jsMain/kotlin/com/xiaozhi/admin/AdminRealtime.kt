@@ -13,12 +13,12 @@ actual val PLATFORM_WS_SUPPORTED: Boolean = true
  * 空串（server 同域托管）→ 从当前页面 location 推导（http→ws、https→wss）。
  * `token` 非空编码进查询参数（浏览器 WS 无法自定义请求头）。
  */
-actual fun adminRealtimeUrl(base: String, token: String): String {
+actual fun adminRealtimeUrl(base: String, token: String, path: String): String {
     val url = if (base.isEmpty()) {
         val scheme = if (window.location.protocol == "https:") "wss" else "ws"
-        "$scheme://${window.location.host}/api/admin/ws"
+        "$scheme://${window.location.host}$path"
     } else {
-        httpToWsAuthority(base) + "/api/admin/ws"
+        httpToWsAuthority(base) + path
     }
     return if (token.isEmpty()) url else "$url?token=${echoMuseUrlComponent(token)}"
 }

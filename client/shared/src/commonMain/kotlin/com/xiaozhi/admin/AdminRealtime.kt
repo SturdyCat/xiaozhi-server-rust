@@ -34,7 +34,7 @@ expect val PLATFORM_WS_SUPPORTED: Boolean
  * `token` 非空时编码进 `?token=` 查询参数——浏览器 WS 无法自定义请求头，与服务端
  * `auth_ok` 的查询参数兜底口径一致（token 为空 = 服务端未设管理令牌）。
  */
-expect fun adminRealtimeUrl(base: String, token: String): String
+expect fun adminRealtimeUrl(base: String, token: String, path: String = "/api/admin/ws"): String
 
 /**
  * 平台 WebSocket 原语：各平台 actual 直连系统 API（web=浏览器 WebSocket、

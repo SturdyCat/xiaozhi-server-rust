@@ -6,10 +6,10 @@ import com.xiaozhi.admin.ui.*
 actual val PLATFORM_WS_SUPPORTED: Boolean = false
 
 /** 尽力值：base 换 scheme 拼固定路径（实际不会被用到——subscribe 已被短路）。 */
-actual fun adminRealtimeUrl(base: String, token: String): String {
+actual fun adminRealtimeUrl(base: String, token: String, path: String): String {
     val b = base.ifEmpty { "http://127.0.0.1:8000" }
     val scheme = if (b.startsWith("https://", ignoreCase = true)) "wss" else "ws"
-    val url = "$scheme://${b.substringAfter("://")}/api/admin/ws"
+    val url = "$scheme://${b.substringAfter("://")}$path"
     return if (token.isEmpty()) url else "$url?token=${echoMuseUrlComponent(token)}"
 }
 
