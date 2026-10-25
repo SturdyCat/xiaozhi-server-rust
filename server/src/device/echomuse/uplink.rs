@@ -16,6 +16,8 @@ pub(super) struct MicUplink {
     epoch: AudioEpoch,
     generation: Option<u64>,
     captured_us: u64,
+    /// 丢帧诊断日志限频（静默黑洞曾让"说完没反应"无从排查）。
+    last_drop_log: std::time::Instant,
 }
 impl MicUplink {
     #[cfg(test)]
@@ -33,6 +35,7 @@ impl MicUplink {
             epoch,
             generation: None,
             captured_us: 0,
+            last_drop_log: std::time::Instant::now() - std::time::Duration::from_secs(60),
         }
     }
     /// 一轮收口（0x04/0x05 或溢出）：turn 已收掉才发官方三连
@@ -60,6 +63,17 @@ impl MicUplink {
         ble_on: bool,
     ) {
         if !self.epoch.is_current() || !self.media.ready() {
+            // 曾是静默 return：代际错位/媒体未就绪时设备所有上行帧（含 0x04 收口）
+            // 无声消失，"说完没反应"无从排查——限频打点照亮丢弃原因。
+            let now = std::time::Instant::now();
+            if now.duration_since(self.last_drop_log) > std::time::Duration::from_secs(5) {
+                self.last_drop_log = now;
+                tracing::warn!(
+                    "device uplink 丢帧：epoch_current={} media_ready={}（代际错位或 data 未就绪，本条限频 5s）",
+                    self.epoch.is_current(),
+                    self.media.ready()
+                );
+            }
             return;
         }
         match frames::parse_uplink(raw) {
