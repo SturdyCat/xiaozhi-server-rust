@@ -12,7 +12,7 @@
 | 服务端与客户端维护 | [服务端](<../server/AGENTS.md>)、[客户端](<../client/AGENTS.md>) |
 | 配置来源、存储、预设与设备 overlay | [配置说明](<../server/src/config/AGENTS.md>)；SQLite 迁移提案见[存储说明](<../server/src/config/store/AGENTS.md>) |
 | 协议与音频下行 | [协议](<../server/src/workflow/protocol/protocol/AGENTS.md>)、[下行](<../server/src/workflow/downlink/AGENTS.md>) |
-| EchoMuse 设备入口（Echo Dot 2 / emOS 直连） | [EchoMuse 说明](<echomuse.md>)、[模块指引](<../server/src/device/echomuse/AGENTS.md>)、[手动安装 emOS](<emos-manual-install.md>)（脚本 `tools/emos_install.py`） |
+| EchoMuse 设备入口（Echo Dot 2 / emOS 直连） | [EchoMuse 说明](<echomuse.md>)、[模块指引](<../server/src/device/echomuse/AGENTS.md>)、[手动安装 emOS](<emos-manual-install.md>)（脚本 `tools/emos_install.py`）、[上游 Dot 2 交互/控制文档整理](<echomuse/>) |
 | 会话、推理闸门与分段延迟 | [会话](<../server/src/workflow/session/AGENTS.md>)、[推理](<../server/src/workflow/pipeline/inference/AGENTS.md>)、[指标](<../server/src/observability/metrics/AGENTS.md>) |
 | HTTP、配置更新与观测接口 | [网关](<../server/src/gateway/ws/AGENTS.md>)、[配置端点](<../server/src/gateway/ws/config/AGENTS.md>) |
 | 插件、注册表与能力维护 | [插件层](<../server/src/plugins/AGENTS.md>)（含[注册表](<../server/src/plugins/registry/AGENTS.md>)、[LLM](<../server/src/plugins/llm/AGENTS.md>)、[TTS](<../server/src/plugins/tts/AGENTS.md>)） |
@@ -37,6 +37,7 @@ docs/
 ├── emos-manual-install.md    Echo Dot 2 手动安装 emOS
 ├── node-test-samples.md      节点测试：快照、输入与样本
 ├── voice-pipeline.md         语音主流程重组与验证记录
+├── echomuse/                 上游 EchoMuse Dot 2 交互/控制文档（中文整理版）
 ├── plans/                    计划、路线与轮次设计（历史交付记录）
 ├── designs/                  功能设计长文（历史）
 └── research/                 调研、评估与分析（过期提案归档）

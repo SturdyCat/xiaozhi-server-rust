@@ -13,6 +13,7 @@ use crate::workflow::session::SessionParams;
 
 fn params(buffer_ms: u32, start_ms: u32, start_max_ms: u32) -> SessionParams {
     SessionParams {
+        kind: crate::workflow::session::DeviceKind::XiaozhiEsp,
         output_codec: crate::media::media::AudioCodec::Opus,
         uplink_bin_ver: BinVersion::V1,
         downlink_bin_ver: BinVersion::V1,

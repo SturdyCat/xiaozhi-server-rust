@@ -1,10 +1,14 @@
 //! Native media adapters feed the same VAD/ASR path as the legacy ESP decoder.
-use super::{Session, SessionParams};
+use super::{DeviceKind, Session, SessionParams};
 use crate::media::media::{AudioChunk, AudioCodec, AudioFormat};
 use crate::workflow::protocol::Transport;
 
 impl SessionParams {
     /// Saved-defaults diagnostic, NOT a claim about an ESP's negotiated hello.
+    ///
+    /// `kind` 按 codec 的入口对应关系推导（PcmS16Le 只有 EchoMuse 入口工厂使用）；
+    /// 真实入口各自显式声明（gateway/ws 字面量、`echomuse::session_params`），此处
+    /// 推导只为诊断/基准探针（`benchmark::features`）与测试保持同一口径。
     pub fn configured_defaults(cfg: &crate::config::Config, codec: AudioCodec) -> Self {
         let echo = codec == AudioCodec::PcmS16Le;
         // EchoMuse 上下行几何不同：mic 16 kHz、speaker 48 kHz（设备不重采样，
@@ -17,6 +21,11 @@ impl SessionParams {
             crate::workflow::protocol::BinVersion::from_u8(cfg.audio.binary_protocol_version)
         };
         let mut params = Self {
+            kind: if echo {
+                DeviceKind::EchoMuse
+            } else {
+                DeviceKind::XiaozhiEsp
+            },
             uplink_bin_ver: version,
             downlink_bin_ver: version,
             uplink_sr: 16_000,
@@ -105,12 +114,22 @@ impl<T: Transport> Session<'_, T> {
             self.recognize_segments(segments).await;
         }
     }
+    /// EchoMuse 承载的上行：原生 mono PCM 块。`IncomingFrame::Audio` 只由
+    /// `EchomuseTransport` 产出；格式守卫在 [`native_pcm`]（数据完整性校验，
+    /// 类型判定在会话建立期的 `params.kind`，见 `start.rs::device_vad`）。
     pub(super) async fn handle_audio(&mut self, chunk: AudioChunk) {
+        debug_assert_eq!(
+            self.params.kind,
+            super::DeviceKind::EchoMuse,
+            "Audio 帧只来自 EchoMuse 承载"
+        );
         if let Some(pcm) = native_pcm(&chunk) {
             self.handle_pcm(&pcm).await;
         }
     }
 
+    /// xiaozhi ESP 承载的上行：二进制信封（unwrap → Opus 解码）。类型分支在构造期：
+    /// EchoMuse 会话不建 `uplink_decoder`，即使误收 Binary 也在此自然忽略。
     pub(super) async fn handle_binary(&mut self, data: &[u8]) {
         let payload = crate::workflow::protocol::unwrap_uplink(self.params.uplink_bin_ver, data);
         if payload.is_empty() {

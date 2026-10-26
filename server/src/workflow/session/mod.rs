@@ -79,9 +79,25 @@ where
     }
 }
 
+/// 接入入口声明的设备类型：**入口即定型**。
+///
+/// 两个生产入口各自声明，会话层据此走专用分支（设备端 VAD 直通、连接欢迎语注入等），
+/// 不再从音频格式/codec 反推；共享流水线环节（ASR/技能/LLM/TTS/下行节拍）不感知该类型：
+/// - [`crate::gateway::ws`]（xiaozhi hello 协商入口）→ [`DeviceKind::XiaozhiEsp`]；
+/// - [`crate::device::echomuse`]（`/em/control`+`/em/data`，identify/ack、无 hello）→ [`DeviceKind::EchoMuse`]。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceKind {
+    /// xiaozhi ESP 承载（含 `hello.test=true` 的 macApp 测试台——同一入口、同一 hello 协商）。
+    XiaozhiEsp,
+    /// EchoMuse 承载（Echo Dot 2 / emOS 直连；原生 mono PCM，设备端已做 speech gate）。
+    EchoMuse,
+}
+
 /// 会话协商参数（握手后固定）。
 #[derive(Clone, Copy)]
 pub struct SessionParams {
+    /// 接入入口声明的设备类型（见 [`DeviceKind`]）：会话专用分支的唯一判据。
+    pub kind: DeviceKind,
     pub uplink_bin_ver: BinVersion,
     pub downlink_bin_ver: BinVersion,
     pub uplink_sr: u32,

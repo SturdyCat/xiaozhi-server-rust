@@ -1,6 +1,6 @@
 # EchoMuse 设备入口（Echo Dot 2 / emOS）
 
-> 当前功能说明；协议权威来源是 EchoMuse 仓库 `docs/device-controller-interface.md`（以代码为准），实现细节以 `server/src/device/echomuse/` 源码与测试为准。
+> 当前功能说明；协议权威来源是 EchoMuse 仓库 `docs/device-controller-interface.md`（以代码为准），实现细节以 `server/src/device/echomuse/` 源码与测试为准。上游 Dot 2 交互/控制文档的中文整理版见 [echomuse/](<echomuse/>)（设备控制协议 / 聆听 / 音频状态 / 灯环 / 配置 / 上游语音管线，快照 2026-10 main）。
 
 ## 上游参考版本（增量比对锚点）
 
@@ -19,7 +19,7 @@ emOS Web 管理的额外参考锚点是上游 [`858987c272329a41d385835439bd3e2d
 
 ## 是什么
 
-把一台刷了 emOS 的 Echo Dot 2（EchoMuse 固件）作为语音卫星**直接接入本服务端**：不经 Home Assistant、不跑 EchoMuse 官方 controller。设备经 mDNS 发现本服务器，走 `/em/control` + `/em/data` 双 WebSocket 接入，与 xiaozhi ESP 设备**共用同一条** SenseVoice ASR → LLM/技能级联 → TTS 流水线。
+把一台刷了 emOS 的 Echo Dot 2（EchoMuse 固件）作为语音卫星**直接接入本服务端**：不经 Home Assistant、不跑 EchoMuse 官方 controller。设备经 mDNS 发现本服务器，走 `/em/control` + `/em/data` 双 WebSocket 接入，与 xiaozhi ESP 设备**共用** SenseVoice ASR → LLM/技能级联 → TTS 流水线的共享环节；设备类型由**接入入口定型**（`SessionParams.kind` = `DeviceKind::EchoMuse`，xiaozhi hello 入口则声明 `XiaozhiEsp`）：会话专用分支（设备端 VAD 直通、连接欢迎语注入、有界轮次）与几何投影（16k mic / 48k speaker PCM、lead=0）按类型走各自专属逻辑，共享环节不感知设备类型（见 `workflow/session/AGENTS.md`）。
 
 ## 配置（`[echomuse]`，改动需重启）
 

@@ -589,7 +589,7 @@ fn local_ipv4() -> Option<Ipv4Addr> {
     super::local_ipv4()
 }
 
-/// Native Echo PCM geometry; no ESP codec/wire negotiation occurs.
+/// Native Echo PCM geometry; no ESP codec/wire negotiation; PcmS16Le ⇔ `DeviceKind::EchoMuse`.
 pub(crate) fn session_params(
     cfg: &crate::config::Config,
 ) -> crate::workflow::session::SessionParams {

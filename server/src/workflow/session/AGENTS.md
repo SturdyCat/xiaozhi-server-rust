@@ -2,6 +2,8 @@
 
 入口[会话建立](<start.rs>)负责热刷新、依赖快照和注册；[主循环](<./mod.rs>)处理帧；[回复编排](<reply.rs>)串起上下文、LLM、TTS 和下行。测试台[bench](<bench.rs>)只服务 `hello.test=true`，不是生产捷径。
 
+**设备类型入口定型**：`SessionParams.kind`（`DeviceKind`）由两个生产入口各自声明——`gateway/ws`（hello 协商）→ `XiaozhiEsp`、`device::echomuse`（identify/ack、无 hello）→ `EchoMuse`。会话专用分支（设备端 VAD 直通、连接欢迎语）只读 kind，不从音频格式反推（debug_assert 钉住 kind⇔几何一致）；连接欢迎语文本由入口经 `run_session` 的 `welcome` 参数注入，`workflow` 不反向依赖 `device::echomuse`。共享流水线（ASR/技能/LLM/TTS/下行）不感知类型；几何差异（16k/48k、PCM/Opus、lead=0）由入口经 `SessionParams` 投影（`configured_defaults` 的 PcmS16Le⇔EchoMuse 口径），下行分帧按该投影走各自专属链路（Opus 编码 vs 48k PCM 直通）。
+
 ## 推理与流式生产
 
 - ASR/TTS 同步推理通过 `spawn_blocking` 隔离，并共用[InferenceGates](<../pipeline/inference.rs>)。许可 move 进 blocking 闭包以 RAII 释放，不能在等上一句时占着许可。

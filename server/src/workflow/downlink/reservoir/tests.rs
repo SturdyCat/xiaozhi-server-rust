@@ -28,6 +28,7 @@ fn mem(k: &HotAudioKey) -> u64 {
 
 fn params() -> SessionParams {
     SessionParams {
+        kind: crate::workflow::session::DeviceKind::XiaozhiEsp,
         output_codec: crate::media::media::AudioCodec::Opus,
         uplink_bin_ver: BinVersion::V1,
         downlink_bin_ver: BinVersion::V1,

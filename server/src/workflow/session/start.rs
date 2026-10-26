@@ -15,7 +15,7 @@ use crate::runtime::Engines;
 use crate::workflow::downlink::DownlinkPacer;
 use crate::workflow::protocol::Transport;
 
-use super::{Session, SessionParams};
+use super::{DeviceKind, Session, SessionParams};
 
 /// 会话主循环：收发消息、驱动流水线。`is_test` 来自 hello 的 `test` 参数，
 /// 只有测试台会话能发起 asr_test/tts_test/llm_test（设备正式流程不经过测试端点）。
@@ -27,6 +27,12 @@ use super::{Session, SessionParams};
 /// `device_id`（`Device-Id` 头，固件写 MAC）与 `client_id`（`Client-Id` 头）都只用于
 /// **观测与记忆作用域**，不参与协议协商：前者是设备稳定键（记忆隔离、管理页「设备」），
 /// 后者是固件版本标识，仅进管理页「设备」列表。
+///
+/// `welcome` 是**连接欢迎语**文本，由设备入口决策后注入（EchoMuse 入口读
+/// `[echomuse].welcome`，xiaozhi ESP 入口恒 `None`）：会话层只负责"有就说"，不感知
+/// 具体设备的配置来源——`workflow` 不反向依赖 `device::echomuse`。
+/// `params.kind` 是入口声明的设备类型（[`DeviceKind`]），会话专用分支的唯一判据，
+/// 贯穿上行（VAD 策略/解码）到下行（分帧格式即其投影）。
 pub async fn run_session<T: Transport>(
     transport: &mut T,
     engines: Arc<Engines>,
@@ -36,6 +42,7 @@ pub async fn run_session<T: Transport>(
     client_id: String,
     is_test: bool,
     mcp: bool,
+    welcome: Option<String>,
 ) -> anyhow::Result<()> {
     // 会话开始时按磁盘最新配置热刷新引擎（管理页保存后**新会话即生效**，无需重启）。
     // ⚠️ 必须在 spawn_blocking 内：sherpa 重建引擎可能加载模型数秒，直接调用会独占
@@ -60,8 +67,14 @@ pub async fn run_session<T: Transport>(
     // 收口）→ 服务端跳过 VAD：不借池实例（省 1 个名额 + 每帧推理），PCM 直接缓冲，
     // `UtteranceEnd::Speech` 时整段送 ASR。双 VAD 口径不一致会吞字（设备上行的是
     // "gate 通过的音频"，服务端 VAD 若把个别帧判为非语音，句首/句中就被切掉）。
-    // 判定与数据路径同源：上行格式为 `echo_mic()` 的承载（见 `media.rs::native_pcm`）。
-    let device_vad = profile.input == crate::media::media::AudioFormat::echo_mic();
+    // 判据是入口声明的设备类型；debug_assert 与承载音频几何同源（EchoMuse 上行恒为
+    // `echo_mic()`，见 `media.rs::native_pcm`），类型与格式漂移在开发期即暴露。
+    let device_vad = params.kind == DeviceKind::EchoMuse;
+    debug_assert_eq!(
+        device_vad,
+        profile.input == crate::media::media::AudioFormat::echo_mic(),
+        "入口声明的设备类型必须与承载音频几何一致"
+    );
     let vad = if device_vad {
         None
     } else {
@@ -88,9 +101,8 @@ pub async fn run_session<T: Transport>(
     let tts_lease = engines
         .tts_lease()
         .with_synthesis_params(eff_config.tts.speaker, eff_config.tts.speed);
-    // 连接欢迎语（仅 EchoMuse 承载，见 `echomuse::connect_welcome`）：client_id 会被
-    // 下面的 begin_session 按值消费，决策必须在其之前完成。
-    let welcome = crate::device::echomuse::connect_welcome(&client_id, &eff_config.echomuse);
+    // 连接欢迎语不再在此决策：由设备入口计算后经 `run_session` 的 `welcome` 参数注入
+    //（EchoMuse 入口读 `[echomuse].welcome`；ESP 入口恒 None），会话层与具体设备配置解耦。
     // AIUI 全链路会话：sn = 前缀 + 会话短 id（云端个性化/上下文绑定，≤32 字符）
     // ⚠️ AIUI 全链路刻意用**启动快照**（注册表里是 RestartOnly）：它决定整条流水线的
     // 走向，且启用时凭据缺失是致命错误（boot 即失败）；热启用会带来"半配置切换链路"的风险。
@@ -192,8 +204,8 @@ pub async fn run_session<T: Transport>(
             None
         },
     };
-    // 连接欢迎语（`[echomuse].welcome`，RestartOnly）：设备接入即说一次，走唤醒问候
-    // 同一预制话术链路（`speak_canned`）——固定文本合成一次即经预取链路落盘
+    // 连接欢迎语（入口注入，EchoMuse 为 `[echomuse].welcome`，RestartOnly）：设备接入即说
+    // 一次，走唤醒问候同一预制话术链路（`speak_canned`）——固定文本合成一次即经预取链路落盘
     // hot-audio/（裸 PCM 文件，引擎原样、无重采样，见 `media::hot_audio`），稳态零合成；失败只记日志，
     // 绝不影响会话本身。
     if let Some(text) = welcome {

@@ -229,7 +229,7 @@ fn parse_didl(xml: &str) -> Vec<DidlEntry> {
                             ..Default::default()
                         });
                     }
-                    "title" | "class" | "creator" | "album" | "res" => {
+                    "title" | "class" | "creator" | "artist" | "album" | "res" => {
                         capture = Some(l.clone());
                         if l == "res" {
                             if let Some(c) = cur.as_mut() {
@@ -246,7 +246,13 @@ fn parse_didl(xml: &str) -> Vec<DidlEntry> {
                     match cap.as_str() {
                         "title" => c.title = t.clone(),
                         "class" => c.class = t.clone(),
-                        "creator" => c.artist = t.clone(),
+                        // upnp:artist 优先、dc:creator 兜底：真实 DIDL 常两者都发，artist 在后。
+                        "artist" => c.artist = t.clone(),
+                        "creator" => {
+                            if c.artist.is_empty() {
+                                c.artist = t.clone();
+                            }
+                        }
                         "album" => c.album = t.clone(),
                         "res" => {
                             if c.res_url.is_empty() {
@@ -266,7 +272,7 @@ fn parse_didl(xml: &str) -> Vec<DidlEntry> {
                         }
                         capture = None;
                     }
-                    "title" | "class" | "creator" | "album" | "res" => {
+                    "title" | "class" | "creator" | "artist" | "album" | "res" => {
                         capture = None;
                     }
                     _ => {}
@@ -290,6 +296,7 @@ fn parse_duration(s: &str) -> u64 {
     }
     let parts: Vec<&str> = s.split(':').collect();
     let mut secs: f64 = 0.0;
+    // 最右是秒，向左逐级 ×60（DLNA `H:MM:SS(.fraction)` / `M:SS` / `S`）。
     for (i, p) in parts.iter().enumerate().rev() {
         let val: f64 = p.parse().unwrap_or(0.0);
         secs += val * 60f64.powi(i as i32);

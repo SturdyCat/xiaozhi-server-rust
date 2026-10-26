@@ -363,6 +363,8 @@ async fn handle_handshake(
         .map_err(|e| anyhow::anyhow!("发送 server hello 失败: {e}"))?;
 
     let params = SessionParams {
+        // 入口即定型：本入口（hello 协商）承载的是 xiaozhi ESP（含 hello.test 测试台）。
+        kind: crate::workflow::session::DeviceKind::XiaozhiEsp,
         output_codec: crate::media::media::AudioCodec::Opus,
         uplink_bin_ver,
         downlink_bin_ver,
@@ -404,6 +406,8 @@ async fn handle_handshake(
         client_id.to_string(),
         hello.test,
         mcp,
+        // 连接欢迎语是 EchoMuse 入口的专属注入（见 run_session 文档）；本入口无。
+        None,
     )
     .await
 }
