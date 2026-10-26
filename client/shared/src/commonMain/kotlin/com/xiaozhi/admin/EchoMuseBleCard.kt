@@ -35,10 +35,10 @@ fun ViewContainer<*, *>.echoMuseBlePanel(row: EchoMuseDeviceRow, state: EchoMuse
                 }
             }
         }
-        labeledField("目标 MAC 地址", { ble.address }, { ble.setAddress(it) }, "aa:bb:cc:dd:ee:ff")
+        labeledField("目标 MAC 地址", { ble.address }, { ble.applyAddress(it) }, "aa:bb:cc:dd:ee:ff")
         actionRow {
             secondaryButton("地址类型", dynamicText = { if (ble.addressType == 0) "地址：public (0)" else "地址：random (1)" }) {
-                ble.setAddressType(if (ble.addressType == 0) 1 else 0)
+                ble.applyAddressType(if (ble.addressType == 0) 1 else 0)
             }
         }
         textNote("手填 MAC 时必须核对 public/random 地址类型；地址可能轮换。选择外设不会自动连接，也不会自动执行读写。", micro = true)

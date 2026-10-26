@@ -132,27 +132,31 @@ pub(super) fn approved_emos(reg: &Registry, id: &str) -> Result<(), ShellError> 
     Ok(())
 }
 
-struct Pending {
-    owner: uuid::Uuid,
+pub(super) struct Pending {
+    pub(super) owner: uuid::Uuid,
     ctl: UnboundedSender<ControlOut>,
     peer: IpAddr,
-    deadline: Instant,
+    pub(super) deadline: Instant,
     socket: Option<oneshot::Sender<WebSocket>>,
 }
 
-type PendingMap = Mutex<HashMap<String, Pending>>;
-fn pending() -> &'static PendingMap {
+/// 待回拨槽表（键 = device_id）。控制台与一次性操作共用，故提到 `pub(super)` 供
+/// `console.rs`/外置测试断言 owner 与占用状态；**语义一个字节都没改**。
+pub(super) type PendingMap = Mutex<HashMap<String, Pending>>;
+pub(super) fn pending() -> &'static PendingMap {
     static PENDING: OnceLock<PendingMap> = OnceLock::new();
     PENDING.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 /// The HTTP operation alone owns this slot. Any cancellation/timeout/error/drop
 /// clears only its own entry and shell_close goes ONLY to its captured channel.
-struct Operation {
-    id: String,
-    owner: uuid::Uuid,
-    ctl: UnboundedSender<ControlOut>,
-    deadline: Instant,
+pub(super) struct Operation {
+    pub(super) id: String,
+    pub(super) owner: uuid::Uuid,
+    /// 占槽时刻捕获的 control 通道：`shell_close` **只发这里**（绝不用 `hub_ctl(id)`
+    /// 现取——那是设备重拨后的新会话）。
+    pub(super) ctl: UnboundedSender<ControlOut>,
+    pub(super) deadline: Instant,
 }
 
 impl Drop for Operation {
@@ -170,7 +174,9 @@ impl Drop for Operation {
 }
 
 impl Operation {
-    fn reserve(
+    /// 占槽。控制台把它当长驻租约持有到会话结束（设计 §5.1）；一次性路径仍在
+    /// `deadline` 后丢弃。两条路径共用同一个类型与同一段 `Drop`，行为不可能分叉。
+    pub(super) fn reserve(
         id: &str,
         ctl: UnboundedSender<ControlOut>,
         live: &LiveControl,
@@ -214,14 +220,15 @@ impl Operation {
     }
 }
 
-fn live_matches(id: &str, ctl: &UnboundedSender<ControlOut>) -> bool {
+/// 捕获的 ctl 是否仍是 hub 里该设备的**当前** control 会话（同 channel + 未关闭）。
+pub(super) fn live_matches(id: &str, ctl: &UnboundedSender<ControlOut>) -> bool {
     super::hub_live(id)
         .is_some_and(|(current, _)| current.same_channel(ctl) && !current.is_closed())
 }
 
 /// Claim happens before HTTP upgrade, so unsolicited/duplicate sockets get a
 /// real rejection. Sender handoff after upgrade fails closed if owner expired.
-fn claim(id: &str, peer: IpAddr) -> Result<oneshot::Sender<WebSocket>, ShellError> {
+pub(super) fn claim(id: &str, peer: IpAddr) -> Result<oneshot::Sender<WebSocket>, ShellError> {
     let mut map = pending().lock().expect("echomuse shell lock");
     let p = map.get_mut(id).ok_or(ShellError::Unsolicited)?;
     if Instant::now() >= p.deadline {

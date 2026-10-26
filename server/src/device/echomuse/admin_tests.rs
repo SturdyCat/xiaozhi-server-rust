@@ -4,7 +4,7 @@
 
 use super::admin::{
     approve as admin_approve, command_plan, device_payload, devices_payload, filter_settings,
-    settings_plan,
+    settings_plan, SETTINGS_KEYS,
 };
 use super::hub_tests::{insert_online, HUB_LOCK};
 use super::registry::Registry;
@@ -369,4 +369,43 @@ fn registry_settings_roundtrip_and_payload() {
         "alexa"
     );
     assert!(reg.set_settings("ghost", m).is_none());
+}
+
+/// 白名单护栏（防止文档再漂 / 防止后人"顺手补"控制器侧键）：
+/// 恰好 40 键、必含 `sendspinUnpaired`、必不含控制器侧与 env-only 的键。
+#[test]
+fn settings_keys_are_exactly_the_device_wire_contract() {
+    let keys: Vec<&str> = SETTINGS_KEYS.iter().map(|(name, _)| *name).collect();
+    assert_eq!(
+        keys.len(),
+        40,
+        "白名单固定 40 键（设备线缆 ConfigMessage 真键）；增删必须同时改 docs/echomuse.md：{keys:?}"
+    );
+    assert!(
+        keys.contains(&"sendspinUnpaired"),
+        "官方 Stage07 的 sendspinUnpaired 是线缆真键，必须收"
+    );
+    for forbidden in [
+        // 控制器侧渲染/交互参数：设备 Device 结构体里不存在
+        "vadChannel", // 只由设备环境变量 VAD_CHANNEL 注入，不是线缆键
+        "ledScene",
+        "ledListenColor",
+        "ledThinkColor",
+        "meterAttack",
+        "nsAsr",
+        "buttonSingleTapEvent",
+        // emOS USB 串口 console 的 init 凭据/超时：与网页控制台无关
+        "consolePassword",
+        "consoleTimeoutMin",
+    ] {
+        assert!(
+            !keys.contains(&forbidden),
+            "{forbidden} 不得进白名单（文档曾误列，见 docs/echomuse.md）"
+        );
+    }
+    // 无重复键（重复会让 40 这个数字失真）
+    let mut sorted = keys.clone();
+    sorted.sort_unstable();
+    sorted.dedup();
+    assert_eq!(sorted.len(), keys.len(), "白名单不得有重复键");
 }

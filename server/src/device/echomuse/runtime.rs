@@ -176,13 +176,36 @@ impl LiveControl {
             "volume_state": s.volume_state,
             "mute_state": s.mute_state, "updated_at": s.updated_at})
     }
+
+    /// 在线体 + `link` 块（官方 Link 卡的 **TLS/token 三态**，设计 §3.2）。
+    ///
+    /// **`link` 不是 RSSI/PHY/频段**——那三项在设备真实上报的 `stats` 里：
+    /// `wifiRssi`/`linkSpeedMbps`/`wifiFreqMhz`/`wifiBssid`（白名单见 [`Self::update`]，
+    /// 设备没报就是 `null`，本文件从不填 0、也不估算）。官方 dashboard 的
+    /// `linkQuality`（分钟级丢包带）设备侧压根不报，故本服务端**没有**这个字段，
+    /// 前端按"未采集"渲染即可。
+    ///
+    /// 纯附加字段：`payload()` 原样保留（`esp_home` 与既有测试照旧用），管理面
+    /// [`super::system::get_runtime`] 用这个版本。`token_required` 由调用方算
+    /// （`[echomuse].token` 非空即 true），本结构不反查配置。
+    pub(crate) fn payload_with_link(&self, id: &str, token_required: bool) -> Value {
+        let mut body = self.payload(id);
+        body["link"] = json!({
+            "authenticated": self.authenticated,
+            "token_required": token_required,
+        });
+        body
+    }
 }
 
 pub(crate) fn offline_payload(id: &str) -> Value {
     json!({"device_id": id, "session_id": null, "online": false, "stats": null, "listen_state": null,
         "listen_end": null, "playback_stats": null, "oww_shadow_cross": null,
         "wifi_result": null, "wifi_scan": null, "ambient_light": null, "pair_requested_at": null,
-        "volume_state": null, "mute_state": null, "updated_at": null})
+        "volume_state": null, "mute_state": null, "updated_at": null,
+        // 离线时链路两字段都不可知：明确给 null 而不是缺键（前端 optJSONObject 两者
+        // 都读成 null，但显式 null 让抓包能区分"没这个概念"与"没读到"）。
+        "link": null})
 }
 
 impl LiveControl {

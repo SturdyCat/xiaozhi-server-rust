@@ -49,6 +49,7 @@ pub(crate) fn admin_routes() -> axum::Router<Arc<Engines>> {
         .route("/api/echomuse/devices/{id}/music", post(device_music))
         .merge(super::system::routes())
         .merge(super::oww::routes())
+        .merge(super::console::routes())
 }
 
 // ---- 响应构造（纯函数，测试直驱） ----
@@ -76,6 +77,12 @@ fn disabled_404() -> Response {
         StatusCode::NOT_FOUND,
         serde_json::json!({ "error": "echomuse disabled" }),
     )
+}
+
+/// `{"error": …}` 单行错误响应：handler 里 `device not found` / `device offline`
+/// 反复出现的同一形状（4 行 vs 1 行，且错误体只有一处定义）。
+fn err_json(code: StatusCode, error: &str) -> Response {
+    json(code, serde_json::json!({ "error": error }))
 }
 
 /// devices 列表体：registry 全表（按 device_id 排序）left join hub 在线状态；
@@ -146,19 +153,33 @@ fn command_out(body: &serde_json::Value) -> Result<String, &'static str> {
     }
 }
 
-/// settings 白名单：**设备端 `ConfigMessage` 全量字段**（`device/internal/config/
-/// config.go` 实际消费的键，文档 canonical 里的 controller 侧键——`ledScene`/
-/// `meter*`/`nsAsr`/`wakeArbitrationMs`/`button*`/`saveUtterances`——不进设备，不收）。
+/// settings 白名单：**设备端 `ConfigMessage` 实际消费的 40 个键**（`device/internal/
+/// config/config.go` 的线缆结构）。controller 侧键（`ledScene`/`meter*`/`nsAsr`/
+/// `saveUtterances`/`button*`…）在设备 `Device` 结构体里不存在、`vadChannel` 只由设备
+/// 环境变量注入，都**不收**；`consolePassword`/`consoleTimeoutMin` 也不收（emOS **USB
+/// 串口 console** 的 init，与网页控制台无关）。边界与理由见 `docs/echomuse.md`，并在
+/// `admin_tests.rs::settings_keys_are_exactly_the_device_wire_contract` 钉死。
 /// 协议 camelCase、"零值忽略"部分更新；`0`/`false` 是合法设置，设备按指针类型
 /// 区分"未设置"。
 ///
-/// 设备默认值（排障基准）：`beamformingEnabled=true`、`beamAngle=-1`（自动追踪）、
-/// `aecEnabled=true`、`agcEnabled=true`、`vadThreshold=0.004`、`micGainDb=24`、
-/// `adcDigitalGain=88`、`adcMicpga=40`、`startupVolume` 取设备存储值。
+/// 设备端官方初始默认值（排障基准），**逐字对齐**官方固件
+/// `device/internal/config/config.go::loadDefaults()`（设备首次 `Get()` 的初始化值）。
+/// 本服务器不强制推送这些键——设备本地即为官方默认；但当某台设备的存储
+/// settings 被污染（如本仓库遇到的 `beamformingEnabled=false`、
+/// `vadThreshold=0.06340`）时，需经 `POST /settings` 显式发回每个键（部分更新、
+/// 零值忽略语义）才能覆盖旧值。完整官方真值：
+/// vadThreshold=0.004, vadSpeechMs=80, vadSilenceMs=600, owwThreshold=0.5,
+/// owwModel=hey_jarvis_v0.1, owwOnDevice=off, bargeInThreshold=0.05,
+/// wakeWordEnabled=true, duckDb=-18, responseLevel=low, wakeSound=false,
+/// wakeSoundLevel=medium, remoteVolumeArc=false, adcDigitalGain=88, adcMicpga=40,
+/// micGainDb=24, beamAngle=-1, beamformingEnabled=true, wakeMic=0, agcEnabled=true,
+/// aecEnabled=true, aecDelayMs=0, aecTailMs=300, aecRefSource=auto,
+/// bleProxyEnabled=false, sendspinEnabled=false, sendspinUnpaired=false,
+/// startupVolume=85, volumeButtonSound=true。
 ///
 /// kind 语言（[`filter_settings`] 解析）：`bool` / `string` / `json`（任意 JSON）/
 /// `float list`（数字数组）/ 含 `|` 的枚举 / `(0,1]` / `integer A..B` / `number A..B`。
-const SETTINGS_KEYS: &[(&str, &str)] = &[
+pub(super) const SETTINGS_KEYS: &[(&str, &str)] = &[
     // 唤醒词
     ("wakeWordEnabled", "bool"),
     ("owwOnDevice", "off|shadow|on"),
@@ -208,6 +229,8 @@ const SETTINGS_KEYS: &[(&str, &str)] = &[
     // Sendspin（Music Assistant 直连设备，不经本服务器；仅开关与名字）
     ("sendspinEnabled", "bool"),
     ("sendspinName", "string"),
+    // 官方 Stage07 的「已配对另一台 MA」：设备线缆真有（`…config.go:601` 的 `*bool`）。
+    ("sendspinUnpaired", "bool"),
     // 灯环：私听态默认动画 spec（设备本地渲染）
     ("listeningAnim", "json"),
 ];
@@ -227,6 +250,15 @@ fn range_ok(kind: &str, prefix: &str, v: &serde_json::Value) -> bool {
     } else {
         v.as_f64().is_some_and(|n| n >= lo && n <= hi)
     }
+}
+
+/// 决策失败的三元组：`(状态码, {"error": …}, 空下发)`。
+///
+/// [settings_plan]/[command_plan] 里六处失败分支原本各摊 6 行完全同构的元组字面量
+/// （只有状态码/文案/空值类型不同），压成一处后所有失败响应共用同一形状，
+/// 也避免"改一处忘了另一处"导致两个端点错误体不一致。
+fn reject<T>(code: StatusCode, error: &str, empty: T) -> (StatusCode, serde_json::Value, T) {
+    (code, serde_json::json!({ "error": error }), empty)
 }
 
 /// 过滤并校验 settings body：只留白名单键且类型匹配（`number` 接受整/浮）。
@@ -278,26 +310,14 @@ pub(crate) fn settings_plan(
     body: &serde_json::Value,
 ) -> (StatusCode, serde_json::Value, Vec<ControlOut>) {
     if !enabled {
-        return (
-            StatusCode::NOT_FOUND,
-            serde_json::json!({ "error": "echomuse disabled" }),
-            Vec::new(),
-        );
+        return reject(StatusCode::NOT_FOUND, "echomuse disabled", Vec::new());
     }
     if !known {
-        return (
-            StatusCode::NOT_FOUND,
-            serde_json::json!({ "error": "device not found" }),
-            Vec::new(),
-        );
+        return reject(StatusCode::NOT_FOUND, "device not found", Vec::new());
     }
     let (settings, err) = filter_settings(body);
     if let Some(err) = err {
-        return (
-            StatusCode::BAD_REQUEST,
-            serde_json::json!({ "error": err }),
-            Vec::new(),
-        );
+        return reject(StatusCode::BAD_REQUEST, &err, Vec::new());
     }
     let push = super::config_push_with(&serde_json::Value::Object(
         settings.clone().into_iter().collect(),
@@ -325,18 +345,10 @@ pub(crate) fn command_plan(
     body: &serde_json::Value,
 ) -> (StatusCode, serde_json::Value, Option<ControlOut>) {
     if !enabled {
-        return (
-            StatusCode::NOT_FOUND,
-            serde_json::json!({ "error": "echomuse disabled" }),
-            None,
-        );
+        return reject(StatusCode::NOT_FOUND, "echomuse disabled", None);
     }
     if !online {
-        return (
-            StatusCode::CONFLICT,
-            serde_json::json!({ "error": "device offline" }),
-            None,
-        );
+        return reject(StatusCode::CONFLICT, "device offline", None);
     }
     match command_out(body) {
         Ok(text) => (
@@ -344,11 +356,7 @@ pub(crate) fn command_plan(
             serde_json::json!({ "queued": true }),
             Some(ControlOut::Json(text)),
         ),
-        Err(err) => (
-            StatusCode::BAD_REQUEST,
-            serde_json::json!({ "error": err }),
-            None,
-        ),
+        Err(err) => reject(StatusCode::BAD_REQUEST, err, None),
     }
 }
 
@@ -395,10 +403,7 @@ async fn device_get(
     }
     match device_payload(registry::global(&engines.config), &id) {
         Some(v) => json(StatusCode::OK, v),
-        None => json(
-            StatusCode::NOT_FOUND,
-            serde_json::json!({ "error": "device not found" }),
-        ),
+        None => err_json(StatusCode::NOT_FOUND, "device not found"),
     }
 }
 
@@ -418,10 +423,7 @@ async fn device_delete(
             serde_json::json!({ "removed": true, "device_id": id }),
         )
     } else {
-        json(
-            StatusCode::NOT_FOUND,
-            serde_json::json!({ "error": "device not found" }),
-        )
+        err_json(StatusCode::NOT_FOUND, "device not found")
     }
 }
 
@@ -442,10 +444,7 @@ async fn device_approve(
             super::bump_devices_version();
             json(StatusCode::OK, v)
         }
-        None => json(
-            StatusCode::NOT_FOUND,
-            serde_json::json!({ "error": "device not found" }),
-        ),
+        None => err_json(StatusCode::NOT_FOUND, "device not found"),
     }
 }
 
@@ -470,10 +469,7 @@ async fn device_settings(
     // 合法性已验证：持久化（离线也保存，设备下次接入时由 control_session 推送）。
     let (settings, _) = filter_settings(&payload);
     let Some(record) = reg.set_settings(&id, settings) else {
-        return json(
-            StatusCode::NOT_FOUND,
-            serde_json::json!({ "error": "device not found" }),
-        );
+        return err_json(StatusCode::NOT_FOUND, "device not found");
     };
     // Push the merged snapshot: pushing only a delta would reapply baseline
     // owwOnDevice=on and silently undo a previously stored off/shadow mode.
@@ -521,10 +517,7 @@ async fn device_command(
         match hub_ctl(&id) {
             Some(ctl) if ctl.send(out).is_ok() => {}
             _ => {
-                return json(
-                    StatusCode::CONFLICT,
-                    serde_json::json!({ "error": "device offline" }),
-                );
+                return err_json(StatusCode::CONFLICT, "device offline");
             }
         }
     }

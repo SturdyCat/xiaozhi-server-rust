@@ -91,9 +91,11 @@ async fn get_runtime(
     if registry::global(&engines.config).get(&id).is_none() {
         return ShellError::NotFound.response();
     }
+    // `link`：设备是否已认证 + 服务端是否要求设备 token（明网信任边界，设计 §3.2）。
+    let token_required = !engines.config.echomuse.token.trim().is_empty();
     let body = super::hub_live(&id)
         .filter(|(c, _)| !c.is_closed())
-        .map(|(_, live)| live.payload(&id))
+        .map(|(_, live)| live.payload_with_link(&id, token_required))
         .unwrap_or_else(|| runtime::offline_payload(&id));
     admin::json(StatusCode::OK, body)
 }

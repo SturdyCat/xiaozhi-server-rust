@@ -12,7 +12,8 @@ import com.tencent.kuikly.core.views.Text
  * 「EchoMuse 设备」页的渲染（纯展示，数据见 [EchoMuseState]）。
  *
  * 本文件只负责页面壳体（摘要头/错误/骨架/未启用与空列表提示/设备卡列表）；
- * 单台设备卡片（标题行 + 卡内左菜单/右内容面板）见 `EchoMuseDeviceCard.kt`。
+ * 单台设备卡片（标题行 + 六 tab 内容区，未批准则是审批单页）见 `EchoMuseDeviceCard.kt`
+ * 与 `EchoMuseDetailTabs.kt`。
  *
  * 呈现规则与运维页同一口径（见 `OpsPages.kt` 文件头）：
  * - `enabled=false` 优先于一切：显示"未启用"提示并说明怎么开，不渲染空列表；

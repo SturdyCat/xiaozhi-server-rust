@@ -7,7 +7,8 @@ import com.tencent.kuikly.core.directives.vif
 import com.tencent.kuikly.core.pager.Pager
 
 /**
- * 「音乐」面板（设备卡菜单 [ECHOMUSE_MENU_MUSIC]，EchoMuseDeviceCard 分发）。
+ * 配置 tab 的 **Stage 08 区块内容**（标题与"为什么官方没有这一组"的说明在
+ * `EchoMuseConfigStages.kt::stageMusic`，本文件只画控件）。
  *
  * 音乐面控制（对齐官方 `audio_mix`），音源**仅 DLNA**：服务端扫描/浏览局域网媒体
  * 服务器，选曲后由服务端拉流→解码→经同一下行平面逐帧下发（0x04/0x05，播放中说话
@@ -17,13 +18,16 @@ import com.tencent.kuikly.core.pager.Pager
  * DLNA 协议细节。播放/停止需要设备在线（data 链就绪）；扫描/浏览不依赖设备在线。
  * 提示文案由 [EchoMuseState.dlnaScan]/[EchoMuseState.dlnaBrowse]/[EchoMuseState.dlnaPlay]/
  * [EchoMuseState.stopMusic] 给出。
+ *
+ * 本组**不写任何 config 键**，所以「下发配置」对这里无效——音乐是动作面板，不是设置。
  */
-internal fun ViewContainer<*, *>.echoMuseMusicPanel(
+internal fun ViewContainer<*, *>.echoMuseMusicStage(
     row: EchoMuseDeviceRow,
     state: EchoMuseState,
     toast: ToastState,
     ctx: Pager,
 ) {
+    val music = state.music
     textNote(
         "音乐在独立平面与语音混音：说话时自动压低（duck）、说完恢复，不打断播放。" +
             "音源是局域网 DLNA 媒体服务器的曲目——扫描、浏览、拉流解码与推流全部由服务端完成。",
@@ -32,56 +36,56 @@ internal fun ViewContainer<*, *>.echoMuseMusicPanel(
     dropdownField(
         "DLNA 媒体服务器",
         {
-            state.dlnaServerSelection.ifEmpty {
-                if (state.dlnaServersLoaded) "未发现服务器" else "（尚未扫描）"
+            music.serverSelection.ifEmpty {
+                if (music.serversLoaded) "未发现服务器" else "（尚未扫描）"
             }
         },
-        { state.dlnaServers }, { state.dlnaServerSelection }, { state.dlnaServerOpen },
-        { state.dlnaServerOpen = !state.dlnaServerOpen }, { state.dlnaSelectServer(it) },
+        { music.servers }, { music.serverSelection }, { music.serverOpen },
+        { music.serverOpen = !music.serverOpen }, { music.selectServer(it) },
         help = "扫描基于 SSDP 组播（约 4 秒）；容器部署收不到组播时需 host 网络部署。",
     )
     actionRow {
         secondaryButton(
             "扫描局域网",
             icon = IconToken.Refresh,
-            loading = { state.actionBusy },
+            loading = { music.busy },
         ) {
-            state.dlnaScan(ctx, row.deviceId) { ok, msg ->
+            music.scan(ctx, row.deviceId) { ok, msg ->
                 toast.show(msg, if (ok) "ok" else "error")
             }
         }
     }
-    vif({ state.dlnaServerSelection.isNotEmpty() }) {
+    vif({ music.serverSelection.isNotEmpty() }) {
         dropdownField(
             "曲目",
             {
-                state.dlnaTrackSelection.ifEmpty {
-                    if (state.dlnaTracksLoaded) "没有曲目" else "（尚未浏览）"
+                music.trackSelection.ifEmpty {
+                    if (music.tracksLoaded) "没有曲目" else "（尚未浏览）"
                 }
             },
-            { state.dlnaTracks }, { state.dlnaTrackSelection }, { state.dlnaTrackOpen },
-            { state.dlnaTrackOpen = !state.dlnaTrackOpen }, { state.dlnaTrackSelection = it },
+            { music.tracks }, { music.trackSelection }, { music.trackOpen },
+            { music.trackOpen = !music.trackOpen }, { music.trackSelection = it },
             help = "清单由服务端递归浏览该服务器的音频目录生成；切换服务器后需重新浏览。",
         )
         actionRow {
             secondaryButton(
                 "浏览曲目",
                 icon = IconToken.Refresh,
-                loading = { state.actionBusy },
+                loading = { music.busy },
             ) {
-                state.dlnaBrowse(ctx, row.deviceId) { ok, msg ->
+                music.browse(ctx, row.deviceId) { ok, msg ->
                     toast.show(msg, if (ok) "ok" else "error")
                 }
             }
             hGap(AdminSpace.sm)
             primaryButton(
                 "播放所选曲目",
-                enabled = { row.online && state.dlnaTrackSelection.isNotEmpty() },
-                loading = { state.actionBusy },
+                enabled = { row.online && music.trackSelection.isNotEmpty() },
+                loading = { music.busy },
                 loadingText = "排队中…",
                 icon = IconToken.Play,
             ) {
-                state.dlnaPlay(ctx, row.deviceId) { ok, msg ->
+                music.play(ctx, row.deviceId) { ok, msg ->
                     toast.show(msg, if (ok) "ok" else "error")
                 }
             }
@@ -89,10 +93,10 @@ internal fun ViewContainer<*, *>.echoMuseMusicPanel(
             secondaryButton(
                 "停止并清空缓冲",
                 enabled = { row.online },
-                loading = { state.actionBusy },
+                loading = { music.busy },
                 icon = IconToken.Stop,
             ) {
-                state.stopMusic(ctx, row.deviceId) { ok, msg ->
+                music.stop(ctx, row.deviceId) { ok, msg ->
                     toast.show(msg, if (ok) "ok" else "error")
                 }
             }

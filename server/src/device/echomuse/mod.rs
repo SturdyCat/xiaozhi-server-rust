@@ -57,6 +57,9 @@ mod admin_tests;
 #[cfg(test)]
 mod ble_tests;
 mod config;
+/// 网页控制台：设备 `sh` 的长驻 WS 会话（设计 §5），帧协议在同目录 `console_frames.rs`。
+mod console;
+mod console_frames;
 pub(crate) mod dlna;
 pub(crate) mod dot2;
 #[cfg(test)]
@@ -70,6 +73,8 @@ pub(crate) mod mic;
 pub(crate) mod music;
 mod onnx_typed;
 pub(crate) mod oww;
+/// OWW 资产四/五态只读接口（`GET …/oww/state`），与 [`oww`] 的下载/下发链路共用清单读取。
+mod oww_state;
 pub(crate) mod registry;
 pub(crate) mod routes;
 pub(crate) mod runtime;
@@ -195,12 +200,7 @@ pub(crate) fn subscribe_devices_version() -> watch::Receiver<u64> {
 
 /// 登记（control 侧）；同名旧记录被替换（设备重拨是常态，旧通道随任务退出关闭）。
 fn hub_insert(device_id: &str, entry: PendingDevice) {
-    if let Some(old) = hub()
-        .pending
-        .lock()
-        .expect("echomuse hub 锁中毒")
-        .insert(device_id.to_string(), entry)
-    {
+    if let Some(old) = hub_iter().insert(device_id.to_string(), entry) {
         old.management.media.close();
         let _ = old
             .up_tx
@@ -381,12 +381,7 @@ pub(crate) fn status_json(enabled: bool) -> serde_json::Value {
 /// 测试 fixture 清理；生产路径必须使用带会话探针的 hub_remove_session。
 #[cfg(test)]
 fn hub_remove(device_id: &str) {
-    let removed = hub()
-        .pending
-        .lock()
-        .expect("echomuse hub 锁中毒")
-        .remove(device_id)
-        .is_some();
+    let removed = hub_iter().remove(device_id).is_some();
     if removed {
         // 下线对管理台列表可见（online 消失）。
         bump_devices_version();
@@ -447,8 +442,7 @@ pub struct DeviceRegister {
 pub fn ack_message(device_id: &str, ble: bool) -> String {
     let mut features = vec!["output_chain"];
     if ble {
-        features.push("ble_adverts_data");
-        features.push("ble_connect");
+        features.extend(["ble_adverts_data", "ble_connect"]);
     }
     serde_json::json!({
         "type": "ack",
@@ -461,10 +455,8 @@ pub fn ack_message(device_id: &str, ble: bool) -> String {
 
 /// Unix 毫秒（ack 校时用；时钟早于 epoch 时回 0，设备端按原样处理）。
 fn unix_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
+    let elapsed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+    elapsed.map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
 /// control 接入时的 config 基线：`ble_proxy` 开启时默认打开设备侧扫描与连接

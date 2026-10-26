@@ -163,7 +163,14 @@ class EchoMuseBleState(scope: PagerScope) {
         readOutput = ""
     }
 
-    fun setAddress(value: String) {
+    /**
+     * 手填 MAC / 切地址类型（`public`0 / `random`1）：改动即作废旧会话的 GATT 输出。
+     *
+     * ⚠️ 名字是 `apply*` 而不是 `set*`：`address`/`addressType` 是 `var`，Kotlin 会为它们
+     * 生成 `setAddress(String)`/`setAddressType(Int)`，同名函数在 **JVM/Android** 目标上
+     * 直接撞「Platform declaration clash」，Android 编译失败（`js`/`macos` 不报）。
+     */
+    fun applyAddress(value: String) {
         if (address == value) return
         invalidate(resetBusy = false)
         address = value
@@ -171,7 +178,7 @@ class EchoMuseBleState(scope: PagerScope) {
         gattOutput = ""
         readOutput = ""
     }
-    fun setAddressType(value: Int) {
+    fun applyAddressType(value: Int) {
         if (value !in 0..1 || addressType == value) return
         invalidate(resetBusy = false)
         addressType = value
@@ -192,8 +199,8 @@ class EchoMuseBleState(scope: PagerScope) {
             error = "广播的 MAC/地址类型不合法，不能选择；请核对原始数据"
             return
         }
-        setAddress(addr)
-        setAddressType(row.addressType!!)
+        applyAddress(addr)
+        applyAddressType(row.addressType!!)
     }
 
     fun readAdverts(ctx: Pager) {

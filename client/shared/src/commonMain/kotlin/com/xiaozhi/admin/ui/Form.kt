@@ -161,6 +161,19 @@ fun ViewContainer<*, *>.labeledField(
     help: String = "",
     /** 名称右侧的控制动作（如「获取模型列表」），与标题左右两端对齐。 */
     trailing: ViewBuilder? = null,
+    /**
+     * 可用性（lambda，在 attr 闭包内求值 → 随 observable 变化即时置灰/恢复）。
+     * 用于"整块能力不可用"的字段（如控制台在非 `ready` 态不能输入），
+     * 与「保存」按钮的禁用是两件事：置灰的字段连 IME 都不该弹。
+     */
+    enabled: () -> Boolean = { true },
+    /**
+     * 回车提交（官方 `Input` 的 `inputReturn`）。
+     *
+     * ⚠️ H5 上 `inputReturn` 官方标注"实现中"，**可能不触发**——凡是必须能提交的
+     * 输入（控制台命令行）调用方必须同时给一个可见按钮兜底，不能只依赖回车。
+     */
+    onSubmit: (() -> Unit)? = null,
 ) {
     fieldLabel(label, help, trailing)
     fieldBox(height = height) {
@@ -170,7 +183,10 @@ fun ViewContainer<*, *>.labeledField(
                 height(height)
                 backgroundColor(AdminColors.transparent)
                 fontSize(AdminType.body)
-                color(AdminColors.textPrimary)
+                // 不可用时用占位色：暗色主题下"灰字"比"灰底"更能表达"这里现在不能打字"
+                color(if (enabled()) AdminColors.textPrimary else AdminColors.textPlaceholder)
+                placeholderColor(AdminColors.textPlaceholder)
+                editable(enabled())
                 // web 渲染器不处理 textInputState attr（只认 text prop），不绑则输入框
                 // 永远显示 placeholder——用户会误读成「保存的值丢了」（仅 web 绑，见
                 // AdminPlatform.INPUT_NEEDS_TEXT_PROP；原生绑 text() 会打断 IME 组词）
@@ -203,6 +219,10 @@ fun ViewContainer<*, *>.labeledField(
                             onChange(next)
                         }
                     }
+                }
+                // 回车提交：只对 opt-in 的调用方挂（表单字段的回车语义是全站统一的"无动作"）
+                if (onSubmit != null) {
+                    inputReturn { if (enabled()) onSubmit() }
                 }
             }
         }

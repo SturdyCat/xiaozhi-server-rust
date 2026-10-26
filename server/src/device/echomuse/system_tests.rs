@@ -253,3 +253,81 @@ fn partial_settings_merge_and_legacy_registry_load() {
     );
     let _ = std::fs::remove_file(path);
 }
+
+/// `/runtime` 的 `link` 块三态：在线已认证 / 在线未认证 / 离线（两字段不可知）。
+/// 纯附加字段：旧调用方（`esp_home`、`payload()`）一个字段都没少。
+#[test]
+fn runtime_link_reports_authentication_and_token_policy() {
+    let authed = runtime::LiveControl::new(Some("192.0.2.9".parse().unwrap()), true);
+    let body = authed.payload_with_link("d1", true);
+    assert_eq!(body["link"]["authenticated"], true);
+    assert_eq!(body["link"]["token_required"], true);
+    assert_eq!(body["online"], true);
+
+    let lan = runtime::LiveControl::new(None, false).payload_with_link("d1", false);
+    assert_eq!(lan["link"]["authenticated"], false);
+    assert_eq!(lan["link"]["token_required"], false);
+
+    // 离线：link 明确为 null 且键存在（与"没这个概念"区分）。
+    let offline = runtime::offline_payload("d1");
+    assert!(offline.as_object().unwrap().contains_key("link"));
+    assert!(offline["link"].is_null());
+    assert_eq!(offline["online"], false);
+
+    // `payload()` 保持原样（不含 link）：`esp_home` 与既有断言据此不变。
+    assert!(authed.payload("d1").get("link").is_none());
+}
+
+/// settings 白名单边界：官方文档曾误列的 8 个键必须继续被拒，`vadChannel` 永不入白名单。
+#[test]
+fn settings_whitelist_keeps_rejecting_documented_but_nonexistent_keys() {
+    for key in [
+        "vadChannel",
+        "ledScene",
+        "ledListenColor",
+        "ledThinkColor",
+        "meterAttack",
+        "nsAsr",
+        "owwSpeexNs",
+        "buttonSingleTapEvent",
+    ] {
+        let (_, error) = admin::filter_settings(&json!({key: false}));
+        assert!(
+            error.is_some_and(|e| e.contains(key)),
+            "{key} 必须被白名单拒绝"
+        );
+    }
+}
+
+/// 白名单的**正例与计数**：恰好 40 键（设备线缆真键集），`sendspinUnpaired` 已收，
+/// `consolePassword`/`consoleTimeoutMin` 仍刻意不收（那是 emOS **USB 串口 console**
+/// 的 init 凭据/超时，与网页控制台无关）。多收一个或少收一个都会在这里炸。
+#[test]
+fn settings_whitelist_is_exactly_40_keys_with_sendspin_unpaired() {
+    assert_eq!(
+        admin::SETTINGS_KEYS.len(),
+        40,
+        "白名单固定 40 键；增删必须同步 admin.rs 注释、docs/echomuse.md 与本断言"
+    );
+    // 官方 Stage07 的「已配对另一台 MA」开关：设备线缆真有（config.go:601 `*bool`）。
+    assert!(
+        admin::filter_settings(&json!({"sendspinUnpaired": true}))
+            .1
+            .is_none(),
+        "sendspinUnpaired 必须被接受"
+    );
+    // 灯环真正在设备线缆里的那个键（json 任意对象）。
+    assert!(
+        admin::filter_settings(&json!({"listeningAnim": {"name": "listen"}}))
+            .1
+            .is_none(),
+        "listeningAnim 必须被接受"
+    );
+    // 仍刻意不收的两个（真键但与本页控制台无关，别被 "console" 这个词误导）。
+    for key in ["consolePassword", "consoleTimeoutMin"] {
+        assert!(
+            admin::filter_settings(&json!({key: true})).1.is_some(),
+            "{key} 是 P2 项（USB 串口 console），不得进白名单"
+        );
+    }
+}

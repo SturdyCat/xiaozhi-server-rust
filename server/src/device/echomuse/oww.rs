@@ -63,7 +63,7 @@ const DEVICE_VAD_PATH: &str = "/data/local/share/echomuse/oww/silero_vad.onnx";
 /// 固定命令：目录不存在就建（官方 reconcile 同样先 `mkdir -p`）。
 const MKDIR: &str = "mkdir -p /data/local/share/echomuse/oww";
 
-const VAD_NAME: &str = "silero_vad.onnx";
+pub(super) const VAD_NAME: &str = "silero_vad.onnx";
 /// 模型根目录：与入口脚本的 `XIAOZHI_MODELS_DIR` 同源（容器内默认 `/data/models`）。
 const ENV_MODELS_DIR: &str = "XIAOZHI_MODELS_DIR";
 const DEFAULT_MODELS_DIR: &str = "/data/models";
@@ -91,7 +91,7 @@ const ENV_VAD_URL: &str = "OWW_VAD_URL";
 /// ORT 运行时在设备上的路径（与 VAD 同目录，`speechgate.go` 的 dlopen 名）。
 const DEVICE_ORT_PATH: &str = "/data/local/share/echomuse/oww/libonnxruntime.so";
 /// ORT 运行时的设备侧文件名（资产清单的 key）。
-const ORT_SO_FILE: &str = "libonnxruntime.so";
+pub(super) const ORT_SO_FILE: &str = "libonnxruntime.so";
 /// ORT 运行时在模型卷下的相对路径（与 VAD 同级）。
 const ORT_RELATIVE: &str = "oww/libonnxruntime.so";
 /// 官方 ORT 来源：上游 `controller/Dockerfile` 就是取 maven central 的
@@ -107,7 +107,7 @@ const ENV_ORT_URL: &str = "OWW_ORT_URL";
 const MAX_AAR_BYTES: u64 = 32 * 1024 * 1024;
 /// 设备剩余空间下限（MB）：低于它拒绝推 ORT（官方 `FREE_FLOOR_MB` 同值）——
 /// 设备装满会以"半个 .so + 一条不知所云的 dlopen 报错"收场，宁可明确跳过。
-const FREE_FLOOR_MB: u64 = 50;
+pub(super) const FREE_FLOOR_MB: u64 = 50;
 /// GitHub 代理前缀。与入口脚本 `apply_proxy` 同语义：**只对 github.com 套用**，
 /// `off`/空表示直连。部署环境（如 compose 默认值）不直连 GitHub 时，这里必须跟着走，
 /// 否则「服务端自己下载」会比入口脚本那条路更脆。
@@ -122,10 +122,13 @@ const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(120);
 
 pub(super) fn routes() -> axum::Router<Arc<Engines>> {
     use axum::routing::post;
-    axum::Router::new().route(
-        "/api/echomuse/devices/{id}/oww/install-vad",
-        post(install_vad),
-    )
+    axum::Router::new()
+        .route(
+            "/api/echomuse/devices/{id}/oww/install-vad",
+            post(install_vad),
+        )
+        // 资产五态只读接口在 [`super::oww_state`]（本文件已 700+ 行，不再加逻辑）。
+        .merge(super::oww_state::routes())
 }
 
 /// 模型卷根目录（`XIAOZHI_MODELS_DIR`，空值等同未配置）。
@@ -157,7 +160,7 @@ fn is_ready(path: &std::path::Path) -> bool {
     std::fs::metadata(path).is_ok_and(|meta| meta.is_file() && meta.len() > 0)
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
+pub(super) fn sha256_hex(bytes: &[u8]) -> String {
     // 与下发时的校验共用同一实现，避免"下载算一种、下发算另一种"。
     shell::sha256_hex(bytes)
 }
@@ -440,7 +443,7 @@ fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
 
 /// 读模型并保证是「typed 重写版」：原始 `raw_data` 版在 armv7 ORT 上会 SIGBUS，
 /// 所以转换是下发前的**必要条件**，不是可选优化。
-fn vad_asset() -> Result<Vec<u8>, String> {
+pub(super) fn vad_asset() -> Result<Vec<u8>, String> {
     let path = vad_path();
     let bytes = std::fs::read(&path).map_err(|error| {
         format!(
@@ -522,15 +525,16 @@ async fn install_vad(
 const DEVICE_STATE_CHECK: &str = "for f in /data/local/share/echomuse/oww/*.so /data/local/share/echomuse/oww/*.onnx; do [ -f \"$f\" ] && echo \"$(busybox sha256sum \"$f\" | busybox cut -d' ' -f1) $f\"; done; echo \"FREE $(busybox df -m /data | busybox tail -1)\"";
 
 /// 设备侧 OWW 资产现状：文件名 → sha256，以及 /data 剩余 MB。
-struct DeviceOwwState {
-    files: HashMap<String, String>,
-    free_mb: Option<u64>,
+/// `pub(super)`：只读五态接口（[`super::oww_state`]）复用同一次清单读取。
+pub(super) struct DeviceOwwState {
+    pub(super) files: HashMap<String, String>,
+    pub(super) free_mb: Option<u64>,
 }
 
 /// 一趟读设备侧现状。**读不到 ≠ 缺失**（官方"failure to LOOK is not evidence of
 /// absence"）：返回 None 时调用方必须什么都不做——shell 面可能还没起来，刚接入
 /// 的设备大概率如此，此时改设备才是错的。
-async fn device_state(id: &str) -> Option<DeviceOwwState> {
+pub(super) async fn device_state(id: &str) -> Option<DeviceOwwState> {
     let out = shell::run(id, DEVICE_STATE_CHECK).await.ok()?;
     let mut files = HashMap::new();
     let mut free_mb = None;
@@ -542,10 +546,9 @@ async fn device_state(id: &str) -> Option<DeviceOwwState> {
         let mut fields = line.split_whitespace();
         let digest = fields.next()?;
         let path = fields.next()?;
-        if digest.len() == 64 {
-            if let Some(name) = path.rsplit('/').next() {
-                files.insert(name.to_owned(), digest.to_ascii_lowercase());
-            }
+        // 只认 64 位 sha256 行：`filter` 里带长度判定，省掉一层嵌套 if。
+        if let Some(name) = path.rsplit('/').next().filter(|_| digest.len() == 64) {
+            files.insert(name.to_owned(), digest.to_ascii_lowercase());
         }
     }
     Some(DeviceOwwState { files, free_mb })
@@ -557,8 +560,7 @@ async fn device_state(id: &str) -> Option<DeviceOwwState> {
 fn parse_free_mb(df_row: &str) -> Option<u64> {
     let tokens: Vec<&str> = df_row.split_whitespace().collect();
     tokens.iter().enumerate().rev().find_map(|(i, field)| {
-        let pct = field.strip_suffix('%')?;
-        pct.parse::<u8>().ok()?;
+        field.strip_suffix('%')?.parse::<u8>().ok()?; // 只认"% 结尾"的使用率列
         let prev = *tokens.get(i.checked_sub(1)?)?;
         prev.parse::<u64>().ok()
     })
@@ -659,16 +661,14 @@ async fn sync_runtime(id: &str, state: &DeviceOwwState) {
     }
     // 空间护栏（官方 FREE_FLOOR_MB 同值）：设备装满 → 半个 .so → dlopen 报错不知所云。
     // 官方语义：空间检查在算完"真正要推什么"之后——已齐的设备绝不被空间挡。
-    if let Some(free) = state.free_mb {
-        if free < FREE_FLOOR_MB {
-            tracing::warn!(
-                device_id = %id,
-                free_mb = free,
-                need_mb = asset.len() / (1024 * 1024),
-                "设备剩余空间不足，跳过 ORT 运行时下发（官方下限 {FREE_FLOOR_MB}MB）"
-            );
-            return;
-        }
+    if state.free_mb.is_some_and(|free| free < FREE_FLOOR_MB) {
+        tracing::warn!(
+            device_id = %id,
+            free_mb = state.free_mb.unwrap_or_default(),
+            need_mb = asset.len() / (1024 * 1024),
+            "设备剩余空间不足，跳过 ORT 运行时下发（官方下限 {FREE_FLOOR_MB}MB）"
+        );
+        return;
     }
     if let Err(error) = shell::run(id, MKDIR).await {
         tracing::warn!(device_id = %id, ?error, "ORT 运行时下发前置 mkdir 失败，跳过");
@@ -692,7 +692,7 @@ async fn sync_runtime(id: &str, state: &DeviceOwwState) {
 /// ORT 运行时资产：读模型卷里由 `spawn_ort_prefetch` 下载的 armv7 so。
 /// 摘要已在下载时钉过（AAR 级），落盘后只做"非空文件"检查——对自置文件不做
 /// 内容级验证（无法验证），装错由设备 dlopen 失败兜底（退回 RMS，不崩）。
-fn ort_asset() -> Result<Vec<u8>, String> {
+pub(super) fn ort_asset() -> Result<Vec<u8>, String> {
     let path = ort_path();
     let bytes = std::fs::read(&path).map_err(|error| {
         format!(
