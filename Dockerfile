@@ -37,6 +37,18 @@
 #   本地能编、ACR 必败，差异就在这里（本机 `:sharedCompose:compileKotlinJs` 有产物 195 KiB）。
 #   修法：COPY 清单层与源码层都要带上 sharedCompose（见下方两处 COPY 与源码断言）。
 #
+# 🚨 2026-10-27 第四次复现：编译全绿后死在业务包 webpack（cgroup OOM 第二形态）。
+#   断点：`:shared:jsBrowserProductionWebpack` 刚打印 webpack patch 已加载即 EOF。
+#   此时配置阶段已过（sharedCompose 修复生效）、:shared 两个 Kotlin/JS 编译全部完成、
+#   无任何编译错误栈 → 整机 OOM 而非堆溢出（Node 堆不足会抛明确的
+#   "JavaScript heap out of memory"；EOF = 构建容器整体被杀）。
+#   峰值格局：Gradle JVM(1280m) + 编译完成后仍驻留的 Kotlin daemon(1024m) + 业务包
+#   webpack Node 三家叠加。material3 补丁入库（2f55b53）后 sharedCompose 源码变大、
+#   业务包 webpack 输入变大，把之前勉强能过的档位顶爆。
+#   修法：编译与 publishWeb 拆成两条 RUN——BuildKit 每条 RUN 是一次性容器，RUN 结束
+#   所有残留进程（含 Kotlin daemon）随之销毁。第一条只做 Kotlin/JS 编译 + 壳打包
+#   （Gradle+daemon 交替，本次日志已证能过）；第二条 publishWeb 时编译产物全部
+#   up-to-date、不再 fork daemon，业务包 webpack 时只剩 Gradle+Node 两家。
 # 三个阶段：
 #   web    —— Gradle 构建 Kuikly H5 管理页（client 工程：shared 业务包 + h5App 壳）
 #   build  —— 编译 Rust server（--features sherpa,nlu，真实 ASR/TTS 引擎 + TinyBERT NLU）
@@ -105,12 +117,24 @@ RUN if ! (test -d shared/src/commonMain/kotlin \
 #   -PwebSourceMap=false：生产镜像不调试，关掉 .map 生成（xiaoya 实测省 ~400MB 峰值内存）。
 #   --max-workers=2：org.gradle.parallel=false 只管跨 project 并行，项目内 worker API
 #   （KSP、verifyAdminIcons 等）仍按 CPU 核数开线程，多线程同时持有 AST/IR 会再抬一截峰值。
+#
+# 🚨 两条 RUN 拆分（见文件头第四次复现记录，勿合并回一条）：本条只做编译 + 壳打包，
+#   两处 -P/-D 参数必须与下一条 publishWeb 完全一致，否则 up-to-date 判定失效、
+#   下条会重新 fork Kotlin daemon，拆分白做。
+RUN ./gradlew :shared:compileKotlinJs :shared:compileProductionExecutableKotlinJs \
+      :apps:h5App:jsBrowserProductionWebpack \
+      --no-daemon --max-workers=2 -PwebSourceMap=false \
+      -Dorg.gradle.jvmargs="-Xmx1280m -Dfile.encoding=UTF-8" \
+      -Dkotlin.daemon.jvm.options=-Xmx1024m
+
+# publishWeb：编译产物 up-to-date（:shared / :apps:h5App 的 Kotlin 编译与壳 webpack
+#   均不再执行 → 不 fork Kotlin daemon），真正干的活只剩 :shared:jsBrowserProductionWebpack
+#   （业务包 webpack）+ 三份 sync Copy + verifyAdminIcons，峰值少 ~1GB。
 # 产物断言：web/ 下三件套缺一不可（index.html 入口 / nativevue2.js 业务包 / h5App.js 壳），
 #   缺失即构建失败——假产物不得静默出厂（部署后表现为白屏/404，排查成本远高于此处一行 test）。
 RUN NODE_OPTIONS="--max-old-space-size=1024" \
     ./gradlew :apps:h5App:publishWeb --no-daemon --max-workers=2 -PwebSourceMap=false \
       -Dorg.gradle.jvmargs="-Xmx1280m -Dfile.encoding=UTF-8" \
-      -Dkotlin.daemon.jvm.options=-Xmx1024m \
  && test -f apps/h5App/web/index.html \
  && test -f apps/h5App/web/nativevue2.js \
  && test -f apps/h5App/web/h5App.js
