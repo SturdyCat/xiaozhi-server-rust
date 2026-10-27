@@ -2,10 +2,11 @@ package com.xiaozhi.admin
 
 import com.xiaozhi.admin.ui.*
 
+import com.tencent.kuikly.core.coroutines.Job
+import com.tencent.kuikly.core.coroutines.delay
+import com.tencent.kuikly.core.coroutines.launch
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.pager.Pager
-import com.tencent.kuikly.core.timer.clearTimeout
-import com.tencent.kuikly.core.timer.setTimeout
 
 /** 断线重连退避起点（毫秒）：3s 起步，逐次 ×2，封顶 [RT_BACKOFF_MAX_MS]。 */
 private const val RT_BACKOFF_INIT_MS = 3_000L
@@ -66,9 +67,11 @@ expect class PlatformWsSocket(
  * - **分发**：文本帧按 `type` 分发给该连接上的所有订阅者（hello/pong 也分发，
  *   订阅者自行忽略不关心的类型）；非法帧静默丢弃（服务端会回 error 并保持连接）；
  * - **断线自动重连**：3s 起步 ×2 封顶 30s，仅在仍有订阅者时；成功 open 后重置退避；
- * - **代际保护**：每次断开/关停递增代际计数器，残留的 setTimeout 回调（重连/心跳）
- *   携带的代际过期即放弃，杜绝 close 后幽灵重连；
- * - **心跳**：连接期间每 25s 发一帧 ping（Kuikly setTimeout 链，同样受代际保护）；
+ * - **取消即销毁**：重连等待与心跳循环由 [Pager.lifecycleScope] 上的协程持有，断开/关停时
+ *   `Job.cancel()` 一并作废——不需要"定时器 id + 代际比对"这套手写取消；
+ * - **代际保护**：平台 socket 回调（onOpen/onText/onClosed）无法用 Job 取消，仍靠代际计数
+ *   丢弃过期回调，杜绝 close 后幽灵重连；
+ * - **心跳**：连接期间每 25s 发一帧 ping（协程 `delay` 循环，到期恢复必回 Kuikly context 线程）；
  * - `PLATFORM_WS_SUPPORTED=false` 的平台 subscribe 返回空订阅，行为退化为
  *   「进页刷新一次」，不循环重试。
  *
@@ -140,14 +143,23 @@ class AdminRealtime {
     ) {
         val subs = mutableListOf<SubscriptionImpl>()
 
-        /** 代际计数器：每次断开/关停递增；残留回调携带的代际过期即放弃。 */
+        /** 代际计数器：每次断开/关停递增；**平台 socket 回调**携带的代际过期即放弃。 */
         private var generation = 0
         private var socket: PlatformWsSocket? = null
 
         /** 下一次重连的退避间隔（成功 open 后重置）。 */
         private var backoffMs = RT_BACKOFF_INIT_MS
-        private var reconnectRef: String? = null
-        private var heartbeatRef: String? = null
+
+        /**
+         * 重连等待 / 心跳循环的协程句柄。
+         *
+         * 此前是 `reconnectRef: String?`（setTimeout 的定时器 id）+ 代际比对两件套；
+         * 换成协程后 `Job.cancel()` 本身就是"这段等待作废"的语义，少一个需要手工同步的状态。
+         * 用 [Pager.lifecycleScope] 而非自建 scope：`delay` 到期恢复由框架的 timeout 注册
+         * 投递回 context 线程，不会踩 `assertContextQueue`。
+         */
+        private var reconnectJob: Job? = null
+        private var heartbeatJob: Job? = null
 
         fun ensureConnected() {
             if (socket != null) return
@@ -157,7 +169,7 @@ class AdminRealtime {
                 onOpen = {
                     if (gen == generation) {
                         backoffMs = RT_BACKOFF_INIT_MS
-                        armHeartbeat(gen)
+                        armHeartbeat()
                     }
                 },
                 onText = { raw ->
@@ -168,7 +180,7 @@ class AdminRealtime {
                     if (gen == generation && socket != null) {
                         socket = null
                         disarmHeartbeat()
-                        scheduleReconnect(gen)
+                        scheduleReconnect()
                     }
                 },
             )
@@ -176,39 +188,41 @@ class AdminRealtime {
 
         fun shutdown() {
             generation++
-            cancel(reconnectRef)
-            reconnectRef = null
+            reconnectJob?.cancel()
+            reconnectJob = null
             disarmHeartbeat()
             val s = socket
             socket = null
             s?.close() // close 后残留回调因代际过期而放弃，不会幽灵重连
         }
 
-        private fun scheduleReconnect(gen: Int) {
+        private fun scheduleReconnect() {
             if (subs.isEmpty()) return
-            val delay = backoffMs
+            val wait = backoffMs
             backoffMs = (backoffMs * 2).coerceAtMost(RT_BACKOFF_MAX_MS)
-            reconnectRef = ctx.setTimeout(delay.toInt()) {
-                reconnectRef = null
-                if (gen != generation || subs.isEmpty()) return@setTimeout
+            reconnectJob?.cancel()
+            reconnectJob = ctx.lifecycleScope.launch {
+                delay(wait.toInt())
+                reconnectJob = null
+                if (subs.isEmpty()) return@launch
                 ensureConnected()
             }
         }
 
-        /** 心跳链：到期发 ping 后自续期；断线/关停 disarm，代际过期即放弃。 */
-        private fun armHeartbeat(gen: Int) {
+        /** 心跳循环：每 [RT_HEARTBEAT_MS] 发一帧 ping；断线/关停时 cancel 掉整个循环。 */
+        private fun armHeartbeat() {
             disarmHeartbeat()
-            heartbeatRef = ctx.setTimeout(RT_HEARTBEAT_MS) {
-                heartbeatRef = null
-                if (gen != generation) return@setTimeout
-                socket?.send(RT_PING_FRAME)
-                armHeartbeat(gen)
+            heartbeatJob = ctx.lifecycleScope.launch {
+                while (true) {
+                    delay(RT_HEARTBEAT_MS)
+                    socket?.send(RT_PING_FRAME)
+                }
             }
         }
 
         private fun disarmHeartbeat() {
-            cancel(heartbeatRef)
-            heartbeatRef = null
+            heartbeatJob?.cancel()
+            heartbeatJob = null
         }
 
         private fun dispatchFrame(raw: String) {
@@ -221,10 +235,6 @@ class AdminRealtime {
             if (type.isEmpty()) return
             // 快照迭代：订阅者在回调里 close 自己（或他人）不撕坏遍历
             for (sub in subs.toList()) sub.dispatch(type, data)
-        }
-
-        private fun cancel(ref: String?) {
-            if (ref != null) ctx.clearTimeout(ref)
         }
     }
 }

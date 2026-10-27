@@ -168,9 +168,9 @@ class NluSectionState(private val scope: PagerScope) {
     /** 用服务端 `/api/config` 回包填充（缺键保留当前草稿；数组如实重建）。 */
     fun fill(obj: JSONObject) {
         obj.optJSONObject("nlu")?.let { n ->
-            enabled = n.optBoolean("enabled", enabled.toBooleanStrictOrNull() ?: true).toString()
-            modelThreshold = n.optDouble("model_threshold", modelThreshold.trim().toDoubleOrNull() ?: 0.9).toString()
-            modelMargin = n.optDouble("model_margin", modelMargin.trim().toDoubleOrNull() ?: 0.1).toString()
+            enabled = n.boolText("enabled", enabled, true)
+            modelThreshold = n.doubleText("model_threshold", modelThreshold.trim(), 0.9)
+            modelMargin = n.doubleText("model_margin", modelMargin.trim(), 0.1)
             n.optJSONArray("intents")?.let { arr ->
                 intents.clear()
                 for (i in 0 until arr.length()) {

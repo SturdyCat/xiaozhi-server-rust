@@ -80,19 +80,6 @@ expect fun ViewContainer<*, *>.macServerSwitchEntry(
 expect fun pagerBaseUrl(pager: Pager): String
 
 /**
- * unix 秒 → 本地时区 `"yyyy-MM-dd HH:mm:ss"`（EchoMuse 设备的 first_seen/last_seen
- * 等时间戳展示统一走这里；commonMain 无日期库，由平台 API 换算本地时区）。
- */
-expect fun formatEpochSeconds(secs: Long): String
-
-/**
- * 本地时区**当前时刻**的 UTC 偏移（秒，东八区 = +28800）。「文件」页 mtime 展示用：
- * 纯函数 [FilesModel.mtimeText] 不读系统时钟，页面把本值显式传入即可得到本地时间
- * （列表行只按"当前偏移"折算，不追踪条目时刻的历史 DST——展示口径如此即可）。
- */
-expect fun localZoneOffsetSeconds(): Int
-
-/**
  * 复制文本到系统剪贴板，返回是否成功。
  * web 管理台常以 `http://LAN-IP` 访问（非 secure context，无 async Clipboard API），
  * actual 内回落 `execCommand('copy')`；不支持剪贴板的平台返回 false（调用方 toast 提示）。

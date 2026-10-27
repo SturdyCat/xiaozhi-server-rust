@@ -5,6 +5,10 @@ import javax.inject.Inject
 
 plugins {
     kotlin("multiplatform")
+    // kotlinx.serialization 编译器插件：为 @Serializable 类生成序列化器（版本随 Kotlin，见根脚本）。
+    kotlin("plugin.serialization")
+    // Compose 编译器插件：Kuikly Compose 的 @Composable 由它处理（见下方 compose 依赖）。
+    id("org.jetbrains.kotlin.plugin.compose")
     id("com.android.library")
     // Kuikly KSP：扫描 @Page 注解生成页面注册代码（KuiklyCoreEntry，按编译目标注入）
     id("com.google.devtools.ksp")
@@ -14,6 +18,15 @@ plugins {
 }
 
 val kuiklyVersion: String = property("kuiklyVersion") as String
+
+// ===== kotlinx 基础库版本（按 Kotlin 2.1.21 兼容口径锁定，勿随手升级）=====
+// - serialization：1.9.0+ 用更新 Kotlin 编译，元数据版本高于 2.1.21 会直接失败，停在 1.8.1
+//   （最低要求 Kotlin 2.1.20，与 2.1.21 同代）。
+// - datetime：停在 0.6.x —— 0.7.0 起 `Instant` 迁往 `kotlin.time`（实验 API），
+//   升级必须连带改业务代码。
+// 协程不走 kotlinx：用 Kuikly core 自带的 com.tencent.kuikly.core.coroutines（见下方依赖块注释）。
+val serializationVersion = "1.8.1"
+val datetimeVersion = "0.6.2"
 
 // source map 开关（`-PwebSourceMap=false` 关闭，默认开）——与 apps/h5App 同一属性：
 // 本地开发留 map，浏览器报错能定位到 Kotlin 源码；生产/Docker 构建要关：
@@ -91,6 +104,22 @@ kotlin {
                 implementation("com.tencent.kuikly-open:core:$kuiklyVersion")
                 // @Page 注解
                 implementation("com.tencent.kuikly-open:core-annotations:$kuiklyVersion")
+                // Kuikly Compose 运行时（含 foundation / material3 / ui）：Settings 磁贴组件的基础。
+                // 与 core 同一版本口径（kuiklyVersion），且有 macosarm64 / js 变体。
+                implementation("com.tencent.kuikly-open:compose:$kuiklyVersion")
+                // Compose-Settings 磁贴 + kuiklyx-viewmodel + material3 缺失组件补丁（源码 vendored）
+                implementation(project(":sharedCompose"))
+
+                // ===== kotlinx 基础库（android / iosArm64 / macosArm64 / js 四端齐全）=====
+                // JSON：替代手写解析器（FilesModel）与后续强类型回包解析。
+                implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:$serializationVersion")
+                // 时间：收敛 formatEpochSeconds / localZoneOffsetSeconds 的四端 expect/actual 实现。
+                implementation("org.jetbrains.kotlinx:kotlinx-datetime:$datetimeVersion")
+                // ⚠️ 刻意**不**引入 kotlinx-coroutines-core：Kuikly core 自带一套协程
+                // （com.tencent.kuikly.core.coroutines：Pager.lifecycleScope / launch / delay / Job），
+                // 其 delay 到期经框架 timeout 注册投递回 context 线程。两套 Job 体系互不兼容，
+                // 混用会让取消语义错乱（cancel 一套、等另一套），因此业务协程一律用 Kuikly 的那套。
+                // 见 AdminRealtime 的重连/心跳。
             }
         }
     }

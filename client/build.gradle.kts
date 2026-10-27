@@ -21,6 +21,12 @@ plugins {
     // apply false：仅集中锁定版本，由各子模块自行 apply，避免 Kotlin 插件被重复加载报错。
     kotlin("multiplatform") version "2.1.21" apply false
     kotlin("android") version "2.1.21" apply false
+    // kotlinx.serialization 编译器插件：版本必须与 Kotlin 编译器同版本（2.1.21），
+    // 否则 @Serializable 生成的序列化器与运行时 ABI 对不上。
+    kotlin("plugin.serialization") version "2.1.21" apply false
+    // Compose 编译器插件：Kuikly Compose（com.tencent.kuikly-open:compose）处理 @Composable 必需。
+    // 版本必须与 Kotlin 编译器一致（2.1.21），否则 Composable 函数的合成签名与运行时 ABI 对不上。
+    id("org.jetbrains.kotlin.plugin.compose") version "2.1.21" apply false
     id("com.android.application") version "8.9.0" apply false
     id("com.android.library") version "8.9.0" apply false
     // Kuikly KSP 宿主插件：扫描 @Page 注解生成页面注册代码（版本须与 Kotlin 2.1.21 配套）

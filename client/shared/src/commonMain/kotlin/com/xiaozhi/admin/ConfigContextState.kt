@@ -160,8 +160,6 @@ class ContextSectionState(private val scope: PagerScope) {
         return out.joinToString("\n")
     }
 
-    private fun boolStr(b: Boolean): String = if (b) "true" else "false"
-
     /**
      * `[soul]` 段的 JSON（保存、预览、载入预设三处共用，避免字段漂移）。
      *
@@ -271,7 +269,7 @@ class ContextSectionState(private val scope: PagerScope) {
 
     fun fill(obj: JSONObject) {
         obj.optJSONObject("soul")?.let { s ->
-            soulEnabled = boolStr(s.optBoolean("enabled", soulEnabled.toBooleanStrictOrNull() ?: true))
+            soulEnabled = s.boolText("enabled", soulEnabled, true)
             // P6.x：内置预设键（旧服务端/旧文件没有它 → 保留当前值）
             soulPreset = s.optString("preset", soulPreset)
             soulName = s.optString("name", soulName)
@@ -285,46 +283,37 @@ class ContextSectionState(private val scope: PagerScope) {
             soulValues = joinLines(s.optJSONArray("values"))
             soulBoundaries = joinLines(s.optJSONArray("boundaries"))
             soulTone = s.optString("tone", soulTone)
-            soulColloquial = boolStr(s.optBoolean("colloquial", soulColloquial.toBooleanStrictOrNull() ?: true))
+            soulColloquial = s.boolText("colloquial", soulColloquial, true)
             soulAddressUser = s.optString("address_user", soulAddressUser)
             soulCatchphrases = joinLines(s.optJSONArray("catchphrases"))
-            soulEmoji = boolStr(s.optBoolean("emoji", soulEmoji.toBooleanStrictOrNull() ?: false))
-            soulMaxSentences = s.optInt("max_sentences", soulMaxSentences.toIntOrNull() ?: 2).toString()
-            soulMaxChars = s.optInt("max_chars", soulMaxChars.toIntOrNull() ?: 40).toString()
+            soulEmoji = s.boolText("emoji", soulEmoji, false)
+            soulMaxSentences = s.intText("max_sentences", soulMaxSentences, 2)
+            soulMaxChars = s.intText("max_chars", soulMaxChars, 40)
             soulScenario = s.optString("scenario", soulScenario)
             soulDeviceHint = s.optString("device_hint", soulDeviceHint)
             soulExamples = joinLines(s.optJSONArray("examples"))
         }
         obj.optJSONObject("memory")?.let { m ->
-            memoryEnabled = boolStr(m.optBoolean("enabled", memoryEnabled.toBooleanStrictOrNull() ?: true))
+            memoryEnabled = m.boolText("enabled", memoryEnabled, true)
             // `engine` 是 P4 起的规范键；旧服务端回 `backend`，一并兼容读
             memoryBackend = m.optString("engine", m.optString("backend", memoryBackend))
             memoryDbPath = m.optString("db_path", memoryDbPath)
-            memoryDbBusyTimeoutMs =
-                m.optInt("db_busy_timeout_ms", memoryDbBusyTimeoutMs.toIntOrNull() ?: 5000).toString()
-            memoryRecallEnabled =
-                boolStr(m.optBoolean("recall_enabled", memoryRecallEnabled.toBooleanStrictOrNull() ?: true))
-            memoryExtractionEnabled =
-                boolStr(m.optBoolean("extraction_enabled", memoryExtractionEnabled.toBooleanStrictOrNull() ?: true))
-            memoryFreshTurnCount =
-                m.optInt("fresh_turn_count", memoryFreshTurnCount.toIntOrNull() ?: 5).toString()
-            memoryRecallMaxNodes = m.optInt("recall_max_nodes", memoryRecallMaxNodes.toIntOrNull() ?: 6).toString()
-            memoryRecallMaxTokens =
-                m.optInt("recall_max_tokens", memoryRecallMaxTokens.toIntOrNull() ?: 400).toString()
-            memoryRecallBudgetMs = m.optInt("recall_budget_ms", memoryRecallBudgetMs.toIntOrNull() ?: 300).toString()
-            memoryMaintenanceInterval =
-                m.optInt("maintenance_interval", memoryMaintenanceInterval.toIntOrNull() ?: 6).toString()
+            memoryDbBusyTimeoutMs = m.intText("db_busy_timeout_ms", memoryDbBusyTimeoutMs, 5000)
+            memoryRecallEnabled = m.boolText("recall_enabled", memoryRecallEnabled, true)
+            memoryExtractionEnabled = m.boolText("extraction_enabled", memoryExtractionEnabled, true)
+            memoryFreshTurnCount = m.intText("fresh_turn_count", memoryFreshTurnCount, 5)
+            memoryRecallMaxNodes = m.intText("recall_max_nodes", memoryRecallMaxNodes, 6)
+            memoryRecallMaxTokens = m.intText("recall_max_tokens", memoryRecallMaxTokens, 400)
+            memoryRecallBudgetMs = m.intText("recall_budget_ms", memoryRecallBudgetMs, 300)
+            memoryMaintenanceInterval = m.intText("maintenance_interval", memoryMaintenanceInterval, 6)
             memoryInjectPosition = m.optString("inject_position", memoryInjectPosition)
-            memoryQuarantineMaxAttempts =
-                m.optInt("quarantine_max_attempts", memoryQuarantineMaxAttempts.toIntOrNull() ?: 3).toString()
+            memoryQuarantineMaxAttempts = m.intText("quarantine_max_attempts", memoryQuarantineMaxAttempts, 3)
             memoryScopePrefix = m.optString("scope_prefix", memoryScopePrefix)
             m.optJSONObject("retention")?.let { r ->
                 memoryRetentionKeep = r.optString("keep", memoryRetentionKeep)
-                memoryRetentionRecentTurns =
-                    r.optInt("recent_turns", memoryRetentionRecentTurns.toIntOrNull() ?: 0).toString()
-                memoryRetentionDays = r.optInt("retention_days", memoryRetentionDays.toIntOrNull() ?: 0).toString()
-                memoryRetentionDryRun =
-                    boolStr(r.optBoolean("dry_run", memoryRetentionDryRun.toBooleanStrictOrNull() ?: false))
+                memoryRetentionRecentTurns = r.intText("recent_turns", memoryRetentionRecentTurns, 0)
+                memoryRetentionDays = r.intText("retention_days", memoryRetentionDays, 0)
+                memoryRetentionDryRun = r.boolText("dry_run", memoryRetentionDryRun, false)
             }
             m.optJSONObject("extractor")?.let { e ->
                 memoryExtractorApiBase = e.optString("api_base", memoryExtractorApiBase)
@@ -333,16 +322,14 @@ class ContextSectionState(private val scope: PagerScope) {
                 memoryExtractorApiKeyConfigured =
                     e.optBoolean("has_api_key", memoryExtractorApiKey.isNotBlank())
                 memoryExtractorModel = e.optString("model", memoryExtractorModel)
-                memoryExtractorTemperature =
-                    e.optDouble("temperature", memoryExtractorTemperature.toDoubleOrNull() ?: 0.1).toString()
+                memoryExtractorTemperature = e.doubleText("temperature", memoryExtractorTemperature, 0.1)
             }
             // rag 参数组：旧服务端无该键 → 保留当前值（P1-9）
             m.optJSONObject("rag")?.let { r ->
                 memoryRagDocsDir = r.optString("docs_dir", memoryRagDocsDir)
-                memoryRagChunkSize = r.optInt("chunk_size", memoryRagChunkSize.toIntOrNull() ?: 512).toString()
-                memoryRagChunkOverlap =
-                    r.optInt("chunk_overlap", memoryRagChunkOverlap.toIntOrNull() ?: 64).toString()
-                memoryRagTopK = r.optInt("top_k", memoryRagTopK.toIntOrNull() ?: 4).toString()
+                memoryRagChunkSize = r.intText("chunk_size", memoryRagChunkSize, 512)
+                memoryRagChunkOverlap = r.intText("chunk_overlap", memoryRagChunkOverlap, 64)
+                memoryRagTopK = r.intText("top_k", memoryRagTopK, 4)
             }
         }
     }

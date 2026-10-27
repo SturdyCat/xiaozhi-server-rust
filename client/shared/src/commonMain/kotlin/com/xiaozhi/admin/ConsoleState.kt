@@ -1,6 +1,9 @@
 package com.xiaozhi.admin
 
 import com.xiaozhi.admin.ui.*
+import com.tencent.kuikly.core.coroutines.Job
+import com.tencent.kuikly.core.coroutines.delay
+import com.tencent.kuikly.core.coroutines.launch
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.pager.Pager
 import com.tencent.kuikly.core.reactive.handler.observable
@@ -56,7 +59,8 @@ class ConsoleState(private val ctx: Pager) {
     private val pausedBuffer = mutableListOf<String>() // 暂停期间累积
     private val pending = mutableListOf<String>()      // 待刷入（节流）
     private var flushRef: String? = null
-    private var reconnectRef: String? = null
+    /** 重连等待的协程句柄（cancel 即作废）；一次性节流的 [flushRef] 仍用 setTimeout。 */
+    private var reconnectJob: Job? = null
     private var backoff = CONSOLE_BACKOFF_INIT
     private var stopped = false
     private var generation = 0
@@ -69,7 +73,7 @@ class ConsoleState(private val ctx: Pager) {
         generation++
         socket?.close()
         socket = null
-        cancel(reconnectRef); reconnectRef = null
+        reconnectJob?.cancel(); reconnectJob = null
         openOnce()
     }
 
@@ -107,11 +111,13 @@ class ConsoleState(private val ctx: Pager) {
 
     private fun scheduleReconnect(gen: Int) {
         if (stopped || gen != generation) return
-        val delay = backoff
+        val wait = backoff
         backoff = (backoff * 2).coerceAtMost(CONSOLE_BACKOFF_MAX)
-        reconnectRef = ctx.setTimeout(delay.toInt()) {
-            reconnectRef = null
-            if (gen == generation && !stopped) openOnce()
+        reconnectJob?.cancel()
+        reconnectJob = ctx.lifecycleScope.launch {
+            delay(wait.toInt())
+            reconnectJob = null
+            if (!stopped) openOnce()
         }
     }
 
@@ -222,7 +228,7 @@ class ConsoleState(private val ctx: Pager) {
     fun disconnect() {
         stopped = true
         generation++
-        cancel(reconnectRef); reconnectRef = null
+        reconnectJob?.cancel(); reconnectJob = null
         cancel(flushRef); flushRef = null
         socket?.close()
         socket = null

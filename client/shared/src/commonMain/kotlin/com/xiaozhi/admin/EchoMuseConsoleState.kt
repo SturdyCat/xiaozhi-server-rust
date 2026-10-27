@@ -2,6 +2,9 @@ package com.xiaozhi.admin
 
 import com.xiaozhi.admin.ui.*
 
+import com.tencent.kuikly.core.coroutines.Job
+import com.tencent.kuikly.core.coroutines.delay
+import com.tencent.kuikly.core.coroutines.launch
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.pager.Pager
 import com.tencent.kuikly.core.reactive.handler.observable
@@ -106,9 +109,10 @@ class EchoMuseConsoleState(private val ctx: Pager) {
     private val carry = AnsiCarry()
     private var socket: PlatformWsSocket? = null
     private var flushRef: String? = null
-    private var heartbeatRef: String? = null
+    /** 心跳循环的协程句柄（cancel 即停）；一次性合并刷新仍用 [flushRef]。 */
+    private var heartbeatJob: Job? = null
 
-    /** 代际计数器：断连/重开后残留的定时器与回调按代际作废（同 [AdminRealtime] 手法）。 */
+    /** 代际计数器：断连/重开后残留的**平台 socket 回调**按代际作废（同 [AdminRealtime] 手法）。 */
     private var generation = 0
     private var deviceId = ""
     private var baseUrl = ""
@@ -438,21 +442,20 @@ class EchoMuseConsoleState(private val ctx: Pager) {
 
     /** 应用层心跳：浏览器 WS 无协议层 ping，服务端每 25 s 收不到东西也不会主动断，只用于探活。 */
     private fun armHeartbeat() {
-        cancel(heartbeatRef)
-        val gen = generation
-        heartbeatRef = ctx.setTimeout(EM_CONSOLE_PING_MS) {
-            heartbeatRef = null
-            if (gen != generation) return@setTimeout
-            send(ConsoleWire.PING_FRAME)
-            armHeartbeat()
+        heartbeatJob?.cancel()
+        heartbeatJob = ctx.lifecycleScope.launch {
+            while (true) {
+                delay(EM_CONSOLE_PING_MS)
+                send(ConsoleWire.PING_FRAME)
+            }
         }
     }
 
     private fun stopTimers() {
         cancel(flushRef)
         flushRef = null
-        cancel(heartbeatRef)
-        heartbeatRef = null
+        heartbeatJob?.cancel()
+        heartbeatJob = null
     }
 
     private fun cancel(ref: String?) {

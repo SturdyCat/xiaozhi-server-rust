@@ -12,6 +12,17 @@
 #   参数取自 xiaoya-player 实测口径（其 webpack 峰值 2.8-3.2GB，不限堆必被杀）。
 #   ⛔ 不要为了「跑得更快」调高上限——调高只会重新触发 OOM 中断。
 #
+# 🚨 2026-10-27 二次复现的结论：**限堆只是必要条件，不是充分条件**。
+#   崩点：web 阶段第 13 步（publishWeb）在 `:shared:compileKotlinJs` fork Kotlin daemon
+#   的瞬间 EOF，之前没有任何 Gradle 异常栈（无 Java heap space / Daemon disappeared）
+#   → 整机 cgroup OOM kill，而非某个堆上限被撑爆。
+#   主因是**并行叠加**：BuildKit 会并行执行没有依赖关系的 stage，`cargo build --release`
+#   （rustc 默认 `-j=CPU 核数`，本依赖树含 ort/tokenizers/sherpa-onnx，单进程 1.5–2.5GB）
+#   与 web 的 Gradle+Kotlin daemon（约 3.5GB）同时驻留，4–8GB 档构建机直接爆。
+#   因此两处硬约束，勿删：
+#     ① build 阶段 `CARGO_BUILD_JOBS=2`——不限制就按 CPU 核数开满 rustc；
+#     ② build 阶段以 `COPY --from=web` 建立依赖 → 两个阶段严格串行，峰值永不同时出现。
+#
 # 三个阶段：
 #   web    —— Gradle 构建 Kuikly H5 管理页（client 工程：shared 业务包 + h5App 壳）
 #   build  —— 编译 Rust server（--features sherpa,nlu，真实 ASR/TTS 引擎 + TinyBERT NLU）
@@ -66,10 +77,12 @@ RUN if ! (test -d shared/src/commonMain/kotlin \
 
 # 🚨 内存三上限（见文件头说明，勿调高）：Gradle JVM 1280m / Kotlin daemon 1024m / webpack Node 1024m；
 #   -PwebSourceMap=false：生产镜像不调试，关掉 .map 生成（xiaoya 实测省 ~400MB 峰值内存）。
+#   --max-workers=2：org.gradle.parallel=false 只管跨 project 并行，项目内 worker API
+#   （KSP、verifyAdminIcons 等）仍按 CPU 核数开线程，多线程同时持有 AST/IR 会再抬一截峰值。
 # 产物断言：web/ 下三件套缺一不可（index.html 入口 / nativevue2.js 业务包 / h5App.js 壳），
 #   缺失即构建失败——假产物不得静默出厂（部署后表现为白屏/404，排查成本远高于此处一行 test）。
 RUN NODE_OPTIONS="--max-old-space-size=1024" \
-    ./gradlew :apps:h5App:publishWeb --no-daemon -PwebSourceMap=false \
+    ./gradlew :apps:h5App:publishWeb --no-daemon --max-workers=2 -PwebSourceMap=false \
       -Dorg.gradle.jvmargs="-Xmx1280m -Dfile.encoding=UTF-8" \
       -Dkotlin.daemon.jvm.options=-Xmx1024m \
  && test -f apps/h5App/web/index.html \
@@ -89,6 +102,18 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
+
+# 🚨 阶段串行屏障（见文件头 2026-10-27 记录，勿删）：BuildKit 默认并行执行没有依赖关系的
+#   stage，cargo 的 rustc 进程群会与 web 阶段的 Gradle / Kotlin daemon / webpack 同时驻留，
+#   4–8GB 档构建机必被 OOM kill（日志以 `rpc error ... EOF` 收尾，无任何编译错误）。
+#   这里读一个 web 阶段产物建立 DAG 依赖：web 先跑完，cargo 才开始；文件落 /tmp，不进运行镜像。
+#   代价：总时长 ≈ web + build（原先并行取 max），换峰值内存永不同时出现。
+COPY --from=web /src/client/apps/h5App/web/index.html /tmp/.web-stage-done
+
+# 🚨 rustc 并行度硬上限（同上，勿删）：cargo 默认 `-j=CPU 核数`，本依赖树含 ort-sys /
+#   tokenizers / sherpa-onnx-sys（自带 C++/protobuf codegen），单 rustc 峰值 1.5–2.5GB，
+#   -j4 就能吃掉 8GB 机器的全部内存。2 = 实测能过 ACR 构建机的档位（慢一点，但不会中断）。
+ENV CARGO_BUILD_JOBS=2
 
 # 目标指令集固定为 x86-64-v2：部署机 N5105（Tremont，无 AVX）可安全运行。
 # 不要用 native —— ACR 构建机的 CPU 与部署机不同，native 会嵌入部署机不支持的

@@ -53,7 +53,7 @@ class EchoMuseSectionState(private val scope: PagerScope) {
     /** 用服务端 `/api/config` 回包填充（缺键保留当前值，不静默改成默认值）。 */
     fun fill(obj: JSONObject) {
         obj.optJSONObject("echomuse")?.let { e ->
-            enabled = e.optBoolean("enabled", enabled.toBooleanStrictOrNull() ?: true).toString()
+            enabled = e.boolText("enabled", enabled, true)
             token = e.optString("token", token)
             tokenConfigured = e.optBoolean("has_token", token.isNotBlank())
             welcome = e.optString("welcome", welcome)

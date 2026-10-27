@@ -123,6 +123,56 @@ class FilesModelTest {
         assertEquals("a\\b.onnx", listing.entries.single().name)
     }
 
+    /**
+     * 服务端加字段、给显式 `null`：都不该毁掉整条或整页。
+     * 前者靠 `ignoreUnknownKeys`，后者靠 `coerceInputValues`（null 落字段默认值）。
+     */
+    @Test fun parseListingToleratesUnknownAndNullFields() {
+        val listing = FilesModel.parseListing(
+            """{"root":null,"path":"p","extra":"x","entries":[
+                 {"name":"a.onnx","size":null,"modified":null,"mime":"application/octet-stream"}
+               ]}""",
+        )
+        assertEquals("", listing.root)
+        assertEquals("p", listing.path)
+        assertEquals(listOf(FilesEntry(name = "a.onnx")), listing.entries)
+    }
+
+    /** 非字符串的 `root`/`path` 视同未给（旧实现 `as? String` 同口径，不渲染成 "0"/"true"）。 */
+    @Test fun parseListingNonStringRootAndPathAreIgnored() {
+        val listing = FilesModel.parseListing("""{"root":0,"path":true}""")
+        assertEquals("", listing.root)
+        assertEquals("", listing.path)
+        assertEquals(emptyList(), listing.entries)
+    }
+
+    /**
+     * 有意收紧（与旧手写解析器的唯一语义差异）：数字字段给成字符串时，该条目被跳过，
+     * 而不是像旧实现那样 `(as? Number)?.toLong() ?: 0` 退化成 "0 B"。
+     * 服务端契约是 u64/i64 整数——类型漂移应当暴露，见 FilesModel 解码配置的说明。
+     */
+    /**
+     * 数字字段的宽容度（与旧手写解析器唯一的语义差异，两个方向都有）：
+     * - `"size":"1024"`（字符串数字）→ 解出 1024，**比旧实现准**（旧实现 `as? Number`
+     *   失败后退化成 0，条目显示 "0 B"）；
+     * - `1.5` / `"abc"` / `true` → 该条目解码失败被跳过，旧实现是退化成 0 并保留。
+     *
+     * 服务端契约（FROZEN）是 u64/i64 整数，真出现类型漂移应当暴露而不是显示成 0 字节；
+     * 见 FilesModel 解码配置的说明。
+     */
+    @Test fun parseListingNumericFieldTolerance() {
+        val listing = FilesModel.parseListing(
+            """{"entries":[
+                 {"name":"strnum.onnx","size":"1024"},
+                 {"name":"float.onnx","size":1.5},
+                 {"name":"alpha.onnx","size":"abc"},
+                 {"name":"bool.onnx","size":true}
+               ]}""",
+        )
+        assertEquals(listOf("strnum.onnx"), listing.entries.map { it.name })
+        assertEquals(1024L, listing.entries.single().size)
+    }
+
     @Test fun errorTextPrefersErrorThenMessage() {
         assertEquals("boom", FilesModel.errorText("""{"error":"boom"}""", "fallback"))
         assertEquals("msg", FilesModel.errorText("""{"message":"msg"}""", "fallback"))

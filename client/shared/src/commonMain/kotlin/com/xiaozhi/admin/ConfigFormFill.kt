@@ -20,40 +20,40 @@ import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 internal fun ConfigFormState.fill(obj: JSONObject) {
     revision = obj.optString("revision", revision)
     obj.optJSONObject("server")?.let { s ->
-        port = s.optInt("port", port.toIntOrNull() ?: 8000).toString()
+        port = s.intText("port", port, 8000)
         expectedToken = s.optString("expected_token", expectedToken)
-        workerThreads = s.optInt("worker_threads", workerThreads.toIntOrNull() ?: 2).toString()
+        workerThreads = s.intText("worker_threads", workerThreads, 2)
         adminDir = s.optString("admin_dir", adminDir)
     }
     obj.optJSONObject("audio")?.let { a ->
-        downlinkSampleRate = a.optInt("downlink_sample_rate", downlinkSampleRate.toIntOrNull() ?: 24000).toString()
-        downlinkFrameMs = a.optInt("downlink_frame_duration_ms", downlinkFrameMs.toIntOrNull() ?: 60).toString()
-        channels = a.optInt("channels", channels.toIntOrNull() ?: 1).toString()
-        binaryProtocolVersion = a.optInt("binary_protocol_version", binaryProtocolVersion.toIntOrNull() ?: 1).toString()
-        downlinkLeadMs = a.optInt("downlink_lead_ms", downlinkLeadMs.toIntOrNull() ?: 1000).toString()
-        downlinkQueuePackets = a.optInt("downlink_queue_packets", downlinkQueuePackets.toIntOrNull() ?: 20).toString()
-        downlinkBufferMs = a.optInt("downlink_buffer_ms", downlinkBufferMs.toIntOrNull() ?: 30000).toString()
-        downlinkBufferStartMs = a.optInt("downlink_buffer_start_ms", downlinkBufferStartMs.toIntOrNull() ?: 1500).toString()
-        downlinkBufferStartMaxMs = a.optInt("downlink_buffer_start_max_ms", downlinkBufferStartMaxMs.toIntOrNull() ?: 4000).toString()
+        downlinkSampleRate = a.intText("downlink_sample_rate", downlinkSampleRate, 24000)
+        downlinkFrameMs = a.intText("downlink_frame_duration_ms", downlinkFrameMs, 60)
+        channels = a.intText("channels", channels, 1)
+        binaryProtocolVersion = a.intText("binary_protocol_version", binaryProtocolVersion, 1)
+        downlinkLeadMs = a.intText("downlink_lead_ms", downlinkLeadMs, 1000)
+        downlinkQueuePackets = a.intText("downlink_queue_packets", downlinkQueuePackets, 20)
+        downlinkBufferMs = a.intText("downlink_buffer_ms", downlinkBufferMs, 30000)
+        downlinkBufferStartMs = a.intText("downlink_buffer_start_ms", downlinkBufferStartMs, 1500)
+        downlinkBufferStartMaxMs = a.intText("downlink_buffer_start_max_ms", downlinkBufferStartMaxMs, 4000)
     }
     obj.optJSONObject("playback")?.let { p ->
         playbackMode = p.optString("mode", playbackMode)
-        announcementStartMs = p.optInt("announcement_start_ms", announcementStartMs.toIntOrNull() ?: 5000).toString()
-        announcementStartMaxMs = p.optInt("announcement_start_max_ms", announcementStartMaxMs.toIntOrNull() ?: 10000).toString()
+        announcementStartMs = p.intText("announcement_start_ms", announcementStartMs, 5000)
+        announcementStartMaxMs = p.intText("announcement_start_max_ms", announcementStartMaxMs, 10000)
     }
     obj.optJSONObject("asr")?.let { a ->
         asrModel = a.optString("model", asrModel)
         asrTokens = a.optString("tokens", asrTokens)
         asrLanguage = a.optString("language", asrLanguage)
-        asrUseItn = a.optBoolean("use_itn", asrUseItn.toBooleanStrictOrNull() ?: true).toString()
-        asrNumThreads = a.optInt("num_threads", asrNumThreads.toIntOrNull() ?: 2).toString()
+        asrUseItn = a.boolText("use_itn", asrUseItn, true)
+        asrNumThreads = a.intText("num_threads", asrNumThreads, 2)
         asrProvider = a.optString("provider", asrProvider)
     }
     obj.optJSONObject("vad")?.let { v ->
         vadModel = v.optString("model", vadModel)
-        vadThreshold = v.optDouble("threshold", vadThreshold.toDoubleOrNull() ?: 0.5).toString()
-        vadMinSilence = v.optDouble("min_silence_duration", vadMinSilence.toDoubleOrNull() ?: 0.25).toString()
-        vadMinSpeech = v.optDouble("min_speech_duration", vadMinSpeech.toDoubleOrNull() ?: 0.25).toString()
+        vadThreshold = v.doubleText("threshold", vadThreshold, 0.5)
+        vadMinSilence = v.doubleText("min_silence_duration", vadMinSilence, 0.25)
+        vadMinSpeech = v.doubleText("min_speech_duration", vadMinSpeech, 0.25)
     }
     obj.optJSONObject("tts")?.let { t ->
         // P4 配置约定：规范键是 `engine`；旧服务端/旧文件可能仍是 `backend`，本地引擎的
@@ -81,9 +81,9 @@ internal fun ConfigFormState.fill(obj: JSONObject) {
         ttsLang = privateStr("lang", ttsLang)
         ttsNumThreads = privateInt("num_threads", ttsNumThreads, 4)
         // 跨实现通用项：位置未变（旧、新写法都在 `[tts]` 本体）
-        ttsSpeaker = t.optInt("speaker", ttsSpeaker.toIntOrNull() ?: 0).toString()
-        ttsSpeed = t.optDouble("speed", ttsSpeed.toDoubleOrNull() ?: 1.0).toString()
-        ttsCacheEntries = t.optInt("cache_entries", ttsCacheEntries.toIntOrNull() ?: 256).toString()
+        ttsSpeaker = t.intText("speaker", ttsSpeaker, 0)
+        ttsSpeed = t.doubleText("speed", ttsSpeed, 1.0)
+        ttsCacheEntries = t.intText("cache_entries", ttsCacheEntries, 256)
         t.optJSONObject("xfyun")?.let { x ->
             xfyunAppId = x.optString("app_id", xfyunAppId)
             // 密钥明文不再下发（服务端打码）：无该键 → 保留用户已输入的草稿；另取 presence 标记
@@ -100,18 +100,18 @@ internal fun ConfigFormState.fill(obj: JSONObject) {
         }
     }
     obj.optJSONObject("llm")?.let { l ->
-        llmEnabled = l.optBoolean("enabled", llmEnabled.toBooleanStrictOrNull() ?: true).toString()
+        llmEnabled = l.boolText("enabled", llmEnabled, true)
         llmApiBase = l.optString("api_base", llmApiBase)
         llmApiKey = l.optString("api_key", llmApiKey)
         llmApiKeyConfigured = l.optBoolean("has_api_key", llmApiKey.isNotBlank())
         llmModel = l.optString("model", llmModel)
         llmSystemPrompt = l.optString("system_prompt", llmSystemPrompt)
-        llmMaxHistory = l.optInt("max_history", llmMaxHistory.toIntOrNull() ?: 10).toString()
-        llmTemperature = l.optDouble("temperature", llmTemperature.toDoubleOrNull() ?: 0.7).toString()
-        llmStream = l.optBoolean("stream", llmStream.toBooleanStrictOrNull() ?: true).toString()
+        llmMaxHistory = l.intText("max_history", llmMaxHistory, 10)
+        llmTemperature = l.doubleText("temperature", llmTemperature, 0.7)
+        llmStream = l.boolText("stream", llmStream, true)
     }
     obj.optJSONObject("aiui")?.let { a ->
-        aiuiEnabled = a.optBoolean("enabled", aiuiEnabled.toBooleanStrictOrNull() ?: false).toString()
+        aiuiEnabled = a.boolText("enabled", aiuiEnabled, false)
         aiuiAppid = a.optString("appid", aiuiAppid)
         aiuiApiKey = a.optString("api_key", aiuiApiKey)
         aiuiApiSecret = a.optString("api_secret", aiuiApiSecret)
@@ -121,11 +121,11 @@ internal fun ConfigFormState.fill(obj: JSONObject) {
         aiuiScene = a.optString("scene", aiuiScene)
         aiuiSnPrefix = a.optString("sn_prefix", aiuiSnPrefix)
         aiuiVoice = a.optString("voice", aiuiVoice)
-        aiuiSpeed = a.optInt("speed", aiuiSpeed.toIntOrNull() ?: 50).toString()
-        aiuiVolume = a.optInt("volume", aiuiVolume.toIntOrNull() ?: 50).toString()
-        aiuiPitch = a.optInt("pitch", aiuiPitch.toIntOrNull() ?: 50).toString()
+        aiuiSpeed = a.intText("speed", aiuiSpeed, 50)
+        aiuiVolume = a.intText("volume", aiuiVolume, 50)
+        aiuiPitch = a.intText("pitch", aiuiPitch, 50)
         aiuiPrompt = a.optString("prompt", aiuiPrompt)
-        aiuiPaceMs = a.optInt("pace_ms", aiuiPaceMs.toIntOrNull() ?: 10).toString()
+        aiuiPaceMs = a.intText("pace_ms", aiuiPaceMs, 10)
     }
     // [soul] / [memory]（上下文生产者）：字段较多，映射集中在 ConfigContextState
     sm.fill(obj)
@@ -141,6 +141,30 @@ internal fun ConfigFormState.fill(obj: JSONObject) {
     // fill 后重 diff Input props，不重建则输入框停留在 build 时的初始值（误读成「保存的值丢了」）
     notifyConfigReloaded()
 }
+
+// ============================================================
+// 字段读取助手（JSON 类型 → 表单文本）
+// ============================================================
+// 为什么需要：表单里每个字段都是 `observable(String)`（Input 只吃文本），而服务端回包是
+// 强类型 JSON。于是每个数字/布尔字段的读取都要写一遍
+// `optInt("k", 字段.toIntOrNull() ?: 默认值).toString()`——全仓 59 处，已全部改走这里。
+// 那套写法的真正问题不是长：默认值在「字段初始值」和「读取兜底」各写一次，
+// 改一处忘另一处，下次轮询就会被静默回滚成旧默认值。
+// 这里只做**一件事的收敛**：把「缺键 → 保留当前值、类型不符 → 兜底默认值」这条既有语义
+// 原样表达一次。⚠️ 语义与调用点手写完全等价（仍走同一个 `optInt/optDouble/optBoolean`），
+// 不引入宽松解析，也不改成"缺失即清空"——部分更新语义见 AGENTS.md「表单与网络契约」。
+
+/** 整数字段：缺键 → 保留 [current]；[current] 非数字 → [fallback]；结果转回表单文本。 */
+internal fun JSONObject.intText(key: String, current: String, fallback: Int): String =
+    optInt(key, current.toIntOrNull() ?: fallback).toString()
+
+/** 浮点字段：同 [intText]，用于 `labeledDecimalField` 绑定的表单文本。 */
+internal fun JSONObject.doubleText(key: String, current: String, fallback: Double): String =
+    optDouble(key, current.toDoubleOrNull() ?: fallback).toString()
+
+/** 布尔字段：表单里存 "true"/"false" 文本（`toString()` 的原样结果）。 */
+internal fun JSONObject.boolText(key: String, current: String, fallback: Boolean): String =
+    optBoolean(key, current.toBooleanStrictOrNull() ?: fallback).toString()
 
 /**
  * 密钥字段写入：**留空 = 不发送**。

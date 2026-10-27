@@ -1,13 +1,26 @@
 package com.xiaozhi.admin
 
 import com.xiaozhi.admin.ui.*
+import kotlinx.datetime.Instant
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.toLocalDateTime
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.jsonObject
 
 /**
  * 「文件管理」页的**纯逻辑**（服务端存储目录浏览 / 上传 / 删除的客户端镜像规则）。
  *
- * 本文件**零外部依赖**（不 import Kuikly/平台 API，同 [EchoMuseWakeWord] 的口径）：
- * 由普通 JVM 测试模块 `:adminCoreTests` 直接引用同一份生产源码回归（路径校验、清单解析、
- * 尺寸/时间格式化都是页面上"看起来对不对"的最后防线，必须可测）。
+ * 本文件不 import Kuikly/平台 API（同 [EchoMuseWakeWord] 的口径），只用 commonMain 的两件
+ * 通用库：kotlinx-datetime 做公历换算、kotlinx-serialization 解回包（此前是一份手写的
+ * 140 行 JSON 解析器，见文件尾的说明）。由普通 JVM 测试模块 `:adminCoreTests` 直接引用
+ * 同一份生产源码回归（路径校验、清单解析、尺寸/时间格式化都是页面上"看起来对不对"的最后
+ * 防线，必须可测）。
  *
  * 服务端契约（FROZEN，server 侧同批实现）：
  * - `GET /api/files?path=<rel>` → `{"root":"/abs","path":"<rel 回显>","entries":[{"name","dir","size","modified","protected"}]}`；
@@ -25,18 +38,25 @@ const val OWW_MODELS_DIR = "oww-models"
 /** 文件夹名称长度上限（与服务端 mkdir 校验一致）。 */
 const val FILES_NAME_MAX_LENGTH = 64
 
-/** 服务端存储目录里的一个条目（字段全部不可变快照；缺省字段安全兜底，不做增量更新）。 */
+/**
+ * 服务端存储目录里的一个条目（字段全部不可变快照；缺省字段安全兜底，不做增量更新）。
+ *
+ * `@Serializable` 只描述**线格式**（服务端契约 FROZEN，见文件头）：`protected` 是 Kotlin
+ * 关键字，用 [SerialName] 映射；全部字段带默认值，字段缺失时取默认值而不是抛异常。
+ */
+@Serializable
 data class FilesEntry(
-    val name: String,
+    /** 空名条目由 [FilesModel.parseListing] 丢弃（服务端不该给，给了就不该渲染成空行）。 */
+    val name: String = "",
     val dir: Boolean = false,
     val size: Long = 0L,
     /** 修改时间（unix 秒；服务端未给为 0 → 展示为空）。 */
     val modified: Long = 0L,
     /** 受保护文件（如 data.db）：展示「保护」徽标且不给删除按钮（服务端也会 403 拒绝）。 */
-    val isProtected: Boolean = false,
+    @SerialName("protected") val isProtected: Boolean = false,
 )
 
-/** `GET /api/files` 的清单快照。 */
+/** `GET /api/files` 的清单快照（字段缺省即空，与条目的兜底口径一致）。 */
 data class FilesListing(
     /** 服务端存储根目录的绝对路径（页面顶部"文件到底存哪了"直接可见）。 */
     val root: String,
@@ -131,35 +151,22 @@ object FilesModel {
     }
 
     /**
-     * unix 秒 → `"yyyy-MM-dd HH:mm"`（commonMain 无日期库， Civil 日历换算见 [civilFromDays]）。
+     * unix 秒 → `"yyyy-MM-dd HH:mm"`（公历换算交给 kotlinx-datetime）。
      *
-     * 与平台 `formatEpochSeconds`（EchoMuse 时间戳的本地格式化）同锚点：`secs <= 0` 视为
+     * 与 [formatEpochSeconds]（EchoMuse 时间戳的本地格式化）同锚点：`secs <= 0` 视为
      * "服务端未给" 返回空串。本地时区由调用方以 [zoneOffsetSeconds]（当前 UTC 偏移，秒）
      * 显式传入——纯函数不读系统时钟，测试传固定偏移即可复现。
+     *
+     * 实现上先把偏移加到时间戳，再按 UTC 折算本地时刻：与「按指定时区折算」完全等价，
+     * 且不像 `UtcOffset(秒)`/`FixedOffsetTimeZone` 那样有 ±18 小时合法性校验（那是给
+     * **真实时区**设的约束，而这里的入参本就是任意偏移量）。
      */
     fun mtimeText(epochSecs: Long, zoneOffsetSeconds: Int = 0): String {
         if (epochSecs <= 0L) return ""
-        val local = epochSecs + zoneOffsetSeconds
-        val days = local.floorDiv(SECONDS_PER_DAY)
-        val secsOfDay = local.mod(SECONDS_PER_DAY)
-        val (year, month, day) = civilFromDays(days)
-        fun p2(v: Long): String = v.toString().padStart(2, '0')
-        return "$year-${p2(month.toLong())}-${p2(day.toLong())} " +
-            "${p2(secsOfDay / 3600L)}:${p2(secsOfDay % 3600L / 60L)}"
-    }
-
-    /** 天数（自 1970-01-01）→ (年, 月, 日)。Howard Hinnant 的 civil_from_days 算法。 */
-    private fun civilFromDays(daysSinceEpoch: Long): Triple<Long, Int, Int> {
-        val z = daysSinceEpoch + 719468L
-        val era = (if (z >= 0) z else z - 146096L) / 146097L
-        val doe = z - era * 146097L
-        val yoe = (doe - doe / 1460L + doe / 36524L - doe / 146096L) / 365L
-        val doy = doe - (365L * yoe + yoe / 4L - yoe / 100L)
-        val mp = (5L * doy + 2L) / 153L
-        val day = doy - (153L * mp + 2L) / 5L + 1L
-        val month = if (mp < 10L) mp + 3L else mp - 9L
-        val year = yoe + era * 400L + (if (month <= 2L) 1L else 0L)
-        return Triple(year, month.toInt(), day.toInt())
+        val dt = Instant.fromEpochSeconds(epochSecs + zoneOffsetSeconds)
+            .toLocalDateTime(TimeZone.UTC)
+        fun p2(v: Int): String = v.toString().padStart(2, '0')
+        return "${dt.year}-${p2(dt.monthNumber)}-${p2(dt.dayOfMonth)} ${p2(dt.hour)}:${p2(dt.minute)}"
     }
 
     // ============================================================
@@ -174,44 +181,38 @@ object FilesModel {
         if (isModelFile(fileName)) fileName.dropLast(".onnx".length) else fileName
 
     // ============================================================
-    // 清单解析（raw JSON → 强类型；见文件尾的极简 JSON 解码说明）
+    // 清单解析（raw JSON → 强类型；见文件尾的解码配置说明）
     // ============================================================
 
     /**
      * 解析 `GET /api/files` 回包原文。任何字段缺失/类型不符都安全兜底
      * （空名条目跳过、畸形 JSON → 空清单），不让单个坏条目毁掉整页。
+     *
+     * 三层兜底对应三种失败面，顺序不能换：
+     * 1. 顶层不是合法 JSON 对象（截断、纯文本、顶层是数组）→ 整页空清单；
+     * 2. `entries` 缺省或不是数组 → 只有 `entries` 为空，`root`/`path` 照常展示；
+     * 3. 单个条目解码失败（如 `"oops"`、`42`）→ 只丢这一条。
+     *
+     * `root`/`path` 只认**字符串**（数字/布尔/null 一律当未给）：旧实现是 `as? String`，
+     * 保持同一口径，避免把 `"root": 0` 渲染成 `"0"`。
      */
-    fun parseListing(raw: String): FilesListing {
-        val obj = runCatching { parseJsonValue(raw) }.getOrNull() as? Map<*, *>
-            ?: return FilesListing("", "", emptyList())
-        val entriesRaw = obj["entries"] as? List<*> ?: emptyList<Any?>()
-        val entries = entriesRaw.mapNotNull { item ->
-            val e = item as? Map<*, *> ?: return@mapNotNull null
-            val name = e["name"] as? String ?: ""
-            if (name.isEmpty()) return@mapNotNull null
-            FilesEntry(
-                name = name,
-                dir = e["dir"] == true,
-                size = (e["size"] as? Number)?.toLong() ?: 0L,
-                modified = (e["modified"] as? Number)?.toLong() ?: 0L,
-                isProtected = e["protected"] == true,
-            )
-        }
-        return FilesListing(
-            root = obj["root"] as? String ?: "",
-            path = obj["path"] as? String ?: "",
-            entries = entries,
-        )
-    }
+    fun parseListing(raw: String): FilesListing = runCatching {
+        val obj = wireJson.parseToJsonElement(raw).jsonObject
+        val entries = (obj["entries"] as? JsonArray)?.mapNotNull { item ->
+            runCatching { wireJson.decodeFromJsonElement<FilesEntry>(item) }.getOrNull()
+                ?.takeIf { it.name.isNotEmpty() }
+        } ?: emptyList()
+        FilesListing(root = obj.stringOrEmpty("root"), path = obj.stringOrEmpty("path"), entries = entries)
+    }.getOrDefault(FilesListing("", "", emptyList()))
 
-    /** 从错误回包原文提取 `error`（或 `message`）文案；解析不出时回退 [fallback]。 */
+    /**
+     * 从错误回包原文提取 `error`（或 `message`）文案；解析不出时回退 [fallback]。
+     * 空串视同未给（服务端常用 `{"error":""}` 表示"没话说"），继续看下一个键。
+     */
     fun errorText(raw: String, fallback: String): String {
-        val obj = runCatching { parseJsonValue(raw) }.getOrNull() as? Map<*, *>
+        val obj = runCatching { wireJson.parseToJsonElement(raw).jsonObject }.getOrNull()
             ?: return fallback
-        val text = (obj["error"] as? String)?.takeIf { it.isNotEmpty() }
-            ?: (obj["message"] as? String)?.takeIf { it.isNotEmpty() }
-            ?: return fallback
-        return text
+        return obj.stringOrEmpty("error").ifEmpty { obj.stringOrEmpty("message") }.ifEmpty { fallback }
     }
 
     /** 条目的次级说明（右对齐 caption）：文件 = "1.5 MB · 2024-10-27 11:33"，目录只给时间。 */
@@ -219,158 +220,37 @@ object FilesModel {
         if (entry.dir) null else sizeText(entry.size),
         mtimeText(entry.modified, zoneOffsetSeconds).ifEmpty { null },
     ).joinToString(" · ")
-
-    private const val SECONDS_PER_DAY = 86400L
 }
 
 // ============================================================
-// 极简 JSON 解码（仅供本文件解析 /api/files 与错误回包）
+// JSON 解码配置（仅供本文件解析 /api/files 与错误回包）
 // ============================================================
 
 /**
- * 为什么在这里手写一份 JSON 解码：本文件按约定零依赖（adminCoreTests 普通 JVM 模块没有
- * Kuikly classpath），而清单解析的"安全兜底"行为必须在生产源码上测试、不能在测试里复刻一份。
- * 只服务本文件的固定回包形状（对象/数组/字符串转义/数字/布尔/null），畸形输入抛
- * [IllegalArgumentException]，由调用方 `runCatching` 兜底。
+ * 这里此前是一份手写的 140 行递归下降解析器，注释写着"本文件按约定零依赖（adminCoreTests
+ * 普通 JVM 模块没有 Kuikly classpath）"。引入 kotlinx-serialization 后这个理由不再成立：
+ * 它是 commonMain 的纯 Kotlin 库，普通 JVM 测试模块能用、五端也不必各写一份，于是换成
+ * "线格式数据类 + Json"（数据类见文件头的 [FilesEntry]）。
+ *
+ * 三个开关各有明确来源，改动前先想清楚会不会吃掉兜底语义：
+ * - `ignoreUnknownKeys`：服务端随时可能给条目加字段（如 `mime`），客户端不该因为不认识的
+ *   键就整页空；
+ * - `coerceInputValues`：`null` 落到字段默认值——服务端对"没有值"有两种写法（省略键、
+ *   显式 `null`），旧实现两种都兜住，这里保持；
+ * - **不开** `isLenient`：宽松模式会接受单引号、裸键名等非 JSON，那会让"回包其实是错误页
+ *   HTML"这类故障被静默吞成空清单。
+ *
+ * ⚠️ 与旧实现有两处**双向**差异（都由 `FilesModelTest.parseListingNumericFieldTolerance` 钉住）：
+ * - `"size":"1024"` 这类字符串数字会被正确解出，旧实现 `as? Number` 失败后退化成 0（显示 "0 B"）；
+ * - `1.5` / `"abc"` / `true` 这类非整数会让**该条目**解码失败被跳过，旧实现退化成 0 并保留。
+ * 服务端契约（FROZEN）是 u64/i64 整数，真出现类型漂移应当暴露而不是显示成 0 字节。
  */
-private fun parseJsonValue(text: String): Any? = JsonReader(text).readValue()
-
-private class JsonReader(private val s: String) {
-    private var i = 0
-
-    fun readValue(): Any? {
-        skipWhitespace()
-        if (i >= s.length) fail("unexpected end of input")
-        return when (s[i]) {
-            '{' -> {
-                i++; readObject()
-            }
-            '[' -> {
-                i++; readArray()
-            }
-            '"' -> readString()
-            't' -> {
-                literal("true"); true
-            }
-            'f' -> {
-                literal("false"); false
-            }
-            'n' -> {
-                literal("null"); null
-            }
-            else -> readNumber()
-        }
-    }
-
-    private fun readObject(): LinkedHashMap<String, Any?> {
-        val obj = LinkedHashMap<String, Any?>()
-        if (peek() == '}') {
-            i++; return obj
-        }
-        while (true) {
-            if (peek() != '"') fail("object key expected")
-            val key = readString()
-            if (peek() != ':') fail("':' expected")
-            i++
-            obj[key] = readValue()
-            when (peek()) {
-                ',' -> i++
-                '}' -> {
-                    i++; return obj
-                }
-                else -> fail("',' or '}' expected")
-            }
-        }
-    }
-
-    private fun readArray(): ArrayList<Any?> {
-        val arr = ArrayList<Any?>()
-        if (peek() == ']') {
-            i++; return arr
-        }
-        while (true) {
-            arr.add(readValue())
-            when (peek()) {
-                ',' -> i++
-                ']' -> {
-                    i++; return arr
-                }
-                else -> fail("',' or ']' expected")
-            }
-        }
-    }
-
-    private fun readString(): String {
-        i++ // 开引号（peek 已确认是 '"'）
-        val sb = StringBuilder()
-        while (true) {
-            if (i >= s.length) fail("unterminated string")
-            when (val c = s[i]) {
-                '"' -> {
-                    i++; return sb.toString()
-                }
-                '\\' -> {
-                    i++; sb.append(readEscape())
-                }
-                else -> {
-                    sb.append(c); i++
-                }
-            }
-        }
-    }
-
-    private fun readEscape(): Char {
-        if (i >= s.length) fail("bad escape")
-        return when (val c = s[i++]) {
-            '"' -> '"'
-            '\\' -> '\\'
-            '/' -> '/'
-            'b' -> '\b'
-            'f' -> '\u000C'
-            'n' -> '\n'
-            'r' -> '\r'
-            't' -> '\t'
-            'u' -> {
-                if (i + 4 > s.length) fail("bad unicode escape")
-                val hex = s.substring(i, i + 4)
-                i += 4
-                hex.toIntOrNull(16)?.toChar() ?: fail("bad unicode escape")
-            }
-            else -> fail("bad escape")
-        }
-    }
-
-    private fun readNumber(): Any {
-        val start = i
-        if (i < s.length && (s[i] == '-' || s[i] == '+')) i++
-        var isDouble = false
-        while (i < s.length && (s[i].isDigit() || s[i] == '.' || s[i] == 'e' || s[i] == 'E')) {
-            if (s[i] == '.' || s[i] == 'e' || s[i] == 'E') isDouble = true
-            i++
-        }
-        val raw = s.substring(start, i)
-        if (raw.isEmpty()) fail("number expected")
-        return if (isDouble) {
-            raw.toDoubleOrNull() ?: fail("bad number '$raw'")
-        } else {
-            raw.toLongOrNull() ?: raw.toDoubleOrNull() ?: fail("bad number '$raw'")
-        }
-    }
-
-    private fun literal(word: String) {
-        if (!s.startsWith(word, i)) fail("'$word' expected")
-        i += word.length
-    }
-
-    private fun peek(): Char {
-        skipWhitespace()
-        if (i >= s.length) fail("unexpected end of input")
-        return s[i]
-    }
-
-    private fun skipWhitespace() {
-        while (i < s.length && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r')) i++
-    }
-
-    private fun fail(what: String): Nothing = throw IllegalArgumentException("JSON parse error at $i: $what")
+private val wireJson = Json {
+    ignoreUnknownKeys = true
+    coerceInputValues = true
 }
+
+/** 只认字符串原值（数字/布尔/null 视同未给，与旧实现 `as? String` 同一口径）。 */
+private fun JsonObject.stringOrEmpty(key: String): String =
+    (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: ""
+

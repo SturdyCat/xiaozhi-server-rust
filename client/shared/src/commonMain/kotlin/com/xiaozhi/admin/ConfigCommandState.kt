@@ -94,7 +94,7 @@ class CommandSectionState(private val scope: PagerScope) {
     /** 用服务端 `/api/config` 回包填充（缺键保留当前值；`keywords` 为空数组时如实显示空）。 */
     fun fill(obj: JSONObject) {
         obj.optJSONObject("command")?.let { c ->
-            enabled = c.optBoolean("enabled", enabled.toBooleanStrictOrNull() ?: true).toString()
+            enabled = c.boolText("enabled", enabled, true)
             // 数组缺键 = 老服务端（保留当前草稿）；空数组 = 用户确实清空了词表（如实显示）
             c.optJSONArray("keywords")?.let { keywords = joinLines(it) }
             matchMode = c.optString("match_mode", matchMode)

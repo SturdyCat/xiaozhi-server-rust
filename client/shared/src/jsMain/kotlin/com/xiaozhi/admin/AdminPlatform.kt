@@ -37,18 +37,6 @@ actual fun ViewContainer<*, *>.macServerSwitchEntry(
 
 actual fun pagerBaseUrl(pager: Pager): String = ""
 
-/** 浏览器本地时区换算（Date 各 getter 即本地值），补零成固定列宽便于扫读。 */
-actual fun formatEpochSeconds(secs: Long): String {
-    if (secs <= 0) return ""
-    val d = kotlin.js.Date(secs.toDouble() * 1000.0)
-    fun p(n: Int): String = n.toString().padStart(2, '0')
-    return "${d.getFullYear().toInt()}-${p(d.getMonth().toInt() + 1)}-${p(d.getDate().toInt())} " +
-        "${p(d.getHours().toInt())}:${p(d.getMinutes().toInt())}:${p(d.getSeconds().toInt())}"
-}
-
-/** 浏览器本地时区偏移（getTimezoneOffset 返回 UTC−当地的分钟数，取负转成秒）。 */
-actual fun localZoneOffsetSeconds(): Int = -kotlin.js.Date().getTimezoneOffset().toInt() * 60
-
 /**
  * 优先 async Clipboard API（https/localhost）；管理台常以 `http://LAN-IP` 访问，
  * 非 secure context 下 API 不存在，回落隐藏 textarea + `execCommand('copy')`。

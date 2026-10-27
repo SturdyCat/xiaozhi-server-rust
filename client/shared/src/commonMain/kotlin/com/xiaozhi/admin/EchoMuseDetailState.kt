@@ -2,11 +2,12 @@ package com.xiaozhi.admin
 
 import com.xiaozhi.admin.ui.*
 
+import com.tencent.kuikly.core.coroutines.Job
+import com.tencent.kuikly.core.coroutines.delay
+import com.tencent.kuikly.core.coroutines.launch
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.pager.Pager
 import com.tencent.kuikly.core.reactive.handler.observable
-import com.tencent.kuikly.core.timer.clearTimeout
-import com.tencent.kuikly.core.timer.setTimeout
 
 /**
  * 设备详情卡的**分区状态**：进了哪个 tab、进 tab 时的懒加载、`runtime` 结构化快照、
@@ -109,7 +110,8 @@ class EchoMuseDetailState(private val scope: Pager) {
     private var base = ""
     private var token = ""
     private var generation = 0
-    private var owwPollRef: String? = null
+    /** 更新 tab 的资产状态轮询句柄（离开 tab / 页面销毁即 cancel）。 */
+    private var owwPollJob: Job? = null
 
     /** 能否执行系统类一次性操作（已批准 + emOS + 在线 + 无并发操作）。 */
     val canSystem: Boolean get() = approved && emos && online
@@ -492,19 +494,18 @@ class EchoMuseDetailState(private val scope: Pager) {
     /** 30 s 轮询资产状态（更新 tab 在屏时才有意义，离开即停）。 */
     private fun armOwwPolling(ctx: Pager) {
         stopOwwPolling()
-        val gen = generation
-        owwPollRef = ctx.setTimeout(EM_OWW_POLL_MS) {
-            owwPollRef = null
-            if (gen != generation || tab != EM_TAB_UPDATES) return@setTimeout
-            readOwwState(ctx)
-            armOwwPolling(ctx)
+        owwPollJob = ctx.lifecycleScope.launch {
+            while (tab == EM_TAB_UPDATES) {
+                delay(EM_OWW_POLL_MS.toInt())
+                if (tab != EM_TAB_UPDATES) return@launch
+                readOwwState(ctx)
+            }
         }
     }
 
     private fun stopOwwPolling() {
-        val ref = owwPollRef ?: return
-        scope.clearTimeout(ref)
-        owwPollRef = null
+        owwPollJob?.cancel()
+        owwPollJob = null
     }
 
     private fun fieldText(data: JSONObject?, key: String): String =

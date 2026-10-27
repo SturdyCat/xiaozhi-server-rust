@@ -22,13 +22,6 @@ import com.tencent.kuikly.core.views.Text
 import com.tencent.kuikly.core.views.View
 import platform.AppKit.NSPasteboard
 import platform.AppKit.NSPasteboardTypeString
-import platform.Foundation.NSDate
-import platform.Foundation.NSDateFormatter
-import platform.Foundation.NSLocale
-import platform.Foundation.NSTimeZone
-import platform.Foundation.dateWithTimeIntervalSince1970
-import platform.Foundation.localeWithLocaleIdentifier
-import platform.Foundation.localTimeZone
 
 /** macOS 客户端：测试台、XiaoZhiModule 原生桥与「服务器设置」仅此平台启用。 */
 actual val IS_MACOS: Boolean = true
@@ -474,20 +467,6 @@ private fun normalizeBase(raw: String): String? {
 
 private fun prefs(pager: Pager) =
     pager.acquireModule<SharedPreferencesModule>(SharedPreferencesModule.MODULE_NAME)
-
-/** 本地时区（NSDateFormatter 默认系统时区）；en_US_POSIX 锁死数字格式防区域变体。 */
-actual fun formatEpochSeconds(secs: Long): String {
-    if (secs <= 0) return ""
-    val fmt = NSDateFormatter().apply {
-        dateFormat = "yyyy-MM-dd HH:mm:ss"
-        locale = NSLocale.localeWithLocaleIdentifier("en_US_POSIX")
-    }
-    return fmt.stringFromDate(NSDate.dateWithTimeIntervalSince1970(secs.toDouble()))
-}
-
-/** 本地时区当前 UTC 偏移（秒）。 */
-actual fun localZoneOffsetSeconds(): Int =
-    NSTimeZone.localTimeZone.secondsFromGMTForDate(NSDate()).toInt()
 
 actual fun copyToClipboard(text: String): Boolean = try {
     val pb = NSPasteboard.generalPasteboard
