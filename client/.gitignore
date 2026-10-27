@@ -31,7 +31,11 @@ iosApp.xcworkspace/
 
 # KMP / Kuikly 产物
 **/outputs/
-**/kuikly/
+# ⛔ 不要写 `**/kuikly/`：该模式会连源码路径 com/tencent/kuikly/** 一起忽略。
+#    sharedCompose 的 material3 补丁（ListItem/RadioButton/SegmentedButton）曾因此
+#    从未入库——本机能编（文件在本地），ACR 从 git 拉代码必报
+#    「Unresolved reference ListItemColors / RadioButton / SegmentedButton」。
+#    Kuikly 的产物目录都落在 */build/ 与 */outputs/ 下，已被上面两条覆盖，无需额外规则。
 
 # h5App web 产物：index.html 入库（必须保留）；nativevue2.js / h5App.js / *.map
 # 是 :apps:h5App:publishWeb 构建输出，不入库（Docker web 阶段自行构建）。
