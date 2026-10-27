@@ -78,11 +78,75 @@ internal fun ViewContainer<*, *>.echoMuseStatusTab(
     ctx: Pager,
 ) {
     val detail = state.detail
-    echoMuseDeviceFacts(row, state, toast, ctx)
-    echoMuseResources(state)
+    // 官方 Status 的分区顺序：设备身份（Dot 2 光环）→ 左右双列（Device / Resources）
+    // → 音量 → 蓝牙 → 诊断。这里照抄分区，不照抄像素：卡片/行/条都由本项目的组件库出。
+    echoMuseDeviceHead(row)
+    splitRow(divider = false, spacing = AdminSpace.lg) {
+        auto { echoMuseDeviceFacts(row, state, toast, ctx) }
+        auto { echoMuseResources(state) }
+    }
     echoMuseVolume(detail, ctx)
     echoMuseBluetoothSummary(state)
     echoMuseDiagnostics(detail, ctx)
+}
+
+/**
+ * 设备头卡（官方设备卡的 `LedRing` + 型号 + 状态）：一眼看出「这是哪台、现在什么状态」。
+ *
+ * 光环颜色是**状态**而不是装饰，口径照官方 `LedRing`：
+ * 在线（默认/空闲）= 品牌绿，离线 = 琥珀（官方 `#d4703a`）。监听/说话/思考/静音四态
+ * 需要设备实时状态字段，本服务端 `stats` 白名单里还没有对应值，先不假装有颜色——
+ * 宁可两态，也不给一个和真实状态无关的灯。
+ */
+private fun ViewContainer<*, *>.echoMuseDeviceHead(row: EchoMuseDeviceRow) {
+    View {
+        attr {
+            flexDirectionRow()
+            alignItemsCenter()
+            padding(AdminSpace.sm)
+            borderRadius(AdminShape.radiusSm)
+            backgroundColor(AdminColors.insetBg)
+            marginBottom(AdminSpace.md)
+        }
+        ledRing(
+            size = 76f,
+            segColor = if (row.online) AdminColors.accent else AdminColors.warning,
+            dotColor = if (row.online) AdminColors.textAccent else AdminColors.warningTintText,
+        )
+        View {
+            attr {
+                flex(1f)
+                marginLeft(AdminSpace.md)
+                flexDirectionColumn()
+            }
+            Text {
+                attr {
+                    fontSize(AdminType.section)
+                    color(AdminColors.textPrimary)
+                    text(row.title)
+                }
+            }
+            Text {
+                attr {
+                    marginTop(2f)
+                    fontSize(AdminType.micro)
+                    color(AdminColors.textSecondary)
+                    text(row.subtitle.ifEmpty { EM_DASH })
+                }
+            }
+            Text {
+                attr {
+                    marginTop(2f)
+                    fontSize(AdminType.micro)
+                    color(if (row.online) AdminColors.textAccent else AdminColors.warning)
+                    text(
+                        (if (row.online) "在线" else "离线") +
+                            (if (row.metaText.isNotEmpty()) " · ${row.metaText}" else ""),
+                    )
+                }
+            }
+        }
+    }
 }
 
 // ============================================================

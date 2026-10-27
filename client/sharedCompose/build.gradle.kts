@@ -15,9 +15,15 @@ plugins {
 //   2. kuiklyx-viewmodel：com.tencent.kuiklyx.viewmodel.*（Pager 级 ViewModel 生命周期）
 //      - 上游同样只有 android / ios 目标，缺 js 与 macosArm64；源码为纯 commonMain（171 行，
 //        只依赖 Kuikly core 的 Pager/PagerScope/IPagerEventObserver），补齐目标即可用。
-//   3. com.tencent.kuikly.compose.material3 缺失组件的补丁（ListItem / SegmentedButton /
-//      SegmentedListItem / ToggleButton / RadioButton）——上游 Kuikly Compose 2.29.2 的
-//      material3 制品实测**不含**这些符号，属于真实缺位，不是重复定义。
+//   3. com.tencent.kuikly.compose.material3 缺失组件的补丁（src/commonMain/kotlin/com/tencent/
+//      kuikly/compose/material3/：ListItem 系列 / RadioButton 系列 / SegmentedButton 系列）
+//      ——上游 Kuikly Compose 2.29.2 的 material3 制品实测**不含**这些符号（只有
+//      ListItemContainerColor 之类的 token 常量），属于真实缺位，不是重复定义。
+//      ⚠️ 没有这批补丁时**整个模块编译不过**（Compose-Settings 的全部磁贴都建在 ListItem 上），
+//      2026-10 补齐前仓库处于该状态。升级 Kuikly 时先验证上游是否补上，补上就删本仓库补丁。
+//      ⚠️ upstream 的 `expressive/` 变体依赖整套 Material 3 Expressive API
+//      （SegmentedListItem / ListItemShapes / ExperimentalMaterial3ExpressiveApi），
+//      2.29.2 全无，故已从本模块移除；需要那套观感时再实现 SegmentedListItem。
 //
 // ⚠️ 本模块只做「承载与编译适配」，不做视觉改造：组件样式由上游默认值决定。
 // 项目自己的设计 token（AdminColors/AdminType）在 shared 侧的 Compose 页面里通过参数注入。

@@ -22,8 +22,13 @@ const val EM_CONSOLE_BUSY = "busy"
 const val EM_CONSOLE_CLOSED = "closed"
 const val EM_CONSOLE_UNSUPPORTED = "unsupported"
 
-/** `ready.mode` 一期唯一值（§8.1：留着字段而非布尔，为将来 pty 模式前向兼容）。 */
+/**
+ * `ready.mode` 取值。留着字段而非布尔是为了让"设备实际给了什么"能被前端看见：
+ * 老固件忽略 `pty` 字段仍是管道（[EM_CONSOLE_MODE_PIPE]，无提示符、无回显），
+ * 新固件给 pty（[EM_CONSOLE_MODE_PTY]，mksh 提示符与行编辑都在设备侧）。
+ */
 const val EM_CONSOLE_MODE_PIPE = "pipe"
+const val EM_CONSOLE_MODE_PTY = "pty"
 
 /** 单行输入上限（字节，§8.2 `LINE_MAX`）：超了**不发**，只在输入框下提示。 */
 const val EM_CONSOLE_LINE_MAX = 4096
@@ -143,7 +148,7 @@ class EchoMuseConsoleState(private val ctx: Pager) {
             EM_CONSOLE_OFFLINE -> "（没有历史输出：设备离线时不会建连）"
             EM_CONSOLE_BUSY -> "（没有历史输出：设备被占用，会话未建立）"
             EM_CONSOLE_CONNECTING -> "（正在与设备建立会话…）"
-            else -> "（等待设备输出：行模式不回显、无提示符，命令跑起来这里才有字）"
+            else -> "（等待设备输出：提示符由设备自己打印，回车执行第一条命令后这里就有内容）"
         }
 
     /** 确认首次进入的危险说明（同一设备同一会话内不再出现）。 */
@@ -357,7 +362,7 @@ class EchoMuseConsoleState(private val ctx: Pager) {
     private fun onReady(data: JSONObject) {
         phase = EM_CONSOLE_READY
         insecure = data.optBoolean("insecure", false)
-        mode = data.optString("mode", EM_CONSOLE_MODE_PIPE)
+        mode = data.optString("mode", EM_CONSOLE_MODE_PTY)
         notice = data.text("notice")
         hint = ""
         closing = ""

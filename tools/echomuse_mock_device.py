@@ -290,11 +290,20 @@ class FakeShell:
 
 
 class ShellSession:
-    """一条活着的 `/shell/{id}` 回拨：读 stdin 字节 → 假 shell → 写 Binary 输出。"""
+    """一条活着的 `/shell/{id}` 回拨：读 stdin 字节 → 假 shell → 写 Binary 输出。
 
-    def __init__(self, ws: "WsClient") -> None:
+    `pty=True`（控制台）与真机同形：回拨后**先发一帧 `shell_meta{pty:true}`**，随后由
+    "设备"自己打印提示符、回显用户输入——真实 pty 上的 mksh 就是这样（termios ECHO 打开）。
+    `pty=False`（一次性操作：系统信息/文件传输）不发 meta、不回显、无提示符，只有命令输出。
+
+    这是浏览器控制台**能看到终端效果**的前提：前端不再自己伪造提示符，画面里的
+    `emos:/ # ` 与命令回显全部来自这里（或真机）。
+    """
+
+    def __init__(self, ws: "WsClient", pty: bool = True) -> None:
         self.ws = ws
         self.shell = FakeShell()
+        self.pty = pty
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name="mock-shell", daemon=True)
 
@@ -307,6 +316,11 @@ class ShellSession:
 
     def _run(self) -> None:
         try:
+            if self.pty:
+                # 官方 handle_shell：声明模式的这一帧在**任何终端字节之前**，且是文本帧。
+                # 服务端把它原样转给浏览器（不会写进终端画面）。
+                self.ws.send_text(json.dumps({"type": "shell_meta", "pty": True}))
+                self.ws.send_binary(b"emos:/ # ")
             while not self._stop.is_set():
                 opcode, payload = self.ws.recv_message()
                 if opcode == 0x8:  # 服务端关连接 = 会话结束
@@ -315,6 +329,12 @@ class ShellSession:
                     # 真实设备上行只有 Binary（stdin 原始字节）；其它帧忽略而不是断链
                     continue
                 text, keep = self.shell.feed(payload)
+                if self.pty:
+                    # pty 的 ECHO：命令本身先被回显一遍，然后是它的输出，最后是新提示符。
+                    # 换行统一成 CRLF——终端画面里 `\n` 只下移不回车，会变成阶梯状。
+                    echoed = payload.decode("utf-8", errors="replace")
+                    text = echoed + (text or "") + "emos:/ # "
+                    text = text.replace("\r\n", "\n").replace("\n", "\r\n")
                 if text:
                     self.ws.send_binary(text.encode())
                 if not keep:
@@ -345,14 +365,16 @@ class ShellBridge:
         """处理 shell 相关控制帧；返回 True 表示已消化（调用方别当业务消息继续处理）。"""
         kind = msg.get("type")
         if kind == "shell_open":
-            self.open()
+            # 控制台带 `pty:true`（终端，要提示符与回显）；一次性操作不带（干净管道）。
+            # 与真机一致：字段缺省即 pipe，老固件同样忽略它。
+            self.open(pty=bool(msg.get("pty")))
             return True
         if kind == "shell_close":
             self.close()
             return True
         return False
 
-    def open(self) -> None:
+    def open(self, pty: bool = False) -> None:
         if not self.enabled:
             print("[shell] 收到 shell_open，但本次运行已关闭 shell 支持（--no-shell）")
             return
@@ -370,9 +392,14 @@ class ShellBridge:
             return
         # 长驻会话可能几分钟没有输入：不能留 10s 读超时，否则空闲就自己断
         ws.sock.settimeout(None)
-        self._session = ShellSession(ws)
+        self._session = ShellSession(ws, pty=pty)
         self._session.start()
-        print("[shell] shell_open → 已回拨 /shell/{}（内置假 shell，不执行真实命令）".format(self.device_id))
+        mode = "pty 终端" if pty else "pipe 管道"
+        print(
+            "[shell] shell_open → 已回拨 /shell/{}（{}，内置假 shell，不执行真实命令）".format(
+                self.device_id, mode
+            )
+        )
 
     def close(self) -> None:
         session, self._session = self._session, None

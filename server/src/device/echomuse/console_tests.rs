@@ -511,10 +511,10 @@ async fn loopback_ready_output_and_client_close_teardown() {
     let client_id = id.to_string();
     let client = tokio::task::spawn_blocking(move || {
         let (mut ws, _) = tungstenite::connect(console_url.as_str()).unwrap();
-        // 1) 第一帧必须是 ready，且 mode=pipe（pipe 模式：无回显、无提示符）。
+        // 1) 第一帧必须是 ready，且 mode=pty（终端模式：提示符与回显由设备打）。
         let ready = next_json(&mut ws);
         assert_eq!(ready["type"], "ready");
-        assert_eq!(ready["mode"], "pipe");
+        assert_eq!(ready["mode"], "pty");
         assert_eq!(ready["device_id"], client_id.as_str());
         assert_eq!(ready["insecure"], false);
         assert!(ready["notice"].as_str().is_some_and(|n| !n.is_empty()));
@@ -535,10 +535,14 @@ async fn loopback_ready_output_and_client_close_teardown() {
         let _ = ws.read();
     });
 
-    // 服务端占槽后立刻下发 shell_open（不带 pty）。
+    // 服务端占槽后立刻下发 shell_open，**带 pty**：控制台是终端，不是日志框。
+    // 这条断言原来是反的（"不得请求 pty"），也正是网页上一直没有提示符/回显的来源。
     match tokio::time::timeout(Duration::from_secs(5), rx.recv()).await {
         Ok(Some(ControlOut::Json(text))) => {
-            assert_eq!(text, r#"{"type":"shell_open"}"#, "不得请求 pty")
+            assert_eq!(
+                text, r#"{"type":"shell_open","pty":true}"#,
+                "控制台必须请求 pty（一次性操作才走 pipe）"
+            )
         }
         other => panic!("未收到 shell_open：{other:?}"),
     }

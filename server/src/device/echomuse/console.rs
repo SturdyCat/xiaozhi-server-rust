@@ -8,13 +8,17 @@
 //!   槽被占则首帧 `error{code:"busy"}` 再关——浏览器 `WebSocket` API 在握手被拒时拿不到
 //!   HTTP 状态码（`onerror` 无信息、`onclose` 恒 1006），而 `busy` 是唯一必须让用户看到
 //!   具体 code 的失败（设计 §5.6）。
-//! - 链路：`shell_open`（**不带 `pty`**，即 pipe 模式）→ 设备回拨 `/shell/{id}` →
-//!   `shell::claim` 认领 → 双向泵（浏览器 JSON 文本帧 ↔ 设备原始 Binary）。
+//! - 链路：`shell_open{pty:true}`（**真终端**，官方 `em_routes_shell.py` 同形）→ 设备
+//!   回拨 `/shell/{id}` → `shell::claim` 认领 → 双向泵（浏览器 JSON 文本帧 ↔ 设备原始
+//!   Binary）。设备若在回拨后先发 `shell_meta{pty}`，原样转给浏览器（控制帧不进画面）。
 //! - 与一次性操作（`/system/*`、`/oww/install-vad`、文件传输）**共用同一把 per-device 槽**：
 //!   本模块不复制槽逻辑，直接把 [`Operation`] 当长驻租约持有到会话结束，收尾走同一段
 //!   `Drop`（先 enqueue `shell_close` 到**捕获的** control 通道，再按 owner 删槽）。
-//! - 没有"完成哨兵"：pipe 模式 `sh` 不回显、无提示符，服务端无法从输出流判断"这条命令
-//!   说完了"，所以输出就是流，结束只由定时器/断链/用户关闭触发（设计 §5.2 末段）。
+//! - 一次性操作仍走 pipe（`shell::SHELL_OPEN`，不带 `pty`）：那边要干净管道做 md5 校验，
+//!   pty 的回显会污染输出；控制台要的正好相反，没有提示符就不是终端。
+//! - pty 模式下 `sh` 自己回显、自己打提示符，所以**前端不再伪造提示符**、服务端也不做
+//!   行编辑；老固件忽略 `pty` 字段仍开 pipe（无提示符无回显），此时前端只标「已连接」，
+//!   功能（写 stdin、读输出）不受影响。
 
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -34,8 +38,17 @@ use super::shell::{self, Operation, ShellError};
 use super::{hub_live, ControlOut};
 use crate::runtime::Engines;
 
-/// 发 `shell_open` 的唯一出处：**不带 `pty` 字段**即 pipe 模式（`device_control.go:1086`）。
-const SHELL_OPEN: &str = r#"{"type":"shell_open"}"#;
+/// 发 `shell_open` 的唯一出处：**带 `pty:true`**，即官方 dashboard 的 Shell 终端模式
+/// （`em_routes_shell.py` 的 `{"type": "shell_open", "pty": True}`）。
+///
+/// 与 `shell::` 里一次性操作用的 `{"type":"shell_open"}` **刻意分成两个常量**：
+/// 系统信息/日志/文件传输要的是干净管道（pty 会把设备 stty 的回显混进输出，md5 校验
+/// 与哨兵匹配都会失真）；控制台要的正好相反——没有提示符、没有回显、没有行编辑，
+/// 就不是终端，用户看到的是"一个能打字的日志框"。
+///
+/// 老固件忽略该字段仍开 pipe，此时设备不会给提示符；前端按 `ready.mode` 决定提示符
+/// 与回显口径，功能（写 stdin、读输出）不受影响。
+const SHELL_OPEN: &str = r#"{"type":"shell_open","pty":true}"#;
 
 const DETAIL_CLIENT_CLOSED: &str = "浏览器关闭连接";
 const DETAIL_DEVICE_OFFLINE: &str = "设备控制通道已断开";
@@ -178,7 +191,7 @@ impl ConsoleSession {
     async fn send_ready(&self, browser: &mut WebSocket) {
         let frame = ConsoleFrame::Ready {
             device_id: self.device_id.clone(),
-            mode: frames::MODE_PIPE,
+            mode: frames::MODE_PTY,
             insecure: self.insecure,
             notice: frames::COPY_READY_NOTICE.to_string(),
         };
@@ -509,8 +522,14 @@ async fn pump(
                         session.on_device_bytes(&bytes, browser).await;
                     }
                     // 设备侧正常只发 Binary；Text 也照收（宽容，不丢输出）。
+                    // 例外是 `shell_meta`：它是控制帧（设备声明自己有没有 pty），
+                    // 必须原样转给浏览器——写进终端画面会在提示符前多出一行 JSON。
                     Some(Ok(Message::Text(text))) => {
-                        session.on_device_bytes(text.as_bytes(), browser).await;
+                        if frames::is_shell_meta(&text) {
+                            let _ = browser.send(Message::Text(text)).await;
+                        } else {
+                            session.on_device_bytes(text.as_bytes(), browser).await;
+                        }
                     }
                 }
             }

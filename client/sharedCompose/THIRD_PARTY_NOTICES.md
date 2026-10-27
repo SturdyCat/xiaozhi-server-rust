@@ -12,7 +12,10 @@
   - `com.alorma.compose.settings.ui.*`（ui-tiles：SettingsSwitch / SettingsCheckbox /
     SettingsRadioButton / SettingsTriStateCheckbox / SettingsMenuLink / SettingsGroup）
   - `com.alorma.compose.settings.ui.*`（ui-tiles-extended：SettingsSlider / SettingsSegmented）
-  - `com.alorma.compose.settings.ui.expressive.*`（ui-tiles-expressive）
+  - `com.alorma.compose.settings.ui.expressive.*`（ui-tiles-expressive）——**已移除**：
+    该变体依赖整套 Material 3 Expressive API（`SegmentedListItem` / `ListItemShapes` /
+    `ExperimentalMaterial3ExpressiveApi`），Kuikly Compose 2.29.2 全部没有。需要那套观感时
+    先补 `SegmentedListItem`，再从上游 `main-kuikly` 重新拉回该目录。
   - `com.alorma.compose.settings.ui.core.*`（CompositionLocals / 默认值）
   - `com.tencent.kuikly.compose.material3.*`（List / Segmented / Toggle / RadioButton 补充实现）
 - 许可：MIT（见上游 LICENSE）

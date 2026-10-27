@@ -25,6 +25,13 @@ pub(crate) const VOLUME_UP_CLICK_TYPE: i64 = 115;
 pub(crate) const VOLUME_DOWN_CLICK_TYPE: i64 = 114;
 /// 禁麦（设备本地 ADC 静音，上报 `mute_state`）。实测 = 113。
 pub(crate) const MUTE_CLICK_TYPE: i64 = 113;
+/// 长按阈值：**逐字对齐官方** `em_esphome.BUTTON_HOLD_MS = 750`（ms）。
+///
+/// 官方在**松开**时用设备上报的 `heldMs` 分类（`em_button.decide`）：
+/// `heldMs >= 750` 是 HOLD，转发成 Home Assistant 的 long 事件，**不开语音轮**。
+/// 用设备侧测得的时长而不是控制器侧 down/up 的时间差——官方注释说明该机队
+/// RTT 峰值曾超过 1600ms，按到达时间算会把轻点误判成长按。
+pub(crate) const BUTTON_HOLD_MS: i64 = 750;
 
 /// 一条 `button` 事件是否代表 action 键（唯一应开语音轮的键）。
 ///

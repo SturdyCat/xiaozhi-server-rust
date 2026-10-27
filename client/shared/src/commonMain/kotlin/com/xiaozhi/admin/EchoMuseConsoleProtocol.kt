@@ -75,7 +75,7 @@ internal object ConsoleWire {
  */
 internal object ConsoleCopy {
     const val CONNECTING = "正在与设备建立会话…"
-    const val CONNECTED = "已连接 · 行模式"
+    const val CONNECTED = "已连接 · 终端"
     const val OFFLINE = "设备离线——控制台不可用"
     const val BUSY = "设备已被另一个操作占用（系统信息/日志/资产下发），请稍后重试"
     const val IDLE_TIMEOUT = "会话因 10 分钟无输入已断开（输出已保留）"
@@ -113,36 +113,8 @@ internal object ConsoleCopy {
     /** 会话输出封顶（服务端也会发同文案的 `notice`）。 */
     const val CAPPED = "会话输出已达 16 MiB 上限，后续输出不再显示（命令仍可执行）"
 
-    /** 常驻合规提示（PRD §5.6，与 `ready.notice` 并存）。 */
-    const val IN_USE_HINT = "审计会记录你输入的每一行命令"
-
     const val INPUT_TOO_LONG = "单行命令过长（上限 4096 字节），未发送"
     const val RATE_LIMITED = "输入过快，已丢弃（每次最多 10 条/秒）"
-
-    /**
-     * 常驻危险横幅（PRD §5.6 定稿，**逐字**，含换行）。
-     *
-     * 两行是一体的：第一行说明"你是谁、会影响什么"，第二行说明"哪些东西干不了、
-     * 输出有上限"。不允许各页各写一半——半句提示会让人以为禁用程序只是"建议"。
-     */
-    const val ROOT_BANNER =
-        "此终端以 root 身份在设备上执行命令。命令会影响正在运行的语音服务；重启类命令会立即中断本会话。\n" +
-            "不支持全屏交互程序（vim / top / less）。输出上限 2000 行，超出丢弃最早内容。"
-
-    /** 首次进入某设备控制台的一次性 inline 说明（PRD §5.6 定稿，**逐字**，非模态）。 */
-    const val FIRST_ENTER = "控制台直接读写设备 root 文件系统。误操作可能让设备无法启动，恢复需要重新刷机。"
-
-    /** 「关于行模式」折叠说明·能做什么（PRD §5.2 能力对照表的用户可读版）。 */
-    const val ABOUT_CAN = "同一 sh 会话：cd、环境变量、shell 变量在后续命令里保持；" +
-        "长输出（dmesg、logcat）可滚动查看，上限 2000 行 / 20 万字符"
-
-    /** 「关于行模式」折叠说明·不能做什么。 */
-    const val ABOUT_CANNOT = "vim / top / less 等全屏交互程序；无回显、无提示符、无窗口尺寸；" +
-        "read / passwd 这类逐字符交互（输入框只在整行提交时才把字节写给设备）"
-
-    /** 行模式与 pty 的差异补充说明（为什么"卡在等输入"只能靠超时收尾）。 */
-    const val ABOUT_NOTE = "疑似等待输入（长时间无输出且无提示符）时会话会靠 10 分钟空闲超时收尾；" +
-        "重连是一条新会话，不恢复上一个 shell 的进程状态"
 }
 
 // ============================================================

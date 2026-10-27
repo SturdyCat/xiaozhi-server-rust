@@ -34,8 +34,13 @@ pub(super) const INPUT_PER_SEC: u32 = 10;
 /// 浏览器入站帧上限：`LINE_MAX` 的 4 倍足够容纳 JSON 包装；更大的帧不是"一行命令"，
 /// 按协议违规直接断开（正常输入框发不出来），比无限缓冲安全。
 pub(super) const INBOUND_MAX: usize = LINE_MAX * 4;
-/// `ready.mode` 一期唯一值。留着字段而不是布尔是为了 pty 模式的前向兼容。
+/// `ready.mode` 取值之一：老固件忽略 `pty` 字段时设备仍是管道，无提示符、无回显。
+/// 保留这个值而不是删掉，是为了让前端能按设备**实际**给出的模式调整提示符与回显口径。
+#[allow(dead_code)]
 pub(super) const MODE_PIPE: &str = "pipe";
+/// `ready.mode` 取值之一：真终端（mksh 挂在 pty 上，有提示符、回显、行编辑）。
+/// 控制台默认按这个模式开会话，与官方 dashboard 的 `shell_open{pty:true}` 一致。
+pub(super) const MODE_PTY: &str = "pty";
 
 // ---- 文案（服务端唯一出处，与 §8.3 前端 `ConsoleCopy` 逐字对齐） ----
 
@@ -46,7 +51,7 @@ pub(super) const COPY_DEVICE_OFFLINE: &str = "设备离线——控制台不可�
 pub(super) const COPY_INTERNAL: &str = "控制台内部错误：";
 pub(super) const COPY_CAPPED: &str = "会话输出已达 16 MiB 上限，后续输出不再显示（命令仍可执行）";
 pub(super) const COPY_READY_NOTICE: &str =
-    "行模式：同一 sh 会话，cd/环境变量保持；本终端不回显、无提示符。审计会记录你输入的每一行命令";
+    "终端：设备 root shell（pty），cd/环境变量在同一会话里保持。审计会记录你输入的每一行命令";
 
 // ---- 帧定义 ----
 
@@ -187,8 +192,28 @@ pub(super) fn parse_incoming(text: &str) -> Incoming {
     }
 }
 
-// ---- 限流 / 长度 / 输出封顶（纯判定） ----
+/// 设备回拨后可能先发一帧 `shell_meta{pty}`（官方 `handle_shell` 在转发任何终端字节
+/// **之前**发出，dashboard 正是靠它决定走 pty 还是 legacy 行模式）。
+///
+/// 这一帧不是终端输出：写进画面会在提示符前多出一行 JSON；丢掉又会让前端失去
+/// "设备到底支持不支持 pty"的唯一信号。所以单独识别、原样转给浏览器，由前端决定
+/// 提示符风格与回显口径。
+///
+/// 用 JSON 解析而不是 `contains`：任何命令输出都可能包含 `shell_meta` 这几个字符
+/// （`grep meta /proc/...`），误判会把真实输出当控制帧吞掉。
+pub(super) fn is_shell_meta(text: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("type")
+                .and_then(|t| t.as_str())
+                .map(|t| t == "shell_meta")
+        })
+        .unwrap_or(false)
+}
 
+// ---- 限流 / 长度 / 输出封顶（纯判定） ----
 /// 单行长度判定：>4096 **字节**（不是字符）即拒。
 pub(super) fn check_line(data: &str) -> Result<(), ErrorCode> {
     if data.len() > LINE_MAX {

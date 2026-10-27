@@ -345,8 +345,16 @@ fn handle_control_text(
         }
         // Dot2 专属适配：只有 action 键（clickType=138 / button.type=="action"）才开轮；
         // 音量± / 禁麦由设备本地处理（ADC 静音 / 调音量，分别上报 mute_state / volume_state），
-        // 控制器不应为其开语音轮。仅"按下"（down=true）开轮——松开（down=false）忽略，
-        // 避免一次点按的按下+松开两事件重复触发；设备已静音时双保险拒绝开轮。
+        // 控制器不应为其开语音轮。
+        //
+        // **判定时机逐字对齐官方** `em_controller.handle_button_event`：
+        //   `if down: return`               —— 按下什么都不做，判定全在"松开"时（heldMs 才是真值）
+        //   held_ms >= BUTTON_HOLD_MS(750)  —— HOLD：官方转成 Home Assistant 的 long 事件，不开轮
+        //   muted                           —— BLOCKED
+        //   turn_active (voice_lock)        —— **CANCEL**：再点一下是取消，不是忽略
+        //   其余                            —— TURN
+        // 其中 CANCEL 是自愈的关键：此前这里对 turn_active 静默丢弃，导致一轮只要没收到
+        // 设备 0x04/0x05 就永久占住采集门，之后每次按键全部无效（现场 12:32→13:04 复现）。
         "button" => {
             if !super::dot2::is_action_button(&v) {
                 let kind = v
@@ -361,14 +369,22 @@ fn handle_control_text(
                 );
             } else {
                 let down = v.get("down").and_then(Value::as_bool).unwrap_or(true);
-                if !down {
+                let held_ms = v.get("heldMs").and_then(Value::as_i64).unwrap_or(0);
+                if down {
+                    // 官方同款：按下直接返回，不给任何反馈。
+                } else if held_ms >= super::dot2::BUTTON_HOLD_MS {
                     tracing::debug!(
-                        "[echomuse] device {device_id} action 键松开（down=false），不重复开轮"
+                        "[echomuse] device {device_id} action 键长按 {held_ms}ms → 官方语义为 HA long 事件，不开轮"
                     );
                 } else if live.is_muted() {
                     tracing::debug!(
-                        "[echomuse] device {device_id} 静音状态下忽略 action 键开轮（设备侧也会拒绝 mic_start）"
+                        "[echomuse] device {device_id} 静音状态下忽略 action 键（官方 BLOCKED；设备侧也会拒绝 mic_start）"
                     );
+                } else if live.turn.is_active() {
+                    tracing::info!(
+                        "[echomuse] device {device_id} action 键再按 → 取消当前轮（官方 CANCEL）"
+                    );
+                    super::turn::cancel_turn(live, up_tx)
                 } else {
                     // 手动按键 ≠ 唤醒词命中：对齐官方 `_button_voice_turn` 的
                     // `is_wakeword=False`——直接进聆听（亮聆听环）、不播唤醒问候「我在」、

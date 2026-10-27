@@ -373,3 +373,60 @@ fun ViewContainer<*, *>.switchRow(label: String, checked: Boolean, help: String 
         }
     }
 }
+
+/**
+ * 终端输入行（控制台专用）：**无外壳**的官方 `Input`——无 label、无边框、无底色，
+ * 直接贴在终端底色上，靠前面的 `❯` 提示符表达“在这里打字”。
+ *
+ * 为什么不复用 [labeledField]：它的壳（fieldBg + 1px 边框 + radiusSm + 左右内边距）是
+ * “表单字段”的语义，放进终端立刻变成“一个填命令的输入框”；官方 dashboard 的控制台是
+ * 整块终端里直接敲字。绑定通道与 [labeledField] 完全一致（`textInputState` + web 侧
+ * `text`/`textDidChange` 双挂），只去掉外壳——两条通道的坑见 [labeledField] 注释。
+ *
+ * 高度由调用方在样式上决定（这里的 28 是等宽正文的一行高），⛔ 不要套表单的 48pt。
+ */
+fun ViewContainer<*, *>.terminalInput(
+    getValue: () -> String,
+    onChange: (String) -> Unit,
+    placeholder: String = "",
+    enabled: () -> Boolean = { true },
+    onSubmit: (() -> Unit)? = null,
+) {
+    Input {
+        attr {
+            flex(1f)
+            height(28f)
+            backgroundColor(AdminColors.transparent)
+            fontSize(AdminType.body)
+            color(if (enabled()) AdminColors.termFg else AdminColors.termDim)
+            placeholderColor(AdminColors.termDim)
+            editable(enabled())
+            // web 渲染器不处理 textInputState attr（只认 text prop），不绑则永远显示
+            // placeholder——用户会误读成“打进去的命令丢了”。原生绑 text() 会打断 IME 组词。
+            if (INPUT_NEEDS_TEXT_PROP) {
+                text(getValue())
+            }
+            textInputState { TextInputState(text = getValue()) }
+            placeholder(placeholder)
+        }
+        event {
+            textInputStateChange { state ->
+                if (state.compositionStart == TextInputState.NO_COMPOSITION &&
+                    state.text != getValue()
+                ) {
+                    onChange(state.text)
+                }
+            }
+            // web 用户键入只走 textDidChange（input 事件 → To 回调），与上面的通道
+            // 双挂安全：`!= getValue()` 幂等去重。
+            if (INPUT_NEEDS_TEXT_PROP) {
+                textDidChange { params ->
+                    if (params.text != getValue()) onChange(params.text)
+                }
+            }
+            if (onSubmit != null) {
+                inputReturn { if (enabled()) onSubmit() }
+            }
+        }
+    }
+}

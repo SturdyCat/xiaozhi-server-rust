@@ -21,65 +21,141 @@ import com.tencent.kuikly.core.views.Text
  * 暗色系设计 Token。窗口/侧栏近黑底，卡片/输入组略亮「浮起」；
  * 品牌绿 accent 保留 #07C160，暗底「选中/链接」文字用更亮 #4CD964 保证对比度。
  */
+/**
+ * 颜色数值的**唯一真源**（0xAARRGGBB 的 Long 字面量）。
+ *
+ * 为什么单独抽一张表：管理台现在有两条渲染栈——传统 Kuikly DSL（[AdminColors]，颜色类型是
+ * `com.tencent.kuikly.core.base.Color`）与 Compose 磁贴（`com.xiaozhi.admin.compose.AdminC`，
+ * 颜色类型是 `com.tencent.kuikly.compose.ui.graphics.Color`）。两侧的 `Color(Long)` 构造都按
+ * ARGB 解析，因此同一份 Long 可以直接喂给两边，**不在任何一侧复制 hex 字面量**。
+ *
+ * ⛔ 新增/调整颜色只改这里；两侧包装自动跟随。
+ */
+object AdminToken {
+    const val WINDOW_BG = 0xFF1C1C1EL
+    const val SIDEBAR_BG = 0xFF1C1C1EL
+    const val SIDEBAR_SELECTED_BG = 0xFF2C2C2EL
+    const val CARD_BG = 0xFF2C2C2EL
+    const val CARD_HOVER = 0xFF3A3A3CL
+    const val FIELD_BG = 0xFF2C2C2EL
+    const val INSET_BG = 0xFF3A3A3CL
+    const val TOAST_BG = 0xFF3A3A3CL
+    const val TEXT_PRIMARY = 0xFFF5F5F7L
+    const val TEXT_SECONDARY = 0xFFAEAEB2L
+    const val TEXT_TERTIARY = 0xFF8E8E93L
+    const val TEXT_PLACEHOLDER = 0xFF6E6E73L
+    const val TEXT_ON_ACCENT = 0xFFFFFFFFL
+    const val TEXT_ACCENT = 0xFF4CD964L
+    const val DIVIDER = 0xFF38383AL
+    const val DIVIDER_STRONG = 0xFF48484AL
+    const val ACCENT = 0xFF07C160L
+    const val ACCENT_HOVER = 0xFF06B257L
+    const val ACCENT_ACTIVE = 0xFF059A4CL
+    const val ACCENT_TINT_BG = 0x332B5E3FL
+    const val ACCENT_TINT_TEXT = 0xFF4CD964L
+    const val DANGER = 0xFFFF453AL
+    const val DANGER_HOVER = 0xFFE53429L
+    const val DANGER_ACTIVE = 0xFFD12E24L
+    const val DANGER_TINT_BG = 0x33FF453AL
+    const val DANGER_TINT_TEXT = 0xFFFF6961L
+    const val DISABLED_BG = 0xFF636366L
+    const val DISABLED_TEXT = 0xFFD1D1D6L
+    const val WARNING = 0xFFFF9F0AL
+    const val WARNING_TINT_BG = 0x33FF9F0AL
+    const val WARNING_TINT_TEXT = 0xFFFFD479L
+    const val TRACK_BG = 0xFF3A3A3CL
+    const val SWITCH_OFF = 0xFF3A3A3CL
+    const val KNOB = 0xFFFFFFFFL
+    const val SHADOW_SM = 0x40000000L
+    const val FOCUS_RING = 0x3307C160L
+    const val OVERLAY = 0x66000000L
+    const val TRANSPARENT = 0x00000000L
+
+    // ---- 终端（控制台 tab）----
+    // 取官方 dashboard 的 Shell 主题（背景 #1c1f18 / 前景 #c8d4b0 / 光标 #9aba80），
+    // 但饱和度按管理台的近黑底微调：终端块要能一眼认出「这是另一个世界」，
+    // 同时又不能亮到抢走卡片层级。⛔ 终端内部不再引用其它 token，避免两套语义打架。
+    /** 终端底色（官方 `background: '#1c1f18'`）：偏绿的近黑，和 cardBg 的纯灰区分开。 */
+    const val TERM_BG = 0xFF1C1F18L
+    /** 终端正文（官方 `foreground: '#c8d4b0'`）：带绿调的浅色，长读不刺眼。 */
+    const val TERM_FG = 0xFFC8D4B0L
+    /** 终端弱化文字（连接提示、提示符后缀、空态）：同色系降一档。 */
+    const val TERM_DIM = 0xFF6E7A5EL
+    /** 终端强调色（提示符 `❯`、光标块，官方 `cursor: '#9aba80'`）。 */
+    const val TERM_ACCENT = 0xFF9ABA80L
+}
+
 object AdminColors {
-    val windowBg = Color(0xFF1C1C1EL)
-    val sidebarBg = Color(0xFF1C1C1EL)
+    val windowBg = Color(AdminToken.WINDOW_BG)
+    val sidebarBg = Color(AdminToken.SIDEBAR_BG)
     /** 侧边栏选中项背景：cardBg 同级的亮灰胶囊（在近黑侧栏上清晰可辨，macOS HIG 风格）。 */
-    val sidebarSelectedBg = Color(0xFF2C2C2EL)
-    val cardBg = Color(0xFF2C2C2EL)
-    val cardHover = Color(0xFF3A3A3CL)
-    val fieldBg = Color(0xFF2C2C2EL)
-    val insetBg = Color(0xFF3A3A3CL)
+    val sidebarSelectedBg = Color(AdminToken.SIDEBAR_SELECTED_BG)
+    val cardBg = Color(AdminToken.CARD_BG)
+    val cardHover = Color(AdminToken.CARD_HOVER)
+    val fieldBg = Color(AdminToken.FIELD_BG)
+    val insetBg = Color(AdminToken.INSET_BG)
 
     /** 顶部浮动 toast 背景：比卡片再亮一档的浮层色，保证覆盖在内容之上时层次清晰。 */
-    val toastBg = Color(0xFF3A3A3CL)
+    val toastBg = Color(AdminToken.TOAST_BG)
 
-    val textPrimary = Color(0xFFF5F5F7L)
-    val textSecondary = Color(0xFFAEAEB2L)
-    val textTertiary = Color(0xFF8E8E93L)
-    val textPlaceholder = Color(0xFF6E6E73L)
-    val textOnAccent = Color(0xFFFFFFFFL)
-    val textAccent = Color(0xFF4CD964L)
+    val textPrimary = Color(AdminToken.TEXT_PRIMARY)
+    val textSecondary = Color(AdminToken.TEXT_SECONDARY)
+    val textTertiary = Color(AdminToken.TEXT_TERTIARY)
+    val textPlaceholder = Color(AdminToken.TEXT_PLACEHOLDER)
+    val textOnAccent = Color(AdminToken.TEXT_ON_ACCENT)
+    val textAccent = Color(AdminToken.TEXT_ACCENT)
 
-    val divider = Color(0xFF38383AL)
-    val dividerStrong = Color(0xFF48484AL)
+    val divider = Color(AdminToken.DIVIDER)
+    val dividerStrong = Color(AdminToken.DIVIDER_STRONG)
 
-    val accent = Color(0xFF07C160L)
-    val accentHover = Color(0xFF06B257L)
-    val accentActive = Color(0xFF059A4CL)
-    val accentTintBg = Color(0x332B5E3FL)
-    val accentTintText = Color(0xFF4CD964L)
+    val accent = Color(AdminToken.ACCENT)
+    val accentHover = Color(AdminToken.ACCENT_HOVER)
+    val accentActive = Color(AdminToken.ACCENT_ACTIVE)
+    val accentTintBg = Color(AdminToken.ACCENT_TINT_BG)
+    val accentTintText = Color(AdminToken.ACCENT_TINT_TEXT)
 
-    val danger = Color(0xFFFF453AL)
-    val dangerHover = Color(0xFFE53429L)
-    val dangerActive = Color(0xFFD12E24L)
-    val dangerTintBg = Color(0x33FF453AL)
-    val dangerTintText = Color(0xFFFF6961L)
+    val danger = Color(AdminToken.DANGER)
+    val dangerHover = Color(AdminToken.DANGER_HOVER)
+    val dangerActive = Color(AdminToken.DANGER_ACTIVE)
+    val dangerTintBg = Color(AdminToken.DANGER_TINT_BG)
+    val dangerTintText = Color(AdminToken.DANGER_TINT_TEXT)
 
     /** 禁用/处理中按钮背景：中性灰（iOS 暗色 systemGray2）。比页面/卡片底色明显亮一档，
      *  一眼可辨「不可用」；⛔ 不要用 insetBg/trackBg（#3A3A3C）当禁用底——与暗色主题
      *  背景几乎同色，看起来像「没画按钮」而不是「按钮被禁用」。 */
-    val disabledBg = Color(0xFF636366L)
+    val disabledBg = Color(AdminToken.DISABLED_BG)
 
     /** 禁用/处理中按钮文字：浅灰（在中灰底上可读，明显弱于正常态白字） */
-    val disabledText = Color(0xFFD1D1D6L)
+    val disabledText = Color(AdminToken.DISABLED_TEXT)
 
-    val warning = Color(0xFFFF9F0AL)
-    val warningTintBg = Color(0x33FF9F0AL)
-    val warningTintText = Color(0xFFFFD479L)
+    val warning = Color(AdminToken.WARNING)
+    val warningTintBg = Color(AdminToken.WARNING_TINT_BG)
+    val warningTintText = Color(AdminToken.WARNING_TINT_TEXT)
 
-    val trackBg = Color(0xFF3A3A3CL)
-    val switchOff = Color(0xFF3A3A3CL)
-    val knob = Color(0xFFFFFFFFL)
+    val trackBg = Color(AdminToken.TRACK_BG)
+    val switchOff = Color(AdminToken.SWITCH_OFF)
+    val knob = Color(AdminToken.KNOB)
 
-    val shadowSm = Color(0x40000000L)
-    val focusRing = Color(0x3307C160L)
+    val shadowSm = Color(AdminToken.SHADOW_SM)
+    val focusRing = Color(AdminToken.FOCUS_RING)
 
     /** 抽屉遮罩（P1-4 窄屏侧边栏）：40% 黑，盖在内容上让抽屉浮起。 */
-    val overlay = Color(0x66000000L)
+    val overlay = Color(AdminToken.OVERLAY)
 
     /** 完全透明（分段控件未选中段 / 容器化 Input 背景用） */
-    val transparent = Color(0x00000000L)
+    val transparent = Color(AdminToken.TRANSPARENT)
+
+    /** 终端底色（控制台 tab 的整块底色）。 */
+    val termBg = Color(AdminToken.TERM_BG)
+
+    /** 终端正文（等宽输出、用户命令回显）。 */
+    val termFg = Color(AdminToken.TERM_FG)
+
+    /** 终端弱化文字（连接提示、空态、命令历史提示）。 */
+    val termDim = Color(AdminToken.TERM_DIM)
+
+    /** 终端强调色（提示符、发送按钮文字）。 */
+    val termAccent = Color(AdminToken.TERM_ACCENT)
 }
 
 object AdminShape {
