@@ -46,7 +46,9 @@ client/apps/h5App/web/*.js.map
 
 # ---- Gradle 构建脚本——这些是 web 阶段构建链，**必须保留**（不排除）----
 # client/{gradlew, gradlew.bat, gradle.properties, build.gradle.kts, settings.gradle.kts,
-# gradle/, kotlin-js-store/, shared/, apps/h5App/} 都参与 web 阶段构建。
+# gradle/, kotlin-js-store/, shared/, sharedCompose/, apps/h5App/} 都参与 web 阶段构建。
+# ⚠️ sharedCompose 别漏：settings include 了 :sharedCompose，且 :shared 依赖它；
+#    Dockerfile 漏 COPY 或此处被排除，失败表现是「配置阶段末尾静默中断」而非编译错误。
 
 # ---- server/ 内部与 Rust 构建无关的内容 ----
 # Rust 构建只需要 server/{Cargo.toml, Cargo.lock, src/, test_assets/}。

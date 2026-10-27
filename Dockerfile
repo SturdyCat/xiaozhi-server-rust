@@ -13,6 +13,10 @@
 #   ⛔ 不要为了「跑得更快」调高上限——调高只会重新触发 OOM 中断。
 #
 # 🚨 2026-10-27 二次复现的结论：**限堆只是必要条件，不是充分条件**。
+#   ⚠️ 更正（同日第三次复现后补记）：同日另有一部分失败日志的断点与下面「第三次复现」
+#   完全一致（停在 jsNpmAggregated），那部分**不是** OOM，是 COPY 漏了 sharedCompose。
+#   判断口径：日志停在配置阶段末尾且无任何 Gradle 异常 → 查 COPY 集合；有 EOF/整机被杀痕迹
+#   且已完成配置 → 才按内存处理。
 #   崩点：web 阶段第 13 步（publishWeb）在 `:shared:compileKotlinJs` fork Kotlin daemon
 #   的瞬间 EOF，之前没有任何 Gradle 异常栈（无 Java heap space / Daemon disappeared）
 #   → 整机 cgroup OOM kill，而非某个堆上限被撑爆。
@@ -22,6 +26,16 @@
 #   因此两处硬约束，勿删：
 #     ① build 阶段 `CARGO_BUILD_JOBS=2`——不限制就按 CPU 核数开满 rustc；
 #     ② build 阶段以 `COPY --from=web` 建立依赖 → 两个阶段严格串行，峰值永不同时出现。
+#
+# 🚨 2026-10-27 第三次复现的**真正根因**（与前两条内存结论无关，别再按 OOM 调参）：
+#   ACR 日志停在 `Configuration 'jsNpmAggregated' was resolved during configuration time.`
+#   之后一行不出，两次完全同一个断点 → 不是随机 OOM，是确定性失败。
+#   原因：web 阶段的 COPY 集合漏了 `client/sharedCompose`。settings.gradle.kts include 了
+#   `:sharedCompose`，shared/build.gradle.kts 又 `implementation(project(":sharedCompose"))`，
+#   容器里该模块没有构建脚本 → 空 project（`No variants exist`）→
+#   `Could not determine the dependencies of task ':kotlinNpmInstall'` 必失败。
+#   本地能编、ACR 必败，差异就在这里（本机 `:sharedCompose:compileKotlinJs` 有产物 195 KiB）。
+#   修法：COPY 清单层与源码层都要带上 sharedCompose（见下方两处 COPY 与源码断言）。
 #
 # 三个阶段：
 #   web    —— Gradle 构建 Kuikly H5 管理页（client 工程：shared 业务包 + h5App 壳）
@@ -50,18 +64,29 @@ COPY client/gradlew client/gradlew.bat client/gradle.properties client/build.gra
 COPY client/gradle ./client/gradle
 COPY client/kotlin-js-store ./client/kotlin-js-store
 COPY client/shared/build.gradle.kts client/shared/build.gradle.kts
+# 🚨 settings.gradle.kts 里 include(":sharedCompose")，且 shared/build.gradle.kts 通过
+#   implementation(project(":sharedCompose")) 依赖它。这个模块的构建脚本必须进依赖缓存层，
+#   否则配置 :shared 时 `:sharedCompose` 是空 project（无脚本、无 js 产物），
+#   publishWeb 解析依赖阶段必失败——见文件头 2026-10-27 第三次复现记录。
+COPY client/sharedCompose/build.gradle.kts client/sharedCompose/build.gradle.kts
 COPY client/apps/h5App/build.gradle.kts client/apps/h5App/build.gradle.kts
 WORKDIR /src/client
 # 只做配置/下载依赖，不编译业务代码（保持轻）
 RUN ./gradlew :apps:h5App:help --no-daemon
 
-# 业务源码：shared（KMP 共享层，@Page 页面 + Kuikly 插件打业务包）+ h5App 壳
-# ⚠️ 上方 WORKDIR 已切到 /src/client（第 45 行 RUN 的需要），COPY 的 dest 相对 WORKDIR 解析：
-#    必须写 ./shared、./apps/h5App（= Gradle 根 /src/client 下的模块目录，对应 settings 的
-#    :shared、:apps:h5App）。曾误写 ./client/shared，源码实际落盘 /src/client/client/shared
-#    （双层嵌套）：COPY 静默成功，Gradle 侧 shared/ 只有 build.gradle.kts 没有 src →
-#    js 源集 NO-SOURCE → KSP 不生成 KuiklyCoreEntry.kt → 打包任务深处 FileNotFoundException。
+# 业务源码：shared（KMP 共享层，@Page 页面 + Kuikly 插件打业务包）+ sharedCompose + h5App 壳
+# ⚠️ 上方 WORKDIR 已切到 /src/client（上面那个 help 任务的需要），COPY 的 dest 相对 WORKDIR 解析：
+#    必须写 ./shared、./sharedCompose、./apps/h5App（= Gradle 根 /src/client 下的模块目录，
+#    对应 settings 的 :shared、:sharedCompose、:apps:h5App）。曾误写 ./client/shared，源码实际
+#    落盘 /src/client/client/shared（双层嵌套）：COPY 静默成功，Gradle 侧 shared/ 只有
+#    build.gradle.kts 没有 src → js 源集 NO-SOURCE → KSP 不生成 KuiklyCoreEntry.kt →
+#    打包任务深处 FileNotFoundException。
 COPY client/shared ./shared
+# sharedCompose：:shared 的依赖模块（Kuikly Compose 组件层 + 上游 compose-settings 补丁）。
+# ⚠️ 漏掉这一步就是「本地能编、ACR 必败」：settings 里 include 了它，缺源码则 :shared 的
+#    js 依赖链断在这里，日志停在配置阶段末尾（典型末行 `Configuration 'jsNpmAggregated'
+#    was resolved during configuration time.`），既无 OOM 也无编译错误。
+COPY client/sharedCompose ./sharedCompose
 COPY client/apps/h5App ./apps/h5App
 
 # 🚨 源码断言：验证业务源码真的落在了 Gradle 工程期望的位置（而非嵌套错位或上下文缺目录）。
@@ -70,8 +95,9 @@ COPY client/apps/h5App ./apps/h5App
 #   Gradle 前快速失败，错误信息直指根因。
 RUN if ! (test -d shared/src/commonMain/kotlin \
           && test -f shared/src/commonMain/kotlin/com/xiaozhi/admin/ConfigPage.kt \
+          && test -f sharedCompose/src/commonMain/kotlin/com/alorma/compose/settings/ui/SettingsGroup.kt \
           && test -f apps/h5App/src/jsMain/kotlin/com/xiaozhi/admin/Main.kt); then \
-      echo "❌ web 构建缺业务源码：/src/client/shared/src 或 /src/client/apps/h5App/src 未就位（COPY 目标路径错位或上下文不完整）" >&2; \
+      echo "❌ web 构建缺业务源码：/src/client/{shared,sharedCompose,apps/h5App}/src 未就位（COPY 目标路径错位或上下文不完整）" >&2; \
       exit 1; \
     fi
 
