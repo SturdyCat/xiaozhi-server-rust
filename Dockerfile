@@ -49,12 +49,12 @@
 #   所有残留进程（含 Kotlin daemon）随之销毁。第一条只做 Kotlin/JS 编译 + 壳打包
 #   （Gradle+daemon 交替，本次日志已证能过）；第二条 publishWeb 时编译产物全部
 #   up-to-date、不再 fork daemon，业务包 webpack 时只剩 Gradle+Node 两家。
-#   ⚠️ 第五次复现修正：拆分后日志从 `EOF` 变成 `BUILD FAILED in 1m42s`（Gradle 正常退出
-#   exit 1，无 EOF、无具体编译错误），但本机同命令 `BUILD SUCCESSFUL` —— 说明不是代码错、
-#   仍属 OOM：Kotlin daemon 退场后整机不再被杀（故无 EOF），但业务包 webpack 的 Node 进程
-#   仍占大 RSS，被 cgroup 单进程级 OOM kill，Gradle 因此能正常报失败。即 OOM 从「整机死」
-#   降级为「单进程死」，根因没变。按 oom 处理：见下方第二条 RUN 降并发 + 降 Gradle 常驻堆
-#   给 Node 让位。
+#   ⚠️ 第五次复现真正根因（修正前几次判断）：f14abcc 误把第一条 RUN 的 `RUN …` 整段删掉，
+#   只剩一条 publishWeb 全家桶（编译 + 双 webpack + copy 一次做完），Kotlin daemon + Gradle +
+#   双 webpack Node 三家同驻、峰值顶到最高，业务包 webpack 直接 OOM（日志 `26 executed` 全重编）。
+#   而 2632d8a 本身也漏跑业务包 webpack（只跑了壳），导致 publishWeb 重跑它才 OOM。
+#   正确修法：恢复两条 RUN，且把**业务包 + 壳两个 webpack 都塞进第一条**，让第二条 publishWeb
+#   只剩 copy/verify（或至多重跑 webpack，但编译 up-to-date、不 fork daemon）。见下方两条 RUN。
 #   判断口径更新：本机可复现成功、而 ACR 报 BUILD FAILED 且无具体编译错误时，EOF 与
 #   BUILD FAILED 都算 OOM 形态，区别仅在是否整机杀；只有出现明确编译错误（Module not found /
 #   Unresolved reference / Compilation error）才属代码问题、与内存无关。
@@ -127,17 +127,27 @@ RUN if ! (test -d shared/src/commonMain/kotlin \
 #   --max-workers=2：org.gradle.parallel=false 只管跨 project 并行，项目内 worker API
 #   （KSP、verifyAdminIcons 等）仍按 CPU 核数开线程，多线程同时持有 AST/IR 会再抬一截峰值。
 #
-# 🚨 两条 RUN 拆分（见文件头第四次/第五次复现记录，勿合并回一条）：本条只做编译 + 壳打包，
+# 🚨 两条 RUN 拆分（见文件头第四次/第五次复现记录，勿合并回一条）：BuildKit 每条 RUN 是一次性
+#   容器，RUN 结束所有残留进程（含 Kotlin daemon）随之销毁。第一条把「编译 + 两个 webpack」全做掉——
+#   业务包 :shared:jsBrowserProductionWebpack 与壳 :apps:h5App:jsBrowserProductionWebpack 都必须在
+#   本条跑，不能留给 publishWeb 重跑（2632d8a 漏跑业务包 webpack，第二条重跑它时 OOM）。
 #   两处 **影响产物的 -P 参数（仅 -PwebSourceMap）必须与下一条 publishWeb 完全一致**，否则
-#   up-to-date 判定失效、下条会重新 fork Kotlin daemon，拆分白做。JVM 堆参数（-Xmx /
+#   up-to-date 失效、第二条会重新 fork Kotlin daemon，拆分白做。JVM 堆参数（-Xmx /
 #   -Dkotlin.daemon.jvm.options）属 Gradle 自身开销、不进任务指纹，可按阶段独立调，无需一致。
+#   --max-workers=1：强制编译与两个 webpack 串行，避免双 webpack 并行把峰值再叠一截（cgroup 小规格顶不住）。
+RUN ./gradlew :shared:compileKotlinJs :shared:compileProductionExecutableKotlinJs \
+      :shared:jsBrowserProductionWebpack :apps:h5App:jsBrowserProductionWebpack \
+      --no-daemon --max-workers=1 -PwebSourceMap=false \
+      -Dorg.gradle.jvmargs="-Xmx1024m -Dfile.encoding=UTF-8" \
+      -Dkotlin.daemon.jvm.options=-Xmx1024m
 
-# 🚨 第二条 RUN（webpack，第五次复现的 OOM 点）按单进程处理：--max-workers=1 去掉任务级
-#   并发；Gradle 堆从 1280m 降到 768m（webpack 阶段 Gradle 仅是 orchestrator，不吃大内存，
-#   让出的 ~512m 直接给 webpack Node 续命，避免其 RSS 顶爆 cgroup 被单进程 OOM kill）。
-#   NODE_OPTIONS 的 --max-old-space-size=1024 保持不动：那是 V8 堆上限，限制的是 JS 堆而非
-#   Node 全部 RSS（含原生/mmap），调高反而让 Node RSS 更大更易爆 cgroup，调低则 Node 先 heap OOM
-#   报错——1024 是该阶段的稳定档（xiaoya 实测口径），勿动。
+# 🚨 第二条 RUN（publishWeb 收尾，第五次复现 OOM 点按单进程处理）：编译 + 两个 webpack 已
+#   up-to-date（第一条跑过同名任务），本条只重新执行聚合任务本身 + 三份 sync Copy + verifyAdminIcons，
+#   不重跑 webpack、不 fork Kotlin daemon。--max-workers=1 去掉任务级并发；Gradle 堆 1280m→1024m
+#   （本条 Gradle 仅是 orchestrator，让出的内存给 webpack Node 续命）。即使个别 webpack 任务被判定
+#   需重跑，因编译 up-to-date 不会重新 fork daemon，峰值也只是 Gradle+Node 两家，远低于全家桶同驻。
+#   NODE_OPTIONS 的 --max-old-space-size=1024 保持不动：V8 堆上限，约束 JS 堆而非 Node 全部 RSS，
+#   调高反而让 Node RSS 更大更易爆 cgroup，调低则 Node 先 heap OOM 报错——1024 为稳定档。
 RUN NODE_OPTIONS="--max-old-space-size=1024" \
     ./gradlew :apps:h5App:publishWeb --no-daemon --max-workers=1 -PwebSourceMap=false \
       -Dorg.gradle.jvmargs="-Xmx1024m -Dfile.encoding=UTF-8" \
