@@ -21,6 +21,14 @@
 #     GRADLE_MAX_WORKERS 1→2          编译与双 webpack 允许有限并行
 #   web→build 的 COPY --from=web 串行屏障不动：16GB 下两段并跑虽勉强放得下，但省时有限、
 #   叠加峰值贴近上限，不值当。
+#
+# ♻️ 跨次构建缓存（两层策略，详见 Dockerfile 头部 ♻️ 段）：
+#   L1 层缓存：buildx type=gha,mode=max 把全部 stage 的层跨次复用——只改 server/ 时 web
+#     阶段整段命中，只改 client/ 时 Rust 阶段命中，清单不动时依赖层命中。
+#   L2 内容缓存：Dockerfile 的 RUN --mount=type=cache（Gradle 用户主目录 / cargo
+#     registry+git）随 gha 缓存后端一并序列化，层失效时依赖下载也不重来。
+#   首次运行冷建无缓存，从第二次起生效；GHA 仓库级缓存配额 10GB（LRU 逐出，超限退化为
+#   冷建、不会失败）。
 
 name: Docker Image (amd64 → ACR)
 
@@ -31,6 +39,11 @@ on:
         description: "镜像 tag（默认 latest）"
         required: false
         default: "latest"
+
+# 同分支重复手动触发时取消还在跑的旧一轮，避免排队叠加与缓存互踩
+concurrency:
+  group: docker-amd64-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -107,6 +120,10 @@ jobs:
             KOTLIN_DAEMON_XMX=2048m
             NODE_MAX_OLD_SPACE=3072
             GRADLE_MAX_WORKERS=2
+          # 跨次构建缓存（两层策略见文件头 ♻️ 段）：mode=max 连中间 stage 一起导出，
+          # 只改一端时另一端整段命中；RUN --mount 内容缓存随 gha 后端一并序列化。
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Verify pushed image (platform must be linux/amd64)
         run: |

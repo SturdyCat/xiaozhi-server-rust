@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1
+
 # ============================================================
 # xiaozhi-server-rust — Docker 多阶段构建（形态对齐 xiaoya-player 的 Dockerfile）
 #
@@ -66,6 +68,17 @@
 #   判断口径更新：本机可复现成功、而 ACR 报 BUILD FAILED 且无具体编译错误时，EOF 与
 #   BUILD FAILED 都算 OOM 形态，区别仅在是否整机杀；只有出现明确编译错误（Module not found /
 #   Unresolved reference / Compilation error）才属代码问题、与内存无关。
+# ♻️ 构建缓存（2026-10-28 起，两层正交，详见 workflow 与本文件各 RUN 的 --mount）：
+#   L1 层缓存 —— GHA workflow 以 buildx type=gha,mode=max 跨次构建复用全部 stage 的层：
+#     只改 server/ → web 阶段整段命中不重编；只改 client/ → Rust 阶段命中；
+#     清单不动 → 依赖下载层命中。
+#   L2 内容缓存 —— RUN --mount=type=cache：Gradle 用户主目录（web 三条 RUN 共挂一块）与
+#     cargo registry/git（Rust 两条 cargo RUN 共挂）放命名缓存，层失效（如改了清单）时
+#     依赖/插件/wrapper 发行包不再重新下载。⚠️ 产物 target 仍烙进镜像层（dummy 依赖层
+#     设计不变），挂缓存的只有下载与配置类内容——依赖编译产物进层，源码层才能增量。
+#   首次构建冷建无缓存，第二次起生效。GHA 仓库级缓存配额 10GB（LRU 逐出；超限只是退化
+#   成冷建，不会失败）。cache-mount 需要 BuildKit（顶部 # syntax 已声明）；ACR 自动构建
+#   若重新启用，须先确认其构建机支持 BuildKit，否则在 RUN --mount 处解析报错。
 # 三个阶段：
 #   web    —— Gradle 构建 Kuikly H5 管理页（client 工程：shared 业务包 + h5App 壳）
 #   build  —— 编译 Rust server（--features sherpa,nlu，真实 ASR/TTS 引擎 + TinyBERT NLU）
@@ -100,8 +113,13 @@ COPY client/shared/build.gradle.kts client/shared/build.gradle.kts
 COPY client/sharedCompose/build.gradle.kts client/sharedCompose/build.gradle.kts
 COPY client/apps/h5App/build.gradle.kts client/apps/h5App/build.gradle.kts
 WORKDIR /src/client
+# Gradle 用户主目录显式钉到挂载路径（官方 gradle 镜像的默认值，写出来防镜像漂移）。
+# 下方三条 RUN 共挂同一块命名缓存（同一路径即同一份内容）：依赖/插件/wrapper 发行包/
+# 构建缓存（gradle.properties 已开 org.gradle.caching）跨层失效、跨构建复用。
+ENV GRADLE_USER_HOME=/home/gradle/.gradle
 # 只做配置/下载依赖，不编译业务代码（保持轻）
-RUN ./gradlew :apps:h5App:help --no-daemon
+RUN --mount=type=cache,target=/home/gradle/.gradle \
+    ./gradlew :apps:h5App:help --no-daemon
 
 # 业务源码：shared（KMP 共享层，@Page 页面 + Kuikly 插件打业务包）+ sharedCompose + h5App 壳
 # ⚠️ 上方 WORKDIR 已切到 /src/client（上面那个 help 任务的需要），COPY 的 dest 相对 WORKDIR 解析：
@@ -153,7 +171,8 @@ ARG GRADLE_MAX_WORKERS=1
 #   -Dkotlin.daemon.jvm.options）属 Gradle 自身开销、不进任务指纹，可按阶段独立调，无需一致。
 #   --max-workers（ACR 档=1）：强制编译与两个 webpack 串行，避免双 webpack 并行把峰值再叠
 #   一截（cgroup 小规格顶不住）；大内存档可放宽到 2。
-RUN ./gradlew :shared:compileKotlinJs :shared:compileProductionExecutableKotlinJs \
+RUN --mount=type=cache,target=/home/gradle/.gradle \
+    ./gradlew :shared:compileKotlinJs :shared:compileProductionExecutableKotlinJs \
       :shared:jsBrowserProductionWebpack :apps:h5App:jsBrowserProductionWebpack \
       --no-daemon --max-workers=${GRADLE_MAX_WORKERS} -PwebSourceMap=false \
       -Dorg.gradle.jvmargs="-Xmx${GRADLE_XMX} -Dfile.encoding=UTF-8" \
@@ -166,7 +185,8 @@ RUN ./gradlew :shared:compileKotlinJs :shared:compileProductionExecutableKotlinJ
 #   远低于全家桶同驻。--max-old-space-size 是 V8 堆上限，约束 JS 堆而非 Node 全部 RSS：
 #   ACR 档 1024 下调高只会让 Node RSS 更大更易爆 cgroup，调低则 Node 先 heap OOM 报错；
 #   大内存档经 build-args 放宽（xiaoya 实测 webpack 峰值 2.8-3.2GB，GHA 档 3072）。
-RUN NODE_OPTIONS="--max-old-space-size=${NODE_MAX_OLD_SPACE}" \
+RUN --mount=type=cache,target=/home/gradle/.gradle \
+    NODE_OPTIONS="--max-old-space-size=${NODE_MAX_OLD_SPACE}" \
     ./gradlew :apps:h5App:publishWeb --no-daemon --max-workers=${GRADLE_MAX_WORKERS} -PwebSourceMap=false \
       -Dorg.gradle.jvmargs="-Xmx${GRADLE_XMX} -Dfile.encoding=UTF-8" \
  && test -f apps/h5App/web/index.html \
@@ -210,7 +230,13 @@ ENV RUSTFLAGS="-C target-cpu=x86-64-v2"
 # 网络耗时都落在这一层，日常改代码只重编本 crate）。--locked：清单与 lock 不一致即构建失败
 # （可复现发布镜像是核心诉求）。
 COPY server/Cargo.toml server/Cargo.lock ./
-RUN mkdir -p src \
+# registry/git 挂命名缓存（两条 cargo RUN 共挂，源码层那条也要挂——上游 crate 源码解包在
+# CARGO_HOME/registry/src，源码层校验指纹时要读）：清单变更使本层失效时，crates.io 下载
+# 与解包不重来。⚠️ target 产物不挂缓存、仍烙进本层——dummy 层给源码层供增量依赖是既有
+# 设计（见下方源码层 RUN），产物进层它才成立。
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    mkdir -p src \
  && echo 'fn main() {}' > src/main.rs \
  && cargo build --release --features sherpa,nlu --locked \
  && rm -rf src
@@ -231,7 +257,9 @@ COPY server/test_assets ./test_assets
 #   ③ 不要再加「产物断言」（曾用 grep 在二进制里找哨兵串验证非 dummy）：断言依赖构建机
 #      grep 实现对二进制的匹配行为（GNU/ugrep 别名差异），ACR 上两次假阴性、越修越错，
 #      已随版本戳特性一并移除（2026-10）；「Compiling + 非 0.00s 耗时」日志即重编证据。
-RUN find src -type f -exec touch {} + \
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    find src -type f -exec touch {} + \
  && cargo clean -p xiaozhi-server-rust --release \
  && cargo build --release --features sherpa,nlu --locked \
  && strip target/release/xiaozhi-server-rust
