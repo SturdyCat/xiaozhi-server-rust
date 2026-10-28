@@ -9,8 +9,13 @@
 //!   HTTP 状态码（`onerror` 无信息、`onclose` 恒 1006），而 `busy` 是唯一必须让用户看到
 //!   具体 code 的失败（设计 §5.6）。
 //! - 链路：`shell_open{pty:true}`（**真终端**，官方 `em_routes_shell.py` 同形）→ 设备
-//!   回拨 `/shell/{id}` → `shell::claim` 认领 → 双向泵（浏览器 JSON 文本帧 ↔ 设备原始
-//!   Binary）。设备若在回拨后先发 `shell_meta{pty}`，原样转给浏览器（控制帧不进画面）。
+//!   回拨 `/shell/{id}?pty=1`（pty 分配失败则省略、回退 pipe）→ `shell::claim` 认领并记下
+//!   真实模式 → 双向泵（浏览器 JSON 文本帧 ↔ 设备原始 Binary）。认领后服务端据 `?pty=1`
+//!   向浏览器发 `shell_meta{pty}`，并把真实模式写进 `ready.mode`。
+//! - **PTY 帧格式（根因修复）**：pty 模式下写给设备的 stdin 必须带 `0x00` 帧头
+//!   （`plan_line`/`plan_ctrl_c` 产出 `0x00` + 字节），设备侧 `runShellSession` 的
+//!   `switch data[0]` 只认 `0x00`/`0x01`，否则命令首字符被当"其它"静默丢弃——这正是
+//!   "控制台打不进命令"的原因。pipe 模式保持裸字节。
 //! - 与一次性操作（`/system/*`、`/oww/install-vad`、文件传输）**共用同一把 per-device 槽**：
 //!   本模块不复制槽逻辑，直接把 [`Operation`] 当长驻租约持有到会话结束，收尾走同一段
 //!   `Drop`（先 enqueue `shell_close` 到**捕获的** control 通道，再按 owner 删槽）。
@@ -95,6 +100,9 @@ pub(super) struct ConsoleSession {
     authenticated: bool,
     /// `[echomuse].token` 为空 → 明文 + 无设备鉴权。
     insecure: bool,
+    /// 设备真实建立的 shell 模式（来自回拨 URL 的 `?pty=1`）。PTY 决定 stdin 帧是否加
+    /// `0x00` 头、以及 `ready.mode`——这是"控制台打不进命令"的根因修复点。
+    pty: bool,
     /// 占槽租约：`take()` 后 drop 即"先 enqueue `shell_close` 再按 owner 删槽"。
     lease: Option<Operation>,
     started: Instant,
@@ -121,6 +129,7 @@ impl ConsoleSession {
             peer,
             authenticated,
             insecure,
+            pty: false,
             lease: Some(lease),
             started: now,
             last_input: now,
@@ -145,6 +154,15 @@ impl ConsoleSession {
 
     fn secs(&self) -> u64 {
         self.started.elapsed().as_secs()
+    }
+
+    /// 设备真实建立的 shell 模式（来自回拨 URL 的 `?pty=1`），经捕获的租约 `Operation`
+    /// 读 `shell::pending` 里的 `pty` 标志。回拨之后才取得到（设备此时已拨回）。
+    fn device_pty(&self) -> bool {
+        self.lease
+            .as_ref()
+            .map(|op| op.pty())
+            .unwrap_or(false)
     }
 
     // ---- 审计（三行，全部 `tracing::info!`；含命令全文，按敏感数据对待） ----
@@ -191,10 +209,25 @@ impl ConsoleSession {
     async fn send_ready(&self, browser: &mut WebSocket) {
         let frame = ConsoleFrame::Ready {
             device_id: self.device_id.clone(),
-            mode: frames::MODE_PTY,
+            mode: if self.pty {
+                frames::MODE_PTY
+            } else {
+                frames::MODE_PIPE
+            },
             insecure: self.insecure,
-            notice: frames::COPY_READY_NOTICE.to_string(),
+            notice: if self.pty {
+                frames::COPY_READY_NOTICE.to_string()
+            } else {
+                frames::COPY_READY_NOTICE_PIPE.to_string()
+            },
         };
+        self.send(browser, &frame).await;
+    }
+
+    /// 在终端字节前告知浏览器设备真实 shell 模式（官方 `controller_em_controller.py::
+    /// handle_shell` 同一语义）：浏览器据此走"真终端"（有提示符/回显）还是行模式兜底。
+    async fn send_shell_meta(&self, browser: &mut WebSocket) {
+        let frame = ConsoleFrame::ShellMeta { pty: self.pty };
         self.send(browser, &frame).await;
     }
 
@@ -218,14 +251,14 @@ impl ConsoleSession {
     ) {
         match frames::parse_incoming(text) {
             frames::Incoming::Ping => self.send(browser, &ConsoleFrame::Pong).await,
-            frames::Incoming::CtrlC => match frames::plan_ctrl_c(&mut self.rate, Instant::now()) {
+            frames::Incoming::CtrlC => match frames::plan_ctrl_c(&mut self.rate, Instant::now(), self.pty) {
                 frames::InputAction::Write(bytes) => {
                     self.write_device(device, bytes, "^C").await;
                 }
                 frames::InputAction::Reject(code) => self.reject(browser, code).await,
             },
             frames::Incoming::Input(data) => {
-                match frames::plan_line(&mut self.rate, Instant::now(), &data) {
+                match frames::plan_line(&mut self.rate, Instant::now(), &data, self.pty) {
                     frames::InputAction::Write(bytes) => {
                         self.write_device(device, bytes, &data).await;
                     }
@@ -456,7 +489,11 @@ pub(super) async fn serve(mut browser: WebSocket, device_id: String, insecure: b
         teardown(&mut session, &mut browser, &mut device, reason, detail).await;
         return;
     }
+    // 设备真实 shell 模式（回拨 URL 的 `?pty=1`）决定 stdin 帧是否加 `0x00` 头与 ready 模式。
+    session.pty = session.device_pty();
     session.send_ready(&mut browser).await;
+    // 在任何终端字节前告知浏览器真实模式（官方 controller 同一语义）。
+    session.send_shell_meta(&mut browser).await;
 
     let Some(device_socket) = device.as_mut() else {
         return;

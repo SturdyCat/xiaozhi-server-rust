@@ -498,11 +498,18 @@ def main() -> int:
             break
     print("[3/4] mic_start ✓  上行一段'语音'…")
     pcm = tone_pcm()
-    # 按 ~40ms 一帧上行
+    # 按 ~40ms 一帧上行。帧头与真机一致：`[0x01][seq u16 BE][payload]`
+    # （见 EchoMuse controller/em_controller.py 的 MIC_HEADER_LEN = 3）——
+    # 不带 seq 的帧曾让服务端把 seq 当 PCM、把哨兵当音频，联调假通过。
     chunk = MIC_SR // 25 * 2  # 40ms 的字节数
+    seq = 0
     for i in range(0, len(pcm), chunk):
-        data.send_binary(bytes([FRAME_MIC]) + pcm[i:i + chunk])
-    data.send_binary(bytes([FRAME_VAD_END]))
+        data.send_binary(
+            bytes([FRAME_MIC]) + struct.pack(">H", seq & 0xFFFF) + pcm[i:i + chunk]
+        )
+        seq += 1
+    # 收口哨兵也是 0x01 帧的 1 字节负载，不是独立帧型。
+    data.send_binary(bytes([FRAME_MIC]) + struct.pack(">H", seq & 0xFFFF) + bytes([FRAME_VAD_END]))
 
     # 4) 等回复：0x02*…0x03（容忍无回复——流水线引擎未配好时也明确指出）
     got = 0

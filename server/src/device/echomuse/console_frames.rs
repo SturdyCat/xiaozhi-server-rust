@@ -41,6 +41,15 @@ pub(super) const MODE_PIPE: &str = "pipe";
 /// `ready.mode` 取值之一：真终端（mksh 挂在 pty 上，有提示符、回显、行编辑）。
 /// 控制台默认按这个模式开会话，与官方 dashboard 的 `shell_open{pty:true}` 一致。
 pub(super) const MODE_PTY: &str = "pty";
+/// PTY 模式 stdin 帧头（官方 `device_control.go::shellFrameStdin`）：控制器→设备写一段
+/// 输入时**首字节必须是 `0x00`**，设备侧 `runShellSession` 才认（`switch data[0]` 只认
+/// `0x00`/`0x01`，其它首字节静默丢弃——这正是"控制台打不进命令"的根因：本项目此前把命令
+/// 裸字节（首字节是命令字符如 `'l'`=0x6C）直发设备，落入"其它"分支被吞）。
+pub(super) const SHELL_FRAME_STDIN: u8 = 0x00;
+/// PTY 模式 resize 帧头（官方 `shellFrameResize`）：`0x00` 之后跟 4 字节 cols/rows。
+/// 项目浏览器侧不做 resize（终端用默认窗口尺寸），本常量仅文档化对侧契约。
+#[allow(dead_code)]
+pub(super) const SHELL_FRAME_RESIZE: u8 = 0x01;
 
 // ---- 文案（服务端唯一出处，与 §8.3 前端 `ConsoleCopy` 逐字对齐） ----
 
@@ -52,6 +61,9 @@ pub(super) const COPY_INTERNAL: &str = "控制台内部错误：";
 pub(super) const COPY_CAPPED: &str = "会话输出已达 16 MiB 上限，后续输出不再显示（命令仍可执行）";
 pub(super) const COPY_READY_NOTICE: &str =
     "终端：设备 root shell（pty），cd/环境变量在同一会话里保持。审计会记录你输入的每一行命令";
+/// 行模式（设备固件不支持 pty）的就绪说明：无提示符、无回显，但命令结果仍照常显示。
+pub(super) const COPY_READY_NOTICE_PIPE: &str =
+    "行模式（设备不支持 pty）：无提示符、无回显，命令输出照常显示，但需你自己对应每行输出来自哪条命令";
 
 // ---- 帧定义 ----
 
@@ -154,6 +166,14 @@ pub(super) enum ConsoleFrame {
         secs: u64,
     },
     Pong,
+    /// 设备**实际建立**的 shell 模式（非请求的 `shell_open.pty`）：设备固件在 pty 分配
+    /// 失败时回退 pipe 并在回拨 URL 省略 `?pty=1`（`controller_em_controller.py::
+    /// handle_shell` 同义判据）。必须在任何终端字节前发给浏览器，让前端知道走"真终端"
+    /// （有提示符/回显）还是行模式兜底。与官方 `shell_meta` 帧逐字一致。
+    #[serde(rename = "shell_meta")]
+    ShellMeta {
+        pty: bool,
+    },
 }
 
 /// 编码成一段 JSON 文本帧；序列化失败（结构上不可能）也要给浏览器一个可解析的帧，
@@ -232,9 +252,13 @@ pub(super) enum InputAction {
     Reject(ErrorCode),
 }
 
-/// `input` 帧：令牌桶 → 长度 → `utf8(data) + "\n"`（pipe 模式的 `sh` 只在读到换行时
-/// 执行一条完整命令行，缺换行会一直攥在行缓冲里，见 `shell.rs::push` 同源注释）。
-pub(super) fn plan_line(bucket: &mut TokenBucket, now: Instant, data: &str) -> InputAction {
+/// `input` 帧：令牌桶 → 长度 → 写设备的字节。`pty` 由设备回拨 URL 的 `?pty=1` 决定
+/// （`controller_em_controller.py::handle_shell` 同义判据）：
+/// - PTY：首字节必须是 `0x00`（stdin 帧头），否则设备 `runShellSession` 的 `switch data[0]`
+///   把命令首字符（如 `'l'`=0x6C）当"其它"静默丢弃——控制台打不进命令的直接原因；
+///   换行照旧追加，pty 的 tty 行规程同样以 `\n` 触发执行。
+/// - pipe：裸 `data + "\n"`，老固件/一次性操作走这条（`sh` 行缓冲靠换行触发）。
+pub(super) fn plan_line(bucket: &mut TokenBucket, now: Instant, data: &str, pty: bool) -> InputAction {
     if !bucket.allow(now) {
         return InputAction::Reject(ErrorCode::RateLimited);
     }
@@ -242,16 +266,25 @@ pub(super) fn plan_line(bucket: &mut TokenBucket, now: Instant, data: &str) -> I
         return InputAction::Reject(code);
     }
     let mut bytes = data.as_bytes().to_vec();
+    if pty {
+        bytes.insert(0, SHELL_FRAME_STDIN);
+    }
     bytes.push(b'\n');
     InputAction::Write(bytes)
 }
 
-/// `ctrl-c` 帧：单字节 `0x03`（设备侧 pipe stdin 直写 raw 字节）。
-pub(super) fn plan_ctrl_c(bucket: &mut TokenBucket, now: Instant) -> InputAction {
+/// `ctrl-c` 帧：PTY 模式走 stdin 帧（`0x00` + `0x03`），pipe 模式裸 `0x03`。
+/// 设备侧 pty 下同样靠首字节 `0x00` 让 `switch data[0]` 认出这是 stdin 而非丢弃。
+pub(super) fn plan_ctrl_c(bucket: &mut TokenBucket, now: Instant, pty: bool) -> InputAction {
     if !bucket.allow(now) {
         return InputAction::Reject(ErrorCode::RateLimited);
     }
-    InputAction::Write(vec![0x03])
+    let bytes = if pty {
+        vec![SHELL_FRAME_STDIN, 0x03]
+    } else {
+        vec![0x03]
+    };
+    InputAction::Write(bytes)
 }
 
 /// 令牌桶：容量 = 速率（允许一次性连发 `INPUT_PER_SEC` 条），按经过时间补充。

@@ -14,10 +14,21 @@ use crate::workflow::protocol::{IncomingFrame, Transport};
 
 #[test]
 fn mic_pcm_roundtrip() {
+    // 真机格式：`[0x01][seq u16 BE][PCM]`，头 3 字节（官方 MIC_HEADER_LEN）。
     let pcm = [0u8, 1, 2, 3, 4, 5, 6, 7];
-    let mut frame = vec![FRAME_MIC];
+    let mut frame = vec![FRAME_MIC, 0x12, 0x34];
     frame.extend_from_slice(&pcm);
     assert_eq!(parse_uplink(&frame), UplinkFrame::MicPcm(&pcm));
+}
+
+#[test]
+fn mic_truncated_header_is_unknown() {
+    // 只有帧头 + 半个 seq：不能把 seq 字节当 PCM。
+    assert_eq!(parse_uplink(&[FRAME_MIC]), UplinkFrame::Unknown(FRAME_MIC));
+    assert_eq!(
+        parse_uplink(&[FRAME_MIC, 0x00]),
+        UplinkFrame::Unknown(FRAME_MIC)
+    );
 }
 
 #[test]
@@ -40,8 +51,28 @@ fn session_audio_truncated_is_unknown() {
 
 #[test]
 fn vad_sentinels() {
+    // 裸哨兵帧（模拟器/早期固件形态）。
     assert_eq!(parse_uplink(&[FRAME_VAD_END]), UplinkFrame::VadEnd);
     assert_eq!(parse_uplink(&[FRAME_NO_SPEECH]), UplinkFrame::NoSpeech);
+}
+
+#[test]
+fn vad_sentinels_inside_mic_frame() {
+    // 真机形态：哨兵是 0x01 帧的 1 字节负载（`[0x01][seq][0x04]`）。
+    // 这是"说完没反应"的根因回归点——把负载当 PCM 会让 VadEnd 永不触发。
+    assert_eq!(
+        parse_uplink(&[FRAME_MIC, 0x00, 0x07, FRAME_VAD_END]),
+        UplinkFrame::VadEnd
+    );
+    assert_eq!(
+        parse_uplink(&[FRAME_MIC, 0x01, 0x00, FRAME_NO_SPEECH]),
+        UplinkFrame::NoSpeech
+    );
+    // 同样 4 字节长度但负载是真 PCM（2 字节 = 1 个采样）时不能被当成哨兵。
+    assert_eq!(
+        parse_uplink(&[FRAME_MIC, 0x00, 0x08, 0x04, 0x00]),
+        UplinkFrame::MicPcm(&[0x04, 0x00])
+    );
 }
 
 #[test]

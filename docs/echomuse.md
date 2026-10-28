@@ -45,9 +45,9 @@ mDNS 广播地址**无配置项**：启动时动态探测部署机默认出口�
 | data 面 Text identify（拨通后首帧） | 按 `device_id` 精确认领 data 出站口 | data 面唯一文本帧；此后恒为二进制，再收 Text 忽略不断链 |
 | `oww_wake`（设备本地唤醒词命中） | `listen state=detect` → `listen state=start` + 下发 `mic_start{lock_mic:true}` | bounded turn：设备自己做 VAD，结束发哨兵；`detect` 先投（`[wakeup]` 唤醒问候语的触发点，问候关闭时仅多一行会话日志）；detect 的 `text` 携带来源标签 `"本地唤醒词"`，echomuse 层同步打 `触发来源：本地唤醒词` 日志。**只有唤醒词这一条路径发 `detect`** |
 | `button`（动作键） | 只发 `listen state=start`（**不发 `detect`**）+ `mic_start{lock_mic:true}` | 对齐官方 `_button_voice_turn` → `_run_voice_locked(is_wakeword=False)`：手动按键是"我要说话"，直接进聆听、亮聆听环，**不播唤醒问候「我在」、不播唤醒提示音**（cue 只属于唤醒词）。以前一律发 detect，导致按键先答一句「我在」并把聆听态盖成播报态 |
-| `0x01`/`0x07` mic PCM（16k S16LE） | 上行 Opus 二进制帧 | 服务端用同一 `OpusFrameEncoder` 编码，攒满 60ms 一包；`0x07` 会话头（session u32 + seq u16 BE）已剥离 |
-| `0x04`（VAD 结束） | 补齐残 PCM 后投 typed `EndOfUtterance(Speech)` | core 合并已切段与 VAD flush 尾段、reset 后识别；立即允许下次唤醒，不等回复 EOS |
-| `0x05`（无语音超时） | 丢弃残 PCM 后投 typed `EndOfUtterance(NoSpeech)` | core 丢弃已切段与尾段、reset，不触发 ASR/LLM；重复/空闲哨兵幂等 |
+| `0x01`/`0x07` mic PCM（16k S16LE） | 上行 Opus 二进制帧 | 服务端用同一 `OpusFrameEncoder` 编码，攒满 60ms 一包；**`0x01` 帧头是 3 字节 `[type][seq u16 BE]`**（官方 `em_controller.py` 的 `MIC_HEADER_LEN = 3`），`0x07` 会话头（session u32 + seq u16 BE）也已剥离。漏剥 `0x01` 的 seq 会让下面两个哨兵永远收不到（它们就藏在这条帧的 1 字节负载里） |
+| `0x04`（VAD 结束） | 补齐残 PCM 后投 typed `EndOfUtterance(Speech)` | core 合并已切段与 VAD flush 尾段、reset 后识别；立即允许下次唤醒，不等回复 EOS。**真机形态是 `[0x01][seq][0x04]`**，不是独立帧型 |
+| `0x05`（无语音超时） | 丢弃残 PCM 后投 typed `EndOfUtterance(NoSpeech)` | core 丢弃已切段与尾段、reset，不触发 ASR/LLM；重复/空闲哨兵幂等。同样包在 `0x01` 帧里（`[0x01][seq][0x05]`） |
 | TTS PCM（typed `send_audio`） | `0x02` speaker PCM | 重采样到 48kHz，切 40ms（3840B）一块；`tts stop` 时残块补零 |
 | `ServerMessage::Tts { state:"stop" }`（JSON `type=tts,state=stop`） | 残 PCM 补零至一块 `0x02` 后发一条 `0x03` speaker EOS | 按 JSON 结构解析，不匹配伪造 `tts_stop`/文本子串；其余服务器 JSON 不下发 |
 | 会话 `close` | `Shutdown` → control 任务退出、连接关闭 | 与 WsTransport 的粘滞 `Closed` 同语义 |

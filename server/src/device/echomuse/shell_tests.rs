@@ -77,12 +77,12 @@ async fn only_owner_cleans_busy_slot_and_duplicate_claim_is_rejected() {
     ));
     assert!(rx.try_recv().is_err(), "busy waiter sent no close");
     assert!(matches!(
-        claim(id, "192.0.2.1".parse().unwrap()),
+        claim(id, "192.0.2.1".parse().unwrap(), false),
         Err(ShellError::Unauthorized)
     ));
-    let _sender = claim(id, localhost()).unwrap();
+    let _sender = claim(id, localhost(), false).unwrap();
     assert!(matches!(
-        claim(id, localhost()),
+        claim(id, localhost(), false),
         Err(ShellError::Unsolicited)
     ));
     drop(op);
@@ -99,13 +99,13 @@ async fn expired_and_replaced_control_cannot_claim_and_old_cleanup_spares_new() 
     let live = em::hub_live(id).unwrap().1;
     let (op, _) = Operation::reserve(id, ctl.clone(), &live, Duration::ZERO).unwrap();
     assert!(matches!(
-        claim(id, localhost()),
+        claim(id, localhost(), false),
         Err(ShellError::Unsolicited)
     ));
     drop(op);
     let (op, _) = Operation::reserve(id, ctl.clone(), &live, OP_TIMEOUT).unwrap();
     let (new_ctl, mut new_rx) = online(id, localhost(), true);
-    assert!(matches!(claim(id, localhost()), Err(ShellError::Offline)));
+    assert!(matches!(claim(id, localhost(), false), Err(ShellError::Offline)));
     em::hub_remove_session(id, &ctl);
     assert!(em::hub_ctl(id).unwrap().same_channel(&new_ctl));
     drop(op);
@@ -183,7 +183,7 @@ async fn handler(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     State(state): State<TestState>,
 ) -> Response {
-    admit(ws, &headers, &id, peer.ip(), &state.reg, state.device_token)
+    admit(ws, &headers, &id, peer.ip(), &state.reg, state.device_token, false)
 }
 
 async fn server(

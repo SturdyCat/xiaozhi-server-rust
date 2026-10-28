@@ -68,7 +68,7 @@ async fn device_route(
     Path(id): Path<String>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
 ) -> Response {
-    match shell::claim(&id, peer.ip()) {
+    match shell::claim(&id, peer.ip(), false) {
         Ok(tx) => ws.on_upgrade(move |socket| async move {
             let _ = tx.send(socket);
         }),
@@ -213,20 +213,20 @@ fn plan_line_counts_utf8_bytes_and_tolerates_empty_line() {
     let too_long_cjk = "一".repeat(1366);
     assert_eq!(too_long_cjk.len(), 4098);
     assert_eq!(
-        frames::plan_line(&mut bucket, now, &too_long_cjk),
+        frames::plan_line(&mut bucket, now, &too_long_cjk, false),
         frames::InputAction::Reject(ErrorCode::InputTooLong),
         "4098 字节的中文必须拒（按字节算，不是按字符）"
     );
 
     let mut bucket = TokenBucket::new(frames::INPUT_PER_SEC);
-    match frames::plan_line(&mut bucket, now, &"一".repeat(1365)) {
+    match frames::plan_line(&mut bucket, now, &"一".repeat(1365), false) {
         frames::InputAction::Write(bytes) => assert_eq!(bytes.len(), 4096),
         other => panic!("4095 字节必须放行，实际 {other:?}"),
     }
 
     let mut bucket = TokenBucket::new(frames::INPUT_PER_SEC);
     assert_eq!(
-        frames::plan_line(&mut bucket, now, ""),
+        frames::plan_line(&mut bucket, now, "", false),
         frames::InputAction::Write(vec![b'\n']),
         "空行只写换行，不 panic、不写别的字节"
     );

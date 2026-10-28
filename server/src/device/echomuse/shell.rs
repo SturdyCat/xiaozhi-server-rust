@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{ConnectInfo, Path, State};
+use axum::extract::{ConnectInfo, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use futures_util::StreamExt;
@@ -136,6 +136,10 @@ pub(super) struct Pending {
     pub(super) owner: uuid::Uuid,
     ctl: UnboundedSender<ControlOut>,
     peer: IpAddr,
+    /// 设备回拨 URL 是否带 `?pty=1`（真实建立的 shell 模式，非请求的 `shell_open.pty`）。
+    /// 设备 pty 分配失败时回退 pipe 并省略该参数（`device_control.go::runShellSession` 同义）；
+    /// 控制台据此决定 stdin 帧是否加 `0x00` 头——这是"控制台打不进命令"的根因修复点。
+    pub(super) pty: bool,
     pub(super) deadline: Instant,
     socket: Option<oneshot::Sender<WebSocket>>,
 }
@@ -204,6 +208,7 @@ impl Operation {
                 owner,
                 ctl: ctl.clone(),
                 peer,
+                pty: false,
                 deadline,
                 socket: Some(tx),
             },
@@ -220,6 +225,18 @@ impl Operation {
     }
 }
 
+impl Operation {
+    /// 设备真实建立的 shell 模式（来自回拨 URL 的 `?pty=1`）。控制台据此决定 stdin 帧
+    /// 是否加 `0x00` 头。槽在此期间仍由本租约持有（未 drop），故可安全读取。
+    pub(super) fn pty(&self) -> bool {
+        pending()
+            .lock()
+            .expect("echomuse shell lock")
+            .get(&self.id)
+            .is_some_and(|p| p.owner == self.owner && p.pty)
+    }
+}
+
 /// 捕获的 ctl 是否仍是 hub 里该设备的**当前** control 会话（同 channel + 未关闭）。
 pub(super) fn live_matches(id: &str, ctl: &UnboundedSender<ControlOut>) -> bool {
     super::hub_live(id)
@@ -228,7 +245,11 @@ pub(super) fn live_matches(id: &str, ctl: &UnboundedSender<ControlOut>) -> bool 
 
 /// Claim happens before HTTP upgrade, so unsolicited/duplicate sockets get a
 /// real rejection. Sender handoff after upgrade fails closed if owner expired.
-pub(super) fn claim(id: &str, peer: IpAddr) -> Result<oneshot::Sender<WebSocket>, ShellError> {
+pub(super) fn claim(
+    id: &str,
+    peer: IpAddr,
+    pty: bool,
+) -> Result<oneshot::Sender<WebSocket>, ShellError> {
     let mut map = pending().lock().expect("echomuse shell lock");
     let p = map.get_mut(id).ok_or(ShellError::Unsolicited)?;
     if Instant::now() >= p.deadline {
@@ -240,6 +261,8 @@ pub(super) fn claim(id: &str, peer: IpAddr) -> Result<oneshot::Sender<WebSocket>
     if !live_matches(id, &p.ctl) {
         return Err(ShellError::Offline);
     }
+    // 记录设备真实建立的 shell 模式（来自回拨 URL 的 `?pty=1`）。
+    p.pty = pty;
     p.socket.take().ok_or(ShellError::Unsolicited)
 }
 
@@ -252,6 +275,7 @@ pub(super) async fn upgrade(
     ws: WebSocketUpgrade,
     headers: HeaderMap,
     Path(id): Path<String>,
+    Query(query): Query<HashMap<String, String>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     State(engines): State<Arc<Engines>>,
 ) -> Response {
@@ -259,6 +283,10 @@ pub(super) async fn upgrade(
     if !cfg.echomuse.enabled {
         return StatusCode::NOT_FOUND.into_response();
     }
+    // 设备回拨 URL 的 `?pty=1` 是"真实建立的 shell 模式"：设备 pty 分配失败时回退 pipe
+    // 并省略该参数（`device_control.go::runShellSession` 同义）。控制台据此决定 stdin 帧
+    // 是否加 `0x00` 头——这是"控制台打不进命令"的根因修复点。
+    let pty = query.get("pty").map(|v| v == "1").unwrap_or(false);
     admit(
         ws,
         &headers,
@@ -266,6 +294,7 @@ pub(super) async fn upgrade(
         peer.ip(),
         super::registry::global(cfg),
         &cfg.echomuse.token,
+        pty,
     )
 }
 
@@ -280,6 +309,7 @@ fn admit(
     peer: IpAddr,
     reg: &Registry,
     device_token: &str,
+    pty: bool,
 ) -> Response {
     if !device_token.is_empty() && !device_auth(headers, device_token) {
         return ShellError::Unauthorized.response();
@@ -287,7 +317,7 @@ fn admit(
     if let Err(err) = approved_emos(reg, id) {
         return err.response();
     }
-    match claim(id, peer) {
+    match claim(id, peer, pty) {
         Ok(tx) => ws
             .max_message_size(MAX_OUTPUT)
             .max_frame_size(MAX_OUTPUT)

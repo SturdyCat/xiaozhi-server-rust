@@ -1,7 +1,8 @@
 use super::super::turn::start_turn;
 use super::*;
 fn mic(samples: usize) -> Vec<u8> {
-    let mut raw = vec![frames::FRAME_MIC];
+    // 真机帧头：`[0x01][seq u16 BE]`，其后才是 PCM（见 frames::MIC_HEADER_LEN）。
+    let mut raw = vec![frames::FRAME_MIC, 0x00, 0x2A];
     raw.extend((0..samples).flat_map(|_| 1000i16.to_le_bytes()));
     raw
 }
@@ -48,7 +49,14 @@ async fn native_partial_pcm_precedes_end_without_codec_padding_or_replay() {
         "上行格式必须与协议常量同源"
     );
     assert!(audio.is_current());
-    uplink.on_binary(&[frames::FRAME_VAD_END], &live.turn, &up, &ble, false);
+    // 真机收口：哨兵是 0x01 帧的 1 字节负载（`[0x01][seq][0x04]`）。
+    uplink.on_binary(
+        &[frames::FRAME_MIC, 0x00, 0x2B, frames::FRAME_VAD_END],
+        &live.turn,
+        &up,
+        &ble,
+        false,
+    );
     assert!(matches!(
         rx.try_recv().unwrap(),
         IncomingFrame::AudioBoundary(UtteranceEnd::Speech, _)
@@ -57,7 +65,13 @@ async fn native_partial_pcm_precedes_end_without_codec_padding_or_replay() {
         audio.is_current(),
         "completed speech remains valid until consumed"
     );
-    uplink.on_binary(&[frames::FRAME_VAD_END], &live.turn, &up, &ble, false);
+    uplink.on_binary(
+        &[frames::FRAME_MIC, 0x00, 0x2C, frames::FRAME_VAD_END],
+        &live.turn,
+        &up,
+        &ble,
+        false,
+    );
     uplink.on_binary(&mic(42), &live.turn, &up, &ble, false);
     assert!(rx.try_recv().is_err());
 }

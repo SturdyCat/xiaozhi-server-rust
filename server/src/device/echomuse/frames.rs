@@ -5,8 +5,9 @@
 //! 含义不同（下行是音乐帧，上行是 VAD 哨兵），这是协议刻意的设计。
 //!
 //! 当前实现范围（MVP + 蓝牙代理 + 音乐面）：
-//! - 上行：`0x01` mic PCM（mono S16_LE 16kHz）、`0x07` 私听会话音频
-//!   （`[session u32 BE][seq u16 BE][PCM]` 头）、`0x04`/`0x05` bounded-turn 哨兵、
+//! - 上行：`0x01` mic PCM（`[type][seq u16 BE][PCM]` 头，mono S16_LE 16kHz）、
+//!   `0x07` 私听会话音频（`[session u32 BE][seq u16 BE][PCM]` 头）、
+//!   `0x04`/`0x05` bounded-turn 哨兵（**包在同一条 `0x01` 帧的负载里**）、
 //!   `0x06` BLE 广播批次（`ble_proxy` 开启时经 [`super::ble`] 采集）。
 //! - 下行：`0x02` speaker PCM（**mono S16_LE 48 kHz**，见 [`SPEAKER_SAMPLE_RATE`]）、
 //!   `0x03` speaker EOS、`0x04`/`0x05` music PCM/EOS（独立音乐平面，与 voice
@@ -62,6 +63,20 @@ pub const SPEAKER_FRAME_MS: u32 = 40;
 /// `0x07` 帧头长度（session u32 + seq u16）。
 pub const SESSION_HEADER_LEN: usize = 6;
 
+/// `0x01` 帧头长度（type + seq u16 BE）。
+///
+/// 权威来源是**设备端与官方 controller 的代码**，不是协议文档：官方
+/// `controller/em_controller.py` 写死 `MIC_HEADER_LEN = 3  # [type][seq_hi][seq_lo]`，
+/// 设备 `device/internal/client/data.go` 的 `sendFrame` 对**每一帧**（PCM 与哨兵）
+/// 都是 `frame[0]=0x01; frame[1:3]=seq BE; frame[3:]=payload`。
+///
+/// 漏掉这 2 字节的后果不是"音频差一点"，而是**收口帧永远丢失**：设备把
+/// bounded-turn 哨兵包在 `0x01` 帧里发（`[0x01][seq][0x04]`），把 `data[1..]`
+/// 当 PCM 会得到 3 字节负载 —— 按偶数截断成 1 个采样（值 0x04）喂给会话，
+/// `VadEnd` 永不触发。真机表现：设备明明采到并上行了几秒语音，服务端却一路
+/// 等到兜底超时按无语音丢弃（"按了 action 键说话没反应"）。
+pub const MIC_HEADER_LEN: usize = 3;
+
 /// 上行帧解析结果。
 #[derive(Debug, PartialEq, Eq)]
 pub enum UplinkFrame<'a> {
@@ -85,7 +100,20 @@ pub fn parse_uplink(data: &[u8]) -> UplinkFrame<'_> {
         return UplinkFrame::Unknown(0);
     };
     match kind {
-        FRAME_MIC => UplinkFrame::MicPcm(&data[1..]),
+        FRAME_MIC => {
+            // 头是 3 字节（type + seq u16 BE，见 [`MIC_HEADER_LEN`]）。截断的帧按
+            // 未知忽略 —— 半个 seq 的"负载"不可能是音频。
+            let Some(body) = data.get(MIC_HEADER_LEN..) else {
+                return UplinkFrame::Unknown(kind);
+            };
+            // 哨兵同样走这条 0x01 帧，只是负载只有 1 字节。PCM 是 S16_LE、
+            // 长度必为偶数且至少 2 字节，所以单字节负载只可能是哨兵。
+            match body {
+                [FRAME_VAD_END] => UplinkFrame::VadEnd,
+                [FRAME_NO_SPEECH] => UplinkFrame::NoSpeech,
+                _ => UplinkFrame::MicPcm(body),
+            }
+        }
         FRAME_SESSION_AUDIO => {
             // 0x07 头：session u32 BE + seq u16 BE；截断的帧按未知忽略（不该发生）。
             if data.len() > SESSION_HEADER_LEN {
@@ -94,6 +122,9 @@ pub fn parse_uplink(data: &[u8]) -> UplinkFrame<'_> {
                 UplinkFrame::Unknown(kind)
             }
         }
+        // 独立帧型的哨兵：协议表把它们列成 `0x01` 之外的一行，但设备实现是把
+        // 哨兵当 0x01 的负载发的（见上）。这里仍认裸哨兵，兼容只发裸帧的
+        // 模拟器/早期固件，不会误伤。
         FRAME_VAD_END => UplinkFrame::VadEnd,
         FRAME_NO_SPEECH => UplinkFrame::NoSpeech,
         FRAME_BLE_ADVERTS => UplinkFrame::BleAdverts(&data[1..]),

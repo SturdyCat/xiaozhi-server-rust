@@ -105,7 +105,7 @@ async fn stale_and_duplicate_dial_are_unsolicited() {
 
     let (expired, _dial) = Operation::reserve(id, ctl.clone(), &live, Duration::ZERO).unwrap();
     assert_eq!(
-        shell::claim(id, localhost()).err(),
+        shell::claim(id, localhost(), false).err(),
         Some(ShellError::Unsolicited),
         "回拨晚于 deadline 必须判 Unsolicited（服务端已放弃）"
     );
@@ -113,9 +113,9 @@ async fn stale_and_duplicate_dial_are_unsolicited() {
 
     let (live_lease, _dial) =
         Operation::reserve(id, ctl.clone(), &live, frames::DIAL_TIMEOUT).unwrap();
-    let _first = shell::claim(id, localhost()).unwrap();
+    let _first = shell::claim(id, localhost(), false).unwrap();
     assert_eq!(
-        shell::claim(id, localhost()).err(),
+        shell::claim(id, localhost(), false).err(),
         Some(ShellError::Unsolicited),
         "15 s 内二次回拨必须判 Unsolicited（socket 已被取走）"
     );
@@ -310,6 +310,14 @@ fn frame_types_and_codes_match_shared_contract() {
 
     let pong = frame_json(&ConsoleFrame::Pong);
     assert_eq!(pong["type"], "pong");
+
+    // shell_meta：与官方 dashboard 帧逐字一致（type 必须是 "shell_meta"，不是 kebab）。
+    let meta = frame_json(&ConsoleFrame::ShellMeta { pty: true });
+    assert_eq!(meta["type"], "shell_meta");
+    assert_eq!(meta["pty"], true);
+    let meta_pipe = frame_json(&ConsoleFrame::ShellMeta { pty: false });
+    assert_eq!(meta_pipe["type"], "shell_meta");
+    assert_eq!(meta_pipe["pty"], false);
 }
 
 #[test]
@@ -351,18 +359,18 @@ fn rate_limit_and_long_line_write_nothing() {
     let mut bucket = TokenBucket::new(frames::INPUT_PER_SEC);
     for _ in 0..frames::INPUT_PER_SEC {
         assert!(matches!(
-            frames::plan_line(&mut bucket, now, "ls"),
+            frames::plan_line(&mut bucket, now, "ls", false),
             frames::InputAction::Write(bytes) if bytes == b"ls\n"
         ));
     }
     assert_eq!(
-        frames::plan_line(&mut bucket, now, "ps"),
+        frames::plan_line(&mut bucket, now, "ps", false),
         frames::InputAction::Reject(ErrorCode::RateLimited),
         "第 11 帧必须 rate-limited"
     );
     // 拒绝不消耗令牌：同一时刻仍然限流。
     assert_eq!(
-        frames::plan_line(&mut bucket, now, "ps"),
+        frames::plan_line(&mut bucket, now, "ps", false),
         frames::InputAction::Reject(ErrorCode::RateLimited)
     );
 
@@ -370,19 +378,57 @@ fn rate_limit_and_long_line_write_nothing() {
     let mut bucket = TokenBucket::new(frames::INPUT_PER_SEC);
     let long = "x".repeat(frames::LINE_MAX + 1);
     assert_eq!(
-        frames::plan_line(&mut bucket, now, &long),
+        frames::plan_line(&mut bucket, now, &long, false),
         frames::InputAction::Reject(ErrorCode::InputTooLong)
     );
     // 4096 字节恰好通过，且补一个换行（pipe 模式 sh 靠换行触发执行）。
-    match frames::plan_line(&mut bucket, now, &"y".repeat(frames::LINE_MAX)) {
+    match frames::plan_line(&mut bucket, now, &"y".repeat(frames::LINE_MAX), false) {
         frames::InputAction::Write(bytes) => assert_eq!(bytes.len(), frames::LINE_MAX + 1),
         other => panic!("4096 字节必须放行，实际 {other:?}"),
     }
 
-    // ctrl-c 写单字节 0x03。
+    // ctrl-c：pipe 模式写单字节 0x03。
     let mut bucket = TokenBucket::new(frames::INPUT_PER_SEC);
     assert_eq!(
-        frames::plan_ctrl_c(&mut bucket, now),
+        frames::plan_ctrl_c(&mut bucket, now, false),
+        frames::InputAction::Write(vec![0x03])
+    );
+}
+
+/// PTY 帧格式（根因修复）：pty 模式 stdin 必须带 `0x00` 头，否则设备
+/// `runShellSession` 的 `switch data[0]` 把命令首字符当"其它"静默丢弃；pipe 模式裸字节。
+#[test]
+fn pty_framing_prefixes_stdin_byte_and_ctrl_c() {
+    let now = Instant::now();
+
+    // pty：stdin 帧头 0x00 + 命令 + 换行。
+    let mut bucket = TokenBucket::new(frames::INPUT_PER_SEC);
+    assert_eq!(
+        frames::plan_line(&mut bucket, now, "ls", true),
+        frames::InputAction::Write(b"\x00ls\n".to_vec())
+    );
+    // 多字节命令同样加首字节。
+    let mut bucket = TokenBucket::new(frames::INPUT_PER_SEC);
+    assert_eq!(
+        frames::plan_line(&mut bucket, now, "重启", true),
+        frames::InputAction::Write(b"\x00\xe9\x87\x8d\xe5\x90\xaf\n".to_vec())
+    );
+    // pty：ctrl-c 走 stdin 帧（0x00 + 0x03）。
+    let mut bucket = TokenBucket::new(frames::INPUT_PER_SEC);
+    assert_eq!(
+        frames::plan_ctrl_c(&mut bucket, now, true),
+        frames::InputAction::Write(vec![0x00, 0x03])
+    );
+
+    // pipe：裸字节，无首字节（一次性操作与老固件）。
+    let mut bucket = TokenBucket::new(frames::INPUT_PER_SEC);
+    assert_eq!(
+        frames::plan_line(&mut bucket, now, "ls", false),
+        frames::InputAction::Write(b"ls\n".to_vec())
+    );
+    let mut bucket = TokenBucket::new(frames::INPUT_PER_SEC);
+    assert_eq!(
+        frames::plan_ctrl_c(&mut bucket, now, false),
         frames::InputAction::Write(vec![0x03])
     );
 }
@@ -453,7 +499,7 @@ async fn device_route(
     Path(id): Path<String>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
 ) -> Response {
-    match shell::claim(&id, peer.ip()) {
+    match shell::claim(&id, peer.ip(), true) {
         Ok(tx) => ws.on_upgrade(move |socket| async move {
             let _ = tx.send(socket);
         }),
@@ -519,6 +565,13 @@ async fn loopback_ready_output_and_client_close_teardown() {
         assert_eq!(ready["insecure"], false);
         assert!(ready["notice"].as_str().is_some_and(|n| !n.is_empty()));
 
+        // 1b) ready 之后紧跟 shell_meta：告知浏览器设备真实 shell 模式（pty=true，
+        // 真终端）。该帧由本任务新增（console.rs send_shell_meta），漏读会让下一帧
+        // output 被误判为 shell_meta，引发断言失败并毒化 HUB_LOCK。
+        let meta = next_json(&mut ws);
+        assert_eq!(meta["type"], "shell_meta");
+        assert_eq!(meta["pty"], true);
+
         // 2) 输入一行 → 服务端写设备 stdin（raw 字节 + 换行）。
         ws.send(tungstenite::Message::Text(
             r#"{"type":"input","data":"uname -a"}"#.into(),
@@ -555,7 +608,7 @@ async fn loopback_ready_output_and_client_close_teardown() {
             tungstenite::Message::Text(text) => text.as_bytes().to_vec(),
             other => panic!("意外的 stdin 帧：{other:?}"),
         };
-        assert_eq!(stdin, b"uname -a\n", "输入必须原样直达设备 stdin");
+        assert_eq!(stdin, b"\x00uname -a\n", "PTY 模式输入必须带 0x00 帧头直达设备 stdin");
         ws.send(tungstenite::Message::Binary(
             b"fake-kernel\n".to_vec().into(),
         ))

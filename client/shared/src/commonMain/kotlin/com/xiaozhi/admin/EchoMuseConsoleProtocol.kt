@@ -33,6 +33,14 @@ internal object ConsoleWire {
     const val CLOSED = "closed"
     const val PONG = "pong"
 
+    /**
+     * `shell_meta`：服务端在 `ready` 之后紧跟下发，告知浏览器设备**真实** shell 模式
+     * （pty=true 真终端 / false=pipe 行模式）。与官方 `controller_em_controller.py::
+     * handle_shell` 同一语义——官方前端据此走"真终端"还是行模式兜底。本端 `ready.mode`
+     * 已带同值，但 `shell_meta` 是**回拨之后**才确定的权威来源，仍显式消费以防两侧口径漂移。
+     */
+    const val SHELL_META = "shell_meta"
+
     // browser → server
     const val INPUT = "input"
     const val CTRL_C = "ctrl-c"

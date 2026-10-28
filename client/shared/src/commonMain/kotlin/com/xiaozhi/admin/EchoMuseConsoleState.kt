@@ -344,6 +344,12 @@ class EchoMuseConsoleState(private val ctx: Pager) {
         } ?: return
         when (data.optString("type", "")) {
             ConsoleWire.READY -> onReady(data)
+            ConsoleWire.SHELL_META -> {
+                // 设备真实 shell 模式（回拨 URL 的 `?pty=1`）：官方前端据此走"真终端"
+                // 还是行模式兜底。与服务端 `console.rs::send_shell_meta` 逐字对齐。
+                val pty = data.optBoolean("pty", false)
+                mode = if (pty) EM_CONSOLE_MODE_PTY else EM_CONSOLE_MODE_PIPE
+            }
             ConsoleWire.OUTPUT -> {
                 val trimmed = buffer.appendChunk(data.text("text"), carry)
                 if (trimmed) notice = EchoMuseConsoleText.TRUNCATED_NOTICE
