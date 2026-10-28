@@ -1,16 +1,23 @@
 # ============================================================
 # xiaozhi-server-rust — Docker 多阶段构建（形态对齐 xiaoya-player 的 Dockerfile）
 #
-# 发布链路：镜像由**阿里云 ACR 源码自动构建**产出（push 代码即自动构建，构建机在国内）。
-#   ACR 构建规则：Dockerfile 路径 `Dockerfile`、构建上下文（Dockerfile 目录）= 仓库根、
-#   镜像版本 `latest`、构建参数留空。本文件必须位于仓库根目录，切勿在 server/ 下执行
+# 发布链路（两条来源，⛔ 同一 tag 双源并存会互相覆盖）：
+#   ① 阿里云 ACR 源码自动构建：push 代码即自动构建（构建机在国内）。规则：Dockerfile 路径
+#      `Dockerfile`、构建上下文 = 仓库根、镜像版本 `latest`、构建参数留空。
+#   ② GitHub Actions 手动构建推送：.github/workflows/docker-amd64.yml（仅 linux/amd64，
+#      推 registry.cn-hangzhou.aliyuncs.com/notip-com-cn/xiaozhi-server-rust，需仓库
+#      secrets ACR_USERNAME/ACR_PASSWORD）。用它产出 :latest 时须关闭 ACR 自动构建规则。
+# 本文件必须位于仓库根目录，切勿在 server/ 下执行
 #   `docker build .`（context=server/，找不到本文件）。本机验证：仓库根 `docker build -t xiaozhi-server .`
 #
 # 🚨 构建内存（ACR 构建机内存有限，实测 OOM 表现：构建日志戛然而止、以
 #   `rpc error: ... error reading from server: EOF` 收尾——构建容器被 OOM kill）：
 #   web 阶段的三个 JVM/Node 进程（Gradle / Kotlin daemon / webpack-Node）全部显式限堆，
 #   参数取自 xiaoya-player 实测口径（其 webpack 峰值 2.8-3.2GB，不限堆必被杀）。
-#   ⛔ 不要为了「跑得更快」调高上限——调高只会重新触发 OOM 中断。
+#   上述档位已 ARG 化：**默认值 = ACR 校准档**（ACR 自动构建不传参，行为不变），
+#   ⛔ 默认档不要为了「跑得更快」调高——调高只会重新触发 OOM 中断。GHA 构建
+#   （ubuntu-24.04 标准机 16GB/4vCPU）由 .github/workflows/docker-amd64.yml 的
+#   build-args 按大内存档覆盖，两边档位互不影响。
 #
 # 🚨 2026-10-27 二次复现的结论：**限堆只是必要条件，不是充分条件**。
 #   ⚠️ 更正（同日第三次复现后补记）：同日另有一部分失败日志的断点与下面「第三次复现」
@@ -23,9 +30,10 @@
 #   主因是**并行叠加**：BuildKit 会并行执行没有依赖关系的 stage，`cargo build --release`
 #   （rustc 默认 `-j=CPU 核数`，本依赖树含 ort/tokenizers/sherpa-onnx，单进程 1.5–2.5GB）
 #   与 web 的 Gradle+Kotlin daemon（约 3.5GB）同时驻留，4–8GB 档构建机直接爆。
-#   因此两处硬约束，勿删：
-#     ① build 阶段 `CARGO_BUILD_JOBS=2`——不限制就按 CPU 核数开满 rustc；
-#     ② build 阶段以 `COPY --from=web` 建立依赖 → 两个阶段严格串行，峰值永不同时出现。
+#   因此两处硬约束（①参数化为默认 2，GHA 大内存档传 4；②任何档位都勿删）：
+#     ① build 阶段 `CARGO_BUILD_JOBS`（ARG，默认 2）——不限制就按 CPU 核数开满 rustc；
+#     ② build 阶段以 `COPY --from=web` 建立依赖 → 两个阶段严格串行，峰值永不同时出现
+#       （GHA 16GB 下两段并跑虽勉强放得下，但叠加峰值贴近上限且省时有限，同样不放开）。
 #
 # 🚨 2026-10-27 第三次复现的**真正根因**（与前两条内存结论无关，别再按 OOM 调参）：
 #   ACR 日志停在 `Configuration 'jsNpmAggregated' was resolved during configuration time.`
@@ -122,10 +130,19 @@ RUN if ! (test -d shared/src/commonMain/kotlin \
       exit 1; \
     fi
 
-# 🚨 内存三上限（见文件头说明，勿调高）：Gradle JVM 1280m / Kotlin daemon 1024m / webpack Node 1024m；
+# 🚨 内存/并行档位（ARG 化，默认 = ACR 4-8GB 构建机校准档，见文件头，勿调高默认值）：
+#   GRADLE_XMX           Gradle JVM 堆（两条 RUN 共用；orchestrator 用不了多大堆）
+#   KOTLIN_DAEMON_XMX    Kotlin/JS 编译 daemon 堆（随 RUN 容器结束销毁）
+#   NODE_MAX_OLD_SPACE   webpack Node 的 V8 老生代上限（MB）
+#   GRADLE_MAX_WORKERS   任务级并发：org.gradle.parallel=false 只管跨 project 并行，
+#                        项目内 worker API（KSP、双 webpack、verifyAdminIcons）仍按此开线程，
+#                        多线程同时持有 AST/IR / bundle 会把峰值再叠一截。
+#   GHA（16GB/4vCPU）经 .github/workflows/docker-amd64.yml build-args 覆盖为放宽档。
 #   -PwebSourceMap=false：生产镜像不调试，关掉 .map 生成（xiaoya 实测省 ~400MB 峰值内存）。
-#   --max-workers=2：org.gradle.parallel=false 只管跨 project 并行，项目内 worker API
-#   （KSP、verifyAdminIcons 等）仍按 CPU 核数开线程，多线程同时持有 AST/IR 会再抬一截峰值。
+ARG GRADLE_XMX=1024m
+ARG KOTLIN_DAEMON_XMX=1024m
+ARG NODE_MAX_OLD_SPACE=1024
+ARG GRADLE_MAX_WORKERS=1
 #
 # 🚨 两条 RUN 拆分（见文件头第四次/第五次复现记录，勿合并回一条）：BuildKit 每条 RUN 是一次性
 #   容器，RUN 结束所有残留进程（含 Kotlin daemon）随之销毁。第一条把「编译 + 两个 webpack」全做掉——
@@ -134,23 +151,24 @@ RUN if ! (test -d shared/src/commonMain/kotlin \
 #   两处 **影响产物的 -P 参数（仅 -PwebSourceMap）必须与下一条 publishWeb 完全一致**，否则
 #   up-to-date 失效、第二条会重新 fork Kotlin daemon，拆分白做。JVM 堆参数（-Xmx /
 #   -Dkotlin.daemon.jvm.options）属 Gradle 自身开销、不进任务指纹，可按阶段独立调，无需一致。
-#   --max-workers=1：强制编译与两个 webpack 串行，避免双 webpack 并行把峰值再叠一截（cgroup 小规格顶不住）。
+#   --max-workers（ACR 档=1）：强制编译与两个 webpack 串行，避免双 webpack 并行把峰值再叠
+#   一截（cgroup 小规格顶不住）；大内存档可放宽到 2。
 RUN ./gradlew :shared:compileKotlinJs :shared:compileProductionExecutableKotlinJs \
       :shared:jsBrowserProductionWebpack :apps:h5App:jsBrowserProductionWebpack \
-      --no-daemon --max-workers=1 -PwebSourceMap=false \
-      -Dorg.gradle.jvmargs="-Xmx1024m -Dfile.encoding=UTF-8" \
-      -Dkotlin.daemon.jvm.options=-Xmx1024m
+      --no-daemon --max-workers=${GRADLE_MAX_WORKERS} -PwebSourceMap=false \
+      -Dorg.gradle.jvmargs="-Xmx${GRADLE_XMX} -Dfile.encoding=UTF-8" \
+      -Dkotlin.daemon.jvm.options=-Xmx${KOTLIN_DAEMON_XMX}
 
 # 🚨 第二条 RUN（publishWeb 收尾，第五次复现 OOM 点按单进程处理）：编译 + 两个 webpack 已
 #   up-to-date（第一条跑过同名任务），本条只重新执行聚合任务本身 + 三份 sync Copy + verifyAdminIcons，
-#   不重跑 webpack、不 fork Kotlin daemon。--max-workers=1 去掉任务级并发；Gradle 堆 1280m→1024m
-#   （本条 Gradle 仅是 orchestrator，让出的内存给 webpack Node 续命）。即使个别 webpack 任务被判定
-#   需重跑，因编译 up-to-date 不会重新 fork daemon，峰值也只是 Gradle+Node 两家，远低于全家桶同驻。
-#   NODE_OPTIONS 的 --max-old-space-size=1024 保持不动：V8 堆上限，约束 JS 堆而非 Node 全部 RSS，
-#   调高反而让 Node RSS 更大更易爆 cgroup，调低则 Node 先 heap OOM 报错——1024 为稳定档。
-RUN NODE_OPTIONS="--max-old-space-size=1024" \
-    ./gradlew :apps:h5App:publishWeb --no-daemon --max-workers=1 -PwebSourceMap=false \
-      -Dorg.gradle.jvmargs="-Xmx1024m -Dfile.encoding=UTF-8" \
+#   不重跑 webpack、不 fork Kotlin daemon（本条 Gradle 仅是 orchestrator）。即使个别 webpack
+#   任务被判定需重跑，因编译 up-to-date 不会重新 fork daemon，峰值也只是 Gradle+Node 两家，
+#   远低于全家桶同驻。--max-old-space-size 是 V8 堆上限，约束 JS 堆而非 Node 全部 RSS：
+#   ACR 档 1024 下调高只会让 Node RSS 更大更易爆 cgroup，调低则 Node 先 heap OOM 报错；
+#   大内存档经 build-args 放宽（xiaoya 实测 webpack 峰值 2.8-3.2GB，GHA 档 3072）。
+RUN NODE_OPTIONS="--max-old-space-size=${NODE_MAX_OLD_SPACE}" \
+    ./gradlew :apps:h5App:publishWeb --no-daemon --max-workers=${GRADLE_MAX_WORKERS} -PwebSourceMap=false \
+      -Dorg.gradle.jvmargs="-Xmx${GRADLE_XMX} -Dfile.encoding=UTF-8" \
  && test -f apps/h5App/web/index.html \
  && test -f apps/h5App/web/nativevue2.js \
  && test -f apps/h5App/web/h5App.js
@@ -176,10 +194,12 @@ WORKDIR /app
 #   代价：总时长 ≈ web + build（原先并行取 max），换峰值内存永不同时出现。
 COPY --from=web /src/client/apps/h5App/web/index.html /tmp/.web-stage-done
 
-# 🚨 rustc 并行度硬上限（同上，勿删）：cargo 默认 `-j=CPU 核数`，本依赖树含 ort-sys /
+# 🚨 rustc 并行度上限（ACR 档默认 2，勿删）：cargo 默认 `-j=CPU 核数`，本依赖树含 ort-sys /
 #   tokenizers / sherpa-onnx-sys（自带 C++/protobuf codegen），单 rustc 峰值 1.5–2.5GB，
-#   -j4 就能吃掉 8GB 机器的全部内存。2 = 实测能过 ACR 构建机的档位（慢一点，但不会中断）。
-ENV CARGO_BUILD_JOBS=2
+#   -j4 就能吃掉 8GB 机器的全部内存。2 = 实测能过 ACR 构建机的档位（慢一点，但不会中断）；
+#   GHA（16GB/4vCPU）经 build-args 传 4 对齐核数——上方串行屏障保证与 web 峰值错开，
+#   4 路 rustc 并发（最坏 ~10GB）16GB 放得下。ARG 对本阶段后续 RUN 即环境变量，cargo 直读。
+ARG CARGO_BUILD_JOBS=2
 
 # 目标指令集固定为 x86-64-v2：部署机 N5105（Tremont，无 AVX）可安全运行。
 # 不要用 native —— ACR 构建机的 CPU 与部署机不同，native 会嵌入部署机不支持的

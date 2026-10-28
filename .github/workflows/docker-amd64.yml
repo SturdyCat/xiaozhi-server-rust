@@ -1,0 +1,114 @@
+# xiaozhi-server-rust 镜像构建（linux/amd64 → 阿里云 ACR）
+#
+# 与 ci.yml（push/PR 测试门禁）完全隔离：独立文件、独立触发器、独立 runner，互不影响。
+# 形态参考 xiaoya-player 的 docker-multiarch.yml，但**单架构**：部署机 N5105 是 x86-64
+# （Tremont，无 AVX），Dockerfile 已固定 RUSTFLAGS="-C target-cpu=x86-64-v2"，镜像只需
+# linux/amd64 一份，无需双架构矩阵 / manifest 合并。
+#
+# 触发：仅手动（workflow_dispatch），可填镜像 tag（默认 latest）。
+#
+# ⛔ 与 ACR「源代码自动构建」互斥（务必处理，否则同一 tag 会互相覆盖）：
+#   本仓库 Dockerfile 头部记录的现行发布链路是 ACR 控制台的源码自动构建——每次 push
+#   重建 amd64 :latest。启用本工作流产出 :latest 时，请到 ACR 控制台【关闭该仓库的
+#   自动构建规则】（或把它输出的 tag 改名），让 GHA 成为该 tag 的唯一来源。
+#
+# 构建档位（结合 GHA runner 特性放宽）：ubuntu-24.04 标准机 4 vCPU / 16GB 内存，远高于
+#   ACR 4-8GB 构建机。Dockerfile 各内存/并行档已 ARG 化，**默认值 = ACR 校准档**
+#   （ACR 自动构建不传参，行为不变）；本工作流经 build-args 按 16GB 档覆盖：
+#     CARGO_BUILD_JOBS 2→4            rustc 并行对齐 4 vCPU（单 rustc 峰值 1.5-2.5GB，4 路并发 ~10GB 放得下）
+#     GRADLE_XMX / KOTLIN_DAEMON_XMX 1024m→2048m
+#     NODE_MAX_OLD_SPACE 1024→3072    xiaoya 实测 webpack 峰值 2.8-3.2GB，3072 留余量
+#     GRADLE_MAX_WORKERS 1→2          编译与双 webpack 允许有限并行
+#   web→build 的 COPY --from=web 串行屏障不动：16GB 下两段并跑虽勉强放得下，但省时有限、
+#   叠加峰值贴近上限，不值当。
+
+name: Docker Image (amd64 → ACR)
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "镜像 tag（默认 latest）"
+        required: false
+        default: "latest"
+
+permissions:
+  contents: read
+
+env:
+  # 阿里云 ACR 杭州地域 registry（与 ACR 自动构建同源）
+  ACR_REGISTRY: registry.cn-hangzhou.aliyuncs.com
+  ACR_NAMESPACE: notip-com-cn
+  IMAGE_NAME: xiaozhi-server-rust
+
+jobs:
+  build:
+    name: Build & push linux/amd64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Check ACR secrets presence
+        # 安全诊断：只判断 secret 是否注入，不打印值（避免泄露）。
+        # 若此处报未配置 → 到仓库 Settings → Secrets and variables → Actions 添加；
+        # 若此处通过但 login 仍 unauthorized → 是密码值本身不对（见下方 Login 注释）。
+        env:
+          USER_SET: ${{ secrets.ACR_USERNAME != '' }}
+          PASS_SET: ${{ secrets.ACR_PASSWORD != '' }}
+        run: |
+          echo "ACR_USERNAME set: $USER_SET"
+          echo "ACR_PASSWORD set: $PASS_SET"
+          if [ "$USER_SET" != "true" ] || [ "$PASS_SET" != "true" ]; then
+            echo "::error::ACR_USERNAME / ACR_PASSWORD 未配置，请到仓库 Settings → Secrets and variables → Actions 添加"
+            exit 1
+          fi
+
+      - name: Login to ACR
+        # 凭据需在仓库 Settings → Secrets and variables → Actions 配置两个 secret：
+        #   ACR_USERNAME = ACR 控制台「访问凭证」里显示的【登录名】
+        #                （即本地 docker login 用的账号别名或 12 位账号 UID；不是 RAM AccessKey ID）
+        #   ACR_PASSWORD = ACR 控制台「访问凭证」里【设置固定密码】的那个固定密码
+        #                ⚠️ 不是阿里云账号登录密码，也不是 RAM AccessKey Secret
+        # （命名空间 notip-com-cn 已存在，本工作流只往已有的 xiaozhi-server-rust 仓库推送。）
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.ACR_REGISTRY }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      - name: Compute short SHA tag
+        id: meta
+        run: echo "short_sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push (linux/amd64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: true
+          # 阿里云 ACR 不识别 buildx 默认附加的 SLSA provenance / SBOM 证明 manifest
+          # （媒体类型 application/vnd.oci.empty.v1+json），报 `denied: unknown manifest class`。
+          # 关闭证明、只推真实镜像 manifest，ACR 正常接收（xiaoya 实测同解）。⚠️ 勿删。
+          provenance: false
+          sbom: false
+          tags: |
+            ${{ env.ACR_REGISTRY }}/${{ env.ACR_NAMESPACE }}/${{ env.IMAGE_NAME }}:${{ inputs.tag }}
+            ${{ env.ACR_REGISTRY }}/${{ env.ACR_NAMESPACE }}/${{ env.IMAGE_NAME }}:sha-${{ steps.meta.outputs.short_sha }}
+          # GHA 16GB/4vCPU 放宽档；不传即 Dockerfile 默认值 = ACR 校准档（见文件头与 Dockerfile 说明）
+          build-args: |
+            CARGO_BUILD_JOBS=4
+            GRADLE_XMX=2048m
+            KOTLIN_DAEMON_XMX=2048m
+            NODE_MAX_OLD_SPACE=3072
+            GRADLE_MAX_WORKERS=2
+
+      - name: Verify pushed image (platform must be linux/amd64)
+        run: |
+          docker buildx imagetools inspect \
+            "${{ env.ACR_REGISTRY }}/${{ env.ACR_NAMESPACE }}/${{ env.IMAGE_NAME }}:${{ inputs.tag }}"

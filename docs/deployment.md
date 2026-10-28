@@ -30,7 +30,8 @@ cd server && ~/.cargo/bin/cargo run --release --features sherpa -- --config-db /
 
 ## 构建与故障边界
 
-- [Dockerfile](<../Dockerfile>)必须以仓库根为上下文；Web 阶段严格保留源码/产物断言、Gradle/Kotlin/Node 三项内存上限和关闭 source map 的生产配置，不为加速提高堆上限。
+- [Dockerfile](<../Dockerfile>)必须以仓库根为上下文；Web 阶段严格保留源码/产物断言、Gradle/Kotlin/Node 内存上限（ARG 化，**默认值 = ACR 4-8GB 构建机校准档**，勿调高默认）与关闭 source map 的生产配置。[GHA 手动构建](<../.github/workflows/docker-amd64.yml>)按 16GB/4vCPU 档经 build-args 放宽档位，ACR 自动构建不传参维持原档，两边互不影响。
+- 镜像发布两条来源**互斥**：阿里云 ACR「源代码自动构建」（push 即建 amd64 `latest`）与 [GitHub Actions 手动构建](<../.github/workflows/docker-amd64.yml>)（仅 linux/amd64，推 `registry.cn-hangzhou.aliyuncs.com/notip-com-cn/xiaozhi-server-rust`，需仓库 secrets `ACR_USERNAME`/`ACR_PASSWORD`）。同一 tag 只能由其中一处产出——启用 GHA 产出 `latest` 时先到 ACR 控制台关闭该仓库的自动构建规则（或改其输出 tag）。
 - Rust 镜像版本与[锁文件](<../server/Cargo.lock>)同步，不随意降级；[构建目标](<../Dockerfile>)固定 x86-64-v2，不用 native，以免在 N5105 上 SIGILL。
 - dummy main 依赖缓存之后必须 touch 源码并 cargo clean 本 crate；不能删强制重编步骤，否则可能运行占位二进制、零日志 exit 0。不要用二进制 grep 哨兵作为产物断言。
 - [compose](<../docker-compose.yml>)使用可写目录卷 `./server-data:/data`；不要 :ro 或退回单文件配置挂载。配置、模型、固件、预设与热句落盘需保持持久化。

@@ -7,18 +7,25 @@
 # ---- monorepo 中与镜像无关的目录（全排）----
 # .git 整体排除（objects/ 体积大；构建无需版本信息）
 .git
+.github
 .agents
 .codebuddy
 .workbuddy
 .zcode
 .claude
+.idea
+.vscode
 docs
+tools
 scripts
 tests
 skills-lock.json
 *.md
 PLAN.md
 agents.md
+logo.png
+xiaozhi-logo.miora
+xiaozhi-logo_assets
 .DS_Store
 
 # ---- 非 web 宿主端（web 阶段只构建 :apps:h5App）----
@@ -64,7 +71,9 @@ target
 .cargo
 
 # ---- 运行时数据与凭证：绝不进镜像层 ----
-# config.toml（业务配置，可能含 token/api_key）；.env 同理
+# config.toml（业务配置，可能含 token/api_key）；.env 同理；
+# server-data 为 compose 部署产生的数据目录（compose 与仓库同根）。
 config.toml
 server/config.toml
+server-data
 .env
