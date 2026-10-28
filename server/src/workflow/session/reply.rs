@@ -132,15 +132,18 @@ impl<'a, T: Transport> Session<'a, T> {
     /// - `false`：**回声模式**——不调 LLM，把 ASR 文本原样 TTS 下发（见
     ///   [`Self::echo_response`]），用于验证 ASR→TTS 链路。
     ///
-    /// 档位 NextSession：`eff_config` 在会话开始热刷新，保存后**新会话**生效。
+    /// 档位 **Live**（按轮现读）：`llm.enabled` 是链路自测开关，保存后**下一轮**即生效，
+    /// 刻意不走 [`Self::eff_config`]（它是会话开始时的快照）——设备长连接往往整场不断线，
+    /// 沿用快照会出现"配置里已经关掉 LLM，却一直照常调云端 LLM"（实机复现）。
     /// ⚠️ 仅**全局**生效：`llm.enabled` 不在设备 overlay 白名单（`config/overlay.rs`
-    /// 的 llm 段只放行 system_prompt/max_history）——它是全局测试开关，不随设备下发。
+    /// 的 llm 段只放行 system_prompt/max_history）——它是全局测试开关，不随设备下发，
+    /// 所以这里读 `live_config()`（全局）而不是 `effective_config()`（含 overlay）。
     pub(super) async fn respond(
         &mut self,
         user_text: &str,
         trace: &Arc<TurnTrace>,
     ) -> anyhow::Result<()> {
-        if !self.eff_config.llm.enabled {
+        if !self.engines.live_config().llm.enabled {
             return self.echo_response(user_text, trace).await;
         }
         self.stream_response(user_text, trace).await

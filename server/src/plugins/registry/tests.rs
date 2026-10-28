@@ -617,14 +617,18 @@ fn wake_greeting_is_optional_hot_reloadable_and_flags_cache_conflict() {
 }
 
 /// `[llm].enabled` 总开关的注册表语义护栏：默认 true（缺省零行为变化）、
-/// 字段必须暴露给管理页且档位为 NextSession（保存后新会话生效）。
+/// 字段必须暴露给管理页且档位为 Live（保存后下一轮生效）。
+///
+/// 为什么不是 NextSession：它是 ASR→TTS 链路自测开关，而 EchoMuse 设备的会话整场
+/// 不断线（同一个 session 跨多轮），等"新会话"等于永不生效——实机复现过"配置里关了
+/// LLM，设备仍连续多轮照常调云端"。
 #[test]
-fn llm_enabled_switch_is_next_session_and_projected() {
+fn llm_enabled_switch_is_live_and_projected() {
     assert!(Config::default().llm.enabled, "llm.enabled 默认必须为 true");
     assert_eq!(
         field_hot(&["llm", "enabled"]),
-        Some(HotReload::NextSession),
-        "llm.enabled 是会话级开关：新会话生效（eff_config 会话开始热刷新）"
+        Some(HotReload::Live),
+        "llm.enabled 是链路自测开关：按轮生效（respond 现读 live_config）"
     );
     let v = schema_json();
     let llm = v["capabilities"]

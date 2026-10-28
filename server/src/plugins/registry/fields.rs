@@ -116,9 +116,9 @@ pub(super) const CAPABILITY_COMMON_FIELDS: &[(
                 kind: FieldKind::Bool,
                 default_hint: "true",
                 help: "false = 回声模式：技能级联照常，未命中时不调云端 LLM，\
-                        ASR 文本原样 TTS 回放（测试 ASR→TTS 链路用）。新会话生效。\
+                        ASR 文本原样 TTS 回放（测试 ASR→TTS 链路用）。保存后下一轮生效。\
                         纯回声直通（级联也不拦截）：把 [nlu].enabled 与 [command].enabled 一并关闭。",
-                hot: HotReload::NextSession,
+                hot: HotReload::Live,
                 required: false,
             },
             FieldSchema {

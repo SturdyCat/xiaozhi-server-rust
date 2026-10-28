@@ -31,7 +31,8 @@ pub struct LlmConfig {
     /// 总开关（`[llm].enabled`，默认 `true`）。`false` = **回声模式**：技能级联
     /// （command/nlu 两级本地识别）照常工作、命中照常执行；**未命中**时不调云端 LLM，
     /// 把 ASR 识别文本原样 TTS 下发（回声）——用于验证 ASR→TTS 链路。
-    /// 回声轮不写对话历史、不做记忆写入；热生效档位 NextSession（会话开始刷新）。
+    /// 回声轮不写对话历史、不做记忆写入；热生效档位 **Live**（按轮现读全局配置，
+    /// 保存后下一轮即生效——它是链路自测开关，等"新会话"在长连接设备上等于永不生效）。
     #[serde(default = "default_enabled")]
     pub enabled: bool,
     /// 实现 id（`[llm].engine`，约定见 `crate::config` 模块文档）；空 = 默认 `openai`。

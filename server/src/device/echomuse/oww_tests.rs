@@ -113,6 +113,34 @@ fn env_override_replaces_the_model_volume() {
     let _ = std::fs::remove_file(&path);
 }
 
+/// 缓存按文件指纹失效：同一路径换了内容，`vad_asset()` 必须重新解析而不是吐旧字节。
+///
+/// 缓存是为高频只读调用（管理台轮询 `GET …/oww/state`、每次设备注册）加的优化，
+/// 语义必须与"每次都读盘重转"完全一致——否则换模型后会一直下发旧资产。
+#[test]
+fn asset_cache_invalidates_when_the_file_changes() {
+    let _guard = super::super::hub_tests::HUB_LOCK.lock().unwrap();
+    let _volume = Volume::new(Some(&raw_float_model()));
+    let path = std::env::temp_dir().join(format!("oww-vad-cache-{}.onnx", uuid::Uuid::new_v4()));
+    std::fs::write(&path, raw_float_model()).unwrap();
+    std::env::set_var(ENV_OVERRIDE, &path);
+
+    let converted = vad_asset().expect("首次读取应成功转换");
+    assert!(
+        converted
+            .windows(6)
+            .any(|window| window == [0x22, 0x04, 0x00, 0x00, 0x80, 0x3F]),
+        "首次读取应得到 packed float_data"
+    );
+
+    // 同路径换成畸形内容（长度也不同）：缓存必须失效，从内容重新判定为错误。
+    std::fs::write(&path, b"<!DOCTYPE html><html>404</html>").unwrap();
+    let error = vad_asset().expect_err("换内容后必须重新解析（缓存未失效就会吐旧字节）");
+    assert!(error.contains("不是可解析的 ONNX"), "error was: {error}");
+
+    let _ = std::fs::remove_file(&path);
+}
+
 #[test]
 fn unreadable_override_names_the_path_instead_of_falling_back() {
     let _guard = super::super::hub_tests::HUB_LOCK.lock().unwrap();

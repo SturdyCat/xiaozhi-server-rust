@@ -44,9 +44,9 @@
 //! 静默生效。
 
 use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Duration;
+use std::path::{Path as FsPath, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, SystemTime};
 
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -443,27 +443,64 @@ fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
 
 /// 读模型并保证是「typed 重写版」：原始 `raw_data` 版在 armv7 ORT 上会 SIGBUS，
 /// 所以转换是下发前的**必要条件**，不是可选优化。
+///
+/// 结果按 `(文件 mtime, 文件长度)` 缓存（见 [`VAD_CACHE`]）：本函数的调用点是高频
+/// **只读**的——管理台设备页轮询 `GET …/oww/state`、每次设备注册触发的
+/// `ensure_on_device_assets`、以及 `install-vad` 都走它，而重写要解析 1.8MB protobuf
+/// 并逐 tensor 重排字节，没必要每次重跑（日志里成串的"已转换为 typed 字段布局"
+/// 就是缓存缺失的痕迹）。
 pub(super) fn vad_asset() -> Result<Vec<u8>, String> {
     let path = vad_path();
-    let bytes = std::fs::read(&path).map_err(|error| {
-        format!(
-            "VAD 模型不可读：{}（{error}）。服务端在 [echomuse].enabled=true 启动时会自动\
-             从官方源下载到该路径（OWW_VAD_URL 可指内网镜像）；也可用 XIAOZHI_OWW_VAD_PATH \
-             指向已下载的文件",
-            path.display()
-        )
-    })?;
+    let meta = std::fs::metadata(&path).map_err(|error| unreadable(&path, &error))?;
+    let len = meta.len();
+    // mtime 取不到（个别文件系统/挂载）就退化为不缓存，宁可多算也不能给旧字节。
+    let stamp = meta.modified().ok();
+    let cache = VAD_CACHE.get_or_init(|| Mutex::new(None));
+    if let Some(stamp) = stamp {
+        if let Ok(guard) = cache.lock() {
+            if let Some((cached_path, cached_stamp, cached_len, bytes)) = guard.as_ref() {
+                if *cached_path == path && *cached_stamp == stamp && *cached_len == len {
+                    return Ok(bytes.clone());
+                }
+            }
+        }
+    }
+    let bytes = std::fs::read(&path).map_err(|error| unreadable(&path, &error))?;
     let rewritten = onnx_typed::rewrite(&bytes)
         .map_err(|error| format!("VAD 模型不是可解析的 ONNX：{}（{error}）", path.display()))?;
     if rewritten.changed {
         // 下载源给的是原始 `raw_data` 版；这里已经就地转成 typed 布局（不改写磁盘）。
+        // 缓存命中后不会再走到这里，所以这条日志天然只在"首次读/换模型"时出现。
         tracing::debug!(
             path = %path.display(),
             bytes = rewritten.bytes.len(),
             "VAD 模型已转换为 typed 字段布局（armv7 ORT 需要）"
         );
     }
+    if let Some(stamp) = stamp {
+        if let Ok(mut guard) = cache.lock() {
+            *guard = Some((path.clone(), stamp, len, rewritten.bytes.clone()));
+        }
+    }
     Ok(rewritten.bytes)
+}
+
+/// typed 重写结果缓存：`(路径, mtime, 文件长度) → 重写后字节`。
+///
+/// 失效键用 `(路径, mtime, len)` 而不是"进程内只算一次"：模型可能被重新下载、或被
+/// `XIAOZHI_OWW_VAD_PATH` 改指到另一个文件，改完不重启也要能生效；路径必须入键，
+/// 否则"换指到另一个文件但 mtime/长度巧合相同"会拿到上一份字节。
+type VadCache = Mutex<Option<(PathBuf, SystemTime, u64, Vec<u8>)>>;
+static VAD_CACHE: OnceLock<VadCache> = OnceLock::new();
+
+/// 模型文件读不到时的统一说明（顺带给出"怎么补上"的出路）。
+fn unreadable(path: &FsPath, error: &std::io::Error) -> String {
+    format!(
+        "VAD 模型不可读：{}（{error}）。服务端在 [echomuse].enabled=true 启动时会自动\
+         从官方源下载到该路径（OWW_VAD_URL 可指内网镜像）；也可用 XIAOZHI_OWW_VAD_PATH \
+         指向已下载的文件",
+        path.display()
+    )
 }
 
 /// `POST /api/echomuse/devices/{id}/oww/install-vad`
