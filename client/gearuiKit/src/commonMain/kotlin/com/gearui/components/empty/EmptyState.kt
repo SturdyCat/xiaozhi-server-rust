@@ -1,0 +1,148 @@
+package com.gearui.components.empty
+
+import com.gearui.components.icon.*
+import androidx.compose.runtime.*
+import com.gearui.components.button.Button
+import com.gearui.components.icon.Icons
+import com.tencent.kuikly.compose.foundation.background
+import androidx.compose.runtime.remember
+import com.tencent.kuikly.compose.foundation.layout.*
+import com.gearui.foundation.primitives.Icon
+import com.gearui.foundation.primitives.Text
+import com.tencent.kuikly.compose.ui.Alignment
+import com.tencent.kuikly.compose.ui.Modifier
+import com.gearui.theme.Theme
+import com.gearui.i18n.I18n
+import com.gearui.foundation.layout.Spacing
+import com.gearui.foundation.typography.IconSizes
+
+/**
+ * EmptyState - fully Theme-driven empty state
+ *
+ * ✅ Rule: the first line is always `val colors = Theme.colors`
+ * ❌ Never: Color(0x...) or hardcoded colours
+ *
+ * Features:
+ * - empty state message
+ * - custom icon or image
+ * - action button
+ * - several presets
+ */
+@Composable
+fun EmptyState(
+    message: String,
+    modifier: Modifier = Modifier,
+    description: String? = null,
+    icon: (@Composable () -> Unit)? = null,
+    actionText: String? = null,
+    onAction: (() -> Unit)? = null,
+    customAction: (@Composable () -> Unit)? = null
+) {
+    // ⭐ Framework Rule #1: these three are always the first lines
+    val colors = Theme.colors
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(Spacing.xxl),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        // Icon / image
+        if (icon != null) {
+            icon()
+            Spacer(modifier = Modifier.height(Spacing.lg))
+        } else {
+            // Default empty state icon
+            Icon(Icons.image,
+                size = IconSizes.Display.sm,
+                tint = colors.mutedForeground
+            )
+            Spacer(modifier = Modifier.height(Spacing.lg))
+        }
+
+        // Primary message
+        Text(
+            text = message,
+            style = Theme.typography.titleMedium,
+            color = colors.foreground
+        )
+
+        // Description text
+        if (description != null) {
+            Spacer(modifier = Modifier.height(Spacing.sm))
+            Text(
+                text = description,
+                style = Theme.typography.bodyMedium,
+                color = colors.mutedForeground
+            )
+        }
+
+        // Action area (a custom one wins)
+        if (customAction != null) {
+            Spacer(modifier = Modifier.height(Spacing.xl))
+            customAction()
+        } else if (actionText != null && onAction != null) {
+            Spacer(modifier = Modifier.height(Spacing.xl))
+            Button(text = actionText, onClick = onAction)
+        }
+    }
+}
+
+/**
+ * EmptyStateType - preset empty states
+ */
+@Composable
+fun EmptyStatePreset(
+    type: EmptyStateType,
+    modifier: Modifier = Modifier,
+    actionText: String? = null,
+    onAction: (() -> Unit)? = null,
+    customAction: (@Composable () -> Unit)? = null
+) {
+    val s = I18n.strings
+    val (message, description, iconName) = when (type) {
+        EmptyStateType.NO_DATA -> Triple(s.common.noData, s.feedback.emptyNoDataDescription, Icons.image)
+        EmptyStateType.NO_SEARCH_RESULT -> Triple(s.common.noSearchResult, s.feedback.emptyNoSearchResultDescription, Icons.magnifyingGlass)
+        EmptyStateType.NO_NETWORK -> Triple(s.feedback.emptyNoNetworkTitle, s.feedback.emptyNoNetworkDescription, Icons.warning)
+        EmptyStateType.ERROR -> Triple(s.common.loadFailed, s.feedback.emptyErrorDescription, Icons.warningCircle)
+        EmptyStateType.NO_PERMISSION -> Triple(s.feedback.emptyNoPermissionTitle, s.feedback.emptyNoPermissionDescription, Icons.cameraSlash)
+    }
+
+    val colors = Theme.colors
+
+    EmptyState(
+        message = message,
+        description = description,
+        icon = {
+            Icon(iconName,
+                size = IconSizes.Display.sm,
+                tint = colors.mutedForeground
+            )
+        },
+        actionText = actionText,
+        onAction = onAction,
+        customAction = customAction,
+        modifier = modifier
+    )
+}
+
+/**
+ * EmptyStateType - empty state type
+ */
+enum class EmptyStateType {
+    /** no data */
+    NO_DATA,
+
+    /** no search results */
+    NO_SEARCH_RESULT,
+
+    /** no network */
+    NO_NETWORK,
+
+    /** error */
+    ERROR,
+
+    /** no permission */
+    NO_PERMISSION
+}

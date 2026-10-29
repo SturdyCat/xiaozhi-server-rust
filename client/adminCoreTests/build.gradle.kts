@@ -20,7 +20,11 @@ kotlin {
                 implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1")
             }
             kotlin.srcDir(rootProject.file("shared/src/commonMain/kotlin"))
-            kotlin.include("com/xiaozhi/admin/ui/Contracts.kt")
+            // T03 搬迁后纯契约位于 contracts/（零 import，不依赖 Kuikly）
+            kotlin.include("com/xiaozhi/admin/contracts/UiContracts.kt")
+            // 导航常量表（零依赖纯数据）：2026-10-29 范围削减后 UiContractsTest 需要断言
+            // 「12 项 → 8 项」的导航契约，故纳入编译清单
+            kotlin.include("com/xiaozhi/admin/contracts/AdminNav.kt")
             kotlin.include("com/xiaozhi/admin/EchoMuseWakeWord.kt")
             kotlin.include("com/xiaozhi/admin/FilesModel.kt")
             // 时间展示口径（formatEpochSeconds 的格式契约）：依赖 kotlinx-datetime，

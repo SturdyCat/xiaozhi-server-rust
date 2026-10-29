@@ -1,13 +1,12 @@
 package com.xiaozhi.admin
 
-import com.xiaozhi.admin.ui.*
 
 import com.tencent.kuikly.core.coroutines.Job
 import com.tencent.kuikly.core.coroutines.delay
 import com.tencent.kuikly.core.coroutines.launch
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.pager.Pager
-import com.tencent.kuikly.core.reactive.handler.observable
+import com.xiaozhi.admin.state.stateVar
 import com.tencent.kuikly.core.timer.clearTimeout
 import com.tencent.kuikly.core.timer.setTimeout
 
@@ -64,28 +63,28 @@ const val EM_CONSOLE_PING_MS = 25_000
 class EchoMuseConsoleState(private val ctx: Pager) {
 
     /** 六种连接态之一（[EM_CONSOLE_CONNECTING] 起）。渲染见 §6.4 表。 */
-    var phase by ctx.observable(EM_CONSOLE_CONNECTING)
+    var phase by stateVar(EM_CONSOLE_CONNECTING)
 
     /** 已合并刷新的可见输出（200 ms 一次，见 [EM_CONSOLE_FLUSH_MS]）。 */
-    var display by ctx.observable("")
+    var display by stateVar("")
 
     /** 常驻提示条：`ready.notice`（行模式说明）、截断提示、封顶提示。 */
-    var notice by ctx.observable("")
+    var notice by stateVar("")
 
     /** 一次性操作提示：输入过长 / 限流 / 服务端 `error` 文案（下一次操作成功后清空）。 */
-    var hint by ctx.observable("")
+    var hint by stateVar("")
 
     /** 服务端 `ready.insecure`：设备未设 token（同网段可直连）→ 琥珀警告条。 */
-    var insecure by ctx.observable(false)
+    var insecure by stateVar(false)
 
     /** `ready.mode`（一期恒为 `pipe`；留着字段不做布尔，见 §8.1）。 */
-    var mode by ctx.observable(EM_CONSOLE_MODE_PIPE)
+    var mode by stateVar(EM_CONSOLE_MODE_PIPE)
 
     /** 输入框草稿（↑↓ 历史回填也写这里）。 */
-    var input by ctx.observable("")
+    var input by stateVar("")
 
     /** 自动滚底开关（输出区内容高度变化时是否滚到底）。 */
-    var autoScroll by ctx.observable(true)
+    var autoScroll by stateVar(true)
 
     /**
      * 首次进入本设备控制台的危险说明是否已确认（PRD §5.6：同一会话只出一次、非模态）。
@@ -93,16 +92,16 @@ class EchoMuseConsoleState(private val ctx: Pager) {
      * 放状态层而不是视图局部变量：Kuikly 的视图函数在每次重渲染时重新执行，局部标志会被
      * 重置成"每次都弹"；换设备时 [resetForDevice] 再置回 false（新设备的说明该重看一遍）。
      */
-    var introSeen by ctx.observable(false)
+    var introSeen by stateVar(false)
 
     /** 「关于行模式」折叠说明是否展开（PRD §7.1 要求把能力差异给用户看，但默认不占屏）。 */
-    var aboutOpen by ctx.observable(false)
+    var aboutOpen by stateVar(false)
 
     /** 最近一次 `closed.reason` 原文（排查用；对外文案见 [phaseText]）。 */
-    var closing by ctx.observable("")
+    var closing by stateVar("")
 
     /** `closed` 帧的统计行（`inputs`/`bytes_out`/`secs`），只在排查时看。 */
-    var closingStats by ctx.observable("")
+    var closingStats by stateVar("")
 
     /** 清屏时一并复位的历史游标（-1 = 未在浏览历史）。 */
     private var historyCursor = -1

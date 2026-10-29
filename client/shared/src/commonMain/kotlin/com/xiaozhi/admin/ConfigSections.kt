@@ -1,6 +1,5 @@
 package com.xiaozhi.admin
 
-import com.xiaozhi.admin.ui.*
 
 /**
  * Compiled navigation metadata, not executable/downloaded UI plugins.

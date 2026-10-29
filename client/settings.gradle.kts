@@ -39,10 +39,10 @@ rootProject.name = "client"
 // 跨端业务逻辑（Kotlin Multiplatform）：android / ios / js(web) 共用
 include(":shared")
 
-// Kuikly Compose 第三方组件承载层（源码 vendored）：Compose-Settings 磁贴、kuiklyx-viewmodel、
-// 以及 Kuikly Compose material3 缺失组件（ListItem/SegmentedButton 等）的补丁。
-// 单独成模块的原因见 sharedCompose/build.gradle.kts 头部注释（上游缺 macosArm64/js 目标）。
-include(":sharedCompose")
+// GearUI Kit 组件库（Apache-2.0，源码 vendored）：上游只发布 android/ios/js，缺 macosArm64，
+// 本项目 macOS(Mac Catalyst) 是主力端，故源码引入并自补 macosArm64 目标。
+// 来源、许可与相对上游的构建适配见 gearuiKit/THIRD_PARTY_NOTICES.md。
+include(":gearuiKit")
 
 // Pure BLE protocol tests reuse the production codec source without linking a
 // Kuikly renderer, native host exports, or introducing tests into shipped bundles.

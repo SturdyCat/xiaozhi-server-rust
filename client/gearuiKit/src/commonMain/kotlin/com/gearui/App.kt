@@ -1,0 +1,155 @@
+package com.gearui
+
+import androidx.compose.runtime.LaunchedEffect
+import com.gearui.system.applyPlatformInterfaceStyle
+import androidx.compose.runtime.Composable
+import com.gearui.components.toast.ToastHost
+import com.gearui.foundation.keyboard.KeyboardDismissContainer
+import com.gearui.foundation.keyboard.KeyboardDismissMode
+import com.gearui.i18n.I18nProvider
+import com.gearui.i18n.StringsPatch
+import com.gearui.i18n.I18nRoot
+import com.gearui.overlay.OverlayRoot
+import com.gearui.runtime.RuntimeFlags
+import com.gearui.runtime.ProvideRuntimeEnvironment
+import com.gearui.theme.ProvideSystemDarkMode
+import com.gearui.foundation.elevation.Elevation
+import com.gearui.foundation.elevation.Elevations
+import com.gearui.foundation.motion.Motion
+import com.gearui.foundation.motion.Motions
+import com.gearui.theme.Typography
+import com.gearui.theme.Typographies
+import com.gearui.theme.Shapes
+import com.gearui.theme.ShapesDefault
+import com.gearui.theme.Theme
+import com.gearui.theme.ThemeMode
+import com.gearui.theme.ThemeSpec
+import com.tencent.kuikly.compose.foundation.background
+import com.tencent.kuikly.compose.foundation.layout.Box
+import com.tencent.kuikly.compose.foundation.layout.fillMaxSize
+import com.tencent.kuikly.compose.ui.Modifier
+
+/**
+ * App - the single entry point of a GearUI application
+ *
+ * Wires up all GearUI infrastructure:
+ * - I18n (language runtime, shared by every library)
+ * - Theme (visual runtime)
+ * - OverlayRoot (layering runtime)
+ * - ToastHost (global lightweight messages)
+ *
+ * Layering:
+ * ```
+ * App (languageTag + themeMode + ...)
+ *     ↓
+ * I18nRoot (LocalLanguageTag / LocalFallbackLanguageTag)
+ *     ↓
+ * I18nProvider (LocalStrings)
+ *     ↓
+ * ProvideSystemDarkMode (system dark state)
+ *     ↓
+ * Theme (resolved dark boolean → colors)
+ *     ↓
+ * ProvideRuntimeEnvironment
+ *     ↓
+ * OverlayRoot + ToastHost
+ *     ↓
+ * application content
+ * ```
+ *
+ * Usage:
+ * ```kotlin
+ * App(
+ *     languageTag = userLanguage,
+ *     themeMode = ThemeMode.System,
+ *     isSystemDark = StatusBarControllerImpl.isSystemDarkMode(),
+ *     stringsOverrides = mapOf(
+ *         "en-US" to StringsPatch(common = CommonStringsPatch(confirm = "Got it")),
+ *     ),
+ * ) {
+ *     MainPage()
+ * }
+ * ```
+ *
+ * Downstream libraries (privchat-ui and friends) only read `LocalLanguageTag.current`
+ * internally to follow language changes; the application layer never passes languageTag again. See
+ * `docs/I18N.md`.
+ *
+ * @param themeMode theme mode (Light / Dark / System)
+ * @param isSystemDark whether the system is in dark mode (only used when themeMode is System)
+ * @param theme optional custom theme spec
+ * @param languageTag BCP47 language tag (such as "zh-Hans" or "en-US")
+ * @param fallbackLanguageTag fallback used when [languageTag] matches no language pack;
+ *   applies to GearUI itself and to every downstream library
+ * @param stringsOverrides field-level overrides of GearUI's built-in copy, grouped by language tag
+ * @param runtimeFlags Runtime behaviour switches
+ * @param keyboardDismissMode focus-loss policy for text fields (by default tapping empty space or scrolling hides the keyboard)
+ */
+@Composable
+fun App(
+    themeMode: ThemeMode = ThemeMode.Light,
+    isSystemDark: Boolean = false,
+    theme: ThemeSpec? = null,
+    /**
+     * The remaining token axes. `theme` carries colour; these carry the rest,
+     * so a brand can restyle without forking components.
+     *
+     * They were previously reachable only by calling [com.gearui.theme.Theme]
+     * directly, which no application does — App is the documented entry point.
+     * That made "tokens are replaceable" true of colour alone.
+     */
+    typography: Typography = Typographies.Default,
+    shapes: Shapes = ShapesDefault.Default,
+    elevation: Elevation = Elevations.Default,
+    motion: Motion = Motions.Default,
+    languageTag: String = "en-US",
+    fallbackLanguageTag: String = "en-US",
+    stringsOverrides: Map<String, StringsPatch> = emptyMap(),
+    runtimeFlags: RuntimeFlags = RuntimeFlags(),
+    keyboardDismissMode: KeyboardDismissMode = KeyboardDismissMode.OnTapOrScroll,
+    content: @Composable () -> Unit,
+) {
+    // The app's appearance, not the system's, for what the platform draws itself (the
+    // iOS keyboard). Set here at the root only: a nested Theme styles a region, not the window.
+    LaunchedEffect(themeMode) { applyPlatformInterfaceStyle(themeMode) }
+    I18nRoot(languageTag = languageTag, fallbackLanguageTag = fallbackLanguageTag) {
+        I18nProvider(overrides = stringsOverrides) {
+            ProvideSystemDarkMode(isSystemDark = isSystemDark) {
+                Theme(
+                    mode = themeMode,
+                    theme = theme,
+                    typography = typography,
+                    shapes = shapes,
+                    elevation = elevation,
+                    motion = motion,
+                ) {
+                    ProvideRuntimeEnvironment(flags = runtimeFlags) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(Theme.colors.background)
+                        ) {
+                            KeyboardDismissContainer(mode = keyboardDismissMode) {
+                                OverlayRoot {
+                                    content()
+                                    ToastHost()
+                                    // 🔴 The ONE host for the imperative ActionSheet.
+                                    //
+                                    // ActionSheet is global singleton state. When hosting was left to each page
+                                    // (the old contract said "Must be placed at the root of the page"), two
+                                    // failure modes followed, both reproduced in production:
+                                    // 1. showList called from a page without a Host -> nothing appears there,
+                                    //    then the sheet pops up out of nowhere on returning to a page that has one;
+                                    // 2. several live pages each mounting a Host -> the one state gets shown as
+                                    //    multiple stacked overlays.
+                                    // Exactly one host, so the sheet is always topmost and always single.
+                                    com.gearui.components.actionsheet.ActionSheet.Host()
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

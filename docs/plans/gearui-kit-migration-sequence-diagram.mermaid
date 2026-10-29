@@ -1,0 +1,45 @@
+sequenceDiagram
+    autonumber
+    participant H as 宿主 Web / Android / iOS / macOS
+    participant P as AdminPage (ComposeContainer)
+    participant A as App (GearUI 根)
+    participant S as AdminShell
+    participant SP as LocalAdminPager / LocalAdminViewport / LocalFieldHelp
+    participant ST as ConfigFormState (stateVar)
+    participant N as NetworkModule
+    participant T as GearUI Toast
+
+    H->>P: page_name = admin
+    P->>P: didInit()
+    P->>P: 构造全部 state 实例（ConfigFormState(this) 等，仅一次）
+    P->>A: setContent { App(themeMode=Light, languageTag=zh-Hans) { AdminShell() } }
+    A->>A: I18nRoot -> I18nProvider -> Theme -> ProvideRuntimeEnvironment -> OverlayRoot + ToastHost + ActionSheet.Host
+    A->>S: content()
+    S->>SP: 提供 LocalAdminPager / LocalAdminViewport / LocalFieldHelp
+    S->>S: Modifier.onSizeChanged { viewport = AdminViewport(w, h) }
+    Note over S: K9 断点 <768dp 抽屉 / >=900dp 双列 / <700dp 紧凑菜单 / 侧栏 240dp
+    S->>S: NavBar(title = AdminNav.label(selected), centerTitle = false)
+    S->>S: Sidebar(List + CellGroup + Cell，Badge dot = dirty)
+    S->>S: section 分发 -> 语音流程 / 全局配置 / 运维 / EchoMuse / 文件 / 测试台
+    S->>ST: 读取 state 字段（Compose 快照登记读取）
+    S->>N: state.load()（Kuikly 协程 / setTimeout，不经 Compose）
+    N-->>ST: 回调写 stateVar(...)
+    Note over ST: MutableState 写入 -> 全局快照 apply 通知 -> Recomposer 调度重组
+    ST-->>S: 读取处失效，仅该子树重组（未读取处不重组）
+    Note over S: K10 selectedSection 存于页面级 stateVar，跨断点 / 切 tab 不重建
+
+    rect rgb(240, 245, 255)
+    Note over S,T: 保存动作（Q4 / A8）
+    S->>ST: 点保存 -> saving = 1
+    S->>N: POST /api/config（整段回传，全仓唯一提交点）
+    N-->>ST: 成功 -> saving = ""
+    S->>T: Toast.success("已保存")
+    N-->>ST: 409 冲突 -> saving = ""，conflict = true
+    S->>S: 顶部「重新加载」按钮变可用（不弹 Toast）
+    end
+
+    rect rgb(245, 245, 240)
+    Note over S: 图标渲染（K1）
+    S->>S: GearIcon(token) -> IconToken.vectors() -> IconOp.emit(Path, scale)
+    S->>S: Canvas { filled -> drawPath(fill) ; stroke -> drawPath(Stroke(1.8*scale, cap=Round)) }
+    end

@@ -1,27 +1,27 @@
 package com.xiaozhi.admin
 
-import com.xiaozhi.admin.ui.*
 
 import com.tencent.kuikly.core.base.PagerScope
 import com.tencent.kuikly.core.module.NetworkModule
 import com.tencent.kuikly.core.nvi.serialization.json.JSONArray
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.pager.Pager
-import com.tencent.kuikly.core.reactive.collection.ObservableList
-import com.tencent.kuikly.core.reactive.handler.observable
-import com.tencent.kuikly.core.reactive.handler.observableList
+import com.xiaozhi.admin.state.stateVar
+import com.xiaozhi.admin.state.stateListOf
 
 /**
- * 管理台「概览 / 设备 / 会话 / 对话记录 / 用量」等页面的数据源。
+ * 管理台「概览 / 设备」页面的数据源。
  *
- * 对应服务端端点：`GET /api/stats`、`/api/devices`、`/api/sessions`、`/api/conversations`、
- * `/api/usage`，外加设备注入 `POST /api/devices/{id}/inject`（[DevicesState.inject]）。
+ * 对应服务端端点：`GET /api/stats`、`/api/devices`，外加设备注入
+ * `POST /api/devices/{id}/inject`（[DevicesState.inject]）。
+ * （2026-10-29 范围削减：会话页的 `SessionRow` / `SessionsState` 与对话/用量/延迟三个
+ * state 类已随 docs/plans/gearui-kit-scope-reduction.md §二 移除。）
  * 数据源是**进程内注册表**（`crate::app::registry`）：全部为"自本次服务启动以来"的累计值，
  * 重启清零、在线态由会话生命周期派生。这个口径由服务端随响应下发（`note` / `scope_note`），
  * 页面**直接展示服务端的原话**——客户端不自己编一句"今日统计"，那会与事实不符。
  *
  * 设计取舍（与 [McpToolsState] 完全一致，因此读代码时可比照）：
- * - **只读投影**：五个数据源都不参与配置表单，绝不随 `POST /api/config` 回传；
+ * - **只读投影**：这些数据源都不参与配置表单，绝不随 `POST /api/config` 回传；
  * - **失败就地显示**：首次加载失败 → `loadError` + 「刷新」按钮，不弹 toast（toast 只用于
  *   用户动作的结果）；
  * - **空列表给可行动的解释**：用服务端 `note`，并说清"怎么样才会有数据"；
@@ -77,8 +77,8 @@ internal fun getJson(
 /**
  * 只读数据源的公共加载模板（基类）。
  *
- * StatsState / DevicesState / SessionsState / McpToolsState / PluginMetaState /
- * UsageState / ConversationsState 七个类此前各自持有逐字相同的同构骨架：
+ * StatsState / DevicesState / McpToolsState / PluginMetaState 等类此前各自持有逐字相同的同构骨架
+ *（SessionsState / UsageState / ConversationsState 也曾共用，2026-10-29 随范围削减移除）：
  * `loading/loaded/loadError + base + load(){if(loading)return;…} + refresh`。收敛到本基类后，
  * 子类只需声明三个差异点：
  * - [endpoint]：请求 URL（含查询参数）；
@@ -95,9 +95,9 @@ internal fun getJson(
  */
 abstract class LoadableState(private val scope: PagerScope) {
 
-    var loading by scope.observable(false)
-    var loaded by scope.observable(false)
-    var loadError by scope.observable("")
+    var loading by stateVar(false)
+    var loaded by stateVar(false)
+    var loadError by stateVar("")
 
     /** 上次使用的服务端基址：[refresh] 复用（web 同域为空串，macApp 连接流程传绝对地址）。 */
     protected var base = ""
@@ -203,22 +203,22 @@ class UsageTotals(
  */
 class StatsState(scope: PagerScope) : LoadableState(scope) {
 
-    var uptimeText by scope.observable("")
-    var devicesTotal by scope.observable(0)
-    var devicesOnline by scope.observable(0)
-    var sessionsLive by scope.observable(0)
-    var sessionsTest by scope.observable(0)
-    var turnsUser by scope.observable(0)
-    var turnsAssistant by scope.observable(0)
-    var conversationsRetained by scope.observable(0)
-    var usageSummary by scope.observable("")
+    var uptimeText by stateVar("")
+    var devicesTotal by stateVar(0)
+    var devicesOnline by stateVar(0)
+    var sessionsLive by stateVar(0)
+    var sessionsTest by stateVar(0)
+    var turnsUser by stateVar(0)
+    var turnsAssistant by stateVar(0)
+    var conversationsRetained by stateVar(0)
+    var usageSummary by stateVar("")
     /** 已计量的轮次数（`usage.turns`）——与"缓冲内轮次"不同：那个受环形上界影响，这个是累计。 */
-    var usageTurns by scope.observable(0L)
-    var scopeNote by scope.observable("")
-    var version by scope.observable("")
+    var usageTurns by stateVar(0L)
+    var scopeNote by stateVar("")
+    var version by stateVar("")
 
     /** 计数摘要（只含非零项）：顶栏一行就能看到"现在什么状态"。 */
-    var summary by scope.observable("")
+    var summary by stateVar("")
 
     override fun endpoint(baseUrl: String): String = "$baseUrl/api/stats"
 
@@ -308,10 +308,10 @@ class DeviceRow(
 /** `GET /api/devices` 的数据源。 */
 class DevicesState(scope: PagerScope) : LoadableState(scope) {
 
-    var note by scope.observable("")
-    var summary by scope.observable("")
+    var note by stateVar("")
+    var summary by stateVar("")
 
-    val devices: ObservableList<DeviceRow> by scope.observableList()
+    val devices: MutableList<DeviceRow> = stateListOf()
 
     override fun endpoint(baseUrl: String): String = "$baseUrl/api/devices"
 
@@ -360,16 +360,16 @@ class DevicesState(scope: PagerScope) : LoadableState(scope) {
     // ============================================================
 
     /** 当前展开注入输入的设备号（空串 = 全部收起；一次只展开一台，避免一排输入框）。 */
-    var injectTarget by scope.observable("")
+    var injectTarget by stateVar("")
 
     /** 注入文本草稿。 */
-    var injectDraft by scope.observable("")
+    var injectDraft by stateVar("")
 
     /** 注入请求进行中。 */
-    var injectBusy by scope.observable(false)
+    var injectBusy by stateVar(false)
 
     /** 上次注入的就地结果（成功提示或失败原因；空 = 无）。 */
-    var injectMsg by scope.observable("")
+    var injectMsg by stateVar("")
 
     /** 展开/收起某台设备的注入输入（切换目标时清空草稿与结果）。 */
     fun toggleInject(deviceId: String) {
@@ -416,85 +416,7 @@ class DevicesState(scope: PagerScope) : LoadableState(scope) {
 }
 
 // ============================================================
-// 会话
+// 会话（2026-10-29 范围削减：SessionRow / SessionsState 已移除，
+// 会话页随 docs/plans/gearui-kit-scope-reduction.md §二 砍除）
 // ============================================================
-
-/** 一条活会话（`GET /api/sessions` 的一行）。 */
-class SessionRow(
-    val sessionId: String,
-    val deviceId: String,
-    val isTest: Boolean,
-    val mcp: Boolean,
-    val phase: String,
-    val phaseText: String,
-    val durationText: String,
-    val idleText: String,
-    val turnCount: Long,
-    val lastUserText: String,
-    val lastError: String,
-) {
-    /** 阶段 → [statusBadge] 状态词：聆听/思考/说话都是"正在忙"，空闲走中性。 */
-    val badgeState: String
-        get() = when (phase) {
-            "listening" -> "recording"
-            "thinking" -> "busy"
-            "speaking" -> "connected"
-            else -> "idle"
-        }
-
-    val subtitle: String
-        get() = buildString {
-            append("连接 ${durationText} · 空闲 $idleText · 轮次 $turnCount")
-            if (mcp) append(" · MCP")
-        }
-}
-
-/** `GET /api/sessions` 的数据源。 */
-class SessionsState(scope: PagerScope) : LoadableState(scope) {
-
-    var note by scope.observable("")
-    var summary by scope.observable("")
-
-    val sessions: ObservableList<SessionRow> by scope.observableList()
-
-    override fun endpoint(baseUrl: String): String = "$baseUrl/api/sessions"
-
-    override val errorLabel: String = "会话列表加载失败"
-
-    override fun apply(data: JSONObject) {
-        note = data.text("note")
-        sessions.clear()
-        val arr = data.array("sessions")
-        if (arr == null) {
-            loadError = "会话列表为空（服务端返回异常）"
-            return
-        }
-        var test = 0
-        for (i in 0 until arr.length()) {
-            val s = arr.optJSONObject(i) ?: continue
-            val row = SessionRow(
-                sessionId = s.text("session_id"),
-                deviceId = s.text("device_id"),
-                isTest = s.optBoolean("is_test", false),
-                mcp = s.optBoolean("mcp", false),
-                phase = s.text("phase"),
-                phaseText = s.text("phase_display"),
-                durationText = humanDuration(s.optLong("duration_ms") ?: 0L),
-                idleText = humanAge(s.optLong("idle_ms") ?: 0L),
-                turnCount = s.optLong("turn_count") ?: 0L,
-                lastUserText = s.text("last_user_text"),
-                lastError = s.text("last_error"),
-            )
-            sessions.add(row)
-            if (row.isTest) test++
-        }
-        summary = if (sessions.isEmpty()) {
-            "当前没有连接"
-        } else {
-            "当前 ${sessions.size} 条连接" + if (test > 0) "（含 $test 条测试台）" else ""
-        }
-        loaded = true
-        loadError = ""
-    }
-}
 

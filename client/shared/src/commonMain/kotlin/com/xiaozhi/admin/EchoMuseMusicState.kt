@@ -1,13 +1,11 @@
 package com.xiaozhi.admin
 
-import com.xiaozhi.admin.ui.*
 
 import com.tencent.kuikly.core.base.PagerScope
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.pager.Pager
-import com.tencent.kuikly.core.reactive.collection.ObservableList
-import com.tencent.kuikly.core.reactive.handler.observable
-import com.tencent.kuikly.core.reactive.handler.observableList
+import com.xiaozhi.admin.state.stateVar
+import com.xiaozhi.admin.state.stateListOf
 
 /**
  * 音乐面状态（配置 tab 的 **Stage 08**）：局域网 DLNA 服务器的扫描/浏览/播放/停止。
@@ -31,27 +29,27 @@ class EchoMuseMusicState(
 ) {
 
     /** 局域网 DLNA 媒体服务器（value=location 设备描述地址，label=友好名）。 */
-    var servers by scope.observableList<Pair<String, String>>()
+    var servers: MutableList<Pair<String, String>> = stateListOf()
         private set
-    var serversLoaded by scope.observable(false)
+    var serversLoaded by stateVar(false)
         private set
-    var serverOpen by scope.observable(false)
+    var serverOpen by stateVar(false)
 
     /** 已选服务器（location；非空时展示曲目区）。 */
-    var serverSelection by scope.observable("")
+    var serverSelection by stateVar("")
 
     /** 当前服务器的音频曲目（value=直链 url，label=标题（艺术家 · 专辑））。 */
-    var tracks by scope.observableList<Pair<String, String>>()
+    var tracks: MutableList<Pair<String, String>> = stateListOf()
         private set
-    var tracksLoaded by scope.observable(false)
+    var tracksLoaded by stateVar(false)
         private set
-    var trackOpen by scope.observable(false)
+    var trackOpen by stateVar(false)
 
     /** 已选曲目（直链 url）。 */
-    var trackSelection by scope.observable("")
+    var trackSelection by stateVar("")
 
     /** 任一音乐动作进行中（按钮 loading 用）。 */
-    var busy by scope.observable(false)
+    var busy by stateVar(false)
         private set
 
     /** 选中服务器（下拉 onSelect）：切换服务器必须清空上一台的曲目，避免串台。 */

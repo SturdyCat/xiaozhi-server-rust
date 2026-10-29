@@ -1,10 +1,9 @@
 package com.xiaozhi.admin
 
-import com.xiaozhi.admin.ui.*
 
 import com.tencent.kuikly.core.base.PagerScope
-import com.tencent.kuikly.core.reactive.handler.observable
-import com.tencent.kuikly.core.reactive.handler.observableList
+import com.xiaozhi.admin.state.stateVar
+import com.xiaozhi.admin.state.stateListOf
 
 /** 日志来源白名单 id ↔ 下拉文案。id 必须与服务端 `log_command` 的 match 分支逐一对应。 */
 private val EM_LOG_SOURCES = listOf(
@@ -34,28 +33,28 @@ private val EM_LOG_SOURCES = listOf(
 class EchoMuseLogsState(scope: PagerScope, private val detail: EchoMuseDetailState) {
 
     /** 当前选中的来源 id（默认第一项 = 设备自身的 server.log）。 */
-    var logSource by scope.observable(EM_LOG_SOURCES.first().first)
+    var logSource by stateVar(EM_LOG_SOURCES.first().first)
 
     /** 下拉展开态（`dropdownField` 需要）。 */
-    var sourceOpen by scope.observable(false)
+    var sourceOpen by stateVar(false)
 
     /** 下拉选项（`observableList<Pair<id, 文案>>`，与其它下拉同型）。 */
-    val logSources by scope.observableList<Pair<String, String>>()
+    val logSources: MutableList<Pair<String, String>> = stateListOf()
 
     /** 最近一次读取到的日志原文。 */
-    var output by scope.observable("")
+    var output by stateVar("")
         private set
 
     /** 是否读到过（决定"复制日志"可用性与输出区是否渲染）。 */
-    var loaded by scope.observable(false)
+    var loaded by stateVar(false)
         private set
 
     /** 本次输出对应的来源 id（服务端回包里的 `source`，可能与会话里选的不同）。 */
-    var loadedSource by scope.observable("")
+    var loadedSource by stateVar("")
         private set
 
     /** 输出所属设备号：与当前 `target` 不一致时属于串台，视图应提示重新读取。 */
-    var loadedDevice by scope.observable("")
+    var loadedDevice by stateVar("")
         private set
 
     /** 读取时的 control 会话标识：会话变了，这份输出就是"历史快照"。 */

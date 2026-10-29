@@ -1,0 +1,313 @@
+package com.gearui.components.timeline
+
+import com.gearui.foundation.typography.IconSizes
+import com.gearui.foundation.primitives.Icon
+import com.gearui.components.icon.IconSource
+import com.gearui.foundation.control.ControlGeometry
+import com.tencent.kuikly.compose.foundation.background
+import com.tencent.kuikly.compose.foundation.border
+import com.tencent.kuikly.compose.foundation.layout.*
+import com.tencent.kuikly.compose.foundation.shape.CircleShape
+import androidx.compose.runtime.*
+import com.tencent.kuikly.compose.ui.Alignment
+import com.tencent.kuikly.compose.ui.Modifier
+import com.tencent.kuikly.compose.ui.draw.clip
+import com.tencent.kuikly.compose.ui.graphics.Color
+import com.tencent.kuikly.compose.ui.unit.Dp
+import com.gearui.foundation.primitives.Text
+
+import com.gearui.theme.Theme
+import com.gearui.foundation.layout.Spacing
+import com.gearui.foundation.border.BorderWidth
+
+/**
+ * Timeline item data
+ */
+data class TimelineItem(
+    val content: String,
+    val timestamp: String? = null,
+    val icon: IconSource? = null,
+    val color: TimelineColor = TimelineColor.DEFAULT
+)
+
+/**
+ * Timeline color theme
+ */
+enum class TimelineColor {
+    DEFAULT,
+    PRIMARY,
+    SUCCESS,
+    WARNING,
+    ERROR
+}
+
+/**
+ * Timeline mode
+ */
+enum class TimelineMode {
+    LEFT,
+    RIGHT,
+    ALTERNATE
+}
+
+/**
+ * Timeline - Timeline component
+ *
+ * Timeline component
+ *
+ * Features:
+ * - Multiple modes (left, right, alternate)
+ * - Custom icons
+ * - Color themes
+ * - Timestamp support
+ * - Custom content
+ *
+ * Example:
+ * ```
+ * Timeline(
+ *     items = listOf(
+ *         TimelineItem(
+ *             content = "Order created",
+ *             timestamp = "2024-01-01 10:00",
+ *             color = TimelineColor.SUCCESS
+ *         ),
+ *         TimelineItem(
+ *             content = "Payment completed",
+ *             timestamp = "2024-01-01 10:05"
+ *         )
+ *     )
+ * )
+ * ```
+ */
+@Composable
+fun Timeline(
+    items: List<TimelineItem>,
+    modifier: Modifier = Modifier,
+    mode: TimelineMode = TimelineMode.LEFT,
+    reverse: Boolean = false
+) {
+    val colors = Theme.colors
+
+    val displayItems = if (reverse) items.reversed() else items
+
+    Column(
+        modifier = modifier.fillMaxWidth()
+    ) {
+        displayItems.forEachIndexed { index, item ->
+            val isLast = index == displayItems.size - 1
+            val position = when (mode) {
+                TimelineMode.LEFT -> TimelinePosition.LEFT
+                TimelineMode.RIGHT -> TimelinePosition.RIGHT
+                TimelineMode.ALTERNATE -> if (index % 2 == 0) TimelinePosition.LEFT else TimelinePosition.RIGHT
+            }
+
+            TimelineItemView(
+                item = item,
+                position = position,
+                isLast = isLast
+            )
+        }
+    }
+}
+
+private enum class TimelinePosition {
+    LEFT, RIGHT
+}
+
+@Composable
+private fun TimelineItemView(
+    item: TimelineItem,
+    position: TimelinePosition,
+    isLast: Boolean
+) {
+    val colors = Theme.colors
+
+    val dotColor = when (item.color) {
+        TimelineColor.DEFAULT -> colors.mutedForeground
+        TimelineColor.PRIMARY -> colors.primary
+        TimelineColor.SUCCESS -> colors.success
+        TimelineColor.WARNING -> colors.warning
+        TimelineColor.ERROR -> colors.destructive
+    }
+
+    // The row is as tall as its content, and the axis fills it, so the connector runs
+    // from this dot to the next one whatever the content's height. A fixed-height line
+    // stopped short of the next dot.
+    Row(
+        modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min),
+        horizontalArrangement = if (position == TimelinePosition.RIGHT) {
+            Arrangement.End
+        } else {
+            Arrangement.Start
+        }
+    ) {
+        if (position == TimelinePosition.RIGHT) {
+            // Content on the right
+            Box(modifier = Modifier.weight(1f))
+        }
+
+        // Dot and line
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.width(ControlGeometry.timelineAxisWidth).fillMaxHeight()
+        ) {
+            // Dot
+            Box(
+                modifier = Modifier
+                    .size(ControlGeometry.timelineDot)
+                    .clip(CircleShape)
+                    .background(dotColor)
+                    .border(BorderWidth.thick, colors.surface, CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                item.icon?.let { icon ->
+                    Icon(
+                        icon,
+                        size = IconSizes.Default.sm,
+                        tint = colors.primaryForeground
+                    )
+                }
+            }
+
+            // Line
+            if (!isLast) {
+                Box(
+                    modifier = Modifier
+                        .width(BorderWidth.thick)
+                        .weight(1f)
+                        .heightIn(min = ControlGeometry.timelineConnectorMinHeight)
+                        .background(colors.border)
+                )
+            }
+        }
+
+        if (position == TimelinePosition.LEFT) {
+            // Content on the left
+            Spacer(modifier = Modifier.width(Spacing.lg))
+
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(bottom = if (!isLast) Spacing.xl else Spacing.none)
+            ) {
+                Text(
+                    text = item.content,
+                    style = Theme.typography.bodyMedium,
+                    color = colors.foreground
+                )
+
+                item.timestamp?.let { timestamp ->
+                    Spacer(modifier = Modifier.height(Spacing.xs))
+                    Text(
+                        text = timestamp,
+                        style = Theme.typography.bodySmall,
+                        color = colors.mutedForeground
+                    )
+                }
+            }
+        } else {
+            // Content on the right
+            Spacer(modifier = Modifier.width(Spacing.lg))
+
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(bottom = if (!isLast) Spacing.xl else Spacing.none),
+                horizontalAlignment = Alignment.End
+            ) {
+                Text(
+                    text = item.content,
+                    style = Theme.typography.bodyMedium,
+                    color = colors.foreground
+                )
+
+                item.timestamp?.let { timestamp ->
+                    Spacer(modifier = Modifier.height(Spacing.xs))
+                    Text(
+                        text = timestamp,
+                        style = Theme.typography.bodySmall,
+                        color = colors.mutedForeground
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Timeline with custom content
+ */
+@Composable
+fun TimelineCustom(
+    itemCount: Int,
+    modifier: Modifier = Modifier,
+    mode: TimelineMode = TimelineMode.LEFT,
+    dotColor: @Composable (Int) -> Color = { Theme.colors.primary },
+    content: @Composable (index: Int) -> Unit
+) {
+    val colors = Theme.colors
+
+    Column(
+        modifier = modifier.fillMaxWidth()
+    ) {
+        repeat(itemCount) { index ->
+            val isLast = index == itemCount - 1
+            val position = when (mode) {
+                TimelineMode.LEFT -> TimelinePosition.LEFT
+                TimelineMode.RIGHT -> TimelinePosition.RIGHT
+                TimelineMode.ALTERNATE -> if (index % 2 == 0) TimelinePosition.LEFT else TimelinePosition.RIGHT
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = if (position == TimelinePosition.RIGHT) {
+                    Arrangement.End
+                } else {
+                    Arrangement.Start
+                }
+            ) {
+                if (position == TimelinePosition.RIGHT) {
+                    Box(modifier = Modifier.weight(1f))
+                }
+
+                // Dot and line
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.width(ControlGeometry.timelineAxisWidth)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(ControlGeometry.timelineDot)
+                            .clip(CircleShape)
+                            .background(dotColor(index))
+                            .border(BorderWidth.thick, colors.surface, CircleShape)
+                    )
+
+                    if (!isLast) {
+                        Box(
+                            modifier = Modifier
+                                .width(BorderWidth.thick)
+                                .height(ControlGeometry.timelineConnectorMinHeight)
+                                .background(colors.border)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.width(Spacing.lg))
+
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(bottom = if (!isLast) Spacing.xl else Spacing.none),
+                    horizontalAlignment = if (position == TimelinePosition.RIGHT) {
+                        Alignment.End
+                    } else {
+                        Alignment.Start
+                    }
+                ) {
+                    content(index)
+                }
+            }
+        }
+    }
+}

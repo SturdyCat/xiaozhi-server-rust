@@ -1,14 +1,12 @@
 package com.xiaozhi.admin
 
-import com.xiaozhi.admin.ui.*
 
 import com.tencent.kuikly.core.pager.Pager
 import com.tencent.kuikly.core.base.PagerScope
 import com.tencent.kuikly.core.nvi.serialization.json.JSONArray
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
-import com.tencent.kuikly.core.reactive.collection.ObservableList
-import com.tencent.kuikly.core.reactive.handler.observable
-import com.tencent.kuikly.core.reactive.handler.observableList
+import com.xiaozhi.admin.state.stateVar
+import com.xiaozhi.admin.state.stateListOf
 import com.tencent.kuikly.core.timer.setTimeout
 
 /**
@@ -34,45 +32,45 @@ import com.tencent.kuikly.core.timer.setTimeout
 /** 一条自定义意图（`[nlu].intents[i]`）的行内草稿。 */
 class IntentDraft(scope: PagerScope) {
     /// 技能名：唯一，LLM 的 `execute_skill` 白名单也用它（`light` 等短名即可）。
-    var name by scope.observable("")
+    var name by stateVar("")
     /// 模板列表：每行一个，如「把{room}的灯{action}」；`{slot}` 对应 slots 里同名项。
-    var templates by scope.observable("")
+    var templates by stateVar("")
     /// 动作：reply（只应答）| end_session（说 reply 后结束聆听）| mcp（派发设备工具）。
-    var actionKind by scope.observable("reply")
+    var actionKind by stateVar("reply")
     /// action.kind = "mcp:" 时派发的设备工具名（须与设备 MCP 工具页清单一致）。
-    var mcpTool by scope.observable("")
+    var mcpTool by stateVar("")
     /// 命中后的应答语（mcp 技能先应答再派发）。
-    var reply by scope.observable("")
+    var reply by stateVar("")
     /// action 下拉菜单展开态（每行独立，放草稿里避免共享全局互斥键）。
-    var actionMenuOpen by scope.observable(false)
+    var actionMenuOpen by stateVar(false)
 }
 
 /** 一条槽位定义（`[nlu].slots[i]`）的行内草稿。 */
 class SlotDraft(scope: PagerScope) {
     /// 槽位名：对应模板里的 `{name}` 占位。
-    var name by scope.observable("")
+    var name by stateVar("")
     /// 封闭值表：每行一个（用于校验与抽取）；留空 = 开放槽位（任意短语，仅限长校验）。
-    var values by scope.observable("")
+    var values by stateVar("")
     /// true = 模板中该槽位可缺省；false = 缺槽位不命中。
-    var optional by scope.observable("false")
+    var optional by stateVar("false")
 }
 
 class NluSectionState(private val scope: PagerScope) {
 
-    var enabled by scope.observable("true")
+    var enabled by stateVar("true")
     /// 轻量模型执行阈值（0~1，越高越保守；1.0 = 关闭模型级）。
-    var modelThreshold by scope.observable("0.9")
+    var modelThreshold by stateVar("0.9")
     /// 最高分领先其他技能最高分的最小差值（防相近指令歧义误触发）。
-    var modelMargin by scope.observable("0.1")
+    var modelMargin by stateVar("0.1")
 
     /// 自定义意图行（`fill` 重建；`add/remove` 直接改列表保持响应式）。
-    val intents: ObservableList<IntentDraft> by scope.observableList()
+    val intents: MutableList<IntentDraft> = stateListOf()
     /// 槽位定义行。
-    val slots: ObservableList<SlotDraft> by scope.observableList()
+    val slots: MutableList<SlotDraft> = stateListOf()
 
-    /// action.kind 下拉选项（官方 AlertDialog 要求 ObservableList；全部行共享同一份）。
+    /// action.kind 下拉选项（T05 起为 Compose 快照列表；全部行共享同一份）。
     /// 界面只出中文（动作枚举值不进界面，见 fieldLabel 文案口径）。
-    val actionOptions: ObservableList<Pair<String, String>> by scope.observableList()
+    val actionOptions: MutableList<Pair<String, String>> = stateListOf()
 
     init {
         actionOptions.addAll(
@@ -209,13 +207,13 @@ class NluSectionState(private val scope: PagerScope) {
     // ============================================================
 
     /** true = 有一次训练在途（启动请求已发出且尚未终态），按钮置灰防重复点击。 */
-    var buildBusy by scope.observable(false)
+    var buildBusy by stateVar(false)
     /// 用户可见的进度/结果一行话（空串 = 不显示）。
-    var buildMsg by scope.observable("")
+    var buildMsg by stateVar("")
     /// 服务端最新 state（idle / running / success / failed），随轮询更新。
-    var buildPhase by scope.observable("")
+    var buildPhase by stateVar("")
     /// 服务端返回的训练日志尾部（running 时滚动展示，失败时给原因）。
-    var buildLog by scope.observable("")
+    var buildLog by stateVar("")
 
     /**
      * 启动一次训练。服务端异步执行（立即返回）：基于当前技能定义（内置三个提醒技能 +

@@ -1,38 +1,37 @@
 package com.xiaozhi.admin
 
-import com.xiaozhi.admin.ui.*
+import com.xiaozhi.admin.contracts.*
 
 import com.tencent.kuikly.core.base.PagerScope
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.pager.Pager
-import com.tencent.kuikly.core.reactive.collection.ObservableList
-import com.tencent.kuikly.core.reactive.handler.observable
-import com.tencent.kuikly.core.reactive.handler.observableList
+import com.xiaozhi.admin.state.stateVar
+import com.xiaozhi.admin.state.stateListOf
 
 /** Shared Web/macOS HTTP controller. No native bridge, production engine swap, or device action. */
 class NodeTestsState(scope: PagerScope) {
     private val ledger = NodeTestLedger()
     private val capabilityGate = NodeRequestGate()
-    private var changes by scope.observable(0L)
+    private var changes by stateVar(0L)
     private var base = ""
     private var adminToken = "" // Request credential only; never form.expectedToken or a rendered diagnostic.
     private var target = ""
     private var bound = false
 
-    var capabilityState: ActionState by scope.observable(ActionState.Idle)
+    var capabilityState: ActionState by stateVar(ActionState.Idle)
         private set
-    var capabilityMessage by scope.observable("")
+    var capabilityMessage by stateVar("")
         private set
-    var snapshotRevision by scope.observable("")
+    var snapshotRevision by stateVar("")
         private set
-    private var capabilities by scope.observable(emptyMap<String, NodeTestCapability>())
-    var samples by scope.observable(emptyList<NodeTestSample>())
+    private var capabilities by stateVar(emptyMap<String, NodeTestCapability>())
+    var samples by stateVar(emptyList<NodeTestSample>())
         private set
     // Official dropdown adapter only. Selection and source metadata are not copied into it.
-    val sampleOptions: ObservableList<Pair<String, String>> by scope.observableList()
-    var selectedSampleId by scope.observable("")
-    var inputText by scope.observable("你好，请简短介绍一下你自己。")
-    var openMenu by scope.observable("")
+    val sampleOptions: MutableList<Pair<String, String>> = stateListOf()
+    var selectedSampleId by stateVar("")
+    var inputText by stateVar("你好，请简短介绍一下你自己。")
+    var openMenu by stateVar("")
 
     /** A→B→A still advances request generations; invalidation is not remote cancellation. */
     fun invalidateScope() {

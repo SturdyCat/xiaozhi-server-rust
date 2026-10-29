@@ -1,6 +1,6 @@
 package com.xiaozhi.admin
 
-import com.xiaozhi.admin.ui.*
+import com.xiaozhi.admin.contracts.*
 
 /** One navigation source, including when two nodes share a configuration controller. */
 data class ConfigSelection(

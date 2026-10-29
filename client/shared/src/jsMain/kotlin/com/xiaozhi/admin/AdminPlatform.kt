@@ -1,38 +1,26 @@
 package com.xiaozhi.admin
 
-import com.xiaozhi.admin.ui.*
-
-import com.tencent.kuikly.core.base.ViewContainer
+import androidx.compose.runtime.Composable
 import com.tencent.kuikly.core.module.Module
+import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.pager.Pager
 import kotlinx.browser.window
 
 /** Web：无 macOS 专属能力（测试台菜单已隐藏，服务器地址走同域相对路径）。 */
 actual val IS_MACOS: Boolean = false
 
-/** web 渲染器 setProp 不处理 textInputState attr，必须绑 text() 才显示已存值。 */
-actual val INPUT_NEEDS_TEXT_PROP: Boolean = true
-
 actual fun Pager.platformExternalModules(): Map<String, Module> = emptyMap()
 
-actual fun ViewContainer<*, *>.renderTestbenchSection(
-    pager: Pager,
-    form: ConfigFormState,
-    twoColumn: () -> Boolean,
-    pageWidth: () -> Float,
-    pageHeight: () -> Float,
-) {
+@Composable
+actual fun TestbenchSection(page: AdminPage) {
     // 防御分支：web 菜单已隐藏（AdminNav.visible），正常不会走到
 }
 
-actual fun ViewContainer<*, *>.macServerSwitchEntry(
-    pager: Pager,
-    open: () -> Boolean,
-    onOpened: () -> Unit,
-    onClosed: () -> Unit,
-    onApplied: () -> Unit,
-) {
-    // web 由 server 同域托管，无「切换服务器」概念
+actual fun Pager.startAdminServerDiscovery(onResult: (JSONObject?) -> Unit) {
+    // web 无 mDNS 能力（「服务器设置」入口只在 macOS 渲染）
+}
+
+actual fun Pager.stopAdminServerDiscovery() {
 }
 
 actual fun pagerBaseUrl(pager: Pager): String = ""

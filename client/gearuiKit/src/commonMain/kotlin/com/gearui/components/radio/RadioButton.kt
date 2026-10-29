@@ -1,0 +1,152 @@
+package com.gearui.components.radio
+
+import com.gearui.foundation.interaction.choiceSemantics
+import com.gearui.foundation.interaction.controlLabel
+import com.gearui.foundation.control.selectionOutline
+import com.tencent.kuikly.compose.ui.text.font.FontWeight
+import androidx.compose.runtime.*
+import com.tencent.kuikly.compose.foundation.background
+import com.tencent.kuikly.compose.foundation.border
+import com.tencent.kuikly.compose.foundation.clickable
+import com.tencent.kuikly.compose.foundation.shape.CircleShape
+import com.tencent.kuikly.compose.foundation.layout.*
+import com.gearui.foundation.primitives.Text
+import com.tencent.kuikly.compose.ui.Alignment
+import com.tencent.kuikly.compose.ui.Modifier
+import com.tencent.kuikly.compose.ui.draw.clip
+import com.tencent.kuikly.compose.ui.graphics.Color
+import com.tencent.kuikly.compose.ui.unit.Dp
+import com.gearui.foundation.interaction.disabledAppearance
+import com.gearui.theme.Theme
+import com.gearui.foundation.layout.Spacing
+import com.gearui.foundation.border.BorderWidth
+import com.gearui.foundation.control.ControlGeometry
+import com.tencent.kuikly.compose.foundation.interaction.collectIsPressedAsState
+import com.gearui.foundation.motion.FeedbackDefaults
+import com.gearui.foundation.motion.feedbackDuration
+import com.tencent.kuikly.compose.animation.core.*
+import com.tencent.kuikly.compose.foundation.interaction.MutableInteractionSource
+import com.tencent.kuikly.compose.ui.graphics.graphicsLayer
+import com.tencent.kuikly.compose.ui.semantics.Role
+
+/**
+ * RadioButton - fully Theme-driven radio button
+ *
+ * ✅ Rule: the first line is always `val colors = Theme.colors`
+ * ❌ Never: Color(0x...) or hardcoded colours
+ *
+ * Features:
+ * - selected / unselected state
+ * - disabled state
+ * - 2 sizes
+ * - follows the theme colour automatically
+ */
+@Composable
+fun RadioButton(
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    size: RadioSize = RadioSize.MEDIUM,
+    contentDescription: String? = null,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    Box(modifier.sizeIn(minWidth = ControlGeometry.selectionTouchTarget, minHeight = ControlGeometry.selectionTouchTarget)
+        .choiceSemantics(controlLabel(contentDescription), selected, Role.RadioButton, onClick = if (enabled) onClick else null)
+        .clickable(interactionSource = interaction, indication = null, enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center) {
+        RadioMark(selected, enabled, pressed, size)
+    }
+}
+
+@Composable
+private fun RadioMark(selected: Boolean, enabled: Boolean, pressed: Boolean, size: RadioSize) {
+    val colors = Theme.colors
+    val motion = Theme.motion
+    val outer = when (size) {
+        RadioSize.LARGE -> ControlGeometry.selectionLarge
+        RadioSize.MEDIUM -> ControlGeometry.selectionMedium
+        RadioSize.SMALL -> ControlGeometry.selectionSmall
+    }
+    val scale by animateFloatAsState(if (selected || motion.normal <= 0) 1f else FeedbackDefaults.radioExitScale,
+        tween(motion.feedbackDuration(FeedbackDefaults.radioRevealDuration), easing = FeedbackDefaults.pressEasing))
+    // Same press scale as Checkbox: the two controls sit in the same lists.
+    val pressScale by animateFloatAsState(if (pressed && enabled && motion.normal > 0) FeedbackDefaults.selectionPressScale else 1f,
+        tween(motion.feedbackDuration(FeedbackDefaults.pressDuration), easing = FeedbackDefaults.pressEasing))
+    Box(Modifier.size(outer).graphicsLayer {
+            alpha = if (enabled) 1f else FeedbackDefaults.disabledOpacity
+            scaleX = pressScale
+            scaleY = pressScale
+        }
+        .clip(CircleShape).background(if (selected) colors.primary else colors.surface)
+        // Semantic outline is the fallback for the reference's field shadow.
+        .border(BorderWidth.thin, if (selected) colors.primary else selectionOutline(), CircleShape), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(ControlGeometry.radioThumb * (outer / ControlGeometry.selectionMedium))
+            .graphicsLayer { alpha = if (selected) 1f else 0f; scaleX = scale; scaleY = scale }
+            .clip(CircleShape).background(colors.primaryForeground))
+    }
+}
+
+/**
+ * Radio size
+ */
+enum class RadioSize {
+    LARGE,
+    MEDIUM,
+    SMALL
+}
+
+/**
+ * RadioButtonWithLabel - radio button with a label
+ */
+@Composable
+fun RadioButtonWithLabel(
+    selected: Boolean,
+    onClick: () -> Unit,
+    label: String,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    size: RadioSize = RadioSize.MEDIUM
+) {
+    val colors = Theme.colors
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    Row(modifier.heightIn(min = ControlGeometry.selectionTouchTarget)
+        .choiceSemantics(label, selected, Role.RadioButton, onClick = if (enabled) onClick else null)
+        .clickable(interactionSource = interaction, indication = null, enabled = enabled, onClick = onClick)
+        .padding(vertical = Spacing.sm), verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Spacing.md)) {
+        RadioMark(selected, enabled, pressed, size)
+        Text(label, color = colors.foreground, style = Theme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
+            modifier = Modifier.graphicsLayer { alpha = if (enabled) 1f else FeedbackDefaults.disabledOpacity })
+    }
+}
+
+/**
+ * RadioGroup - group of radio buttons
+ *
+ * @param options the options
+ * @param selectedOption currently selected option
+ * @param onOptionSelected selection change callback
+ */
+@Composable
+fun <T> RadioGroup(
+    options: List<T>,
+    selectedOption: T?,
+    onOptionSelected: (T) -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    labelProvider: (T) -> String = { it.toString() }
+) {
+    Column(modifier = modifier) {
+        options.forEach { option ->
+            RadioButtonWithLabel(
+                selected = option == selectedOption,
+                onClick = { onOptionSelected(option) },
+                label = labelProvider(option),
+                enabled = enabled,
+            )
+        }
+    }
+}

@@ -1,13 +1,11 @@
 package com.xiaozhi.admin
 
-import com.xiaozhi.admin.ui.*
 
 import com.tencent.kuikly.core.base.PagerScope
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.pager.Pager
-import com.tencent.kuikly.core.reactive.collection.ObservableList
-import com.tencent.kuikly.core.reactive.handler.observable
-import com.tencent.kuikly.core.reactive.handler.observableList
+import com.xiaozhi.admin.state.stateVar
+import com.xiaozhi.admin.state.stateListOf
 import com.tencent.kuikly.core.timer.setTimeout
 
 /**
@@ -35,44 +33,44 @@ import com.tencent.kuikly.core.timer.setTimeout
 class OtaState(private val scope: PagerScope) {
 
     /** 已托管条目（服务端已按上传时间倒序）。 */
-    val entries: ObservableList<OtaEntryRow> by scope.observableList()
+    val entries: MutableList<OtaEntryRow> = stateListOf()
 
     /** 托管目录（服务端给的绝对路径，"固件到底存哪了"直接可见）。 */
-    var dir by scope.observable("")
+    var dir by stateVar("")
 
     /** 计数摘要（未加载时为空串）。 */
-    var summary by scope.observable("")
+    var summary by stateVar("")
 
     /** 加载失败的就地错误文案（首次加载失败 → 就地错误 + 「重试」，不弹 toast）。 */
-    var loadError by scope.observable("")
+    var loadError by stateVar("")
 
-    var loading by scope.observable(false)
-    var loaded by scope.observable(false)
+    var loading by stateVar(false)
+    var loaded by stateVar(false)
 
     // ===== 上传表单（四个字段都是"可选覆盖"：留空 = 用包内元数据）=====
     /** 是否展开"手动指定"覆盖字段（默认收起：ESP-IDF 包根本不需要手填）。 */
-    var manual by scope.observable(false)
-    var project by scope.observable("")
-    var model by scope.observable("")
-    var board by scope.observable("")
-    var version by scope.observable("")
+    var manual by stateVar(false)
+    var project by stateVar("")
+    var model by stateVar("")
+    var board by stateVar("")
+    var version by stateVar("")
 
     /** 已选固件包的文件名（空 = 还没选）。 */
-    var pickedName by scope.observable("")
+    var pickedName by stateVar("")
 
     /** 已选固件包大小（字节；按钮旁显示"已选 xxx.bin（2.1 MB）"）。 */
-    var pickedSize by scope.observable(0L)
+    var pickedSize by stateVar(0L)
 
     /** 选包失败 / 平台不支持时的就地提示。 */
-    var pickError by scope.observable("")
+    var pickError by stateVar("")
 
-    var uploading by scope.observable(false)
+    var uploading by stateVar(false)
 
     /** 三态按钮的完成态："" 正常 / "ok" 成功 / "error" 失败（约 2s 后由本类复位）。 */
-    var uploadResult by scope.observable("")
+    var uploadResult by stateVar("")
 
     /** 正在等待确认删除的条目 key（空 = 无；行内二次确认，避免误删固件）。 */
-    var confirmKey by scope.observable("")
+    var confirmKey by stateVar("")
 
     /** 平台侧是否已持有选好的文件（macOS 是字节、web 是 File 句柄）。 */
     private var pickedReady = false

@@ -1,6 +1,6 @@
 package com.xiaozhi.admin
 
-import com.xiaozhi.admin.ui.*
+import com.xiaozhi.admin.contracts.*
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -94,6 +94,29 @@ class UiContractsTest {
         assertEquals("nlu", ConfigSections.all.single { it.id == "nlu" }.capabilityId)
         assertEquals("fullchain", ConfigSections.all.single { it.id == "aiui" }.capabilityId)
         assertEquals("vad", ConfigSections.firstSectionIn("voice"))
+    }
+
+    /**
+     * 2026-10-29 范围削减后的导航表（docs/plans/gearui-kit-scope-reduction.md §二）：
+     * 12 项 → 8 项，`sessions` / `conversations` / `usage` / `metrics` 已移除；
+     * macOnly 的 `testbench` 只在 macOS 客户端可见（web 7 项）。
+     * 顺序断言 = order 升序的声明顺序，`AdminNav.init` 里的分组相邻性校验必须继续通过。
+     */
+    @Test fun navIsReducedToEightEntriesAfterScopeCut() {
+        assertEquals(
+            listOf("overview", "testbench", "devices", "echomuse", "console", "config", "settings", "files"),
+            AdminNav.all.map { it.id },
+        )
+        assertEquals(
+            listOf("overview", "devices", "echomuse", "console", "config", "settings", "files"),
+            AdminNav.visible(macos = false).map { it.id },
+        )
+        assertEquals("config", AdminNav.DEFAULT)
+        // 分组只剩「观测 / 配置 / 存储」三段，且组内相邻（visible 顺序即渲染顺序）
+        assertEquals(
+            listOf("观测", "配置", "存储"),
+            AdminNav.grouped(macos = false).map { it.first },
+        )
     }
 
     /**

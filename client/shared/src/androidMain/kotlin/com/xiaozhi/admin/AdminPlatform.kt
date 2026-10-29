@@ -1,36 +1,25 @@
 package com.xiaozhi.admin
 
-import com.xiaozhi.admin.ui.*
-
-import com.tencent.kuikly.core.base.ViewContainer
+import androidx.compose.runtime.Composable
 import com.tencent.kuikly.core.module.Module
+import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.pager.Pager
 
 /** Android：无 macOS 专属能力（测试台与「切换服务器」为 mac-only）。 */
 actual val IS_MACOS: Boolean = false
 
-/** 原生渲染器由 textInputState 通道显示，无需 text()。 */
-actual val INPUT_NEEDS_TEXT_PROP: Boolean = false
-
 actual fun Pager.platformExternalModules(): Map<String, Module> = emptyMap()
 
-actual fun ViewContainer<*, *>.renderTestbenchSection(
-    pager: Pager,
-    form: ConfigFormState,
-    twoColumn: () -> Boolean,
-    pageWidth: () -> Float,
-    pageHeight: () -> Float,
-) {
+@Composable
+actual fun TestbenchSection(page: AdminPage) {
     // 防御分支：Android 侧边栏不渲染测试台入口
 }
 
-actual fun ViewContainer<*, *>.macServerSwitchEntry(
-    pager: Pager,
-    open: () -> Boolean,
-    onOpened: () -> Unit,
-    onClosed: () -> Unit,
-    onApplied: () -> Unit,
-) {
+actual fun Pager.startAdminServerDiscovery(onResult: (JSONObject?) -> Unit) {
+    // Android 无 mDNS 能力（测试台与「切换服务器」为 mac-only）
+}
+
+actual fun Pager.stopAdminServerDiscovery() {
 }
 
 actual fun pagerBaseUrl(pager: Pager): String = ""

@@ -1,14 +1,11 @@
 package com.xiaozhi.admin
 
-import com.xiaozhi.admin.ui.*
 
 import com.tencent.kuikly.core.base.PagerScope
-import com.tencent.kuikly.core.nvi.serialization.json.JSONArray
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.pager.Pager
-import com.tencent.kuikly.core.reactive.collection.ObservableList
-import com.tencent.kuikly.core.reactive.handler.observable
-import com.tencent.kuikly.core.reactive.handler.observableList
+import com.xiaozhi.admin.state.stateVar
+import com.xiaozhi.admin.state.stateListOf
 
 /**
  * 「灵魂」（`[soul]`）与「记忆」（`[memory]`）的表单状态 + 记忆动作。
@@ -16,7 +13,9 @@ import com.tencent.kuikly.core.reactive.handler.observableList
  * 为什么单独一个类（而不是继续往 `ConfigFormState` 里加字段）：
  * `AGENTS.md` §5.10 要求逻辑文件 ≤ 600 行，而这两个段合计约 40 个字段；
  * 拆成 `form.sm.*` 既守住规模约定，也让"上下文生产者"这一组概念在代码里成组出现。
- * 渲染见 `ConfigSoulMemoryCards.kt`，JSON 映射在 `putJson` / `fill`。
+ * 渲染见 `ConfigSoulMemoryCards.kt`；**JSON 往返**（`soulJson` / `putJson` / `fill`）在
+ * `ConfigContextJson.kt`——本文件只保留字段声明、下拉选项与网络动作，两边共享同一个
+ * `ContextSectionState` 实例（`form.sm`），拆的是文件、不是状态。
  *
  * ⚠️ 数组字段（traits/values/boundaries…）在表单里是**多行文本**（每行一条），
  * 读写时统一转换：写入按行拆分成 JSON 数组，读取按 \n 拼回。
@@ -24,92 +23,92 @@ import com.tencent.kuikly.core.reactive.handler.observableList
 class ContextSectionState(private val scope: PagerScope) {
 
     // ===== [soul] 人格档案 =====
-    var soulEnabled by scope.observable("true")
+    var soulEnabled by stateVar("true")
     /// 内置人格预设（默认灵魂）：留空的字段由它补，填了的字段逐字段覆盖它；`none` = 完全自定义。
-    var soulPreset by scope.observable("xiaozhi")
+    var soulPreset by stateVar("xiaozhi")
     /// 预设/预览动作的反馈（载入结果、预览摘要、错误）。
-    var soulPresetMsg by scope.observable("")
+    var soulPresetMsg by stateVar("")
     /// 「预览最终提示词」的正文（`POST /api/soul/preview` 的 `instructions`）。
-    var soulPreviewText by scope.observable("")
-    var soulName by scope.observable("小智")
-    var soulSelfIntro by scope.observable("")
-    var soulForm by scope.observable("")
-    var soulAgeFeel by scope.observable("")
-    var soulWorldview by scope.observable("")
-    var soulBackstory by scope.observable("")
-    var soulRelationshipOrigin by scope.observable("")
+    var soulPreviewText by stateVar("")
+    var soulName by stateVar("小智")
+    var soulSelfIntro by stateVar("")
+    var soulForm by stateVar("")
+    var soulAgeFeel by stateVar("")
+    var soulWorldview by stateVar("")
+    var soulBackstory by stateVar("")
+    var soulRelationshipOrigin by stateVar("")
     /// 性格：每行一条「标签：遇到 X 会怎么做」。
-    var soulTraits by scope.observable("")
-    var soulValues by scope.observable("")
-    var soulBoundaries by scope.observable("")
-    var soulTone by scope.observable("")
-    var soulColloquial by scope.observable("true")
-    var soulAddressUser by scope.observable("你")
-    var soulCatchphrases by scope.observable("")
+    var soulTraits by stateVar("")
+    var soulValues by stateVar("")
+    var soulBoundaries by stateVar("")
+    var soulTone by stateVar("")
+    var soulColloquial by stateVar("true")
+    var soulAddressUser by stateVar("你")
+    var soulCatchphrases by stateVar("")
     /// ⚠️ 语音默认关：TTS 会把 emoji 念出来。
-    var soulEmoji by scope.observable("false")
-    var soulMaxSentences by scope.observable("2")
-    var soulMaxChars by scope.observable("40")
-    var soulScenario by scope.observable("")
-    var soulDeviceHint by scope.observable("")
+    var soulEmoji by stateVar("false")
+    var soulMaxSentences by stateVar("2")
+    var soulMaxChars by stateVar("40")
+    var soulScenario by stateVar("")
+    var soulDeviceHint by stateVar("")
     /// 风格范例：每条一组 Q/A（多行）。
-    var soulExamples by scope.observable("")
+    var soulExamples by stateVar("")
 
     // ===== [memory] 图记忆 =====
-    var memoryEnabled by scope.observable("true")
-    var memoryBackend by scope.observable("graph")
-    var memoryDbPath by scope.observable("/data/data.db")
-    var memoryDbBusyTimeoutMs by scope.observable("5000")
-    var memoryRecallEnabled by scope.observable("true")
-    var memoryExtractionEnabled by scope.observable("true")
-    var memoryFreshTurnCount by scope.observable("5")
-    var memoryRecallMaxNodes by scope.observable("6")
-    var memoryRecallMaxTokens by scope.observable("400")
-    var memoryRecallBudgetMs by scope.observable("300")
-    var memoryMaintenanceInterval by scope.observable("6")
-    var memoryInjectPosition by scope.observable("after_history")
-    var memoryQuarantineMaxAttempts by scope.observable("3")
-    var memoryScopePrefix by scope.observable("xiaozhi")
+    var memoryEnabled by stateVar("true")
+    var memoryBackend by stateVar("graph")
+    var memoryDbPath by stateVar("/data/data.db")
+    var memoryDbBusyTimeoutMs by stateVar("5000")
+    var memoryRecallEnabled by stateVar("true")
+    var memoryExtractionEnabled by stateVar("true")
+    var memoryFreshTurnCount by stateVar("5")
+    var memoryRecallMaxNodes by stateVar("6")
+    var memoryRecallMaxTokens by stateVar("400")
+    var memoryRecallBudgetMs by stateVar("300")
+    var memoryMaintenanceInterval by stateVar("6")
+    var memoryInjectPosition by stateVar("after_history")
+    var memoryQuarantineMaxAttempts by stateVar("3")
+    var memoryScopePrefix by stateVar("xiaozhi")
 
-    var memoryRetentionKeep by scope.observable("all")
-    var memoryRetentionRecentTurns by scope.observable("0")
-    var memoryRetentionDays by scope.observable("0")
-    var memoryRetentionDryRun by scope.observable("false")
+    var memoryRetentionKeep by stateVar("all")
+    var memoryRetentionRecentTurns by stateVar("0")
+    var memoryRetentionDays by stateVar("0")
+    var memoryRetentionDryRun by stateVar("false")
 
-    var memoryExtractorApiBase by scope.observable("")
-    var memoryExtractorApiKey by scope.observable("")
+    var memoryExtractorApiBase by stateVar("")
+    var memoryExtractorApiKey by stateVar("")
     /// 密钥 presence（服务端打码，只回 `has_api_key`）；留空 = 不修改盘上已存值。
-    var memoryExtractorApiKeyConfigured by scope.observable(false)
-    var memoryExtractorModel by scope.observable("")
-    var memoryExtractorTemperature by scope.observable("0.1")
+    var memoryExtractorApiKeyConfigured by stateVar(false)
+    var memoryExtractorModel by stateVar("")
+    var memoryExtractorTemperature by stateVar("0.1")
 
     // ===== [memory.rag] 本地文档 RAG（P1-9，仅 engine=rag 时生效）=====
-    var memoryRagDocsDir by scope.observable("/data/rag-docs")
-    var memoryRagChunkSize by scope.observable("512")
-    var memoryRagChunkOverlap by scope.observable("64")
-    var memoryRagTopK by scope.observable("4")
+    var memoryRagDocsDir by stateVar("/data/rag-docs")
+    var memoryRagChunkSize by stateVar("512")
+    var memoryRagChunkOverlap by stateVar("64")
+    var memoryRagTopK by stateVar("4")
     /// 「重建索引」动作的状态消息（构建中 / 完成提示）。
-    var memoryRagReindexMsg by scope.observable("")
+    var memoryRagReindexMsg by stateVar("")
 
     // ===== 记忆动作的 UI 状态（状态卡 / 测试召回 / 维护 / 清空）=====
-    var memoryStatusMsg by scope.observable("")
-    var memoryTestText by scope.observable("")
+    var memoryStatusMsg by stateVar("")
+    var memoryTestText by stateVar("")
     /// 试召回的作用域（留空 = 跨全部设备检索）。
-    var memoryTestScope by scope.observable("")
-    var memoryTestMsg by scope.observable("")
-    var memoryTestOk by scope.observable(false)
-    var memoryMaintainMsg by scope.observable("")
-    var memoryClearScope by scope.observable("")
-    var memoryClearAll by scope.observable(false)
+    var memoryTestScope by stateVar("")
+    var memoryTestMsg by stateVar("")
+    var memoryTestOk by stateVar(false)
+    var memoryMaintainMsg by stateVar("")
+    var memoryClearScope by stateVar("")
+    var memoryClearAll by stateVar(false)
     /// 两段式强确认：第一次点击只置位并提示，第二次才真正执行（避免误删长期记忆）。
-    var memoryClearConfirm by scope.observable(false)
-    var memoryClearMsg by scope.observable("")
+    var memoryClearConfirm by stateVar(false)
+    var memoryClearMsg by stateVar("")
 
-    // 下拉选项（官方 AlertDialog 要求 ObservableList）
-    val soulPresetOptions: ObservableList<Pair<String, String>> by scope.observableList()
-    val memoryBackendOptions: ObservableList<Pair<String, String>> by scope.observableList()
-    val memoryInjectPositionOptions: ObservableList<Pair<String, String>> by scope.observableList()
-    val retentionKeepOptions: ObservableList<Pair<String, String>> by scope.observableList()
+    // 下拉选项（可变列表；T05 起为 Compose 快照列表）
+    val soulPresetOptions: MutableList<Pair<String, String>> = stateListOf()
+    val memoryBackendOptions: MutableList<Pair<String, String>> = stateListOf()
+    val memoryInjectPositionOptions: MutableList<Pair<String, String>> = stateListOf()
+    val retentionKeepOptions: MutableList<Pair<String, String>> = stateListOf()
 
     init {
         // 与服务端 `presets::PRESETS` 对应；`loadDefaultSoul` 会按服务端回答补上未知项
@@ -141,197 +140,6 @@ class ContextSectionState(private val scope: PagerScope) {
                 "recent" to "最近 N 轮之外的未引用原文",
             ),
         )
-    }
-
-    private fun jsonHeaders(): JSONObject = JSONObject().apply { put("Content-Type", "application/json") }
-
-    /** 多行文本 → JSON 数组（空行丢弃）。 */
-    private fun lines(s: String): JSONArray {
-        val arr = JSONArray()
-        s.split("\n").map { it.trim() }.filter { it.isNotEmpty() }.forEach { arr.put(it) }
-        return arr
-    }
-
-    /** JSON 数组 → 多行文本。 */
-    private fun joinLines(arr: JSONArray?): String {
-        if (arr == null) return ""
-        val out = mutableListOf<String>()
-        for (i in 0 until arr.length()) out.add(arr.optString(i) ?: "")
-        return out.joinToString("\n")
-    }
-
-    /**
-     * `[soul]` 段的 JSON（保存、预览、载入预设三处共用，避免字段漂移）。
-     *
-     * ⚠️ `preset` 必须回传：它是"默认灵魂"的基线选择；不回传就会被服务端的部分更新语义
-     * 保留成旧值（用户在下拉里换了预设却等于没换）。
-     *
-     * internal：设备个性化（P1-5）构建 overlay 时整段复用（`[soul]` 在白名单内全段可覆盖）。
-     */
-    internal fun soulJson(): JSONObject = JSONObject().apply {
-        put("enabled", soulEnabled.toBooleanStrictOrNull() ?: true)
-        put("preset", soulPreset)
-        put("name", soulName)
-        put("self_intro", soulSelfIntro)
-        put("form", soulForm)
-        put("age_feel", soulAgeFeel)
-        put("worldview", soulWorldview)
-        put("backstory", soulBackstory)
-        put("relationship_origin", soulRelationshipOrigin)
-        put("traits", lines(soulTraits))
-        put("values", lines(soulValues))
-        put("boundaries", lines(soulBoundaries))
-        put("tone", soulTone)
-        put("colloquial", soulColloquial.toBooleanStrictOrNull() ?: true)
-        put("address_user", soulAddressUser)
-        put("catchphrases", lines(soulCatchphrases))
-        put("emoji", soulEmoji.toBooleanStrictOrNull() ?: false)
-        put("max_sentences", soulMaxSentences.toIntOrNull() ?: 2)
-        put("max_chars", soulMaxChars.toIntOrNull() ?: 40)
-        put("scenario", soulScenario)
-        put("device_hint", soulDeviceHint)
-        put("examples", lines(soulExamples))
-    }
-
-    /** 服务端错误正文（`{ok:false,message}`）→ 可展示文案；缺正文时退回传输错误/HTTP 码。 */
-    private fun serverMessage(data: JSONObject?, errorMsg: String, code: Int?): String {
-        val msg = data?.optString("message", "") ?: ""
-        if (msg.isNotEmpty()) return msg
-        return if (errorMsg.isNotEmpty()) errorMsg else "HTTP $code"
-    }
-
-    /** JSON 字符串数组 → "a、b、c"（预览里列出字段名）。 */
-    private fun joinNames(arr: JSONArray?): String {
-        if (arr == null) return ""
-        val out = mutableListOf<String>()
-        for (i in 0 until arr.length()) out.add(arr.optString(i) ?: "")
-        return out.filter { it.isNotEmpty() }.joinToString("、")
-    }
-
-    // ============================================================
-    // 写入：表单 → JSON（供 ConfigFormState.save 合并进请求体）
-    // ============================================================
-
-    fun putJson(body: JSONObject) {
-        body.put("soul", soulJson())
-        body.put(
-            "memory",
-            JSONObject().apply {
-                put("enabled", memoryEnabled.toBooleanStrictOrNull() ?: true)
-                put("engine", memoryBackend)
-                put("db_path", memoryDbPath)
-                put("db_busy_timeout_ms", memoryDbBusyTimeoutMs.toIntOrNull() ?: 5000)
-                put("recall_enabled", memoryRecallEnabled.toBooleanStrictOrNull() ?: true)
-                put("extraction_enabled", memoryExtractionEnabled.toBooleanStrictOrNull() ?: true)
-                put("fresh_turn_count", memoryFreshTurnCount.toIntOrNull() ?: 5)
-                put("recall_max_nodes", memoryRecallMaxNodes.toIntOrNull() ?: 6)
-                put("recall_max_tokens", memoryRecallMaxTokens.toIntOrNull() ?: 400)
-                put("recall_budget_ms", memoryRecallBudgetMs.toIntOrNull() ?: 300)
-                put("maintenance_interval", memoryMaintenanceInterval.toIntOrNull() ?: 6)
-                put("inject_position", memoryInjectPosition)
-                put("quarantine_max_attempts", memoryQuarantineMaxAttempts.toIntOrNull() ?: 3)
-                put("scope_prefix", memoryScopePrefix)
-                put(
-                    "retention",
-                    JSONObject().apply {
-                        put("keep", memoryRetentionKeep)
-                        put("recent_turns", memoryRetentionRecentTurns.toIntOrNull() ?: 0)
-                        put("retention_days", memoryRetentionDays.toIntOrNull() ?: 0)
-                        put("dry_run", memoryRetentionDryRun.toBooleanStrictOrNull() ?: false)
-                    },
-                )
-                put(
-                    "extractor",
-                    JSONObject().apply {
-                        put("api_base", memoryExtractorApiBase)
-                        // 打码后表单里没有明文：留空 = 不修改（不发送该字段）
-                        putSecret("api_key", memoryExtractorApiKey)
-                        put("model", memoryExtractorModel)
-                        put("temperature", memoryExtractorTemperature.toDoubleOrNull() ?: 0.1)
-                    },
-                )
-                put(
-                    "rag",
-                    JSONObject().apply {
-                        put("docs_dir", memoryRagDocsDir)
-                        put("chunk_size", memoryRagChunkSize.toIntOrNull() ?: 512)
-                        put("chunk_overlap", memoryRagChunkOverlap.toIntOrNull() ?: 64)
-                        put("top_k", memoryRagTopK.toIntOrNull() ?: 4)
-                    },
-                )
-            },
-        )
-    }
-
-    // ============================================================
-    // 读取：JSON → 表单
-    // ============================================================
-
-    fun fill(obj: JSONObject) {
-        obj.optJSONObject("soul")?.let { s ->
-            soulEnabled = s.boolText("enabled", soulEnabled, true)
-            // P6.x：内置预设键（旧服务端/旧文件没有它 → 保留当前值）
-            soulPreset = s.optString("preset", soulPreset)
-            soulName = s.optString("name", soulName)
-            soulSelfIntro = s.optString("self_intro", soulSelfIntro)
-            soulForm = s.optString("form", soulForm)
-            soulAgeFeel = s.optString("age_feel", soulAgeFeel)
-            soulWorldview = s.optString("worldview", soulWorldview)
-            soulBackstory = s.optString("backstory", soulBackstory)
-            soulRelationshipOrigin = s.optString("relationship_origin", soulRelationshipOrigin)
-            soulTraits = joinLines(s.optJSONArray("traits"))
-            soulValues = joinLines(s.optJSONArray("values"))
-            soulBoundaries = joinLines(s.optJSONArray("boundaries"))
-            soulTone = s.optString("tone", soulTone)
-            soulColloquial = s.boolText("colloquial", soulColloquial, true)
-            soulAddressUser = s.optString("address_user", soulAddressUser)
-            soulCatchphrases = joinLines(s.optJSONArray("catchphrases"))
-            soulEmoji = s.boolText("emoji", soulEmoji, false)
-            soulMaxSentences = s.intText("max_sentences", soulMaxSentences, 2)
-            soulMaxChars = s.intText("max_chars", soulMaxChars, 40)
-            soulScenario = s.optString("scenario", soulScenario)
-            soulDeviceHint = s.optString("device_hint", soulDeviceHint)
-            soulExamples = joinLines(s.optJSONArray("examples"))
-        }
-        obj.optJSONObject("memory")?.let { m ->
-            memoryEnabled = m.boolText("enabled", memoryEnabled, true)
-            // `engine` 是 P4 起的规范键；旧服务端回 `backend`，一并兼容读
-            memoryBackend = m.optString("engine", m.optString("backend", memoryBackend))
-            memoryDbPath = m.optString("db_path", memoryDbPath)
-            memoryDbBusyTimeoutMs = m.intText("db_busy_timeout_ms", memoryDbBusyTimeoutMs, 5000)
-            memoryRecallEnabled = m.boolText("recall_enabled", memoryRecallEnabled, true)
-            memoryExtractionEnabled = m.boolText("extraction_enabled", memoryExtractionEnabled, true)
-            memoryFreshTurnCount = m.intText("fresh_turn_count", memoryFreshTurnCount, 5)
-            memoryRecallMaxNodes = m.intText("recall_max_nodes", memoryRecallMaxNodes, 6)
-            memoryRecallMaxTokens = m.intText("recall_max_tokens", memoryRecallMaxTokens, 400)
-            memoryRecallBudgetMs = m.intText("recall_budget_ms", memoryRecallBudgetMs, 300)
-            memoryMaintenanceInterval = m.intText("maintenance_interval", memoryMaintenanceInterval, 6)
-            memoryInjectPosition = m.optString("inject_position", memoryInjectPosition)
-            memoryQuarantineMaxAttempts = m.intText("quarantine_max_attempts", memoryQuarantineMaxAttempts, 3)
-            memoryScopePrefix = m.optString("scope_prefix", memoryScopePrefix)
-            m.optJSONObject("retention")?.let { r ->
-                memoryRetentionKeep = r.optString("keep", memoryRetentionKeep)
-                memoryRetentionRecentTurns = r.intText("recent_turns", memoryRetentionRecentTurns, 0)
-                memoryRetentionDays = r.intText("retention_days", memoryRetentionDays, 0)
-                memoryRetentionDryRun = r.boolText("dry_run", memoryRetentionDryRun, false)
-            }
-            m.optJSONObject("extractor")?.let { e ->
-                memoryExtractorApiBase = e.optString("api_base", memoryExtractorApiBase)
-                // 密钥明文不再下发（服务端打码）：无该键 → 保留用户已输入的草稿；另取 presence 标记
-                memoryExtractorApiKey = e.optString("api_key", memoryExtractorApiKey)
-                memoryExtractorApiKeyConfigured =
-                    e.optBoolean("has_api_key", memoryExtractorApiKey.isNotBlank())
-                memoryExtractorModel = e.optString("model", memoryExtractorModel)
-                memoryExtractorTemperature = e.doubleText("temperature", memoryExtractorTemperature, 0.1)
-            }
-            // rag 参数组：旧服务端无该键 → 保留当前值（P1-9）
-            m.optJSONObject("rag")?.let { r ->
-                memoryRagDocsDir = r.optString("docs_dir", memoryRagDocsDir)
-                memoryRagChunkSize = r.intText("chunk_size", memoryRagChunkSize, 512)
-                memoryRagChunkOverlap = r.intText("chunk_overlap", memoryRagChunkOverlap, 64)
-                memoryRagTopK = r.intText("top_k", memoryRagTopK, 4)
-            }
-        }
     }
 
     // ============================================================

@@ -1,12 +1,10 @@
 package com.xiaozhi.admin
 
-import com.xiaozhi.admin.ui.*
 
 import com.tencent.kuikly.core.base.PagerScope
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
-import com.tencent.kuikly.core.reactive.collection.ObservableList
-import com.tencent.kuikly.core.reactive.handler.observable
-import com.tencent.kuikly.core.reactive.handler.observableList
+import com.xiaozhi.admin.state.stateVar
+import com.xiaozhi.admin.state.stateListOf
 
 /**
  * 引擎健康自检的数据源：`GET /api/health/engines`（P1-6，设计见 `docs/p1-round1-design.md` §2.1）。
@@ -29,13 +27,13 @@ import com.tencent.kuikly.core.reactive.handler.observableList
 class EngineHealthState(scope: PagerScope) : LoadableState(scope) {
 
     /** 健康行（11 个 capability 各一行；刷新时整表重建，行是不可变快照）。 */
-    val rows: ObservableList<HealthRow> by scope.observableList()
+    val rows: MutableList<HealthRow> = stateListOf()
 
     /** 偏离行（degraded/failed）——横幅只渲染这些，正常时列表为空、横幅不占视觉。 */
-    val deviations: ObservableList<HealthRow> by scope.observableList()
+    val deviations: MutableList<HealthRow> = stateListOf()
 
     /** 计数摘要（只含非零项）；未加载时为空串。 */
-    var summary by scope.observable("")
+    var summary by stateVar("")
 
     override fun endpoint(baseUrl: String): String = "$baseUrl/api/health/engines"
 

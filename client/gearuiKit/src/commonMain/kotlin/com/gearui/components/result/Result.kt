@@ -1,0 +1,290 @@
+package com.gearui.components.result
+
+import com.gearui.components.icon.*
+import com.tencent.kuikly.compose.foundation.background
+import com.tencent.kuikly.compose.foundation.layout.*
+import androidx.compose.runtime.*
+import com.gearui.components.icon.Icons
+import com.gearui.foundation.primitives.Icon
+import com.tencent.kuikly.compose.ui.Alignment
+import com.tencent.kuikly.compose.ui.Modifier
+import com.tencent.kuikly.compose.ui.graphics.Color
+import com.tencent.kuikly.compose.ui.unit.Dp
+import com.gearui.components.button.Button
+import com.gearui.foundation.primitives.Text
+
+import com.gearui.theme.Theme
+import com.gearui.i18n.I18n
+import com.gearui.foundation.layout.Spacing
+import com.gearui.foundation.typography.IconSizes
+
+/**
+ * Result status type
+ */
+enum class ResultStatus {
+    SUCCESS,
+    ERROR,
+    WARNING,
+    INFO,
+    QUESTION,
+    FORBIDDEN,
+    NOT_FOUND   // 404
+}
+
+/**
+ * Result - Result page component
+ *
+ * Result page component
+ *
+ * Features:
+ * - Multiple status types (success, error, warning, etc.)
+ * - Icon display
+ * - Title and description
+ * - Action buttons
+ * - Extra content support
+ *
+ * Example:
+ * ```
+ * Result(
+ *     status = ResultStatus.SUCCESS,
+ *     title = "Success",
+ *     description = "Your action completed successfully",
+ *     primaryAction = {
+ *         Button(text = "Back to home", onClick = { })
+ *     }
+ * )
+ * ```
+ */
+@Composable
+fun Result(
+    status: ResultStatus,
+    title: String,
+    modifier: Modifier = Modifier,
+    description: String? = null,
+    icon: IconSource? = null,
+    primaryAction: (@Composable () -> Unit)? = null,
+    secondaryAction: (@Composable () -> Unit)? = null,
+    extraContent: (@Composable () -> Unit)? = null
+) {
+    val colors = Theme.colors
+
+    val (defaultIconName, iconColor) = getStatusIconAndColor(status, colors)
+    val displayIconName = icon ?: defaultIconName
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(Spacing.xxl),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        // Icon
+        if (displayIconName != null) {
+            Icon(displayIconName,
+                size = IconSizes.Display.lg,
+                tint = iconColor
+            )
+        } else {
+            Text(
+                text = "404",
+                style = Theme.typography.headlineLarge,
+                color = iconColor
+            )
+        }
+
+        Spacer(modifier = Modifier.height(Spacing.xl))
+
+        // Title
+        Text(
+            text = title,
+            style = Theme.typography.headlineMedium,
+            color = colors.foreground
+        )
+
+        // Description
+        description?.let { desc ->
+            Spacer(modifier = Modifier.height(Spacing.md))
+            Text(
+                text = desc,
+                style = Theme.typography.bodyMedium,
+                color = colors.mutedForeground
+            )
+        }
+
+        // Extra content
+        extraContent?.let {
+            Spacer(modifier = Modifier.height(Spacing.lg))
+            it()
+        }
+
+        // Actions
+        if (primaryAction != null || secondaryAction != null) {
+            Spacer(modifier = Modifier.height(Spacing.xxl))
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(Spacing.md)
+            ) {
+                primaryAction?.invoke()
+                secondaryAction?.invoke()
+            }
+        }
+    }
+}
+
+private fun getStatusIconAndColor(status: ResultStatus, colors: com.gearui.theme.Colors): Pair<IconSource?, Color> {
+    return when (status) {
+        ResultStatus.SUCCESS -> Icons.check to colors.successSoftForeground
+        ResultStatus.ERROR -> Icons.x to colors.destructiveSoftForeground
+        ResultStatus.WARNING -> Icons.warning to colors.warningSoftForeground
+        ResultStatus.INFO -> Icons.info to colors.primarySoftForeground
+        ResultStatus.QUESTION -> Icons.question to colors.primarySoftForeground
+        ResultStatus.FORBIDDEN -> Icons.lockSimple to colors.destructiveSoftForeground
+        ResultStatus.NOT_FOUND -> null to colors.mutedForeground
+    }
+}
+
+/**
+ * Success result shorthand
+ */
+@Composable
+fun SuccessResult(
+    title: String,
+    modifier: Modifier = Modifier,
+    description: String? = null,
+    primaryAction: (@Composable () -> Unit)? = null,
+    secondaryAction: (@Composable () -> Unit)? = null
+) {
+    Result(
+        status = ResultStatus.SUCCESS,
+        title = title,
+        description = description,
+        primaryAction = primaryAction,
+        secondaryAction = secondaryAction,
+        modifier = modifier
+    )
+}
+
+/**
+ * Error result shorthand
+ */
+@Composable
+fun ErrorResult(
+    title: String,
+    modifier: Modifier = Modifier,
+    description: String? = null,
+    primaryAction: (@Composable () -> Unit)? = null,
+    secondaryAction: (@Composable () -> Unit)? = null
+) {
+    Result(
+        status = ResultStatus.ERROR,
+        title = title,
+        description = description,
+        primaryAction = primaryAction,
+        secondaryAction = secondaryAction,
+        modifier = modifier
+    )
+}
+
+/**
+ * 404 Not Found result
+ */
+@Composable
+fun NotFoundResult(
+    modifier: Modifier = Modifier,
+    title: String = I18n.strings.feedback.notFoundTitle,
+    description: String? = I18n.strings.feedback.notFoundDescription,
+    primaryAction: (@Composable () -> Unit)? = null
+) {
+    Result(
+        status = ResultStatus.NOT_FOUND,
+        title = title,
+        description = description,
+        primaryAction = primaryAction,
+        modifier = modifier
+    )
+}
+
+/**
+ * 403 Forbidden result
+ */
+@Composable
+fun ForbiddenResult(
+    modifier: Modifier = Modifier,
+    title: String = I18n.strings.feedback.forbiddenTitle,
+    description: String? = I18n.strings.feedback.forbiddenDescription,
+    primaryAction: (@Composable () -> Unit)? = null
+) {
+    Result(
+        status = ResultStatus.FORBIDDEN,
+        title = title,
+        description = description,
+        primaryAction = primaryAction,
+        modifier = modifier
+    )
+}
+
+/**
+ * Empty result (no data)
+ */
+@Composable
+fun EmptyResult(
+    modifier: Modifier = Modifier,
+    title: String = I18n.strings.common.noData,
+    description: String? = null,
+    icon: IconSource = Icons.image,
+    primaryAction: (@Composable () -> Unit)? = null
+) {
+    Result(
+        status = ResultStatus.INFO,
+        title = title,
+        description = description,
+        icon = icon,
+        primaryAction = primaryAction,
+        modifier = modifier
+    )
+}
+
+/**
+ * Loading result (operation in progress)
+ */
+@Composable
+fun LoadingResult(
+    modifier: Modifier = Modifier,
+    title: String = I18n.strings.feedback.processingTitle,
+    description: String? = I18n.strings.feedback.processingDescription,
+    icon: IconSource = Icons.hourglass
+) {
+    Result(
+        status = ResultStatus.INFO,
+        title = title,
+        description = description,
+        icon = icon,
+        modifier = modifier
+    )
+}
+
+/**
+ * Network error result
+ */
+@Composable
+fun NetworkErrorResult(
+    modifier: Modifier = Modifier,
+    title: String = I18n.strings.common.networkError,
+    description: String? = I18n.strings.feedback.networkErrorDescription,
+    onRetry: (() -> Unit)? = null
+) {
+    Result(
+        status = ResultStatus.ERROR,
+        title = title,
+        description = description,
+        icon = Icons.warning,
+        primaryAction = onRetry?.let {
+            {
+                Button(
+                    text = I18n.strings.common.retry,
+                    onClick = it
+                )
+            }
+        },
+        modifier = modifier
+    )
+}

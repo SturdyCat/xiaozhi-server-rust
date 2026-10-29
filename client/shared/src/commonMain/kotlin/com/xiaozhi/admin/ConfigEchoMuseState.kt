@@ -1,10 +1,9 @@
 package com.xiaozhi.admin
 
-import com.xiaozhi.admin.ui.*
 
 import com.tencent.kuikly.core.base.PagerScope
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
-import com.tencent.kuikly.core.reactive.handler.observable
+import com.xiaozhi.admin.state.stateVar
 
 /**
  * 「EchoMuse 设备入口」（`[echomuse]`）的表单状态。
@@ -23,15 +22,15 @@ import com.tencent.kuikly.core.reactive.handler.observable
  */
 class EchoMuseSectionState(private val scope: PagerScope) {
 
-    var enabled by scope.observable("true")
+    var enabled by stateVar("true")
     /// 接入令牌。服务端已打码（GET 只回 `has_token` presence），表单里永远没有明文；
     /// 留空保存 = 「不修改盘上已存值」（见 `putSecret` 与服务端 `SECRET_PATHS`）。
-    var token by scope.observable("")
+    var token by stateVar("")
     /// 密钥 presence（服务端打码，只回 `has_token`）；为 true 时提示「已配置」。
-    var tokenConfigured by scope.observable(false)
+    var tokenConfigured by stateVar(false)
     /// 连接欢迎语（服务端 `[echomuse].welcome`，默认带使用提示；留空 = 不说）。
     /// RestartOnly：保存后需重启服务端生效（档位提示由 sectionNote 下发）。
-    var welcome by scope.observable("")
+    var welcome by stateVar("")
 
     /**
      * 写入保存请求体（`[echomuse]` 整段回传）。

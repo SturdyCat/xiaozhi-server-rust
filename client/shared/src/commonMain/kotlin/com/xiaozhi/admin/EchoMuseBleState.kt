@@ -1,12 +1,11 @@
 package com.xiaozhi.admin
 
-import com.xiaozhi.admin.ui.*
 
 import com.tencent.kuikly.core.base.PagerScope
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.pager.Pager
-import com.tencent.kuikly.core.reactive.handler.observable
-import com.tencent.kuikly.core.reactive.handler.observableList
+import com.xiaozhi.admin.state.stateVar
+import com.xiaozhi.admin.state.stateListOf
 
 internal data class BleAdvertRow(val address: String, val addressType: Int?, val rssi: String, val seen: String, val data: String)
 internal data class BleAttributeRow(
@@ -15,7 +14,7 @@ internal data class BleAttributeRow(
 
 /** Explicit snapshots only. Every connection/target change invalidates pending network callbacks. */
 class EchoMuseBleState(scope: PagerScope) {
-    var target by scope.observable("")
+    var target by stateVar("")
         private set
     private var base = ""
     private var token = ""
@@ -28,47 +27,47 @@ class EchoMuseBleState(scope: PagerScope) {
     private var capable = false
     private var savedEnabled = true
     private var savedConnections = true
-    var busy by scope.observable("")
+    var busy by stateVar("")
         private set
-    var error by scope.observable("")
+    var error by stateVar("")
         private set
-    var result by scope.observable("")
+    var result by stateVar("")
         private set
-    var settingsResult by scope.observable("")
+    var settingsResult by stateVar("")
         private set
-    var status by scope.observable("")
+    var status by stateVar("")
         private set
-    var enabledDraft by scope.observable(true)
+    var enabledDraft by stateVar(true)
         private set
-    var connectionsDraft by scope.observable(true)
+    var connectionsDraft by stateVar(true)
         private set
-    var address by scope.observable("")
+    var address by stateVar("")
         private set
-    var addressType by scope.observable(0)
+    var addressType by stateVar(0)
         private set
-    var handleDraft by scope.observable("")
+    var handleDraft by stateVar("")
         private set
-    var hexDraft by scope.observable("")
+    var hexDraft by stateVar("")
         private set
-    var responseDraft by scope.observable(true)
+    var responseDraft by stateVar(true)
         private set
-    internal var confirmed by scope.observable<BleWriteIntent?>(null)
+    internal var confirmed by stateVar<BleWriteIntent?>(null)
         private set
-    internal val adverts by scope.observableList<BleAdvertRow>()
-    internal val attributes by scope.observableList<BleAttributeRow>()
-    var advertsSummary by scope.observable("尚未读取广播快照")
+    internal val adverts: MutableList<BleAdvertRow> = stateListOf()
+    internal val attributes: MutableList<BleAttributeRow> = stateListOf()
+    var advertsSummary by stateVar("尚未读取广播快照")
         private set
-    var slotsOutput by scope.observable("尚未读取槽位；GET state 中的槽位也只是最后一次上报")
+    var slotsOutput by stateVar("尚未读取槽位；GET state 中的槽位也只是最后一次上报")
         private set
-    var eventsOutput by scope.observable("尚未读取事件；不会自动轮询")
+    var eventsOutput by stateVar("尚未读取事件；不会自动轮询")
         private set
-    var gattOutput by scope.observable("")
+    var gattOutput by stateVar("")
         private set
-    var readOutput by scope.observable("")
+    var readOutput by stateVar("")
         private set
 
     // Observable eligibility fields are read through statusRevision in UI attr/enabled closures.
-    private var statusRevision by scope.observable(0)
+    private var statusRevision by stateVar(0)
     val idle: Boolean get() = busy.isEmpty()
     val canRead: Boolean get() { statusRevision; return target.isNotEmpty() && approved && online && capable && sessionId.isNotEmpty() }
     val canGatt: Boolean get() { statusRevision; return canRead && savedEnabled && savedConnections }

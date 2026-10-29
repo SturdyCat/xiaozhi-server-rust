@@ -1,12 +1,10 @@
 package com.xiaozhi.admin
 
-import com.xiaozhi.admin.ui.*
 
 import com.tencent.kuikly.core.base.PagerScope
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
-import com.tencent.kuikly.core.reactive.collection.ObservableList
-import com.tencent.kuikly.core.reactive.handler.observable
-import com.tencent.kuikly.core.reactive.handler.observableList
+import com.xiaozhi.admin.state.stateVar
+import com.xiaozhi.admin.state.stateListOf
 
 /**
  * 「能力总览」的数据源：`GET /api/plugins`（`docs/plugin-architecture-unification.md` §5.2/§5.3）。
@@ -27,13 +25,13 @@ import com.tencent.kuikly.core.reactive.handler.observableList
 class PluginMetaState(scope: PagerScope) : LoadableState(scope) {
 
     /** 必需能力（asr/vad/tts/llm）：坏掉即启动失败，单列一组。 */
-    val requiredRows: ObservableList<CapabilityRow> by scope.observableList()
+    val requiredRows: MutableList<CapabilityRow> = stateListOf()
 
     /** 可选能力：坏掉只降级（记忆 / 灵魂 / 发音人目录 / 固件托管 / AIUI）。 */
-    val optionalRows: ObservableList<CapabilityRow> by scope.observableList()
+    val optionalRows: MutableList<CapabilityRow> = stateListOf()
 
     /** 计数摘要（只含非零项）；未加载时为空串。 */
-    var summary by scope.observable("")
+    var summary by stateVar("")
 
     override fun endpoint(baseUrl: String): String = "$baseUrl/api/plugins"
 

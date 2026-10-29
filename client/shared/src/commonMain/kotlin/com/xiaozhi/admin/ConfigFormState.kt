@@ -1,12 +1,10 @@
 package com.xiaozhi.admin
 
-import com.xiaozhi.admin.ui.*
 
 import com.tencent.kuikly.core.base.PagerScope
 import com.tencent.kuikly.core.pager.Pager
-import com.tencent.kuikly.core.reactive.collection.ObservableList
-import com.tencent.kuikly.core.reactive.handler.observable
-import com.tencent.kuikly.core.reactive.handler.observableList
+import com.xiaozhi.admin.state.stateVar
+import com.xiaozhi.admin.state.stateListOf
 import kotlin.reflect.KMutableProperty0
 
 /**
@@ -20,77 +18,77 @@ enum class NodeWorkspaceTab { Configuration, Testing }
 class ConfigFormState(private val scope: PagerScope) {
 
     // ===== [server] =====
-    var port by scope.observable("8000")
+    var port by stateVar("8000")
     // 配置中的设备接入密钥草稿，不是当前管理请求的 Bearer token。
-    var expectedToken by scope.observable("")
-    var workerThreads by scope.observable("2")
-    var adminDir by scope.observable("")
+    var expectedToken by stateVar("")
+    var workerThreads by stateVar("2")
+    var adminDir by stateVar("")
 
     // ===== [audio] =====
-    var downlinkSampleRate by scope.observable("24000")
-    var downlinkFrameMs by scope.observable("60")
-    var channels by scope.observable("1")
-    var binaryProtocolVersion by scope.observable("1")
+    var downlinkSampleRate by stateVar("24000")
+    var downlinkFrameMs by stateVar("60")
+    var channels by stateVar("1")
+    var binaryProtocolVersion by stateVar("1")
     /// 下行抖动缓冲提前量（毫秒）：下发时间表比实时提前该时长，使 ESP 解码队列常备音频存货，
     /// 吸收网络抖动 + 上游 LLM 出句/TTS 合成的停顿（长回复断音的来源）。
     /// ⚠️ 上限 = (downlink_queue_packets − 2) × 帧长（默认 (20−2)×60 = 1080ms；超限收敛并告警）。
     /// 默认 1000 ≈ 设备端极限（设备解码队列只有 ~1.2s，想更深必须改固件队列）。
     /// 代价：提前量越大，打断后设备把已缓存音频播完才停口。
-    var downlinkLeadMs by scope.observable("1000")
+    var downlinkLeadMs by stateVar("1000")
     /// 服务器侧下行**水库**容量（毫秒）：把已编码的 Opus 帧在服务器内存里多备几秒，
     /// 发送端从水库取帧（而不是"现合成、现发送"）→ 上游（LLM 出句 / 在线 TTS 首片）
     /// 慢于实时也不再抽干设备解码队列。0 = 关闭（逐帧直通）。内存代价极小（~2KB/s，30s ≈ 60KB）。
     /// 它同时派生 PCM **下载缓冲**预算（`clamp(本值, 1s, 10s)`，见 `src/app/prefetch.rs`）。
     /// 设备解码队列**包数**（必须与固件一致）：`20 × 帧长` 决定设备侧存货上限，
     /// 也是 `downlink_lead_ms` 安全上限的来源。自刷固件放大队列后必须同步本值。
-    var downlinkQueuePackets by scope.observable("20")
-    var downlinkBufferMs by scope.observable("30000")
+    var downlinkQueuePackets by stateVar("20")
+    var downlinkBufferMs by stateVar("30000")
     /// **起跑闸**（毫秒）：本轮首帧下发前先等水库攒够这么多音频再开播（把散在全句的
     /// 断续换成一次起跑等待）；生产端已收工的短回复立即放行，不白等。0 = 关闭。
-    var downlinkBufferStartMs by scope.observable("1500")
+    var downlinkBufferStartMs by stateVar("1500")
     /// 起跑闸**最长等待**（毫秒）：上游持续慢于实时时不把首帧无限期拖住。
-    var downlinkBufferStartMaxMs by scope.observable("4000")
+    var downlinkBufferStartMaxMs by stateVar("4000")
 
     // ===== [playback] ===== 独立 NextSession 场景策略，不改动 [audio] 协商档位
-    var playbackMode by scope.observable("interactive")
-    var announcementStartMs by scope.observable("5000")
-    var announcementStartMaxMs by scope.observable("10000")
+    var playbackMode by stateVar("interactive")
+    var announcementStartMs by stateVar("5000")
+    var announcementStartMaxMs by stateVar("10000")
 
     // ===== [asr] =====（无 mock：ASR 恒为 SenseVoice，无 backend 字段）
-    var asrModel by scope.observable("")
-    var asrTokens by scope.observable("")
-    var asrLanguage by scope.observable("auto")
-    var asrUseItn by scope.observable("true")
-    var asrNumThreads by scope.observable("2")
-    var asrProvider by scope.observable("cpu")
+    var asrModel by stateVar("")
+    var asrTokens by stateVar("")
+    var asrLanguage by stateVar("auto")
+    var asrUseItn by stateVar("true")
+    var asrNumThreads by stateVar("2")
+    var asrProvider by stateVar("cpu")
 
     // ===== [vad] =====
-    var vadModel by scope.observable("")
-    var vadThreshold by scope.observable("0.5")
-    var vadMinSilence by scope.observable("0.25")
-    var vadMinSpeech by scope.observable("0.25")
+    var vadModel by stateVar("")
+    var vadThreshold by stateVar("0.5")
+    var vadMinSilence by stateVar("0.25")
+    var vadMinSpeech by stateVar("0.25")
 
     // ===== [tts] =====（区分「本地模型 / 远程服务」两大类，见 TTS_LOCAL/REMOTE 注册表）
     /// 当前合成方式："local"（本地模型，离线）| "remote"（远程服务，在线）。
     /// 与 [ttsBackend] 联动：切方式时 backend 跟随切到对应组的引擎/服务商。
-    var ttsMode by scope.observable("local")
+    var ttsMode by stateVar("local")
     /// 当前生效的引擎/服务商 id（= 服务端 `[tts].engine`；本地组：kokoro…；远程组：xfyun…）。
     /// ⚠️ P4 前本地组叫 "sherpa"（旧 config.toml 的 `backend` 值），服务端仍认，这里统一为 "kokoro"。
-    var ttsBackend by scope.observable("kokoro")
+    var ttsBackend by stateVar("kokoro")
     /// 上次使用的远程服务商（切回「远程」时恢复，默认 xfyun）。
-    var lastRemoteEngine by scope.observable("xfyun")
-    var ttsModel by scope.observable("")
-    var ttsVoices by scope.observable("")
-    var ttsTokens by scope.observable("")
-    var ttsDataDir by scope.observable("")
-    var ttsDictDir by scope.observable("")
-    var ttsLexicon by scope.observable("")
-    var ttsLang by scope.observable("zh")
-    var ttsSpeaker by scope.observable("0")
-    var ttsSpeed by scope.observable("1.0")
-    var ttsNumThreads by scope.observable("4")
+    var lastRemoteEngine by stateVar("xfyun")
+    var ttsModel by stateVar("")
+    var ttsVoices by stateVar("")
+    var ttsTokens by stateVar("")
+    var ttsDataDir by stateVar("")
+    var ttsDictDir by stateVar("")
+    var ttsLexicon by stateVar("")
+    var ttsLang by stateVar("zh")
+    var ttsSpeaker by stateVar("0")
+    var ttsSpeed by stateVar("1.0")
+    var ttsNumThreads by stateVar("4")
     /// TTS 结果缓存条目数（按句缓存已编码下行 Opus 帧，跨会话共享；命中零合成延迟）。0 = 关闭。
-    var ttsCacheEntries by scope.observable("256")
+    var ttsCacheEntries by stateVar("256")
 
     // ===== [tts.xfyun] =====（engine=xfyun 时使用；讯飞开放平台「在线语音合成」控制台获取）
 
@@ -102,15 +100,15 @@ class ConfigFormState(private val scope: PagerScope) {
         }
     }
 
-    private var _xfyunAppId by scope.observable("")
+    private var _xfyunAppId by stateVar("")
     var xfyunAppId: String
         get() = _xfyunAppId
         set(value) = setXfyunCredential(this::_xfyunAppId, value)
-    private var _xfyunApiKey by scope.observable("")
+    private var _xfyunApiKey by stateVar("")
     var xfyunApiKey: String
         get() = _xfyunApiKey
         set(value) = setXfyunCredential(this::_xfyunApiKey, value)
-    private var _xfyunApiSecret by scope.observable("")
+    private var _xfyunApiSecret by stateVar("")
     var xfyunApiSecret: String
         get() = _xfyunApiSecret
         set(value) = setXfyunCredential(this::_xfyunApiSecret, value)
@@ -118,9 +116,9 @@ class ConfigFormState(private val scope: PagerScope) {
      * 密钥 **presence**：服务端 GET /api/config 已打码，只回 `has_api_key` / `has_api_secret`。
      * 明文永不进表单，输入框留空 = 不修改 SQLite 已保存值；为 true 时提示「已配置」。
      */
-    var xfyunApiKeyConfigured by scope.observable(false)
-    var xfyunApiSecretConfigured by scope.observable(false)
-    private var _xfyunVoice by scope.observable("xiaoyan")
+    var xfyunApiKeyConfigured by stateVar(false)
+    var xfyunApiSecretConfigured by stateVar(false)
+    private var _xfyunVoice by stateVar("xiaoyan")
     var xfyunVoice: String
         get() = _xfyunVoice
         set(value) = setXfyunCredential(this::_xfyunVoice, value)
@@ -138,18 +136,18 @@ class ConfigFormState(private val scope: PagerScope) {
     }
 
     /** 拉取目录/刷新用的服务器地址（连接流程写入；空=当前页同源）。 */
-    private var _serverBase by scope.observable("")
+    private var _serverBase by stateVar("")
     var serverBase: String
         get() = _serverBase
         set(value) = setStringField(this::_serverBase, value) { invalidateReadOnlyTests() }
     /** 上次“刷新音色目录”的结果提示（动作按钮反馈）。 */
-    var voicesRefreshMsg by scope.observable("")
+    var voicesRefreshMsg by stateVar("")
     /** 上次“测试凭据”的结果提示（动作按钮反馈）。 */
-    var credsTestMsg by scope.observable("")
-    var credsTestOk by scope.observable(false)
+    var credsTestMsg by stateVar("")
+    var credsTestOk by stateVar(false)
 
     /** 配置来源提示（配置文件路径 + 持久化状态；Server 配置卡展示）。 */
-    var configMetaMsg by scope.observable("")
+    var configMetaMsg by stateVar("")
 
     /** 讯飞三要素是否就绪——决定依赖凭据的音色选择区是否显示。
      *  密钥可能只以 presence 形式存在（打码后表单里是空的），此时同样算就绪。 */
@@ -160,52 +158,52 @@ class ConfigFormState(private val scope: PagerScope) {
 
     // 音色两级选择：性别分组（女/男/自定义）× 音色类型（全部/普通/极速拟人）。
     // 音色列表经 /api/tts/voices 从服务端动态获取（服务端为唯一数据源：实测目录+控制台元数据）。
-    var xfyunVoiceGroup by scope.observable("female")
-    val xfyunVoiceGroupOptions: ObservableList<Pair<String, String>> by scope.observableList()
+    var xfyunVoiceGroup by stateVar("female")
+    val xfyunVoiceGroupOptions: MutableList<Pair<String, String>> = stateListOf()
     /// 音色类型筛选：all（全部）/ classic（普通发音人）/ x6（极速拟人）。
-    var xfyunVoiceType by scope.observable("all")
-    val xfyunVoiceTypeOptions: ObservableList<Pair<String, String>> by scope.observableList()
-    /** 当前分组+类型下的音色选项（切分组/切类型/拉取目录时重建，官方 AlertDialog 要求 ObservableList）。 */
-    val xfyunVoiceOptions: ObservableList<Pair<String, String>> by scope.observableList()
+    var xfyunVoiceType by stateVar("all")
+    val xfyunVoiceTypeOptions: MutableList<Pair<String, String>> = stateListOf()
+    /** 当前分组+类型下的音色选项（切分组/切类型/拉取目录时重建；T05 起为 Compose 快照列表）。 */
+    val xfyunVoiceOptions: MutableList<Pair<String, String>> = stateListOf()
     // 四个源列表（loadVoices 填充）：性别 × 类型
-    val voicesFemaleClassic: ObservableList<Pair<String, String>> by scope.observableList()
-    val voicesFemaleX6: ObservableList<Pair<String, String>> by scope.observableList()
-    val voicesMaleClassic: ObservableList<Pair<String, String>> by scope.observableList()
-    val voicesMaleX6: ObservableList<Pair<String, String>> by scope.observableList()
+    val voicesFemaleClassic: MutableList<Pair<String, String>> = stateListOf()
+    val voicesFemaleX6: MutableList<Pair<String, String>> = stateListOf()
+    val voicesMaleClassic: MutableList<Pair<String, String>> = stateListOf()
+    val voicesMaleX6: MutableList<Pair<String, String>> = stateListOf()
     /** 目录是否已拉取（拉取前按 vcn 前缀启发式分组）。 */
-    var voicesLoaded by scope.observable(false)
+    var voicesLoaded by stateVar(false)
 
     // ===== [llm] =====（无 mock：LLM 恒为 OpenAI 兼容 HTTP，无 backend 字段）
-    var llmApiBase by scope.observable("")
-    var llmApiKey by scope.observable("")
+    var llmApiBase by stateVar("")
+    var llmApiKey by stateVar("")
     /** 密钥 presence（服务端打码，只回 `has_api_key`）；见 xfyun 同名说明。 */
-    var llmApiKeyConfigured by scope.observable(false)
-    var llmModel by scope.observable("")
-    var llmSystemPrompt by scope.observable("")
-    var llmMaxHistory by scope.observable("10")
-    var llmTemperature by scope.observable("0.7")
-    var llmStream by scope.observable("true")
+    var llmApiKeyConfigured by stateVar(false)
+    var llmModel by stateVar("")
+    var llmSystemPrompt by stateVar("")
+    var llmMaxHistory by stateVar("10")
+    var llmTemperature by stateVar("0.7")
+    var llmStream by stateVar("true")
     /// 回声开关（f68cd99 `[llm].enabled`）：false = 技能未命中不走 LLM，ASR 原文直接回声。
     /// 曾漏配 UI（对齐核对发现）：服务端+注册表齐全而管理台无字段，回声模式不可见不可切。
-    var llmEnabled by scope.observable("true")
+    var llmEnabled by stateVar("true")
 
     // ===== [aiui] =====（全链路极速超拟人：VAD 切段 → 讯飞 AIUI 云端 ASR+LLM+TTS 闭环）
     // ⚠️ 启用后设备流水线走云端闭环，**本地 ASR/LLM/TTS 全部闲置**（`[soul]`/`[memory]` 亦不生效）。
-    var aiuiEnabled by scope.observable("false")
-    var aiuiAppid by scope.observable("")
-    var aiuiApiKey by scope.observable("")
-    var aiuiApiSecret by scope.observable("")
+    var aiuiEnabled by stateVar("false")
+    var aiuiAppid by stateVar("")
+    var aiuiApiKey by stateVar("")
+    var aiuiApiSecret by stateVar("")
     /** 密钥 presence（服务端打码，只回 `has_api_key` / `has_api_secret`）。 */
-    var aiuiApiKeyConfigured by scope.observable(false)
-    var aiuiApiSecretConfigured by scope.observable(false)
-    var aiuiScene by scope.observable("main_box")
-    var aiuiSnPrefix by scope.observable("xiaozhi")
-    var aiuiVoice by scope.observable("x6_dongmanshaonv_pro")
-    var aiuiSpeed by scope.observable("50")
-    var aiuiVolume by scope.observable("50")
-    var aiuiPitch by scope.observable("50")
-    var aiuiPrompt by scope.observable("")
-    var aiuiPaceMs by scope.observable("10")
+    var aiuiApiKeyConfigured by stateVar(false)
+    var aiuiApiSecretConfigured by stateVar(false)
+    var aiuiScene by stateVar("main_box")
+    var aiuiSnPrefix by stateVar("xiaozhi")
+    var aiuiVoice by stateVar("x6_dongmanshaonv_pro")
+    var aiuiSpeed by stateVar("50")
+    var aiuiVolume by stateVar("50")
+    var aiuiPitch by stateVar("50")
+    var aiuiPrompt by stateVar("")
+    var aiuiPaceMs by stateVar("10")
 
     // ===== [soul] / [memory]：上下文生产者（拆到 ConfigContextState，见 AGENTS.md §5.10）=====
     /// 人格档案与图记忆的表单状态 + 记忆动作（状态查询/测试召回/维护/清空）。
@@ -233,30 +231,30 @@ class ConfigFormState(private val scope: PagerScope) {
     // ===== 状态 =====
     /// 服务端配置内容指纹（GET /api/config 的 `revision`）：保存时回传，用于拒绝**过期写入**。
     /// 两个标签页/两个端同时打开表单时，后保存者会拿到 409 而不是静默覆盖前者的改动。
-    private var _revision by scope.observable("")
+    private var _revision by stateVar("")
     var revision: String
         get() = _revision
         set(value) = setStringField(this::_revision, value) {
             testRequests.invalidate()
             nodeTests.invalidateScope()
         }
-    var dirty by scope.observable(false)
-    var saving by scope.observable(false)
-    var statusMsg by scope.observable("")
-    var statusLevel by scope.observable("info")
-    var lastSavedAt by scope.observable("")
+    var dirty by stateVar(false)
+    var saving by stateVar(false)
+    var statusMsg by stateVar("")
+    var statusLevel by stateVar("info")
+    var lastSavedAt by stateVar("")
     /// 上次保存因**过期写入（409）**被拒：顶栏显示「重新加载」入口（草稿保留）。
-    var conflict by scope.observable(false)
+    var conflict by stateVar(false)
     /// 上次保存的「改动影响」文案（基于服务端 `hot`）：非空时在配置 section 头部提示
     /// "本次改动需：新会话生效 / 重启 server 生效"。live（立即生效）或空串则不显示。
     /// 由 save 成功时写入、load/reload 或保存失败时清空。
-    var saveImpactNote by scope.observable("")
+    var saveImpactNote by stateVar("")
 
     // ===== 编辑对象（P1-5：全局配置 / 设备个性化 overlay）=====
     /// 当前编辑目标："" = 全局配置；非空 = 该设备 ID 的个性化 overlay。
     /// 设备目标下 load 走「全局基线 + overlay 套用」、save 走「白名单差量 → 设备 overlay」
     ///（见 ConfigFormActions 的设备加载/保存），预设与 revision 等**全局**机制不参与。
-    private var _editDeviceId by scope.observable("")
+    private var _editDeviceId by stateVar("")
     var editDeviceId: String
         get() = _editDeviceId
         set(value) = setStringField(this::_editDeviceId, value) {
@@ -269,20 +267,20 @@ class ConfigFormState(private val scope: PagerScope) {
      * 请求进行中由 [saving] 表达（按钮文案切「保存中…」并拦截重复点击）；
      * 完成态由 ConfigFormActions 保持 2 秒后自动回落，随后由调用方的顶部 toast 接力提示。
      */
-    var saveResult by scope.observable("")
+    var saveResult by stateVar("")
 
     /** 当前展开的下拉（TTS engine 选择等，"" = 全部收起）；放状态类避免 Pager body 重建丢失展开态。 */
-    var openDropdown by scope.observable("")
+    var openDropdown by stateVar("")
 
     // ===== 配置预设（P1-5：快照 / 应用 / 删除；仅作用于全局配置）=====
     /// 服务端已有的预设名列表（GET /api/config/presets）。
-    val presetNames: ObservableList<String> by scope.observableList()
+    val presetNames: MutableList<String> = stateListOf()
     /// 「保存为预设」的名称草稿。
-    var presetNameDraft by scope.observable("")
+    var presetNameDraft by stateVar("")
     /// 预设动作的就地反馈（保存 / 应用 / 删除结果；空 = 无）。
-    var presetMsg by scope.observable("")
+    var presetMsg by stateVar("")
     /// 预设动作进行中（拦截重复点击）。
-    var presetBusy by scope.observable(false)
+    var presetBusy by stateVar(false)
 
     /** 下拉「是否展开」的判定（收敛各调用点 `openDropdown == id` 三行样板）。 */
     fun isDropdownOpen(id: String): Boolean = openDropdown == id
@@ -311,12 +309,12 @@ class ConfigFormState(private val scope: PagerScope) {
     }
 
     /** Top workflow and attached-node menu are projections of this single route. */
-    private var configSelection by scope.observable(ConfigSelection("vad", "vad"))
-    var workspaceTab by scope.observable(NodeWorkspaceTab.Configuration)
+    private var configSelection by stateVar(ConfigSelection("vad", "vad"))
+    var workspaceTab by stateVar(NodeWorkspaceTab.Configuration)
         private set
-    var showingNodeStatus by scope.observable(false)
+    var showingNodeStatus by stateVar(false)
         private set
-    var selectedTestActionId by scope.observable("")
+    var selectedTestActionId by stateVar("")
         private set
 
     /**
@@ -324,8 +322,8 @@ class ConfigFormState(private val scope: PagerScope) {
      * 这里分别记住两个菜单上次停留的位置：切换菜单时回到原处，而不是每次都被重置。
      * （不引入第二份 active 状态：位置记忆只是路由的历史值，不参与渲染判定。）
      */
-    private var lastWorkflowSelection by scope.observable(ConfigSelection("vad", "vad"))
-    private var lastGlobalSection by scope.observable(ConfigSections.global.firstOrNull()?.id.orEmpty())
+    private var lastWorkflowSelection by stateVar(ConfigSelection("vad", "vad"))
+    private var lastGlobalSection by stateVar(ConfigSections.global.firstOrNull()?.id.orEmpty())
 
     /** 当前路由是否落在「全局配置」菜单（= 选中的 section 没有流程节点）。 */
     val isGlobalSelection: Boolean get() = ConfigSections.isGlobal(configSection)
@@ -369,7 +367,7 @@ class ConfigFormState(private val scope: PagerScope) {
      * Rebuild only the right-hand pane on route, snapshot or local panel changes.
      * substringBefore('@') remains the config section; inputs still rebuild after async fill.
      */
-    val configSectionList: ObservableList<String> by scope.observableList()
+    val configSectionList: MutableList<String> = stateListOf()
     init { configSectionList.add(configRenderKey()) }
     var configSection: String
         get() = configSelection.sectionId
@@ -455,24 +453,24 @@ class ConfigFormState(private val scope: PagerScope) {
     }
 
     /** 「高级选项」展开开关（P0-1 折叠高级字段；跨 section 共享，同一时刻只看一个 section）。 */
-    var showAdvanced by scope.observable(false)
+    var showAdvanced by stateVar(false)
 
-    var testBusyLlm by scope.observable(false)
-    var testBusyTts by scope.observable(false)
-    var testBusyVad by scope.observable(false)
-    var testMsgLlm by scope.observable("")
-    var testMsgTts by scope.observable("")
-    var testMsgVad by scope.observable("")
-    var llmModelsBusy by scope.observable(false)
-    var llmModelsMsg by scope.observable("")
+    var testBusyLlm by stateVar(false)
+    var testBusyTts by stateVar(false)
+    var testBusyVad by stateVar(false)
+    var testMsgLlm by stateVar("")
+    var testMsgTts by stateVar("")
+    var testMsgVad by stateVar("")
+    var llmModelsBusy by stateVar(false)
+    var llmModelsMsg by stateVar("")
     // Pair<id, label>，与 TTS 发音人下拉同构
-    val llmModelOptions: ObservableList<Pair<String, String>> by scope.observableList()
+    val llmModelOptions: MutableList<Pair<String, String>> = stateListOf()
     // 本地模型引擎（离线推理，凭据字段 = 模型路径等）。
-    val ttsLocalEngines: ObservableList<Pair<String, String>> by scope.observableList()
+    val ttsLocalEngines: MutableList<Pair<String, String>> = stateListOf()
     // 远程合成服务商（在线 API，凭据字段 = 各服务商密钥）。
-    val ttsRemoteEngines: ObservableList<Pair<String, String>> by scope.observableList()
+    val ttsRemoteEngines: MutableList<Pair<String, String>> = stateListOf()
     // 合成方式两选项（local/remote）。
-    val ttsModeOptions: ObservableList<Pair<String, String>> by scope.observableList()
+    val ttsModeOptions: MutableList<Pair<String, String>> = stateListOf()
 
     val nodeTests = NodeTestsState(scope)
     internal fun invalidateReadOnlyTests() {

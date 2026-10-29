@@ -1,6 +1,6 @@
 package com.xiaozhi.admin
 
-import com.xiaozhi.admin.ui.*
+import com.xiaozhi.admin.contracts.*
 
 /** Shared read-only test contracts; no JSON or platform/Kuikly dependency. */
 enum class TestInputKind {

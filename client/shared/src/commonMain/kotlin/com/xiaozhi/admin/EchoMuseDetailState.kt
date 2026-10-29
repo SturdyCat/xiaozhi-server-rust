@@ -1,13 +1,12 @@
 package com.xiaozhi.admin
 
-import com.xiaozhi.admin.ui.*
 
 import com.tencent.kuikly.core.coroutines.Job
 import com.tencent.kuikly.core.coroutines.delay
 import com.tencent.kuikly.core.coroutines.launch
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.pager.Pager
-import com.tencent.kuikly.core.reactive.handler.observable
+import com.xiaozhi.admin.state.stateVar
 
 /**
  * 设备详情卡的**分区状态**：进了哪个 tab、进 tab 时的懒加载、`runtime` 结构化快照、
@@ -30,79 +29,79 @@ class EchoMuseDetailState(private val scope: Pager) {
     // ---- 六 tab（§6.2 归位表；`tab` 存的就是 tabBar 的标签文本，见 §6.6 示例）----
 
     /** 当前 tab（默认「状态」，与官方 dashboard 打开设备即看状态一致）。 */
-    var tab by scope.observable(EM_TAB_STATUS)
+    var tab by stateVar(EM_TAB_STATUS)
 
     /** 当前展开的设备号（空串 = 未展开）。切设备会清掉所有设备域快照。 */
-    var target by scope.observable("")
+    var target by stateVar("")
         private set
 
     /**
      * 状态 tab「系统诊断（原始输出）」是否展开（默认收起：原文可能几百行，
      * 一进状态页就铺开会把资源块挤到屏外）。
      */
-    var infoOpen by scope.observable(false)
+    var infoOpen by stateVar(false)
 
     // ---- 设备事实（列表同步而来，不由本类请求）----
 
-    var approved by scope.observable(false)
+    var approved by stateVar(false)
         private set
-    var online by scope.observable(false)
+    var online by stateVar(false)
         private set
-    var emos by scope.observable(false)
+    var emos by stateVar(false)
         private set
-    var speaker by scope.observable(false)
+    var speaker by stateVar(false)
         private set
 
     /** 当前 control 会话标识：变化即"设备重连过"，旧快照一律标历史。 */
-    var sessionId by scope.observable("")
+    var sessionId by stateVar("")
         private set
 
     // ---- 单操作闸门（控制台之外的 `/system/…`、音量、配置下发共用一把槽）----
 
     /** 进行中的操作名（空 = 空闲）；`system/info`、`volume` 等直接当加载态用。 */
-    var busy by scope.observable("")
+    var busy by stateVar("")
         private set
-    var error by scope.observable("")
+    var error by stateVar("")
         private set
-    var result by scope.observable("")
+    var result by stateVar("")
         private set
 
     // ---- 运行状态快照 ----
 
-    var runtime by scope.observable<JSONObject?>(null)
+    var runtime by stateVar<JSONObject?>(null)
         private set
-    var runtimeLoaded by scope.observable(false)
+    var runtimeLoaded by stateVar(false)
         private set
 
     /** 快照是否代表**当前**会话（设备在线 + 同一 session）；false = 历史快照。 */
-    var runtimeCurrent by scope.observable(false)
+    var runtimeCurrent by stateVar(false)
         private set
 
     // ---- 系统信息（手动一次的原文快照）----
 
-    var infoOutput by scope.observable("")
+    var infoOutput by stateVar("")
         private set
-    var infoLoaded by scope.observable(false)
+    var infoLoaded by stateVar(false)
         private set
-    var infoHistorical by scope.observable(false)
+    var infoHistorical by stateVar(false)
         private set
 
     // ---- OWW 资产现状（更新 tab，30 s 轮询；只读，不占单操作闸门）----
 
     /** `GET …/oww/state` 的原始回包（五态 `installed|outdated|blocked|unknown|missing`）。 */
-    var owwState by scope.observable<JSONObject?>(null)
+    var owwState by stateVar<JSONObject?>(null)
         private set
-    var owwLoaded by scope.observable(false)
+    var owwLoaded by stateVar(false)
         private set
-    var owwLoading by scope.observable(false)
+    var owwLoading by stateVar(false)
         private set
 
     // ---- 维护 ----
 
-    var confirmReboot by scope.observable(false)
+    var confirmReboot by stateVar(false)
 
     /** 输出音量草稿（0～127；读取运行状态不覆盖它）。 */
-    var volumeDraft by scope.observable("")
+    var volumeDraft by stateVar("")
 
     /** 控制台会话（T05 的 tab 视图直接读它渲染输出区）。 */
     val console = EchoMuseConsoleState(scope)

@@ -1,0 +1,999 @@
+package com.gearui.navigation
+
+import com.gearui.foundation.a11y.AccessibilityLayer
+import com.gearui.foundation.a11y.AccessibilityLayerBox
+import com.gearui.foundation.interaction.consumeNativeTouches
+import com.tencent.kuikly.compose.ui.input.pointer.pointerInput
+import com.tencent.kuikly.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.RememberObserver
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.runtime.setValue
+import com.gearui.overlay.OverlayManager
+import com.gearui.gestures.LocalPageSwipeBackGate
+import com.gearui.gestures.PageSwipeBackGate
+import com.gearui.gestures.SwipeBackConfig
+import com.gearui.gestures.swipeBack
+import com.tencent.kuikly.compose.BackHandler
+import com.gearui.foundation.keyboard.keyboardHeight
+import com.tencent.kuikly.compose.ui.platform.LocalFocusManager
+import com.tencent.kuikly.compose.ui.platform.LocalSoftwareKeyboardController
+import com.tencent.kuikly.compose.ui.unit.dp
+import com.tencent.kuikly.compose.animation.core.Animatable
+import com.tencent.kuikly.compose.animation.core.spring
+import com.tencent.kuikly.compose.animation.core.tween
+import com.tencent.kuikly.compose.foundation.background
+import com.tencent.kuikly.compose.foundation.layout.Box
+import com.tencent.kuikly.compose.foundation.layout.BoxWithConstraints
+import com.tencent.kuikly.compose.foundation.layout.fillMaxSize
+import com.tencent.kuikly.compose.ui.Modifier
+import com.tencent.kuikly.compose.ui.geometry.Offset
+import com.tencent.kuikly.compose.ui.layout.boundsInRoot
+import com.tencent.kuikly.compose.ui.layout.onGloballyPositioned
+import com.tencent.kuikly.compose.ui.graphics.Color
+import com.tencent.kuikly.compose.ui.graphics.graphicsLayer
+import com.tencent.kuikly.compose.ui.zIndex
+import com.gearui.theme.Theme
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
+
+/**
+ * Navigator v1 entry point. Every stacked navigation in the app — messages,
+ * contacts, profile, groups, QR codes — goes through this.
+ *
+ * Key invariants (see `gearui-kit/docs/ARCHITECTURE.md`, Runtime Contracts):
+ *
+ * 1. It does **not** replace Kuikly `@Page`. This is a stack inside a single
+ *    ComposeContainer.
+ * 2. **Kuikly's BACK is topmost-only**: `backPressCallbackList.isNotEmpty()`
+ *    decides whether the event is consumed, and `dispatchOnBackEvent()` only
+ *    invokes `list.last()`. So Navigator registers exactly **one** BackHandler,
+ *    and **only while `canPop = true`** — at the bottom of the stack it must
+ *    dispose and hand BACK back to native.
+ * 3. A BackHandler registered above Navigator by Dialog / Sheet / ActionSheet
+ *    automatically becomes `list.last()` and takes the event first. OverlayHost
+ *    registers one while an overlay wants BACK, which is what makes that true.
+ * 4. Routes are typed: Navigator is generic over [NavRoute] and an entry carries
+ *    its route, so `entry.route` needs no lookup and a `when` over a sealed
+ *    route type is exhaustive.
+ * 5. Entry keys are generated, never supplied. The exactly-once removal guard is
+ *    keyed on them, so a caller-supplied duplicate would silently skip
+ *    [onEntryRemoved], saveable-state cleanup and retained-state disposal.
+ *
+ * Commit 2 added the transition layer. A pop renders two layers at once —
+ * current (already the old previous) and a snapshot of the outgoing screen —
+ * with an Animatable driving [graphicsLayer] translationX. Edge swipe reuses
+ * `Modifier.swipeBack`'s `onProgress` for finger tracking, with complete
+ * commit and cancel paths.
+ *
+ * @param initialRoute route string at the bottom of the stack
+ * @param swipeBackEnabled global switch; an individual entry can still opt out
+ *                         via [NavOptions.swipeBackEnabled]
+ * @param handleBack whether to take over the system back gesture, registered
+ *                   through Kuikly's `BackHandler` and **only while
+ *                   [NavigatorController.canPop] is true**
+ * @param onEntryRemoved called when an entry **finally** leaves the stack: a
+ *                       committed pop animation, replace, popTo or resetTo.
+ *                       Exactly once — the same entry never fires twice.
+ * @param content renders the page for the current entry; during a transition it
+ *                is called once for the top and once for the previous layer
+ *
+ * Note: the edge hot zone is deliberately **not** exposed (review 4). Navigator
+ * fixes it at 96dp to clear the leftmost ~24dp where Android's own back gesture
+ * takes priority (Phase 0 spike finding). 96dp also works well on iOS.
+ */
+/**
+ * Navigator owning its own stack, rooted at [initialRoute].
+ *
+ * Use this when nothing outside the composition needs to navigate. If it does,
+ * hold a [rememberNavigatorController] and use the other overload — passing
+ * both a route and a controller would mean two sources for the same thing.
+ */
+@Composable
+fun <R : NavRoute> Navigator(
+    initialRoute: R,
+    modifier: Modifier = Modifier,
+    swipeBackEnabled: Boolean = true,
+    handleBack: Boolean = true,
+    onEntryRemoved: ((NavEntry<R>) -> Unit)? = null,
+    content: @Composable EntryScope<R>.(NavEntry<R>) -> Unit,
+) {
+    val controller = rememberNavigatorController(initialRoute)
+    Navigator(
+        controller = controller,
+        modifier = modifier,
+        swipeBackEnabled = swipeBackEnabled,
+        handleBack = handleBack,
+        onEntryRemoved = onEntryRemoved,
+        content = content,
+    )
+}
+
+/**
+ * Navigator driven by a [controller] the caller holds.
+ *
+ * The controller carries the initial route, so there is no second place to
+ * declare it. [NavigatorController] is sealed: it used to be an open interface
+ * that Navigator then narrowed with `as?`, so an outside implementation was
+ * accepted by the signature, silently replaced by an internal one, and the
+ * caller drove a controller nothing rendered — navigation that failed without
+ * an error.
+ */
+@Composable
+fun <R : NavRoute> Navigator(
+    controller: NavigatorController<R>,
+    modifier: Modifier = Modifier,
+    swipeBackEnabled: Boolean = true,
+    handleBack: Boolean = true,
+    onEntryRemoved: ((NavEntry<R>) -> Unit)? = null,
+    content: @Composable EntryScope<R>.(NavEntry<R>) -> Unit,
+) {
+    val saveableHolder = rememberSaveableStateHolder()
+    val removedRef = rememberUpdatedState(onEntryRemoved)
+    val animScope = rememberCoroutineScope()
+
+    // Total, not a narrowing: NavigatorState is the only implementation the
+    // sealed interface permits.
+    val state: NavigatorState<R> = controller as NavigatorState<R>
+
+    // Inject the Composable-scoped saveable holder, animation scope and
+    // onEntryRemoved into the state, and detach on leaving composition — without
+    // that, a callback can still fire against the old holder after a logout
+    // reset.
+    DisposableEffect(state, saveableHolder, animScope) {
+        state.attach(
+            saveable = { key -> saveableHolder.removeState(key) },
+            onEntryRemovedRef = { entry -> removedRef.value?.invoke(entry) },
+            animScope = animScope,
+        )
+        onDispose { state.detach() }
+    }
+
+    // Critical: the BackHandler is registered **only while canPop is true**.
+    // Kuikly reports consumed = backPressCallbackList.isNotEmpty() back to native
+    // before any callback runs, so a BackHandler still registered at the bottom
+    // of the stack means native never sees BACK at all. Registered on
+    // hasBackStack rather than canPop: canPop is also false mid-transition and
+    // while a confirmation is pending, and unregistering then handed BACK to the
+    // host in exactly the moments the app most needs to keep it. requestPop is
+    // already guarded, so a BACK arriving in those moments is swallowed rather
+    // than starting a second pop.
+    //
+    // With the keyboard up, BACK only puts it away, as everywhere on Android; the next
+    // BACK leaves the page. Popping straight away left the keyboard over the page
+    // underneath, with no field to type into (seen on a device).
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val keyboardUp = keyboardHeight() > 0.dp
+    if (handleBack && state.hasBackStack) {
+        BackHandler {
+            if (keyboardUp) {
+                runCatching { focusManager.clearFocus(force = true) }
+                keyboardController?.hide()
+            } else {
+                state.requestPop(PopReason.BackButton)
+            }
+        }
+    }
+
+    // Full-screen gesture, matching WeChat on Android: the swipe may start
+    // anywhere, not just at the left edge.
+    //
+    // Why not an edge hot zone plus setSystemGestureExclusionRects:
+    // - Android caps back-gesture exclusion at 200dp of height (it takes only the
+    //   bottom 200dp of the rect), so a full-height exclusion is impossible. A
+    //   swipe starting at the far left in the middle of the screen would always
+    //   be taken by the system's predictive back.
+    // - What WeChat on Android actually does is full-screen swipe-to-go-back:
+    //   swiping right from mid-screen returns to the previous page, while a
+    //   swipe from the very edge is left to the system gesture (predictive back
+    //   commit -> BACK -> Navigator's pop animation as the fallback).
+    //
+    // Accidental triggering is prevented by the SwipeBack.kt state machine:
+    // directionRatio requires horizontal travel to clearly exceed vertical
+    // before recognising, and nothing is consumed before recognition, so
+    // vertically scrolling lists are unaffected.
+    val swipeConfig = remember { SwipeBackConfig(edgeWidthDp = Float.MAX_VALUE) }
+
+    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+        val widthPx = constraints.maxWidth.toFloat()
+        state.bindViewportWidth(widthPx)
+
+        // ──────────────────── Rendering model: one keyed loop ────────────────────
+        //
+        // How it got here — every version below was broken on a real device:
+        // - v1, "stable slot with eager remove": beginSwipe pulled the outgoing
+        //   entry out of `entries` immediately. Commit did not flicker, but
+        //   **cancel put the outgoing entry back**, at which point
+        //   `entries.last() == _exiting` (the same key) and slot1's
+        //   SaveableStateProvider(key) collided with slot3's — Compose raised
+        //   `Key X was used multiple times`, which is fatal. Dragging back and
+        //   cancelling crashed the app, and the conversation could not be
+        //   reopened afterwards.
+        //
+        // Final version: **the stack does not change for the duration of a
+        // transition**. Neither beginSwipe nor pop touches `entries`; removal
+        // happens only when the animation finishes. Visible layers render
+        // through a single `forEach + key(entry.key)` loop, so every entry has
+        // exactly one stable call site (identity tracked by key) while its role
+        // and transform vary with state. That gives:
+        // - commit: the survivor goes BELOW -> FRONT at the same loop call site,
+        //   so it is not remounted and does not flicker — which is what the v1
+        //   stable-slot design was trying to solve in the first place;
+        //   cancel: the survivor goes MOVING -> FRONT at the same call site and
+        //   is likewise not remounted, while the below layer leaves the loop and
+        //   is disposed. **Each key appears exactly once in any frame**, so the
+        //   double registration cannot recur.
+        //
+        // Gesture host: a keyless, lifecycle-stable full-screen wrapper Box
+        // **inside** BoxWithConstraints. Two more device lessons: it cannot live
+        // inside a slot (the key changes and the coroutine is disposed), and it
+        // cannot be BoxWithConstraints itself (pointerInput receives no events on
+        // Kuikly's SubcomposeLayout). `enabled` is a constant; every dynamic
+        // guard is decided by [NavigatorState.beginSwipe] in onStart.
+        val layers = state.visibleLayers()
+        // Opaque backing for every navigation "screen". Without it, a page with a
+        // transparent background lets the layer beneath show through — on device,
+        // swiping the chat page revealed the conversation list underneath. The
+        // theme colour is read once here, in composable scope.
+        val screenBackground = Theme.colors.background
+        // Where the gesture host sits in the root, so a touch can be matched against
+        // the drag regions controls report in root coordinates.
+        val gestureOrigin = remember { arrayOf(Offset.Zero) }
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .onGloballyPositioned { gestureOrigin[0] = it.boundsInRoot().topLeft }
+                .let { base ->
+                    if (swipeBackEnabled) {
+                        base.swipeBack(
+                            enabled = true,
+                            config = swipeConfig,
+                            // Page-first: while the foreground page can still swipe
+                            // backwards itself (a pager off its first page), the
+                            // router stands down and the page owns the drag. At the
+                            // bottom of the stack the router has nowhere to go
+                            // either, so it stands down there as well — claiming the
+                            // drag only to no-op in beginSwipe would swallow the
+                            // page's own over-scroll tension on its first page.
+                            // A drag that starts on a control that itself drags sideways
+                            // (slider, colour plane, swipe cell) belongs to that control.
+                            deferToPage = { down ->
+                                val gate = state.activePageSwipeGate
+                                gate?.canSwipeBack?.invoke() == true ||
+                                    gate?.ownsDragAt(down + gestureOrigin[0]) == true ||
+                                    !state.hasBackStack
+                            },
+                            // A foreground page that cannot consume the right-swipe
+                            // (no horizontal pager, or a pager already at its
+                            // leftmost) hands the drag to the router from anywhere
+                            // on the screen, so the whole page tracks the finger.
+                            fullWidthWhenPageAtLeftmost = {
+                                state.hasBackStack &&
+                                    state.activePageSwipeGate?.canSwipeBack?.invoke() != true
+                            },
+                            onStart = { state.beginSwipe() },
+                            // 1:1 finger tracking: the page moves exactly as far as the finger, as WeChat does.
+                            onProgress = { _, dragX -> state.updateSwipeByPixels(dragX) },
+                            onCancel = { state.cancelSwipe() },
+                            onCommit = { state.commitSwipe() },
+                        )
+                    } else {
+                        base
+                    }
+                },
+        ) {
+            layers.forEach { layer ->
+                key(layer.entry.key) {
+                    saveableHolder.SaveableStateProvider(layer.entry.key) {
+                        // Opaque backing everywhere except the fading (alpha) moving
+                        // layer of an Overlay/Modal transition, which is meant to
+                        // composite with the layer below and the scrim — that is what
+                        // an image or video preview looks like. Every other layer,
+                        // including a Push transition's moving layer, gets an opaque
+                        // backing so layers cannot bleed through each other.
+                        val opaque = !(layer.role == NavLayerRole.Moving &&
+                            layer.entry.options.transition != NavTransition.SlidePush)
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .zIndex(layer.zIndex)
+                                .graphicsLayer {
+                                    when (layer.role) {
+                                        NavLayerRole.Parked -> {
+                                            // Kuikly hides a view reliably only through alpha.
+                                            alpha = 0f
+                                        }
+                                        NavLayerRole.Front -> {
+                                            translationX = 0f
+                                        }
+                                        NavLayerRole.Below -> {
+                                            // Push: parallax from -W*0.25 to 0. Overlay/Modal: stationary.
+                                            translationX = if (layer.movingIsOverlay) 0f
+                                                else -widthPx * PARALLAX_RATIO * (1f - state.transitionFraction)
+                                        }
+                                        NavLayerRole.Moving -> when (layer.entry.options.transition) {
+                                            NavTransition.SlidePush ->
+                                                translationX = widthPx * state.transitionFraction
+                                            NavTransition.FadeIn, NavTransition.ModalSheet -> {
+                                                translationX = 0f
+                                                alpha = 1f - state.transitionFraction
+                                            }
+                                        }
+                                    }
+                                }
+                                .let { m -> if (opaque) m.background(screenBackground) else m }
+                                // A parked page is out of sight and must be out of reach of a screen reader too.
+                                .let { m -> if (layer.role == NavLayerRole.Parked) m.clearAndSetSemantics { } else m }
+                                // Taps on a blank part of the page must not fall through to the
+                                // hidden page beneath: an observing pointer handler makes this
+                                // layer the hit, and consumes nothing its content needs.
+                                .let { m -> if (layer.role == NavLayerRole.Front || layer.role == NavLayerRole.Moving) m.pointerInput(Unit) {
+                                    awaitPointerEventScope { while (true) awaitPointerEvent() }
+                                }.consumeNativeTouches() else m },
+                        ) {
+                            // Page-first swipe-back arbitration. Each layer owns a
+                            // gate; the foreground layer publishes it into the state
+                            // so the app-level back can consult it on touch-down.
+                            val pageGate = remember { PageSwipeBackGate() }
+                            DisposableEffect(layer.role) {
+                                if (layer.role == NavLayerRole.Front) {
+                                    state.activePageSwipeGate = pageGate
+                                }
+                                onDispose {
+                                    if (state.activePageSwipeGate === pageGate) {
+                                        state.activePageSwipeGate = null
+                                    }
+                                }
+                            }
+                            CompositionLocalProvider(LocalPageSwipeBackGate provides pageGate) {
+                                val scope = EntryScopeImpl(
+                                    entry = layer.entry,
+                                    controller = state,
+                                    isTop = layer.role != NavLayerRole.Below && layer.role != NavLayerRole.Parked,
+                                    isForeground = layer.role == NavLayerRole.Front,
+                                    retained = state.retainedOf(layer.entry.key),
+                                )
+                                // clearAndSetSemantics above drops the Compose semantics only;
+                                // the host takes the native views out of reach too.
+                                AccessibilityLayerBox(
+                                    if (layer.role == NavLayerRole.Parked) AccessibilityLayer.Hidden else AccessibilityLayer.None,
+                                    Modifier.fillMaxSize(),
+                                ) {
+                                    scope.content(layer.entry)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Scrim sits at a z between below (0) and moving (2). It fades only
+            // during a Push transition; for Overlay/Modal it stays at a constant
+            // dim.
+            val moving = state.movingEntry
+            if (moving != null) {
+                val overlayMoving = moving.options.presentation == NavPresentation.Overlay ||
+                    moving.options.presentation == NavPresentation.Modal
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .zIndex(SCRIM_Z)
+                        .graphicsLayer {
+                            if (overlayMoving) {
+                                translationX = 0f
+                                alpha = SCRIM_MAX_ALPHA
+                            } else {
+                                translationX = -widthPx * PARALLAX_RATIO * (1f - state.transitionFraction)
+                                alpha = SCRIM_MAX_ALPHA * (1f - state.transitionFraction)
+                            }
+                        }
+                        .background(Color.Black),
+                )
+            }
+        }
+    }
+}
+
+/** The role a visible layer plays in the render loop. */
+/**
+ * [Parked] is the entry right under the top while nothing moves: composed but not
+ * shown, so a swipe or a back press can reveal it at once instead of building it from
+ * scratch (on device that build took about 450 ms, during which the page ignored the
+ * finger).
+ */
+internal enum class NavLayerRole { Parked, Front, Below, Moving }
+
+/** One visible layer to render. */
+internal data class NavLayer<R : NavRoute>(
+    val entry: NavEntry<R>,
+    val role: NavLayerRole,
+    val zIndex: Float,
+    /** Whether the moving entry is an Overlay/Modal, which decides if the layer below stays still. */
+    val movingIsOverlay: Boolean,
+)
+
+/** Parallax factor for the previous layer: -W*0.25 at exit progress 0, 0 at 1. Modelled on iOS and WeChat. */
+private const val PARALLAX_RATIO = 0.25f
+
+/** Scrim zIndex, between below (0f) and moving (2f). */
+private const val SCRIM_Z = 1f
+
+/** Peak dim opacity laid over the previous layer while a screen exits. */
+private const val SCRIM_MAX_ALPHA = 0.15f
+
+// ─────────────────────────────────────────────────────────────────────────────
+// internal impl
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Creates a Navigator controller ahead of time, for driving the stack from
+ * outside events such as forced logout, kick-out or an expired token calling
+ * [NavigatorController.resetTo]. Callers never touch [NavigatorState] directly —
+ * the stack is only manipulated through the [NavigatorController] interface.
+ *
+ * Usage:
+ * ```kotlin
+ * val nav = rememberNavigatorController(AppRoute.Shell)
+ *
+ * LaunchedEffect(Unit) {
+ *     forcedLogoutEvents.collect {
+ *         nav.resetTo(AppRoute.Shell)
+ *         legacyPageStack.clear()
+ *     }
+ * }
+ *
+ * Navigator(controller = nav, initialRoute = "shell") { entry -> ... }
+ * ```
+ *
+ * @param initialRoute route at the bottom of the stack; must match the `initialRoute` passed to [Navigator] in the same composition
+ */
+@Composable
+fun <R : NavRoute> rememberNavigatorController(initialRoute: R): NavigatorController<R> =
+    remember(initialRoute) { NavigatorState(initialRoute = initialRoute) }
+
+@Stable
+internal class NavigatorState<R : NavRoute>(initialRoute: R) : NavigatorController<R>, RememberObserver {
+
+    // Retained entry state is cancelled per entry in `notifyRemoved`, but that
+    // only covers entries leaving a stack that stays. When the Navigator itself
+    // leaves composition — a logout dropping the whole shell — no entry is
+    // "removed", the remembered state is simply discarded, and without this the
+    // coroutines started in `entryCoroutineScope` would outlive the session
+    // they belong to.
+    override fun onRemembered() = Unit
+    override fun onForgotten() = retainedStore.disposeAll()
+    override fun onAbandoned() = retainedStore.disposeAll()
+
+
+    internal var activePageSwipeGate: PageSwipeBackGate? = null
+
+    private val _entries = mutableStateListOf(
+        NavEntry<R>(route = initialRoute, key = generateKey(initialRoute.routeName, 0)),
+    )
+
+    // These three callbacks only exist in composable scope, so a controller
+    // created ahead of time is attached later. push/pop still work before
+    // attaching, but saveable state and onEntryRemoved will not fire.
+    private var removeSaveableState: ((String) -> Unit)? = null
+    private var onEntryRemovedRef: ((NavEntry<R>) -> Unit)? = null
+    private var animScope: CoroutineScope? = null
+
+    internal fun attach(
+        saveable: (String) -> Unit,
+        onEntryRemovedRef: (NavEntry<R>) -> Unit,
+        animScope: CoroutineScope,
+    ) {
+        this.removeSaveableState = saveable
+        this.onEntryRemovedRef = onEntryRemovedRef
+        this.animScope = animScope
+    }
+
+    /**
+     * Test hooks. The stack machine is worth testing without a composition —
+     * key uniqueness, exactly-once removal and the pop-interception branches
+     * are what a refactor breaks quietly — and both of these are otherwise
+     * private.
+     */
+    internal val entriesForTest: List<NavEntry<R>> get() = _entries
+
+    internal fun attachForTest(onEntryRemoved: (NavEntry<R>) -> Unit) {
+        this.onEntryRemovedRef = onEntryRemoved
+    }
+
+    internal fun detach() {
+        removeSaveableState = null
+        onEntryRemovedRef = null
+        animScope = null
+    }
+
+    /** Exactly-once guard: each key triggers onEntryRemoved and removeState at most once. */
+    private val removedKeys = mutableSetOf<String>()
+
+    /** Generates a unique key when the same route is pushed more than once. */
+    private var keyCounter: Int = 1
+
+    /** PopDecision.Pending: push and pop are blocked until the caller confirms the top entry. */
+    private var pendingEntry: NavEntry<R>? by mutableStateOf(null)
+
+    /**
+     * The entry currently transitioning out. **Key invariant: it stays in
+     * [_entries] for the whole transition** (it is `entries.last()`). The stack
+     * is only modified when the animation finishes — removed on commit/pop, left
+     * alone on cancel. Null in the steady state; non-null during a pop animation
+     * or an in-progress swipe.
+     */
+    private var _moving: NavEntry<R>? by mutableStateOf(null)
+
+    /** Swipe mode: while true the fraction is snapped by [updateSwipeByPixels]; while false it is animation-driven. */
+    private var _swipeMode: Boolean by mutableStateOf(false)
+
+    /** Exit progress 0..1 as a fraction of screen width: 0 = fully covering, 1 = fully off-screen right with the layer below exposed. */
+    private val _fractionAnim = Animatable(0f)
+
+    /**
+     * Whether [_moving] is an entering page (a push) rather than a leaving one. A
+     * push runs the same two layers as a pop, the fraction going 1 -> 0 instead of
+     * 0 -> 1, so a page arrives the way it will leave: from the right, over the
+     * previous page drifting left — and the edge swipe that takes it back follows
+     * the same path.
+     */
+    private var _entering: Boolean = false
+
+    /**
+     * Set by [push] until the enter animation has moved the fraction to 1. Snapping
+     * an Animatable suspends, and the new page is composed in the frame the push
+     * happens: without this it would show at the fraction the last transition left
+     * (0, covering) for a frame, then jump off-screen to slide in — a flash.
+     */
+    private var _enterPending: Boolean by mutableStateOf(false)
+
+    /** Viewport width in pixels, injected by [Navigator]'s BoxWithConstraints. */
+    private var viewportWidth: Float = 0f
+
+    val movingEntry: NavEntry<R>? get() = _moving
+    val transitionFraction: Float get() = if (_enterPending) 1f else _fractionAnim.value
+
+    /**
+     * Composed layers, bottom to top. The render loop tracks identity
+     * by `key(entry.key)`. With no transition there is the top layer,
+     * [NavLayerRole.Front], over the hidden [NavLayerRole.Parked] entry beneath it,
+     * which becomes the below layer in place when a transition starts; during one there are below ([NavLayerRole.Below],
+     * z=0) and moving ([NavLayerRole.Moving], z=2). Moving is `entries.last()`
+     * and below is `entries[size-2]`, so their keys always differ and no key can
+     * repeat within a frame. That is what removed the v1 stable-slot crash.
+     */
+    fun visibleLayers(): List<NavLayer<R>> {
+        val moving = _moving
+        if (moving == null) {
+            val parked = _entries.getOrNull(_entries.size - 2)
+            return buildList {
+                if (parked != null) add(NavLayer(parked, NavLayerRole.Parked, zIndex = PARKED_Z, movingIsOverlay = false))
+                add(NavLayer(_entries.last(), NavLayerRole.Front, zIndex = 0f, movingIsOverlay = false))
+            }
+        }
+        val overlayMoving = moving.options.presentation == NavPresentation.Overlay ||
+            moving.options.presentation == NavPresentation.Modal
+        val below = _entries.getOrNull(_entries.size - 2)
+        return buildList {
+            if (below != null) {
+                add(NavLayer(below, NavLayerRole.Below, zIndex = 0f, movingIsOverlay = overlayMoving))
+            }
+            add(NavLayer(moving, NavLayerRole.Moving, zIndex = 2f, movingIsOverlay = overlayMoving))
+        }
+    }
+
+    override val current: NavEntry<R>
+        get() = _entries.last()
+
+    override val previous: NavEntry<R>?
+        get() = _entries.getOrNull(_entries.size - 2)
+
+    /**
+     * Whether Navigator owns BACK: there is a page underneath to go back to.
+     *
+     * Deliberately not [canPop]. The BackHandler used to register on canPop,
+     * which is also false while a transition or a confirmation is in flight — so
+     * during either, Kuikly saw an empty callback list, reported the event
+     * unconsumed, and BACK fell through to the host. Owning BACK and being able
+     * to start a pop are different questions and cannot share a Boolean.
+     */
+    internal val hasBackStack: Boolean
+        get() = _entries.size > 1
+
+    override val canPop: Boolean
+        get() = hasBackStack && pendingEntry == null && _moving == null
+
+    override val pendingPop: NavEntry<R>?
+        get() = pendingEntry
+
+    override val isTransitioning: Boolean
+        get() = _moving != null
+
+    fun bindViewportWidth(width: Float) {
+        viewportWidth = width
+    }
+
+    /**
+     * Hard v1 invariant: **every** stack-mutating API is refused during a
+     * transition or while pending. A replace/resetTo/popTo mid-swipe would leave
+     * the exit snapshot pointing at an already-removed entry, and behaviour
+     * while pending would be undefined. Call [forcePop] or wait for the animation.
+     */
+    private val isMidFlight: Boolean
+        get() = _moving != null || pendingEntry != null
+
+    override fun push(route: R) {
+        settleEnter()
+        if (isMidFlight) return
+        val newKey = generateKey(route.routeName, keyCounter++)
+        dismissOverlaysForRouteChange()
+        val entry = NavEntry<R>(route = route, key = newKey)
+        _entries.add(entry)
+        startEnterAnim(entry)
+    }
+
+    /**
+     * The enter animation of a push: the new top is the moving layer and the
+     * fraction runs 1 -> 0 (Push: in from the right over the previous page's
+     * parallax and scrim; Overlay/Modal: a fade in). The stack already holds the
+     * entry, so nothing is added or removed when it ends — the moving layer simply
+     * becomes the front one, at the same key, without remounting.
+     */
+    private fun startEnterAnim(entry: NavEntry<R>) {
+        val scope = animScope ?: return // detached: the page is simply there
+        _swipeMode = false
+        _entering = true
+        _enterPending = true
+        _moving = entry
+        scope.launch {
+            try {
+                _fractionAnim.snapTo(1f)
+                // Start the clock once the page is built, not while it is being built.
+                // The first frame composes the new page off-screen; the native views it
+                // describes are then created on the main thread, which for a page like a
+                // chat drops two or three frames on device. A clock started with the push
+                // spends that time with nothing on screen moving, then jumps a tenth of
+                // the way in. Waiting it out keeps every step of the slide. The wait is
+                // time, not frames: the views take as long at 120 Hz as at 60.
+                val composedAt = withFrameNanos { it }
+                while (withFrameNanos { it } - composedAt < ENTER_SETTLE_NANOS) { }
+                _enterPending = false
+                _fractionAnim.animateTo(0f, tween(durationMillis = ANIM_PUSH_MS))
+            } finally {
+                // Only the enter that is still current ends here: a later push,
+                // a pop or a reset may have taken over (see settleEnter).
+                if (_moving?.key == entry.key && _entering) endEnter()
+            }
+        }
+    }
+
+    private fun endEnter() {
+        _moving = null
+        _entering = false
+        _enterPending = false
+    }
+
+    /**
+     * A page still sliding in is finished where it is going before anything else
+     * moves the stack. Unlike a running pop, which refuses changes until it lands, an
+     * enter never blocks: a deep link pushing two pages, or a back tapped as a page
+     * arrives, must not be dropped.
+     */
+    private fun settleEnter() {
+        if (_moving != null && _entering) endEnter()
+    }
+
+    override fun pop(): Boolean = requestPop(PopReason.Programmatic)
+
+    override fun forcePop(): Boolean {
+        settleEnter()
+        // Skips onPopRequest, and is allowed through a pending confirmation:
+        // this is the blunt "leave regardless" for callers that have no pending
+        // state to reason about. Use confirmPendingPop when there is one — it
+        // checks that the page it is popping is still the page that asked.
+        if (_entries.size <= 1) return false
+        if (_moving != null) return false
+        pendingEntry = null
+        startCommitPopAnim(_entries.last())
+        return true
+    }
+
+    override fun confirmPendingPop(): Boolean {
+        settleEnter()
+        val pending = pendingEntry ?: return false
+        pendingEntry = null
+        if (_moving != null) return false
+        // Identity check: a confirmation arriving after the stack moved on must
+        // not pop whatever happens to be on top now.
+        if (_entries.lastOrNull()?.key != pending.key) return false
+        startCommitPopAnim(pending)
+        return true
+    }
+
+    override fun cancelPendingPop() {
+        pendingEntry = null
+    }
+
+    override fun popTo(route: R): Boolean = popTo { it.routeName == route.routeName }
+
+    override fun popTo(predicate: (R) -> Boolean): Boolean {
+        settleEnter()
+        if (isMidFlight) return false
+        val idx = _entries.indexOfLast { predicate(it.route) }
+        if (idx < 0 || idx == _entries.size - 1) return false
+        // Intermediate entries are dropped immediately without animation; only
+        // the top one animates out. The top is not removed here — that happens
+        // when the animation finishes — so the slice keeps up to idx+2.
+        while (_entries.size > idx + 2) {
+            val removed = _entries.removeAt(_entries.size - 2)
+            notifyRemoved(removed)
+        }
+        startCommitPopAnim(_entries.last())
+        return true
+    }
+
+    override fun replace(route: R) {
+        settleEnter()
+        if (isMidFlight) return
+        if (_entries.isEmpty()) return
+        val old = _entries.removeAt(_entries.size - 1)
+        notifyRemoved(old)
+        val newKey = generateKey(route.routeName, keyCounter++)
+        _entries.add(NavEntry(route = route, key = newKey))
+    }
+
+    override fun resetTo(route: R) {
+        dismissOverlaysForRouteChange()
+        // Interrupts rather than defers. This is the forced-logout path; a dirty
+        // form holding a pending confirmation, or an exit animation still
+        // running, must not be able to refuse it. Abandoning _moving is safe:
+        // removeMoving is keyed on the outgoing entry and notifyRemoved is
+        // exactly-once, so the animation's late finally finds nothing to do.
+        pendingEntry = null
+        _moving = null
+        _entering = false
+        _enterPending = false
+        val snapshot = _entries.toList()
+        _entries.clear()
+        snapshot.forEach { notifyRemoved(it) }
+        _entries.add(NavEntry(route = route, key = generateKey(route.routeName, keyCounter++)))
+    }
+
+    /**
+     * Requests a pop, branching on onPopRequest's decision:
+     * - Allow: pop for real and run the exit animation.
+     * - Deny: the caller swallows it, the stack is unchanged, returns false.
+     * - Pending: this BACK counts as consumed. Navigator holds no continuation;
+     *   the caller calls forcePop itself when ready.
+     */
+    internal fun requestPop(reason: PopReason): Boolean {
+        settleEnter()
+        if (_entries.size <= 1) return false
+        dismissOverlaysForRouteChange()
+        if (pendingEntry != null) return false
+        if (_moving != null) return false
+        val top = _entries.last()
+        val decision = top.options.onPopRequest?.invoke(reason) ?: PopDecision.Allow
+        return when (decision) {
+            PopDecision.Allow -> {
+                startCommitPopAnim(top)
+                true
+            }
+
+            PopDecision.Deny -> false
+
+            PopDecision.Pending -> {
+                pendingEntry = top
+                false
+            }
+        }
+    }
+
+    /**
+     * Programmatic pop with an exit animation. **The outgoing entry stays in
+     * _entries** (it is `entries.last()`); the render loop treats it as the moving
+     * layer with below = `entries[size-2]` and animates the fraction 0 -> 1.
+     * Removal and notification happen only when the animation completes, so the
+     * survivor goes Below -> Front at the same call site without remounting.
+     */
+    private fun startCommitPopAnim(outgoing: NavEntry<R>) {
+        _swipeMode = false
+        _moving = outgoing
+        val scope = animScope
+        if (scope == null) {
+            // Detached: no animation scope, so complete synchronously. This is the path when logout is triggered outside composition.
+            removeMoving(outgoing)
+            return
+        }
+        scope.launch {
+            // The finally block guarantees removal even if animateTo is cancelled
+            // concurrently. Without it a stale _moving leaves canPop permanently
+            // false, every later push is refused by isMidFlight, and BACK falls
+            // through to native and exits the app. That was a P0 seen on device.
+            try {
+                _fractionAnim.snapTo(0f)
+                _fractionAnim.animateTo(1f, tween(durationMillis = ANIM_POP_MS))
+            } finally {
+                removeMoving(outgoing)
+            }
+        }
+    }
+
+    /** Animation complete: remove the outgoing entry, notify, and clear _moving — all three in one recomposition. */
+    private fun removeMoving(outgoing: NavEntry<R>) {
+        if (_entries.lastOrNull()?.key == outgoing.key) {
+            _entries.removeAt(_entries.size - 1)
+        }
+        notifyRemoved(outgoing)
+        _moving = null
+    }
+
+    // ───── Swipe API, driven by Modifier.swipeBack onStart/onProgress/onCancel/onCommit ─────
+
+    /**
+     * Gesture recognised (onStart). **Every dynamic guard is evaluated here.** The
+     * gesture modifier sits on Navigator's root with a constant `enabled` — if
+     * beginSwipe changed the stack, pointerInput would restart and kill the
+     * gesture — so whether a swipe is allowed can only be checked as it starts:
+     * stack depth >= 2, no transition or pending decision in flight, and a top
+     * entry that permits swiping with a Push presentation.
+     *
+     * The fraction is reset to 0 on entry: a leftover 1f from the previous commit
+     * would render the snapshot off-screen, which reads as a flash. If the guards
+     * refuse, the whole gesture is a no-op — updateSwipe, commitSwipe and
+     * cancelSwipe all self-check and return.
+     */
+    internal fun beginSwipe() {
+        settleEnter()
+        if (_entries.size <= 1) return
+        if (_moving != null) return
+        if (pendingEntry != null) return
+        val top = _entries.last()
+        if (!top.options.swipeBackEnabled) return
+        if (top.options.presentation != NavPresentation.Push) return
+        // **No removal**: the top stays in entries as the moving layer, below = entries[size-2], and their keys differ.
+        _moving = top
+        _swipeMode = true
+        // The previous animation may have stopped at 1f; snap back to 0 before tracking. snapTo suspends, hence animScope.
+        animScope?.launch {
+            if (_swipeMode) _fractionAnim.snapTo(0f)
+        }
+    }
+
+    /** 1:1 tracking: dragX in pixels, normalised against viewport width into the fraction. */
+    internal fun updateSwipeByPixels(dragX: Float) {
+        if (!_swipeMode) return
+        val width = viewportWidth.takeIf { it > 0f } ?: return
+        animScope?.launch {
+            // Double-check: the gesture may have committed or cancelled while this
+            // launch was queued (_swipeMode flips false). Without this, a late
+            // snapTo cancels the animateTo that commitSwipe is running, through
+            // Animatable's mutual exclusion, and the removal never completes.
+            if (!_swipeMode) return@launch
+            _fractionAnim.snapTo((dragX / width).coerceIn(0f, 1f))
+        }
+    }
+
+    /** Released past the threshold: finish the remaining animation, then remove and notify. */
+    internal fun commitSwipe() {
+        val outgoing = _moving ?: return
+        if (!_swipeMode) return
+        _swipeMode = false
+        val scope = animScope
+        if (scope == null) {
+            removeMoving(outgoing)
+            return
+        }
+        scope.launch {
+            try {
+                _fractionAnim.animateTo(1f, tween(durationMillis = ANIM_SWIPE_COMMIT_MS))
+            } finally {
+                // Removal must complete even if the animation is cancelled; a stale _moving wedges the Navigator.
+                removeMoving(outgoing)
+            }
+        }
+    }
+
+    /**
+     * Released short of the threshold: spring back. **The stack never changed** —
+     * the outgoing entry is still `entries.last()` — so this only animates the
+     * fraction back to 0 and clears _moving, with no remount and no repeated key.
+     */
+    internal fun cancelSwipe() {
+        if (!_swipeMode) return
+        _swipeMode = false
+        val scope = animScope
+        if (scope == null) {
+            _moving = null
+            return
+        }
+        scope.launch {
+            try {
+                _fractionAnim.animateTo(0f, spring())
+            } finally {
+                _moving = null
+            }
+        }
+    }
+
+    /**
+     * Per-entry retained state. Lives on the state rather than in the
+     * composition so it survives the entry going off screen.
+     */
+    private val retainedStore = RetainedEntryStore()
+
+    internal fun retainedOf(key: String): RetainedEntry = retainedStore.of(key)
+
+    /**
+     * An overlay belongs to the screen that opened it, so navigating away takes
+     * it with them.
+     *
+     * `OverlayDismissPolicy.routeChange` has always defaulted to true and
+     * `dispatchEvent` handles it, but `OverlayManager.notifyRouteChange()` had
+     * no callers — so a programmatic navigation (a logout `resetTo`, a push
+     * notification routing away) left a sheet or dialog floating over whatever
+     * screen came next, still holding a callback into the one that is gone.
+     *
+     * Only route *changes* fire this. A swipe-back that is cancelled never
+     * reaches here, because it never reaches a mutation.
+     */
+    private fun dismissOverlaysForRouteChange() {
+        OverlayManager.notifyRouteChange()
+    }
+
+    private fun notifyRemoved(entry: NavEntry<R>) {
+        if (removedKeys.add(entry.key)) {
+            onEntryRemovedRef?.invoke(entry)
+            removeSaveableState?.invoke(entry.key)
+            // Same exactly-once guard as the saveable state, for the same
+            // reason: an entry can be reported gone from more than one path
+            // (pop, swipe-commit, reset) and its coroutines must be cancelled
+            // once, not once per path.
+            retainedStore.dispose(entry.key)
+        }
+    }
+}
+
+private const val ANIM_POP_MS: Int = 220
+/** Longer than the pop: an arriving page is read as it comes in, a leaving one is not. */
+private const val ANIM_PUSH_MS: Int = 350
+/**
+ * Time a pushed page is given, after the frame that composes it, for its native views
+ * to be built before it starts to move. On an iPhone 13 a chat page's views kept the
+ * main thread 25-47 ms; started sooner, the slide's first steps were dropped frames.
+ * With this wait, read from the moving view's on-screen position, eight of nine chat
+ * pushes reached the screen at every frame and the ninth repeated one. It sits inside
+ * the press feedback the tap shows.
+ */
+private const val ENTER_SETTLE_NANOS = 66_000_000L
+private const val ANIM_SWIPE_COMMIT_MS: Int = 160
+private const val PARKED_Z = -1f
+
+@Stable
+private class EntryScopeImpl<R : NavRoute>(
+    override val entry: NavEntry<R>,
+    override val controller: NavigatorController<R>,
+    override val isTop: Boolean,
+    override val isForeground: Boolean,
+    private val retained: RetainedEntry,
+) : EntryScope<R> {
+    override val entryCoroutineScope: CoroutineScope get() = retained.coroutineScope
+    override fun <T : Any> retain(key: String, factory: () -> T): T = retained.retain(key, factory)
+}
+
+/**
+ * Generates the internal unique key. Callers pushing the same route repeatedly may pass their own stable key; otherwise `route#counter` is used.
+ */
+private fun generateKey(route: String, counter: Int): String = "$route#$counter"

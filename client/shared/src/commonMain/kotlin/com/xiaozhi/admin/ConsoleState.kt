@@ -1,13 +1,12 @@
 package com.xiaozhi.admin
 
-import com.xiaozhi.admin.ui.*
 import com.tencent.kuikly.core.coroutines.Job
 import com.tencent.kuikly.core.coroutines.delay
 import com.tencent.kuikly.core.coroutines.launch
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.pager.Pager
-import com.tencent.kuikly.core.reactive.handler.observable
-import com.tencent.kuikly.core.reactive.handler.observableList
+import com.xiaozhi.admin.state.stateVar
+import com.xiaozhi.admin.state.stateListOf
 import com.tencent.kuikly.core.timer.clearTimeout
 import com.tencent.kuikly.core.timer.setTimeout
 
@@ -25,29 +24,29 @@ import com.tencent.kuikly.core.timer.setTimeout
  */
 class ConsoleState(private val ctx: Pager) {
     /** 当前可见文本（已按级别筛选、按上限截断）。改它即触发重渲染。 */
-    var display by observable("")
+    var display by stateVar("")
 
     /** 连接状态文案：未连接 / 连接中… / 已连接 / 已断开 · 重连中… / 不支持。 */
-    var status by observable("未连接")
+    var status by stateVar("未连接")
 
     /** 是否连上（影响「复制 / 清空 / 暂停」可用性与状态字色）。 */
-    var connected by observable(false)
+    var connected by stateVar(false)
 
     /** 暂停：冻结画面（连接保持，新行进暂停缓冲，继续后一次性补上）。便于盯着某段排查。 */
-    var paused by observable(false)
+    var paused by stateVar(false)
 
     /** 级别筛选：all / warn / error。 */
-    var levelFilter by observable("all")
+    var levelFilter by stateVar("all")
 
     /** 级别筛选下拉展开态（[dropdownField] 需要）。 */
-    var levelOpen by observable(false)
+    var levelOpen by stateVar(false)
 
     /** 连接地址与令牌（[connect] 时记下，供「重连」按钮复用）。 */
     internal var apiBase = ""
     internal var apiToken = ""
 
-    /** 级别筛选下拉选项（[dropdownField] 的 `options` 要求 ObservableList）。 */
-    var levelOptions by observableList<Pair<String, String>>()
+    /** 级别筛选下拉选项（[dropdownField] 的 `options` 取可变列表；T05 起为 Compose 快照列表）。 */
+    var levelOptions: MutableList<Pair<String, String>> = stateListOf()
     init {
         levelOptions.add("all" to "全部级别")
         levelOptions.add("warn" to "警告及以上")

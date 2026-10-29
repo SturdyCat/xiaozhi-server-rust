@@ -1,9 +1,9 @@
 package com.xiaozhi.admin
 
-import com.xiaozhi.admin.ui.*
 
-import com.tencent.kuikly.core.base.ViewContainer
+import androidx.compose.runtime.Composable
 import com.tencent.kuikly.core.module.Module
+import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.pager.Pager
 
 /**
@@ -12,29 +12,23 @@ import com.tencent.kuikly.core.pager.Pager
  * ## 为什么收口到一个文件
  *
  * 废除 macOS 双壳（`AdminShell` @Page("router")）后，web 与 macOS 共用同一个
- * `@Page("admin")` 壳（[AdminPage]）。两者只剩四类差异，全部以 expect/actual 表达，
+ * `@Page("admin")` 壳（[AdminPage]）。平台差异全部以 expect/actual 表达，
  * commonMain 的壳代码只面向这些 hook 编程，不出现任何 `if (平台)` 散落分支：
  *
- * - [IS_MACOS]：平台判定（导航过滤、测试台分支）；
+ * - [IS_MACOS]：平台判定（导航过滤、侧边栏「服务器设置」入口）；
  * - [platformExternalModules]：macOS 注入 [XiaoZhiModule]（测试台的 WS/麦克风/Opus 原生桥）；
- * - [renderTestbenchSection]：测试台渲染（mac-only，web 菜单已隐藏，此处是防御分支）；
- * - [macServerSwitchEntry]：macOS 的「服务器设置」入口与表单（web 由 server 同域托管，无此概念）；
+ * - [TestbenchSection]：测试台 section 的 Compose 挂载点（mac-only 真实现，
+ *   非 mac 平台是防御空实现——菜单已在 web/iOS/Android 端隐藏）。T12 起
+ *   取代旧 DSL 的 `renderTestbenchSection`（`ViewContainer` 扩展无法进 Compose 树）；
+ * - [startAdminServerDiscovery] / [stopAdminServerDiscovery]：局域网 mDNS 服务器发现
+ *   （macOS 转发 [XiaoZhiModule]；其他平台 no-op）。T12 起取代旧 DSL 的
+ *   `macServerSwitchEntry`——发现逻辑本身是平台无关的（见 `MacServerSwitch.kt`），
+ *   只有「谁来做 mDNS」是平台差异，故收窄成这两个 Pager 级 hook；
  * - [pagerBaseUrl]：API 基址（web 相对路径 = ""，macOS 读 SP 记忆地址）。
  *
  * actual 落点：macosArm64Main（真实现）与 jsMain / androidMain / iosMain（空实现/默认值）。
  */
 expect val IS_MACOS: Boolean
-
-/**
- * 文本输入是否需要**额外绑定 `text()`** 才能显示已存值（仅 web 为 true）。
- *
- * web（h5）渲染器的 `setProp` 不处理 `textInputState` attr（只认 `text` prop），
- * 只绑 textInputState 时输入框永远显示 placeholder——用户会误读成「保存的值丢了」；
- * 原生渲染器（Catalyst/Android/iOS）由 textInputState 通道负责显示，
- * 再绑 `text()` 会打断 IME 组词形成受控回写循环（见 [AdminFormControls.labeledField] 注释），
- * 故仅 web 需要。
- */
-expect val INPUT_NEEDS_TEXT_PROP: Boolean
 
 /**
  * Pager 额外注册的平台模块：macOS 返回 [XiaoZhiModule]（测试台依赖），
@@ -43,35 +37,24 @@ expect val INPUT_NEEDS_TEXT_PROP: Boolean
 expect fun Pager.platformExternalModules(): Map<String, Module>
 
 /**
- * 测试台 section 渲染（mac-only）。菜单已在 web 端隐藏（[AdminNav.visible]），
- * 非 mac 平台的 actual 是空实现，仅作防御。
+ * 测试台 section（mac-only）的 Compose 挂载点。
  *
- * ⚠️ 必须在目标容器闭包内**非限定**调用（接收者 = 内容区容器），否则节点挂到根容器布局逃逸；
- * twoColumn/pageWidth/pageHeight 须为 lambda，在 vif/attr 闭包内读取 pageViewWidth 才响应 resize。
+ * macOS actual：按 Pager 缓存 [TestBenchState]（切走再切回来连接状态/录音不丢）
+ * 并渲染五 tab 工作区（`TestBenchPage.kt`）；其他平台 actual 为空实现
+ * （防御分支：导航表 [AdminNav.visible] 已按平台隐藏该项，正常不会走到）。
  */
-expect fun ViewContainer<*, *>.renderTestbenchSection(
-    pager: Pager,
-    form: ConfigFormState,
-    twoColumn: () -> Boolean,
-    pageWidth: () -> Float,
-    pageHeight: () -> Float,
-)
+@Composable
+expect fun TestbenchSection(page: AdminPage)
 
 /**
- * macOS「服务器设置」hook（web 空实现）：
- * - 在调用处（侧边栏内）渲染「服务器设置」入口项（内联展示当前生效地址）；
- * - 点击入口经 [onOpened] 展开、表单收起经 [onClosed]（open 状态由壳层持有，
- *   入口自己不持状态——统一壳后状态机收口到 [AdminPage.serverSwitchOpen]）；
- * - 展开时在侧边栏内联显示局域网自动发现列表 + 地址输入表单，保存后写回平台存储
- *   并回调 [onApplied]（壳层据此重跑数据加载）。
+ * 启动局域网服务器发现（macOS = [XiaoZhiModule] 的 mDNS 浏览 `_xiaozhi-admin._tcp`；
+ * 结果经 [onResult] 回调 {servers:[{name, base}]}，已在 Kuikly 线程）。
+ * 其他平台 no-op：侧边栏入口只在 [IS_MACOS] 时渲染。
  */
-expect fun ViewContainer<*, *>.macServerSwitchEntry(
-    pager: Pager,
-    open: () -> Boolean,
-    onOpened: () -> Unit,
-    onClosed: () -> Unit,
-    onApplied: () -> Unit,
-)
+expect fun Pager.startAdminServerDiscovery(onResult: (JSONObject?) -> Unit)
+
+/** 停止局域网服务器发现（幂等；macOS 之外 no-op）。 */
+expect fun Pager.stopAdminServerDiscovery()
 
 /**
  * 管理 API 基址：web 返回 ""（server 同域托管，走相对路径）；

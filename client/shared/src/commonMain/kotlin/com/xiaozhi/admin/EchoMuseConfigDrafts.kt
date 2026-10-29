@@ -1,12 +1,11 @@
 package com.xiaozhi.admin
 
-import com.xiaozhi.admin.ui.*
 
 import com.tencent.kuikly.core.base.PagerScope
 import com.tencent.kuikly.core.nvi.serialization.json.JSONArray
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
-import com.tencent.kuikly.core.reactive.handler.observable
-import com.tencent.kuikly.core.reactive.handler.observableList
+import com.xiaozhi.admin.state.stateVar
+import com.xiaozhi.admin.state.stateListOf
 
 /**
  * 配置 tab 的**全部表单草稿**（唤醒词 Stage 02 + 音频链 Stage 01/03/04/05 + Sendspin Stage 07），
@@ -48,76 +47,76 @@ class EchoMuseConfigDrafts(scope: PagerScope) {
     // Stage 02 唤醒词
     // ============================================================
 
-    var wakeWordEnabled by scope.observable(true)
-    var owwOnDevice by scope.observable("on")
-    var owwModeOpen by scope.observable(false)
-    val owwModes by scope.observableList<Pair<String, String>>()
-    var wakeLevelOpen by scope.observable(false)
-    val wakeLevels by scope.observableList<Pair<String, String>>()
-    var owwModelOpen by scope.observable(false)
+    var wakeWordEnabled by stateVar(true)
+    var owwOnDevice by stateVar("on")
+    var owwModeOpen by stateVar(false)
+    val owwModes: MutableList<Pair<String, String>> = stateListOf()
+    var wakeLevelOpen by stateVar(false)
+    val wakeLevels: MutableList<Pair<String, String>> = stateListOf()
+    var owwModelOpen by stateVar(false)
 
     /** 模型下拉选项：官方四款 + 服务端 `oww-models/` 已上传模型 + 已存自定义值。 */
-    val owwModelOptions by scope.observableList<Pair<String, String>>()
+    val owwModelOptions: MutableList<Pair<String, String>> = stateListOf()
 
     /** 管理面存储的原始 `owwModel`；空 = 设备默认（hey jarvis），展示时要标出来。 */
-    var owwModelStored by scope.observable("")
+    var owwModelStored by stateVar("")
 
     /** 下拉草稿：恒为生效模型名（存储空时解析为设备默认，见 [EchoMuseWakeWord]）。 */
-    var owwModel by scope.observable(EchoMuseWakeWord.DEFAULT_MODEL)
+    var owwModel by stateVar(EchoMuseWakeWord.DEFAULT_MODEL)
 
     /** 唤醒灵敏度阈值（读数保真：轨外历史值原样保留，滑杆端点钉扎见官方 wakeTrackFor）。 */
-    var owwThreshold by scope.observable(EchoMuseWakeWord.DEFAULT_THRESHOLD)
-    var wakeSound by scope.observable(true)
+    var owwThreshold by stateVar(EchoMuseWakeWord.DEFAULT_THRESHOLD)
+    var wakeSound by stateVar(true)
 
     /** 固件提示音档位（不是输出音量 0～127）。 */
-    var wakeSoundLevel by scope.observable("medium")
+    var wakeSoundLevel by stateVar("medium")
 
     /** 0=中心麦克风，范围 0~6。 */
-    var wakeMic by scope.observable("0")
+    var wakeMic by stateVar("0")
 
     // ============================================================
     // Stage 01 / 03 / 05 音频链
     // ============================================================
 
-    var vadThresholdDraft by scope.observable("")
-    var vadSpeechMsDraft by scope.observable("")
-    var vadSilenceMsDraft by scope.observable("")
-    var adcMicpgaDraft by scope.observable("")
-    var adcDigitalGainDraft by scope.observable("")
-    var micGainDbDraft by scope.observable("")
-    var startupVolumeDraft by scope.observable("")
-    var aecEnabled by scope.observable(true)
-    var aecDelayMsDraft by scope.observable("")
-    var aecTailMsDraft by scope.observable("")
-    var aecRefSource by scope.observable("auto")
-    var aecRefSourceOpen by scope.observable(false)
-    val aecRefSources by scope.observableList<Pair<String, String>>()
-    var agcEnabled by scope.observable(true)
-    var beamformingEnabled by scope.observable(true)
-    var beamAngleDraft by scope.observable("")
-    var bargeInEnabled by scope.observable(true)
-    var bargeInThresholdDraft by scope.observable("")
+    var vadThresholdDraft by stateVar("")
+    var vadSpeechMsDraft by stateVar("")
+    var vadSilenceMsDraft by stateVar("")
+    var adcMicpgaDraft by stateVar("")
+    var adcDigitalGainDraft by stateVar("")
+    var micGainDbDraft by stateVar("")
+    var startupVolumeDraft by stateVar("")
+    var aecEnabled by stateVar(true)
+    var aecDelayMsDraft by stateVar("")
+    var aecTailMsDraft by stateVar("")
+    var aecRefSource by stateVar("auto")
+    var aecRefSourceOpen by stateVar(false)
+    val aecRefSources: MutableList<Pair<String, String>> = stateListOf()
+    var agcEnabled by stateVar(true)
+    var beamformingEnabled by stateVar(true)
+    var beamAngleDraft by stateVar("")
+    var bargeInEnabled by stateVar(true)
+    var bargeInThresholdDraft by stateVar("")
 
     /** 语音相对音乐的提升电平（官方 0/+6/+12 dB）。 */
-    var responseLevel by scope.observable("low")
-    var responseLevelOpen by scope.observable(false)
-    val responseLevels by scope.observableList<Pair<String, String>>()
-    var volumeButtonSound by scope.observable(true)
+    var responseLevel by stateVar("low")
+    var responseLevelOpen by stateVar(false)
+    val responseLevels: MutableList<Pair<String, String>> = stateListOf()
+    var volumeButtonSound by stateVar(true)
 
     /** 遥控调音量时灯环青色弧（Stage 04）。 */
-    var remoteVolumeArc by scope.observable(false)
-    var eqLoudness by scope.observable(false)
-    var bassGuardEnabled by scope.observable(true)
-    var bassGuardDbDraft by scope.observable("")
-    var limiterEnabled by scope.observable(true)
-    var limiterThresholdDraft by scope.observable("")
-    var limiterReleaseDraft by scope.observable("")
-    var duckDbDraft by scope.observable("")
+    var remoteVolumeArc by stateVar(false)
+    var eqLoudness by stateVar(false)
+    var bassGuardEnabled by stateVar(true)
+    var bassGuardDbDraft by stateVar("")
+    var limiterEnabled by stateVar(true)
+    var limiterThresholdDraft by stateVar("")
+    var limiterReleaseDraft by stateVar("")
+    var duckDbDraft by stateVar("")
 
     /** EQ 频段 JSON（数字数组，如 `[2,0,-1,0,2]`）；空 = 不修改。 */
-    var eqBandsDraft by scope.observable("")
-    var eqPresetOpen by scope.observable(false)
-    val eqPresets by scope.observableList<Pair<String, String>>()
+    var eqBandsDraft by stateVar("")
+    var eqPresetOpen by stateVar(false)
+    val eqPresets: MutableList<Pair<String, String>> = stateListOf()
 
     /**
      * 设备上已存的 `listeningAnim`（只读展示，Stage 04）。
@@ -125,20 +124,20 @@ class EchoMuseConfigDrafts(scope: PagerScope) {
      * 一期**不给独立控件**（设计 §6.3 Stage 04：`listeningAnim` 是 P2 控件），要改走
      * Stage 05 末尾的「进阶 JSON」手填入口——那条路径同样过服务端白名单与形状校验。
      */
-    var listeningAnimStored by scope.observable("")
+    var listeningAnimStored by stateVar("")
 
     /** Stage 05「进阶（JSON）」手填体（整对象，键名由服务端白名单裁定）；空 = 不发。 */
-    var extraJsonDraft by scope.observable("")
+    var extraJsonDraft by stateVar("")
 
     // ============================================================
     // Stage 07 Sendspin
     // ============================================================
 
-    var sendspinEnabled by scope.observable(false)
-    var sendspinName by scope.observable("")
+    var sendspinEnabled by stateVar(false)
+    var sendspinName by stateVar("")
 
     /** 设备 `ConfigMessage` 的第三键（40 键白名单自 2026-10 起含它）。 */
-    var sendspinUnpaired by scope.observable(false)
+    var sendspinUnpaired by stateVar(false)
 
     init {
         rebuildModeOptions()

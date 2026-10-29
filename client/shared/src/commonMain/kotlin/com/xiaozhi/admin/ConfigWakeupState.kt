@@ -1,10 +1,9 @@
 package com.xiaozhi.admin
 
-import com.xiaozhi.admin.ui.*
 
 import com.tencent.kuikly.core.base.PagerScope
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
-import com.tencent.kuikly.core.reactive.handler.observable
+import com.xiaozhi.admin.state.stateVar
 
 /**
  * 「唤醒问候语」（`[wakeup]`）的表单状态。
@@ -23,11 +22,11 @@ import com.tencent.kuikly.core.reactive.handler.observable
  */
 class WakeupSectionState(private val scope: PagerScope) {
 
-    var enabled by scope.observable("true")
+    var enabled by stateVar("true")
     /// 唤醒后立刻说的这句话。建议短：播放期间上行音频在缓冲区排队，太长会推迟用户第一句话。
-    var greeting by scope.observable("我在")
+    var greeting by stateVar("我在")
     /// 是否把成品音频落盘（跨进程重启复用）。⚠️ 需要 [tts].cache_entries > 0。
-    var persist by scope.observable("true")
+    var persist by stateVar("true")
 
     /**
      * 写入保存请求体（`[wakeup]` 整段回传）。

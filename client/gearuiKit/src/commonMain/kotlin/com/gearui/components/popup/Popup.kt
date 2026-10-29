@@ -1,0 +1,146 @@
+package com.gearui.components.popup
+
+import com.gearui.foundation.control.ControlGeometry
+import com.gearui.foundation.material.Materials
+import com.gearui.foundation.material.MaterialSurface
+import androidx.compose.runtime.*
+import com.tencent.kuikly.compose.foundation.border
+import com.tencent.kuikly.compose.foundation.layout.*
+import com.tencent.kuikly.compose.ui.Modifier
+import com.tencent.kuikly.compose.ui.geometry.Rect
+import com.tencent.kuikly.compose.ui.unit.Dp
+import com.tencent.kuikly.compose.ui.unit.dp
+import com.gearui.overlay.OverlayOptions
+import com.gearui.overlay.OverlayPlacement
+import com.gearui.overlay.LocalOverlayController
+import com.gearui.overlay.OverlayDismissPolicy
+import com.gearui.overlay.OverlayDefaults
+
+/**
+ * Popup - an anchored floating layer for content the kit has no component for.
+ *
+ * For a menu, a tooltip or a popover use those components; Popup is the primitive
+ * underneath the idea, for callers building their own.
+ *
+ * Characteristics:
+ * - non-modal (does not block interaction)
+ * - anchored (positioned relative to the trigger)
+ * - optional scrim
+ * - tap outside to dismiss
+ */
+object Popup {
+
+    /**
+     * Declarative Popup
+     *
+     * @param visible whether it is shown
+     * @param anchorBounds anchor position
+     * @param placement popup placement
+     * @param offsetX offset on the X axis
+     * @param offsetY offset on the Y axis
+     * @param dismissOnOutside whether tapping outside dismisses it
+     * @param autoFlip whether to flip automatically when space runs out
+     * @param onDismiss dismiss callback
+     * @param surface draw the overlay surface (popover fill, radius, shadow) around
+     *   [content]. Off for content that draws its own — a bubble, an image card.
+     * @param content the content
+     */
+    @Composable
+    fun Host(
+        visible: Boolean,
+        anchorBounds: Rect?,
+        placement: OverlayPlacement = OverlayPlacement.BottomLeft,
+        offsetX: Dp = 0.dp,
+        offsetY: Dp = ControlGeometry.overlayOffset,
+        dismissOnOutside: Boolean = true,
+        autoFlip: Boolean = true,
+        onDismiss: () -> Unit = {},
+        surface: Boolean = true,
+        content: @Composable () -> Unit
+    ) {
+        val controller = LocalOverlayController.current
+        var overlayId by remember { mutableStateOf<Long?>(null) }
+
+        // Anchor position recorded at open time, used to detect scrolling
+        var anchorBoundsWhenOpened by remember { mutableStateOf<Rect?>(null) }
+
+        // Keep the onDismiss callback current
+        val onDismissState = rememberUpdatedState(onDismiss)
+        val contentState = rememberUpdatedState(content)
+
+        // React to visible changes
+        LaunchedEffect(visible) {
+            if (visible) {
+                // anchorBounds may be null for a centred popup
+                // an anchored popup requires anchorBounds
+                val needsAnchor = placement != OverlayPlacement.Center &&
+                                  placement != OverlayPlacement.Fullscreen
+
+                if (needsAnchor && anchorBounds == null) {
+                    // Anchor required but missing: do not show
+                    return@LaunchedEffect
+                }
+
+                overlayId = controller.show(
+                    anchorBounds = anchorBounds,
+                    options = OverlayOptions(
+                        placement = placement,
+                        offsetX = offsetX,
+                        offsetY = offsetY,
+                        modal = false,
+                        autoFlip = autoFlip,
+                        dismissPolicy = OverlayDismissPolicy.Dropdown.copy(
+                            outsideClick = dismissOnOutside
+                        )
+                    ),
+                    onDismiss = { onDismissState.value() }
+                ) {
+                    if (surface) PopupSurface(content = contentState.value) else contentState.value()
+                }
+                anchorBoundsWhenOpened = anchorBounds
+            } else {
+                overlayId?.let { controller.close(it) }
+                overlayId = null
+                anchorBoundsWhenOpened = null
+            }
+        }
+
+        // Scroll detection: dismiss the Overlay when anchorBounds moves while it is open
+        LaunchedEffect(anchorBounds) {
+            if (visible && overlayId != null && anchorBoundsWhenOpened != null && anchorBounds != null) {
+                val openedBounds = anchorBoundsWhenOpened!!
+                val currentBounds = anchorBounds
+                // A visible shift (more than 1 pixel) means the page scrolled
+                if (kotlin.math.abs(openedBounds.top - currentBounds.top) > 1f ||
+                    kotlin.math.abs(openedBounds.left - currentBounds.left) > 1f) {
+                    overlayId?.let { controller.dismiss(it) }
+                }
+            }
+        }
+
+        // Dismiss when the component leaves composition
+        DisposableEffect(Unit) {
+            onDispose {
+                overlayId?.let { controller.close(it) }
+            }
+        }
+    }
+}
+
+/**
+ * PopupSurface - shared visual container for Popup
+ */
+@Composable
+internal fun PopupSurface(
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit
+) {
+    // Overlay surface and shadow, no border (reference overlay contract).
+    MaterialSurface(
+        material = Materials.Popover,
+        shape = OverlayDefaults.panelShape,
+        modifier = modifier,
+    ) {
+        content()
+    }
+}

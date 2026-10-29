@@ -1,12 +1,10 @@
 package com.xiaozhi.admin
 
-import com.xiaozhi.admin.ui.*
 
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.pager.Pager
-import com.tencent.kuikly.core.reactive.collection.ObservableList
-import com.tencent.kuikly.core.reactive.handler.observable
-import com.tencent.kuikly.core.reactive.handler.observableList
+import com.xiaozhi.admin.state.stateVar
+import com.xiaozhi.admin.state.stateListOf
 
 /**
  * 「EchoMuse 设备」页的数据源（`GET /api/echomuse/devices` + 批准/下发指令/删除记录三个写动作）。
@@ -36,19 +34,19 @@ import com.tencent.kuikly.core.reactive.handler.observableList
  *   [EchoMuseMusicState]（本文件已到 600 行上限，而音乐面自成一个写动作集合）。
  */
 class EchoMuseState(scope: Pager) {
-    var loading by scope.observable(false)
+    var loading by stateVar(false)
         private set
-    var loaded by scope.observable(false)
+    var loaded by stateVar(false)
         private set
-    var loadError by scope.observable("")
+    var loadError by stateVar("")
         private set
     private var base = ""
     private var connectionGeneration = 0
 
     /** 服务端 `[echomuse]` 能力开关（false 时页面显示"未启用"提示）。 */
-    var enabled by scope.observable(true)
+    var enabled by stateVar(true)
 
-    val devices: ObservableList<EchoMuseDeviceRow> by scope.observableList()
+    val devices: MutableList<EchoMuseDeviceRow> = stateListOf()
 
     /** 详情卡分区状态（六 tab + 运行状态/系统信息/音量/OWW 资产/控制台会话）。 */
     val detail = EchoMuseDetailState(scope)
@@ -235,7 +233,7 @@ class EchoMuseState(scope: Pager) {
     // ============================================================
 
     /** 批准表单的 label 草稿。 */
-    var approveDraft by scope.observable("")
+    var approveDraft by stateVar("")
 
     /**
      * 批准一台设备。成功后回调 `onDone(true, msg)` 并由调用方刷新列表（approved 状态以
@@ -265,11 +263,11 @@ class EchoMuseState(scope: Pager) {
     // ============================================================
 
     /** WiFi 表单草稿。 */
-    var wifiSsid by scope.observable("")
-    var wifiPsk by scope.observable("")
+    var wifiSsid by stateVar("")
+    var wifiPsk by stateVar("")
 
     /** 写动作互斥锁（批准/重启/WiFi/音乐共用：单设备低频管理操作，无需并发）。 */
-    var actionBusy by scope.observable(false)
+    var actionBusy by stateVar(false)
 
     /**
      * 下发一条指令。202 = 已排队（结果看设备灯环）；409 = 设备离线，指令不会下发。
@@ -322,7 +320,7 @@ class EchoMuseState(scope: Pager) {
     // ============================================================
 
     /** 删除行内二次确认的设备号（空串 = 无）；重启确认由 detail 独立持有。 */
-    var confirmDeleteId by scope.observable("")
+    var confirmDeleteId by stateVar("")
 
     /**
      * 删除登记记录（清理 mock/联调设备）。只清静态登记、不断开在线会话；
@@ -392,9 +390,9 @@ class EchoMuseState(scope: Pager) {
      * 扫描结果在 `wifi_scan.networks`（`[{ssid,signal}]`），切网结果在 `wifi_result`
      * （`{ok,ssid,error?}`）——都是设备上行、进 runtime 的有界遥测。
      */
-    var wifiRuntime by scope.observable<JSONObject?>(null)
+    var wifiRuntime by stateVar<JSONObject?>(null)
         private set
-    var wifiRuntimeBusy by scope.observable(false)
+    var wifiRuntimeBusy by stateVar(false)
         private set
 
     /**
@@ -403,7 +401,7 @@ class EchoMuseState(scope: Pager) {
      * 置位在 [sendWifi] 成功之后，清位在 [sendWifiCommit] 成功之后——中间这段既不能
      * 说成功也不能说失败：设备可能正在重连、也可能已经回滚到旧网。
      */
-    var wifiPending by scope.observable(false)
+    var wifiPending by stateVar(false)
 
     /** 当前连接的网络名（`wifi_runtime.stats.wifiSsid`；未上报 = 空串 = 未知）。 */
     val wifiCurrentSsid: String
@@ -419,7 +417,7 @@ class EchoMuseState(scope: Pager) {
             else wifiRuntimeError = "运行状态读取失败：${reason.ifEmpty { "请确认设备在线" }}"
         }
     }
-    var wifiRuntimeError by scope.observable("")
+    var wifiRuntimeError by stateVar("")
 
     /** 下发 `wifi_scan`（扫描周边网络）。202 = 已排队；结果经「读取扫描结果」拉 runtime。 */
     fun sendWifiScan(ctx: Pager, deviceId: String, onDone: (ok: Boolean, msg: String) -> Unit) {

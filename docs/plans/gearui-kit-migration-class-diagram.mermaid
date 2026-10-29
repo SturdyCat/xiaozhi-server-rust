@@ -1,0 +1,179 @@
+classDiagram
+    direction TB
+
+    %% ===== 页面入口 =====
+    class ComposeContainer {
+        +Pager pager
+        +PagerData pagerData
+        +acquireModule(name)
+        #didInit()
+        +setContent(content)
+    }
+    class AdminPage {
+        +FieldHelpState fieldHelp
+        +ConfigFormState form
+        +StatsState stats
+        +EchoMuseState echomuse
+        +String selectedSection
+        +Boolean drawerOpen
+        #didInit()
+    }
+    class ConfigPage {
+        #didInit()
+    }
+    ComposeContainer <|-- AdminPage
+    ComposeContainer <|-- ConfigPage
+
+    %% ===== App 根 =====
+    class AppRoot {
+        <<composable fun App>>
+        +ThemeMode themeMode = Light
+        +String languageTag = zh-Hans
+        +String fallbackLanguageTag = zh-Hans
+        +ThemeSpec theme = null
+        +RuntimeFlags runtimeFlags
+        +content()
+    }
+    AdminPage ..> AppRoot : didInit 内 setContent
+
+    %% ===== CompositionLocal 环境 =====
+    class AdminScope {
+        <<object>>
+        +LocalAdminPager
+        +LocalAdminViewport
+        +LocalFieldHelp
+    }
+    class AdminViewport {
+        +Dp width
+        +Dp height
+        +Boolean isNarrow()  %% width lt 768dp
+        +Boolean twoColumn()  %% width gte 900dp
+        +Boolean workspaceCompact()  %% width lt 700dp
+    }
+    AdminScope ..> AdminViewport
+
+    %% ===== 壳层 =====
+    class AdminShell {
+        +AdminViewport viewport
+        +NavBar titleBar
+        +Sidebar sidebar
+        +Drawer narrowDrawer
+        +sectionHost()
+    }
+    AdminShell --> AdminViewport
+    AdminShell --> AdminNav
+    AdminShell --> FieldHelpState
+
+    %% ===== 状态机制（U2）=====
+    class StateVarDelegate~T~ {
+        -MutableState~T~ state
+        +getValue(thisRef, property) T
+        +setValue(thisRef, property, value)
+    }
+    class "stateVar(initial)" {
+        <<top-level fun>>
+    }
+    class "stateListOf()" {
+        <<top-level fun returns SnapshotStateList>>
+    }
+    class ConfigFormState {
+        +String llmModel  %% by stateVar
+        +String saving  %% by stateVar
+        +MutableList~VoiceOption~ voiceOptions  %% stateListOf
+        +fill(obj)
+        +putJson(root)
+        +save()
+    }
+    class WakeupSectionState {
+        -PagerScope scope
+        +String enabled
+        +String greeting
+        +String persist
+        +fill(obj)
+        +putJson(root)
+    }
+    class PagerScope {
+        <<Kuikly core>>
+        +setTimeout(ms, block)
+    }
+    ConfigFormState --> StateVarDelegate
+    WakeupSectionState --> StateVarDelegate
+    WakeupSectionState ..> PagerScope : setTimeout 保留
+
+    %% ===== 契约与图标（U1）=====
+    class IconToken {
+        <<enum, 26 entries>>
+    }
+    class AdminIconVectors {
+        <<internal object, 26 geometry>>
+    }
+    class IconLayer {
+        +String pathData
+        +Boolean filled
+        +Float strokeWidth = 1.8
+        +List~IconOp~ ops
+    }
+    class IconOp {
+        <<sealed>>
+        +Move
+        +Line
+        +Cubic
+        +Quad
+        +Close
+        +emit(path, scale)
+    }
+    class SvgPathParser {
+        <<internal object>>
+        +parse(pathData) List~IconOp~
+    }
+    class GearIcon {
+        <<composable fun>>
+        +IconToken token
+        +Dp size
+        +Color tint
+    }
+    class UiContracts {
+        <<pure Kotlin, zero import>>
+        +Availability
+        +ActionState
+        +ActionOutcome
+        +CheckState
+        +OverrideChoice
+        +NodeRequestGate
+    }
+    IconToken ..> AdminIconVectors : vectors 1 to 1
+    AdminIconVectors --> IconLayer
+    IconLayer --> IconOp
+    IconLayer ..> SvgPathParser
+    GearIcon ..> IconToken
+    GearIcon ..> IconOp : Compose Canvas + Stroke
+
+    %% ===== 布局常量 =====
+    class GearUiSpace {
+        <<object, Dp>>
+        +xs 8
+        +sm 12
+        +md 16
+        +lg 20
+        +xl 24
+        +xxl 28
+        +xxxl 32
+        +pagePadding 24
+        +gutter 20
+        +cardPadding 20
+        +fieldGap 12
+    }
+
+    %% ===== 平台差异 =====
+    class AdminPlatform {
+        <<expect / actual>>
+        +IS_MACOS
+        +platformExternalModules(pager)
+        +pagerBaseUrl(pager)
+        +copyToClipboard(text)
+        +TestbenchSection(...)  %% was ViewContainer extension
+        +MacServerSwitchEntry(...)  %% was ViewContainer extension
+    }
+    AdminShell ..> AdminPlatform
+    AdminPage ..> UiContracts
+    AdminShell ..> GearUiSpace

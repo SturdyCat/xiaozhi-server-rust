@@ -1,6 +1,6 @@
 package com.xiaozhi.admin
 
-import com.xiaozhi.admin.ui.*
+import com.xiaozhi.admin.contracts.*
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith

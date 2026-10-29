@@ -1,13 +1,11 @@
 package com.xiaozhi.admin
 
-import com.xiaozhi.admin.ui.*
 
 import com.tencent.kuikly.core.base.PagerScope
 import com.tencent.kuikly.core.nvi.serialization.json.JSONArray
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
-import com.tencent.kuikly.core.reactive.collection.ObservableList
-import com.tencent.kuikly.core.reactive.handler.observable
-import com.tencent.kuikly.core.reactive.handler.observableList
+import com.xiaozhi.admin.state.stateVar
+import com.xiaozhi.admin.state.stateListOf
 
 /**
  * 「MCP 工具」页的数据源：`GET /api/mcp/tools`。
@@ -28,13 +26,13 @@ import com.tencent.kuikly.core.reactive.handler.observableList
 class McpToolsState(scope: PagerScope) : LoadableState(scope) {
 
     /** 已登记的设备（最近探测的在前，服务端已排序）。 */
-    val devices: ObservableList<DeviceToolsRow> by scope.observableList()
+    val devices: MutableList<DeviceToolsRow> = stateListOf()
 
     /** 计数摘要（只含非零项）；未加载时为空串。 */
-    var summary by scope.observable("")
+    var summary by stateVar("")
 
     /** 服务端给的说明（空列表时显示：为什么这里什么都没有）。 */
-    var note by scope.observable("")
+    var note by stateVar("")
 
     override fun endpoint(baseUrl: String): String = "$baseUrl/api/mcp/tools"
 

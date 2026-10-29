@@ -1,6 +1,6 @@
 package com.xiaozhi.admin
 
-import com.xiaozhi.admin.ui.*
+import com.xiaozhi.admin.contracts.*
 
 /** Stable display order, independent of the server capability-array order. */
 enum class VoiceStageId(val id: String) { Vad("vad"), Asr("asr"), Nlu("nlu"), Llm("llm"), Tts("tts") }

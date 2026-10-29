@@ -107,8 +107,11 @@ kotlin {
                 // Kuikly Compose 运行时（含 foundation / material3 / ui）：Settings 磁贴组件的基础。
                 // 与 core 同一版本口径（kuiklyVersion），且有 macosarm64 / js 变体。
                 implementation("com.tencent.kuikly-open:compose:$kuiklyVersion")
-                // Compose-Settings 磁贴 + kuiklyx-viewmodel + material3 缺失组件补丁（源码 vendored）
-                implementation(project(":sharedCompose"))
+                // GearUI Kit 组件库（Apache-2.0，源码 vendored，见 gearuiKit/THIRD_PARTY_NOTICES.md）。
+                // 用 implementation 而非 api：管理台以外无消费方，不需要向宿主泄漏。
+                // ⚠️ 该模块目标集必须与本模块严格对齐（android/iosArm64/iosSimulatorArm64/
+                //    macosArm64/js），缺任一目标本模块在该目标上即解析失败。
+                implementation(project(":gearuiKit"))
 
                 // ===== kotlinx 基础库（android / iosArm64 / macosArm64 / js 四端齐全）=====
                 // JSON：替代手写解析器（FilesModel）与后续强类型回包解析。
@@ -120,6 +123,14 @@ kotlin {
                 // 其 delay 到期经框架 timeout 注册投递回 context 线程。两套 Job 体系互不兼容，
                 // 混用会让取消语义错乱（cancel 一套、等另一套），因此业务协程一律用 Kuikly 的那套。
                 // 见 AdminRealtime 的重连/心跳。
+            }
+        }
+        // T05 垂直切片：状态机制的单测。Compose 快照在**纯 JVM 单测**里可直接读写，
+        // 不需要真机、不需要组合环境（Compose Runtime 的快照系统是纯 Kotlin 实现）。
+        // 跑法：./gradlew :shared:testDebugUnitTest
+        val commonTest by getting {
+            dependencies {
+                implementation(kotlin("test"))
             }
         }
     }
@@ -156,9 +167,12 @@ val verifyAdminIcons by tasks.registering {
     group = "verification"
     description = "Verify embedded vector icon coverage: token-to-geometry 1:1, Canvas rendering, no bitmap/resource fallback"
     val adminDir = layout.projectDirectory.dir("src/commonMain/kotlin/com/xiaozhi/admin")
-    val contracts = adminDir.file("ui/Contracts.kt")
-    val mappingFile = adminDir.file("ui/Icons.kt")
-    inputs.files(contracts, mappingFile)
+    // T03 搬迁后：纯契约进 contracts/，图标几何与 1:1 映射进 icons/
+    //（ui/ 目录本步不删，剩下的组件层要在 T12/T13 才整体替换）
+    val contracts = adminDir.file("contracts/UiContracts.kt")
+    val mappingFile = adminDir.file("icons/AdminIcons.kt")
+    val geometryFile = adminDir.file("icons/IconVectors.kt")
+    inputs.files(contracts, geometryFile, mappingFile)
     doLast {
         val enumBody = Regex("enum class IconToken\\s*\\{([^}]+)}")
             .find(contracts.asFile.readText())!!.groupValues[1]
@@ -181,6 +195,119 @@ val verifyAdminIcons by tasks.registering {
 }
 tasks.matching { it.name == "check" || it.name.startsWith("packLocalJSBundle") }.configureEach {
     dependsOn(verifyAdminIcons)
+}
+
+// Admin UI state must go through Compose snapshot state (stateVar / stateListOf)，页面才能在
+// Kit 组件（GearUI）与自有 Compose 组件之间共享同一套重组触发机制。Kuikly 自研的
+// scope.observable()/observableList()/ObservableList 只被 Kuikly DSL 的 ViewContainer 消费，
+// GearUI 组件内部读不到，改组件的状态会“写了不刷新”。护栏锁定三点：
+//   1) 迁移后的 stateVar( 调用数精确命中（迁移完成度，防止漏改）；
+//   2) stateListOf( 调用数精确命中；
+//   3) 遗留原语计数为 0（import com.tencent.kuikly.core.reactive / scope.observable( /
+//      observableList( / ObservableList 类型引用）。
+// 只扫源码、只扫非注释行——StateVar.kt 的文档注释里会提到旧原语名，属正常说明。
+// 白名单口径：T05 时唯一保留的旧机制触点是 LegacyVfor.kt（Kuikly DSL 的 vfor 只接受
+// ObservableList（core 的 LoopDirectivesViewKt 只有一个 () -> ObservableList<T> 重载），
+// 而状态层列表已是 SnapshotStateList，故桥接文件必须构造一次 ObservableList）。
+//
+// ✅ **T13 末检已执行（2026-10-29）**：`ui/`（14 文件）与两个过渡桥接文件
+//   （`LegacyVfor.kt`、`LegacyAppIcon.kt`）已删除，`bridgeWhitelist` 收口为 `emptySet()`；
+//   白名单撤掉后重跑护栏，`legacy` 计数仍为 0（旧原语真正归零，不是靠豁免蒙过去）。
+//   `LegacyAppIcon.kt` 删前确认无 `stateVar(`/`stateListOf(` 调用，451/48 期望值不动。
+//   此后出现任何旧原语即判失败（白名单机制随 T13 一并退役，不再有豁免通道）。
+// 计数口径（改动原因逐条写在这里，避免下一个人以为护栏被"调松")：
+//   T05 收口时 = 483。T06 换 Compose 壳时 `ToastHost.kt` 从"自持 ToastData 状态 + 自绘浮层"
+//   改成"转发 GearUI 的 Toast"（浮层状态归 GearUI 的 OverlayRoot，不再由我们的源码持有），
+//   该文件随之少掉 1 处 `var current by stateVar<ToastData?>(null)` → 483 - 1 = 482。
+//   同一次改动里 `AdminPage.kt` 的 4 个页面级字段（selectedSection/drawerOpen/
+//   serverSwitchOpen/apiBase）**逐一保留**，一个没少（已与 HEAD 版本对比确认）。
+//   2026-10-29 范围削减（docs/plans/gearui-kit-scope-reduction.md §二）按 codemod
+//   `--check` 实测值回填 482→455 / 51→48：删除 OpsSessionsPage / OpsConversationsPage /
+//   OpsUsagePage / OpsMetricsPage 四页、OpsConversationsState / OpsUsageState /
+//   OpsMetricsState 三个 state 类、OpsState.kt 内的 SessionRow / SessionsState，
+//   以及 AdminPage 的 sessions / conversations / usage / metrics 四个字段与加载请求。
+//   ⚠️ 这是"死代码必须删"的回填，不是把护栏调松——被删代码已不在任何渲染路径上。
+//   T12 测试台重写回填 455→451：测试台 Audio 下沉删除 4 个播放 stateVar
+//   （recAudioSrc/ttsAudioSrc/recPlayCommand/ttsPlayCommand）——DSL 原生 AudioView 挂不进
+//   Compose 树，播放控制回归 XiaoZhiModule 的 playRecording/playTts/stopPlayback +
+//   100ms 轮询 getAudioState，这 4 个字段及其命令值（0/1/3）不再有任何消费方。
+//   T13 清理收尾回填 451→448：删除 ui/ 目录（14 个旧 DSL 组件文件）时，其中**自持状态的
+//   组件**（ui/Tabs.kt 的 TabUiState——tab 选中/展开态，随目录一并退役）带走了 3 处
+//   `stateVar(` 调用；stateListOf 48 不变（ui/ 无 stateListOf 调用），legacy 0 不变。
+//   ⚠️ 逐文件分布未留档（ui/ 文件未入 git 索引即被删除），数值以本护栏实测回填。
+val expectedStateVarCalls = 448
+val expectedStateListCalls = 48
+val bridgeWhitelist = emptySet<String>()
+val verifyComposeStateMigration by tasks.registering {
+    group = "verification"
+    description = "Verify UI state uses Compose snapshot state (stateVar/stateListOf) and no legacy Kuikly reactive primitives"
+    val sourceRoots = listOf("commonMain", "androidMain", "iosMain", "jsMain", "macosArm64Main")
+        .map { layout.projectDirectory.dir("src/$it/kotlin") }
+        .filter { it.asFile.isDirectory }
+    inputs.files(sourceRoots.map { it.asFile }).withPathSensitivity(PathSensitivity.RELATIVE)
+    doLast {
+        // 状态定义文件自身含 fun stateVar( / fun stateListOf( 声明，不计入调用数；
+        // 桥接文件允许出现旧机制（见上方注释），但**不允许**出现 stateVar/stateListOf 调用。
+        val definitionFiles = setOf("state/StateVar.kt")
+        val bridgeFiles = bridgeWhitelist
+        var stateVarCalls = 0
+        var stateListCalls = 0
+        var legacyHits = 0
+        val legacyDetail = mutableListOf<String>()
+        val legacyPatterns = listOf(
+            Regex("import\\s+com\\.tencent\\.kuikly\\.core\\.reactive\\."),
+            Regex("\\bscope\\.observable\\s*\\("),
+            Regex("\\bobservableList\\s*\\("),
+            Regex("\\bObservableList\\s*<"),
+        )
+        sourceRoots.forEach { root ->
+            root.asFile.walkTopDown().filter { it.isFile && it.extension == "kt" }.forEach { file ->
+                val relative = file.relativeTo(root.asFile).invariantSeparatorsPath
+                val isDefinition = definitionFiles.any { relative.endsWith(it) }
+                val isBridge = bridgeFiles.any { relative.endsWith(it) }
+                file.readLines().forEachIndexed { index, rawLine ->
+                    // 注释行不参与统计：StateVar.kt 的等价说明里会出现旧原语名
+                    val line = rawLine.trim()
+                    if (line.startsWith("//") || line.startsWith("*") || line.startsWith("/*")) return@forEachIndexed
+                    val code = rawLine.substringBefore("//")
+                    if (!isDefinition && !isBridge) {
+                        stateVarCalls += Regex("\\bstateVar\\s*(<[^<>]*>)?\\s*\\(").findAll(code).count()
+                        stateListCalls += Regex("\\bstateListOf\\s*(<[^<>]*>)?\\s*\\(").findAll(code).count()
+                    }
+                    if (isBridge) return@forEachIndexed
+                    legacyPatterns.forEach { pattern ->
+                        if (pattern.containsMatchIn(code)) {
+                            legacyHits += 1
+                            legacyDetail += "$relative:${index + 1}: $line"
+                        }
+                    }
+                }
+            }
+        }
+        logger.lifecycle("Compose state migration: stateVar=$stateVarCalls (expect $expectedStateVarCalls), " +
+            "stateListOf=$stateListCalls (expect $expectedStateListCalls), legacy=$legacyHits (expect 0)")
+        // 末检提示仅在白名单非空时打印（T13 已收口为空集，此提示随之退役）
+        if (bridgeFiles.isNotEmpty()) {
+            logger.lifecycle("Legacy bridge whitelist = ${bridgeFiles.sorted()} " +
+                "-> must delete ${bridgeFiles.sorted()} and reset " +
+                "`bridgeWhitelist` to emptySet(), then re-run this task with legacy still 0")
+        }
+        check(legacyHits == 0) {
+            "Legacy Kuikly reactive primitives remain ($legacyHits hit(s)); " +
+                "migrate them to stateVar/stateListOf:\n" + legacyDetail.joinToString("\n")
+        }
+        check(stateVarCalls == expectedStateVarCalls) {
+            "stateVar( call count is $stateVarCalls, expected $expectedStateVarCalls"
+        }
+        check(stateListCalls == expectedStateListCalls) {
+            "stateListOf( call count is $stateListCalls, expected $expectedStateListCalls"
+        }
+    }
+}
+// T05 起挂到 check / web 打包：状态机制是"读得到才刷新"的前提，
+// 一旦有人回填旧原语，后续 Compose 页面会静默不重组 —— 必须在打包前就拦住。
+tasks.matching { it.name == "check" || it.name.startsWith("packLocalJSBundle") }.configureEach {
+    dependsOn(verifyComposeStateMigration)
 }
 
 // ===== macOS Catalyst 补丁 =====

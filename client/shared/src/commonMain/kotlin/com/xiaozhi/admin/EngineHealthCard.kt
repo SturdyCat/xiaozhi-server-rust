@@ -1,274 +1,192 @@
 package com.xiaozhi.admin
 
-import com.xiaozhi.admin.ui.*
-
-import com.tencent.kuikly.core.base.CursorType
-import com.tencent.kuikly.core.base.ViewContainer
-import com.tencent.kuikly.core.directives.vfor
-import com.tencent.kuikly.core.directives.vif
-import com.tencent.kuikly.core.pager.Pager
-import com.tencent.kuikly.core.views.Text
-import com.tencent.kuikly.core.views.View
-
-/**
- * 引擎健康自检的两个渲染件（P1-6，全部复用 AdminTheme 组件层，不自造样式）：
- *
- * - [healthBanner]：**就绪度横幅**（概览页最顶部）。仅当存在偏离行时渲染，
- *   每行「{能力} · {降级|异常}」可点击 → 跳配置页对应 section；正常时不占任何视觉
- *   （延续全站"只在偏离时打标"铁律）。
- * - [engineHealthCard]：**能力健康卡**（配置页「总览」section、既有 `overviewCard` 之下）。
- *   11 行 × phase 一览：偏离行打 [statusBadge] + 原因展开 + 可点击跳 section；
- *   正常行弱化（textTertiary 一行带过）；行尾显示当前实现 id（数据同源 `/api/plugins`）。
- *
- * ⚠️ 渲染函数必须是 `ViewContainer` 扩展，并在目标容器闭包内**非限定**调用
- * （见 `ConfigFormState` 文件头的 Kuikly DSL 绑定说明）。
- */
+import androidx.compose.runtime.Composable
+import com.gearui.foundation.layout.Spacing
+import com.gearui.foundation.primitives.Text
+import com.gearui.theme.Theme
+import com.tencent.kuikly.compose.foundation.clickable
+import com.tencent.kuikly.compose.foundation.layout.Arrangement
+import com.tencent.kuikly.compose.foundation.layout.Column
+import com.tencent.kuikly.compose.foundation.layout.Row
+import com.tencent.kuikly.compose.foundation.layout.fillMaxWidth
+import com.tencent.kuikly.compose.foundation.layout.padding
+import com.tencent.kuikly.compose.ui.Alignment
+import com.tencent.kuikly.compose.ui.Modifier
+import com.tencent.kuikly.compose.ui.unit.dp
+import com.xiaozhi.admin.contracts.IconToken
+import com.xiaozhi.admin.icons.GearIcon
+import com.xiaozhi.admin.kit.dividerH
+import com.xiaozhi.admin.kit.statusBadge
 
 /**
- * 就绪度横幅：仅当存在偏离（degraded/failed）行时渲染。
+ * 引擎健康自检的两个渲染件（P1-6）—— Compose 版。
  *
- * 点击某行 → [onJumpSection]（配置页 section id；无对应 section 的行不可点）。
- * 加载失败不渲染横幅本体（健康卡内有就地错误 + 刷新），但横幅位置不留给空白。
+ * - [HealthBanner]：**就绪度横幅**，只渲染偏离行（`degraded` / `failed`），可点击跳配置 section。
+ *   正常时**一行都不渲染**（延续全站"只在偏离时打标"铁律：一屏绿点等于没有信息）。
+ * - [EngineHealthCard]：**能力健康卡**（「总览」section、能力总览卡之下）。11 行 × phase 一览：
+ *   偏离行打徽标 + 原因展开 + 可点击跳 section；正常行弱化一行带过；行尾显示当前实现 id。
+ *
+ * ## 四态颜色（K5）的唯一出处
+ *
+ * 徽标不自己配色，一律走 `kit/GearBadges.statusBadge`：
+ *
+ * | 业务态 | `state` | 颜色 |
+ * | --- | --- | --- |
+ * | 异常 `failed` | `"error"` | `colors.destructive`（红） |
+ * | 降级 `degraded` | `"busy"` | `colors.warning`（黄） |
+ * | 正常 `active` | `"connected"` | `colors.success`（绿） |
+ * | 未知/已关闭 | `"idle"` | `colors.mutedForeground`（灰） |
+ *
+ * **行内仍遵守「只在偏离时打标」**：正常行不渲染绿胶囊（否则 11 行全绿等于没有信息），
+ * 正常态用中性文字「正常」一行带过 —— 这是旧实现刻意定的规则，不是这次简化。
+ *
+ * ## 与 `/api/plugins` 的分工
+ *
+ * `Phase` 由服务端两处同源聚合（`PluginHost::capability_summary`），客户端**不自算任何状态**；
+ * 本文件的 `probeState` / `probeDetail` 只是服务端给的探测原文投影。
  */
-fun ViewContainer<*, *>.healthBanner(health: EngineHealthState, onJumpSection: (section: String) -> Unit) {
-    vif({ health.loaded && health.deviations.size > 0 }) {
-        groupedCard("引擎健康（${health.deviations.size} 项偏离）") {
-            vfor({ health.deviations }) { row ->
-                // 单一根容器包裹：vfor 项闭包只允许生成一个孩子（2.29.1 起严格校验，
-                // healthBannerRow 在 reason 非空时会生成「行 + 原因」两个根节点，直接抛
-                // "vfor creator闭包内必须需要且仅一个孩子节点"→ 整页白屏）
-                View {
-                    attr { flexDirectionColumn() }
-                    healthBannerRow(row) { section -> onJumpSection(section) }
-                }
-            }
-            textNote("点击条目可跳到对应配置项修复；探测为本地文件系统检查，服务端每次请求实时执行。", micro = true)
-        }
-    }
-}
-
-/** 横幅里的一行：能力名 + 徽标 + 原因摘要；可跳转的行整体可点。 */
-private fun ViewContainer<*, *>.healthBannerRow(row: HealthRow, onJump: (section: String) -> Unit) {
-    View {
-        attr {
-            flexDirectionRow()
-            alignItemsCenter()
-            paddingTop(AdminSpace.xs)
-            paddingBottom(AdminSpace.xs)
-            // 可跳转行悬停指针（不可跳转行保持默认箭头）
-            if (row.jumpable) {
-                cursor(CursorType.POINTER)
-            }
-        }
-        // 可跳转的行给可点击语义（voice 这类无 section 的偏离行只展示）
-        if (row.jumpable) {
-            event { click { onJump(row.configSection) } }
-        }
-        Text {
-            attr {
-                fontSize(AdminType.body)
-                fontWeightMedium()
-                color(if (row.phase == "failed") AdminColors.dangerTintText else AdminColors.warningTintText)
-                text(row.display)
-            }
-        }
-        hGap(AdminSpace.sm)
-        statusBadge(
-            state = { if (row.phase == "failed") "error" else "busy" },
-            text = { if (row.phase == "failed") "异常" else "降级" },
+@Composable
+fun EngineHealthCard(health: EngineHealthState, onJumpSection: (String) -> Unit) {
+    val pager = LocalAdminPagerOrThrow()
+    LabeledCard(title = "能力健康") {
+        SectionSummaryRow(
+            summary = when {
+                health.loadError.isNotEmpty() -> "无法读取健康自检"
+                health.summary.isEmpty() -> if (health.loading) "检测中…" else "—"
+                else -> health.summary
+            },
+            actionText = "重新检测",
+            busy = health.loading,
+            busyText = "检测中…",
+            onAction = { health.refresh(pager) },
         )
-        View { attr { flex(1f) } }
-        if (row.jumpable) {
-            // 行尾指示箭头走官方 Canvas 矢量图标（不再用「›」字符当图标）
-            appIcon({ IconToken.ChevronRight }, size = 14f, tint = { AdminColors.accent })
+        // 首次加载失败：就地错误 + 可行动指引（不弹 toast —— toast 只用于用户动作的结果）
+        if (health.loadError.isNotEmpty()) {
+            WarnLine(health.loadError + "（确认服务端地址可达后点「重新检测」）", error = true)
         }
-    }
-    // 原因摘要（含「怎么修」）：横幅里也直接可见，不用点进健康卡
-    if (row.reason.isNotEmpty()) {
-        View {
-            attr { paddingBottom(AdminSpace.xs) }
-            Text {
-                attr {
-                    fontSize(AdminType.micro)
-                    color(AdminColors.textTertiary)
-                    text(row.reason)
-                }
-            }
+        if (health.loaded && health.rows.isEmpty()) {
+            HintLine("服务端未返回任何能力（注册表为空？请查看服务端日志）。")
         }
+        for (row in health.rows) HealthRowView(row, onJumpSection)
+        HintLine("健康 = 配置校验（plan）与本地探测（模型文件 / 记忆目录可写）的合并结论；与「能力总览」同源。")
     }
 }
 
 /**
- * 能力健康卡：11 个 capability × phase 一览（配置页「总览」section）。
+ * 就绪度横幅：仅当存在偏离（degraded/failed）行时渲染；[onJumpSection] 收到的是配置 section id。
  *
- * 偏离行打徽标 + 原因展开 + 可点击跳 section；正常行弱化一行带过；
- * 行尾显示当前实现 id（呼应"capability 行可见其实现明细，数据同源"）。
+ * 加载失败**不渲染横幅本体**（健康卡内有就地错误 + 重新检测），横幅位置不留给空白。
  */
-fun ViewContainer<*, *>.engineHealthCard(health: EngineHealthState, ctx: Pager, onJumpSection: (section: String) -> Unit) {
-    groupedCard("能力健康") {
-        // 摘要行：左侧计数、右侧刷新（与 overviewCard 同款头行）
-        View {
-            attr {
-                flexDirectionRow()
-                alignItemsCenter()
-            }
-            Text {
-                attr {
-                    flex(1f)
-                    fontSize(AdminType.body)
-                    color(AdminColors.textSecondary)
-                    text(
-                        when {
-                            health.loadError.isNotEmpty() -> "无法读取健康自检"
-                            health.summary.isEmpty() -> if (health.loading) "检测中…" else "—"
-                            else -> health.summary
-                        },
-                    )
-                }
-            }
-            secondaryButton(
-                "重新检测",
-                loading = { health.loading },
-                loadingText = "检测中…",
-            ) {
-                health.refresh(ctx)
-            }
-        }
-        // 首次加载失败：就地错误 + 可行动指引
-        vif({ health.loadError.isNotEmpty() }) {
-            Text {
-                attr {
-                    fontSize(AdminType.caption)
-                    color(AdminColors.dangerTintText)
-                    marginTop(AdminSpace.xs)
-                    text(health.loadError + "（确认服务端地址可达后点「重新检测」）")
-                }
-            }
-        }
-        vif({ health.loaded && health.rows.size == 0 }) {
-            Text {
-                attr {
-                    fontSize(AdminType.caption)
-                    color(AdminColors.textTertiary)
-                    marginTop(AdminSpace.xs)
-                    text("服务端未返回任何能力（注册表为空？请查看服务端日志）。")
-                }
-            }
-        }
-        vfor({ health.rows }) { row ->
-            // 单一根容器包裹：vfor 项闭包只允许生成一个孩子（healthCardRow 内部含分隔线，
-            // 2.29.1 起严格校验会直接抛异常），行内布局（含行尾分隔线）保持不变
-            View {
-                healthCardRow(row, onJumpSection)
-            }
-        }
-        textNote("健康 = 配置校验（plan）与本地探测（模型文件 / 记忆目录可写）的合并结论；与「能力总览」同源。", micro = true)
+@Composable
+fun HealthBanner(health: EngineHealthState, onJumpSection: (String) -> Unit) {
+    if (!health.loaded || health.deviations.isEmpty()) return
+    LabeledCard(title = "引擎健康（${health.deviations.size} 项偏离）") {
+        for (row in health.deviations) BannerRow(row, onJumpSection)
+        HintLine("点击条目可跳到对应配置项修复；探测为本地文件系统检查，服务端每次请求实时执行。")
     }
 }
 
-/** 健康卡里的一行：偏离行展开（徽标 + 原因 + 跳转），正常行弱化一行。 */
-private fun ViewContainer<*, *>.healthCardRow(row: HealthRow, onJump: (section: String) -> Unit) {
-    if (row.isDeviation) {
-        // 偏离行：能力名 + 徽标 + 当前实现 + 原因 + 可跳转
-        View {
-            attr {
-                flexDirectionColumn()
-                paddingTop(AdminSpace.sm)
-                paddingBottom(AdminSpace.xs)
-            }
-            // 偏离行标题：整行可跳转（headerRow 的 onClick 自带指针），右侧实现名 + 徽标
-            headerRow(
-                title = row.display,
-                actions = {
-                    if (row.activeImpl.isNotEmpty()) {
-                        Text {
-                            attr {
-                                fontSize(AdminType.micro)
-                                color(AdminColors.textTertiary)
-                                marginRight(AdminSpace.sm)
-                                text(row.activeImpl)
-                            }
-                        }
-                    }
-                    statusBadge(
-                        state = { if (row.phase == "failed") "error" else "busy" },
-                        text = { if (row.phase == "failed") "异常" else "降级" },
-                    )
-                },
-                tone = HeaderTone.PRIMARY,
-                bottomGap = 0f,
-                onClick = if (row.jumpable) ({ onJump(row.configSection) }) else null,
+/** 横幅里的一行：能力名（偏离色）+ 徽标 + 原因摘要；有对应 section 时整行可点。 */
+@Composable
+private fun BannerRow(row: HealthRow, onJump: (String) -> Unit) {
+    val jumpable = row.jumpable
+    val clickModifier = if (jumpable) Modifier.clickable { onJump(row.configSection) } else Modifier
+    Column(modifier = Modifier.fillMaxWidth().then(clickModifier).padding(vertical = Spacing.xs)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+        ) {
+            Text(
+                text = row.display,
+                style = Theme.typography.titleSmall,
+                color = if (row.phase == "failed") Theme.colors.destructive else Theme.colors.warning,
             )
-            // 原因必须显示（怎么修就在 last_error 里）
-            if (row.reason.isNotEmpty()) {
-                Text {
-                    attr {
-                        fontSize(AdminType.micro)
-                        color(if (row.phase == "failed") AdminColors.dangerTintText else AdminColors.warningTintText)
-                        marginTop(AdminSpace.xs)
-                        text(row.reason)
-                    }
-                }
-            }
-            if (row.jumpable) {
-                View {
-                    attr { flexDirectionRow(); alignItemsCenter(); marginTop(AdminSpace.xs) }
-                    Text {
-                        attr {
-                            fontSize(AdminType.micro)
-                            color(AdminColors.accent)
-                            text("点击跳到「${sectionLabel(row.configSection)}」配置项")
-                        }
-                    }
-                    hGap(4f)
-                    appIcon({ IconToken.ChevronRight }, size = 12f, tint = { AdminColors.accent })
-                }
+            statusBadge(
+                state = if (row.phase == "failed") "error" else "busy",
+                text = if (row.phase == "failed") "异常" else "降级",
+            )
+            if (jumpable) {
+                // 行尾指示箭头走内嵌矢量图标（沿用旧实现的 ChevronRight，不用「›」字符当图标）
+                GearIcon(
+                    token = IconToken.ChevronRight,
+                    size = 14.dp,
+                    tint = Theme.colors.primary,
+                )
             }
         }
-        dividerH()
-    } else {
-        // 正常/关闭行：弱化一行（名称 + 状态词 + 实现尾注），不打徽标不展开
-        View {
-            attr {
-                flexDirectionRow()
-                alignItemsCenter()
-                paddingTop(AdminSpace.xs)
-                paddingBottom(AdminSpace.xs)
+        // 原因摘要（含「怎么修」）：横幅里也直接可见，不用点进健康卡
+        if (row.reason.isNotEmpty()) HintLine(row.reason)
+    }
+}
+
+/**
+ * 健康卡里的一行。
+ *
+ * 偏离行：能力名 + 实现 + 徽标 + 原因 + 可跳转提示（跳转入口是行标题，整块可点）；
+ * 正常/关闭行：名称 + 实现 + 状态词，全部弱化为次要文字色，不打徽标不展开。
+ */
+@Composable
+private fun HealthRowView(row: HealthRow, onJump: (String) -> Unit) {
+    val jumpable = row.jumpable
+    val clickModifier = if (jumpable) Modifier.clickable { onJump(row.configSection) } else Modifier
+    Column(modifier = Modifier.fillMaxWidth().then(clickModifier).padding(top = Spacing.sm)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+        ) {
+            Text(
+                text = row.display,
+                modifier = Modifier.weight(1f),
+                style = if (row.isDeviation) Theme.typography.titleSmall else Theme.typography.bodyMedium,
+                color = if (row.isDeviation) Theme.colors.foreground else Theme.colors.mutedForeground,
+            )
+            if (row.activeImpl.isNotEmpty()) {
+                Text(
+                    text = row.activeImpl,
+                    style = Theme.typography.caption,
+                    color = Theme.colors.mutedForeground,
+                )
             }
-            Text {
-                attr {
-                    flex(1f)
-                    fontSize(AdminType.body)
-                    color(AdminColors.textTertiary)
-                    text(row.display)
-                }
+            if (row.isDeviation) {
+                statusBadge(
+                    state = if (row.phase == "failed") "error" else "busy",
+                    text = if (row.phase == "failed") "异常" else "降级",
+                )
+            } else {
+                Text(
+                    text = when (row.phase) {
+                        "active" -> "正常"
+                        "disabled" -> "已关闭"
+                        else -> row.phase
+                    },
+                    style = Theme.typography.caption,
+                    color = Theme.colors.mutedForeground,
+                )
             }
-            Text {
-                attr {
-                    fontSize(AdminType.micro)
-                    color(AdminColors.textTertiary)
-                    marginRight(AdminSpace.sm)
-                    text(row.activeImpl)
-                }
-            }
-            Text {
-                attr {
-                    fontSize(AdminType.micro)
-                    color(AdminColors.textTertiary)
-                    text(
-                        when (row.phase) {
-                            "active" -> "正常"
-                            "disabled" -> "已关闭"
-                            else -> row.phase
-                        },
-                    )
-                }
+        }
+        if (row.isDeviation && row.reason.isNotEmpty()) {
+            WarnLine(row.reason, error = row.phase == "failed")
+        }
+        if (jumpable) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = Spacing.xs),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Spacing.xs),
+            ) {
+                Text(
+                    text = "点击跳到「${sectionLabelOf(row.configSection)}」配置项",
+                    style = Theme.typography.caption,
+                    color = Theme.colors.primary,
+                )
+                GearIcon(token = IconToken.ChevronRight, size = 12.dp, tint = Theme.colors.primary)
             }
         }
         dividerH()
     }
 }
 
-/** section id → 管理台导航标签（跳转提示文案用；ConfigSections 是唯一权威）。 */
-private fun sectionLabel(sectionId: String): String =
+/** section id → 管理台导航标签（跳转提示文案用；`ConfigSections` 是唯一权威）。 */
+internal fun sectionLabelOf(sectionId: String): String =
     ConfigSections.all.firstOrNull { it.id == sectionId }?.label ?: sectionId

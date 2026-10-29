@@ -1,13 +1,11 @@
 package com.xiaozhi.admin
 
-import com.xiaozhi.admin.ui.*
 
 import com.tencent.kuikly.core.base.PagerScope
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.pager.Pager
-import com.tencent.kuikly.core.reactive.collection.ObservableList
-import com.tencent.kuikly.core.reactive.handler.observable
-import com.tencent.kuikly.core.reactive.handler.observableList
+import com.xiaozhi.admin.state.stateVar
+import com.xiaozhi.admin.state.stateListOf
 
 /**
  * 「文件」页的数据源：服务端存储目录浏览（`GET /api/files`）+ 新建文件夹 / 上传 / 删除
@@ -28,40 +26,40 @@ import com.tencent.kuikly.core.reactive.handler.observableList
  */
 class FilesState(private val scope: PagerScope) {
 
-    var loading by scope.observable(false)
+    var loading by stateVar(false)
         private set
-    var loaded by scope.observable(false)
+    var loaded by stateVar(false)
         private set
-    var loadError by scope.observable("")
+    var loadError by stateVar("")
         private set
 
     /** 服务端存储根目录绝对路径（"文件到底存哪了"直接可见）。 */
-    var root by scope.observable("")
+    var root by stateVar("")
         private set
 
     /** 当前相对目录（空串 = 根目录「存储目录」）。 */
-    var path by scope.observable("")
+    var path by stateVar("")
         private set
 
     /** 面包屑轨迹（段名 → 截至该段的相对路径），[load] 成功/进入时整表重建。 */
-    val crumbs: ObservableList<Pair<String, String>> by scope.observableList()
+    val crumbs: MutableList<Pair<String, String>> = stateListOf()
 
     /** 当前目录条目（服务端已按目录优先排序，客户端保持原序）。 */
-    val entries: ObservableList<FilesEntry> by scope.observableList()
+    val entries: MutableList<FilesEntry> = stateListOf()
 
     /** 行内删除二次确认：已武装的相对路径（空串 = 无）；换目录/刷新复位。 */
-    var confirmDelete by scope.observable("")
+    var confirmDelete by stateVar("")
 
     /** mkdir/delete 互斥（低频管理操作，无需并发）。 */
-    var actionBusy by scope.observable(false)
+    var actionBusy by stateVar(false)
         private set
 
     /** 「新建文件夹」表单开关与名称草稿。 */
-    var mkdirOpen by scope.observable(false)
-    var mkdirDraft by scope.observable("")
+    var mkdirOpen by stateVar(false)
+    var mkdirDraft by stateVar("")
 
     /** 上传进行中（选包 → 二进制 POST 期间拦截重复点击）。 */
-    var uploading by scope.observable(false)
+    var uploading by stateVar(false)
         private set
 
     /** 上次使用的服务端基址 / 鉴权 token（[refresh] 与写动作复用）。 */

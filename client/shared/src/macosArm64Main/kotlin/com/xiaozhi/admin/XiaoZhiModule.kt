@@ -1,7 +1,5 @@
 package com.xiaozhi.admin
 
-import com.xiaozhi.admin.ui.*
-
 import com.tencent.kuikly.core.module.CallbackFn
 import com.tencent.kuikly.core.module.Module
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject

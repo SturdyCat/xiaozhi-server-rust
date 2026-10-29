@@ -1,0 +1,735 @@
+package com.gearui.components.slider
+
+import androidx.compose.runtime.*
+import com.gearui.foundation.primitives.Text
+import com.tencent.kuikly.compose.foundation.background
+import com.tencent.kuikly.compose.foundation.border
+import com.tencent.kuikly.compose.foundation.clickable
+import com.gearui.gestures.detectSidewaysDrag
+import com.gearui.gestures.ownsHorizontalDrag
+import com.tencent.kuikly.compose.foundation.gestures.detectTapGestures
+import com.tencent.kuikly.compose.foundation.layout.*
+import com.tencent.kuikly.compose.foundation.shape.CircleShape
+import com.tencent.kuikly.compose.ui.Alignment
+import com.tencent.kuikly.compose.ui.Modifier
+import com.tencent.kuikly.compose.ui.draw.clip
+import com.tencent.kuikly.compose.ui.draw.shadow
+import com.tencent.kuikly.compose.ui.input.pointer.pointerInput
+import com.tencent.kuikly.compose.ui.layout.onSizeChanged
+import com.tencent.kuikly.compose.ui.platform.LocalDensity
+import com.tencent.kuikly.compose.ui.unit.Dp
+import com.tencent.kuikly.compose.ui.unit.IntSize
+import com.tencent.kuikly.compose.ui.unit.dp
+import com.gearui.theme.Theme
+import com.gearui.foundation.layout.Spacing
+import com.gearui.foundation.border.BorderWidth
+import com.gearui.foundation.control.ControlGeometry
+import com.gearui.foundation.motion.FeedbackDefaults
+import com.tencent.kuikly.compose.ui.graphics.graphicsLayer
+import com.tencent.kuikly.compose.ui.semantics.*
+
+/**
+ * Slider style
+ */
+enum class SliderStyle {
+    NORMAL,
+    CAPSULE
+}
+
+/**
+ * Slider - value selection by dragging
+ *
+ * Features:
+ * - single-value selection
+ * - leading and trailing labels
+ * - custom range
+ * - step values (discrete)
+ * - disabled state
+ * - tick labels
+ * - current value readout
+ * - plain or capsule style
+ * - tap the track to jump
+ */
+@Composable
+fun Slider(
+    value: Float,
+    onValueChange: (Float) -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    valueRange: ClosedFloatingPointRange<Float> = 0f..100f,
+    steps: Int = 0,
+    leftLabel: String? = null,
+    rightLabel: String? = null,
+    showThumbValue: Boolean = false,
+    showScaleValue: Boolean = false,
+    style: SliderStyle = SliderStyle.NORMAL,
+    onChangeStart: ((Float) -> Unit)? = null,
+    onChangeEnd: ((Float) -> Unit)? = null
+) {
+    val colors = Theme.colors
+    // Gesture handlers outlive a recomposition; they must call the latest value and callbacks,
+    // or a caller that derives its update from the current value (ColorSlider) writes a stale one.
+    val value by rememberUpdatedState(value)
+    val onValueChange by rememberUpdatedState(onValueChange)
+    val onChangeStart by rememberUpdatedState(onChangeStart)
+    val onChangeEnd by rememberUpdatedState(onChangeEnd)
+
+    var sliderSize by remember { mutableStateOf(IntSize.Zero) }
+    val density = LocalDensity.current
+    var isDragging by remember { mutableStateOf(false) }
+    var dragValue by remember { mutableStateOf(value) }
+
+    LaunchedEffect(value, isDragging) {
+        if (!isDragging) {
+            dragValue = value
+        }
+    }
+
+    val displayValue = if (isDragging) dragValue else value
+
+    // Normalised value (0-1)
+    val normalizedValue = SliderMath.normalize(displayValue, valueRange)
+
+    // Track parameters
+    val trackHeight = if (style == SliderStyle.CAPSULE) ControlGeometry.sliderCapsuleHeight else ControlGeometry.sliderTrackHeight
+    val thumbSize = ControlGeometry.sliderThumbWidth
+    val thumbRadius = thumbSize / 2
+
+    // Usable track width, minus the thumb radius at each end
+    fun getEffectiveWidth(): Float {
+        return (sliderSize.width - with(density) { thumbSize.toPx() }).coerceAtLeast(0f)
+    }
+
+    // Value for a given position
+    fun calculateValue(positionX: Float): Float {
+        val ratio = SliderMath.positionRatio(positionX, sliderSize.width.toFloat(), with(density) { thumbSize.toPx() })
+
+        return SliderMath.valueAt(ratio, valueRange, steps)
+    }
+
+    Column(modifier = modifier.semantics {
+        progressBarRangeInfo = ProgressBarRangeInfo(value.coerceIn(valueRange), valueRange, steps)
+        if (!enabled) disabled()
+        else setProgress { requested ->
+            if (!requested.isFinite()) false else {
+                val next = SliderMath.snap(requested, valueRange, steps)
+                if (next == value) false else {
+                    onChangeStart?.invoke(value)
+                    onValueChange(next)
+                    onChangeEnd?.invoke(next)
+                    true
+                }
+            }
+        }
+    }.graphicsLayer { alpha = if (enabled) 1f else FeedbackDefaults.disabledOpacity }) {
+        // Current value, shown above the thumb
+        if (showThumbValue) {
+            Spacer(modifier = Modifier.height(ControlGeometry.sliderValueLabelHeight))
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Leading label
+            if (leftLabel != null) {
+                Text(
+                    text = leftLabel,
+                    style = Theme.typography.bodyMedium,
+                    color = if (enabled) colors.foreground else colors.mutedForeground
+                )
+            }
+
+            // Thumb container
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(ControlGeometry.selectionTouchTarget)
+                    .onSizeChanged { sliderSize = it }
+                    .ownsHorizontalDrag { enabled }
+                    .then(
+                        if (enabled) {
+                            // Dragging anywhere on the track moves the value with the finger;
+                            // the thumb keeps its own relative drag on top of this.
+                            Modifier.pointerInput(valueRange, steps) {
+                                detectSidewaysDrag(
+                                    onDragStart = { offset ->
+                                        isDragging = true
+                                        dragValue = calculateValue(offset.x)
+                                        onChangeStart?.invoke(value)
+                                        onValueChange(dragValue)
+                                    },
+                                    onDragEnd = {
+                                        isDragging = false
+                                        onChangeEnd?.invoke(dragValue)
+                                    },
+                                    onDragCancel = { isDragging = false },
+                                ) { change, _ ->
+                                    change.consume()
+                                    val next = calculateValue(change.position.x)
+                                    if (next != dragValue) {
+                                        dragValue = next
+                                        onValueChange(next)
+                                    }
+                                }
+                            }.pointerInput(Unit) {
+                                detectTapGestures { offset ->
+                                    val newValue = calculateValue(offset.x)
+                                    onChangeStart?.invoke(newValue)
+                                    dragValue = newValue
+                                    onValueChange(newValue)
+                                    onChangeEnd?.invoke(newValue)
+                                }
+                            }
+                        } else Modifier
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                // Track
+                when (style) {
+                    SliderStyle.NORMAL -> NormalTrack(
+                        normalizedValue = normalizedValue,
+                        enabled = enabled,
+                        trackHeight = trackHeight,
+                        steps = steps,
+                        showScaleValue = showScaleValue,
+                        valueRange = valueRange
+                    )
+                    SliderStyle.CAPSULE -> CapsuleTrack(
+                        normalizedValue = normalizedValue,
+                        enabled = enabled,
+                        trackHeight = trackHeight,
+                        steps = steps,
+                        showScaleValue = showScaleValue,
+                        valueRange = valueRange
+                    )
+                }
+
+                // Thumb
+                val thumbOffsetX = with(density) {
+                    SliderMath.thumbOffset(normalizedValue, sliderSize.width.toFloat(), thumbSize.toPx()).toDp()
+                }
+
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .offset(x = thumbOffsetX)
+                ) {
+                    // Current value, shown above the thumb
+                    if (showThumbValue) {
+                        Text(
+                            text = SliderMath.format(displayValue),
+                            style = Theme.typography.bodySmall,
+                            color = if (enabled) colors.foreground else colors.mutedForeground,
+                            modifier = Modifier
+                                .align(Alignment.TopCenter)
+                                .offset(y = (-24).dp)
+                        )
+                    }
+
+                    // The thumb itself
+                    Box(
+                        modifier = Modifier
+                            .width(thumbSize)
+                            .height(ControlGeometry.selectionTouchTarget)
+                            .then(
+                                if (enabled) {
+                                    Modifier.pointerInput(Unit) {
+                                        detectSidewaysDrag(
+                                            onDragStart = {
+                                                isDragging = true
+                                                dragValue = value
+                                                onChangeStart?.invoke(value)
+                                            },
+                                            onDragEnd = {
+                                                val endValue = SliderMath.snap(dragValue, valueRange, steps)
+                                                if (endValue != dragValue) {
+                                                    dragValue = endValue
+                                                    onValueChange(endValue)
+                                                }
+                                                isDragging = false
+                                                onChangeEnd?.invoke(endValue)
+                                            },
+                                            onDragCancel = {
+                                                isDragging = false
+                                            }
+                                        ) { change, dragAmount ->
+                                            change.consume()
+                                            val effectiveWidth = getEffectiveWidth()
+                                            if (effectiveWidth <= 0f) return@detectSidewaysDrag
+
+                                            val deltaRatio = dragAmount.x / effectiveWidth
+                                            val deltaValue =
+                                                (valueRange.endInclusive - valueRange.start) * deltaRatio
+                                            val newValue = (dragValue + deltaValue).coerceIn(valueRange)
+                                            dragValue = newValue
+                                            onValueChange(newValue)
+                                        }
+                                    }
+                                } else Modifier
+                            )
+                    ) { SliderThumbFace(isDragging) }
+                }
+            }
+
+            // Trailing label
+            if (rightLabel != null) {
+                Text(
+                    text = rightLabel,
+                    style = Theme.typography.bodyMedium,
+                    color = if (enabled) colors.foreground else colors.mutedForeground
+                )
+            }
+        }
+
+        // Tick labels
+        if (showScaleValue && steps > 0) {
+            Spacer(modifier = Modifier.height(Spacing.xs))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = thumbRadius),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                val stepCount = steps + 1
+                for (i in 0..stepCount) {
+                    val stepValue = valueRange.start + (valueRange.endInclusive - valueRange.start) * i / stepCount
+                    Text(
+                        text = SliderMath.format(stepValue),
+                        style = Theme.typography.bodySmall,
+                        color = if (enabled) colors.mutedForeground else colors.mutedForeground
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Plain track
+ */
+@Composable
+private fun NormalTrack(
+    normalizedValue: Float,
+    enabled: Boolean,
+    trackHeight: Dp,
+    steps: Int,
+    showScaleValue: Boolean,
+    valueRange: ClosedFloatingPointRange<Float>
+) {
+    val colors = Theme.colors
+
+    Box(
+        modifier = Modifier.fillMaxWidth(),
+        contentAlignment = Alignment.CenterStart
+    ) {
+        // Inactive track (background)
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(trackHeight)
+                .clip(Theme.shapes.md)
+                .background(colors.muted)
+        )
+
+        // Active track
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(normalizedValue.coerceAtLeast(0.001f))
+                .height(trackHeight)
+                .clip(Theme.shapes.md)
+                .background(colors.primary)
+        )
+
+        // Tick marks
+        if (steps > 0) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = ControlGeometry.sliderThumbWidth / 2),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                for (i in 0..steps + 1) {
+                    val stepNormalized = i.toFloat() / (steps + 1)
+                    val isActive = stepNormalized <= normalizedValue
+                    Box(
+                        modifier = Modifier
+                            .size(ControlGeometry.sliderScaleDot)
+                            .clip(CircleShape)
+                            .background(
+                                if (enabled) {
+                                    if (isActive) colors.primary else colors.muted
+                                } else {
+                                    colors.muted
+                                }
+                            )
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Capsule track
+ */
+@Composable
+private fun CapsuleTrack(
+    normalizedValue: Float,
+    enabled: Boolean,
+    trackHeight: Dp,
+    steps: Int,
+    showScaleValue: Boolean,
+    valueRange: ClosedFloatingPointRange<Float>
+) {
+    val colors = Theme.colors
+
+    Box(
+        modifier = Modifier.fillMaxWidth(),
+        contentAlignment = Alignment.CenterStart
+    ) {
+        // Inactive track (background), capsule shaped
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(trackHeight)
+                .clip(Theme.shapes.md)
+                .background(colors.muted)
+        )
+
+        // Active track, inset slightly to leave room for the thumb
+        val innerPadding = ControlGeometry.sliderCapsuleInset
+        Box(
+            modifier = Modifier
+                .padding(horizontal = innerPadding, vertical = innerPadding)
+                .fillMaxWidth(normalizedValue.coerceAtLeast(0.001f))
+                .height(trackHeight - innerPadding * 2)
+                .clip(Theme.shapes.md)
+                .background(colors.primary)
+        )
+    }
+}
+
+/**
+ * RangeSlider - range selection
+ *
+ * Features:
+ * - two thumbs for a range
+ * - leading and trailing labels
+ * - custom range
+ * - step values
+ * - disabled state
+ */
+@Composable
+fun RangeSlider(
+    values: ClosedFloatingPointRange<Float>,
+    onValuesChange: (ClosedFloatingPointRange<Float>) -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    valueRange: ClosedFloatingPointRange<Float> = 0f..100f,
+    steps: Int = 0,
+    leftLabel: String? = null,
+    rightLabel: String? = null,
+    showThumbValue: Boolean = false,
+    showScaleValue: Boolean = false,
+    onChangeStart: ((ClosedFloatingPointRange<Float>) -> Unit)? = null,
+    onChangeEnd: ((ClosedFloatingPointRange<Float>) -> Unit)? = null
+) {
+    val colors = Theme.colors
+    val values by rememberUpdatedState(values)
+    val onValuesChange by rememberUpdatedState(onValuesChange)
+    val onChangeStart by rememberUpdatedState(onChangeStart)
+    val onChangeEnd by rememberUpdatedState(onChangeEnd)
+
+    var sliderSize by remember { mutableStateOf(IntSize.Zero) }
+    val density = LocalDensity.current
+    var draggingThumb by remember { mutableStateOf<Int?>(null) } // 0 = start, 1 = end
+    var dragStartValue by remember { mutableStateOf(values.start) }
+    var dragEndValue by remember { mutableStateOf(values.endInclusive) }
+
+    LaunchedEffect(values.start, values.endInclusive, draggingThumb) {
+        if (draggingThumb == null) {
+            dragStartValue = values.start
+            dragEndValue = values.endInclusive
+        }
+    }
+
+    val displayStart = if (draggingThumb == 0) dragStartValue else values.start
+    val displayEnd = if (draggingThumb == 1) dragEndValue else values.endInclusive
+
+    // Normalised values
+    val startNormalized = SliderMath.normalize(displayStart, valueRange)
+    val endNormalized = SliderMath.normalize(displayEnd, valueRange)
+
+    val thumbSize = ControlGeometry.sliderThumbWidth
+    val thumbRadius = thumbSize / 2
+    val trackHeight = ControlGeometry.sliderTrackHeight
+
+    // Usable track width
+    fun getEffectiveWidth(): Float {
+        return (sliderSize.width - with(density) { thumbSize.toPx() }).coerceAtLeast(0f)
+    }
+
+    // Value for a given position
+    fun calculateValue(positionX: Float): Float {
+        val ratio = SliderMath.positionRatio(positionX, sliderSize.width.toFloat(), with(density) { thumbSize.toPx() })
+
+        return SliderMath.valueAt(ratio, valueRange, steps)
+    }
+
+    Column(modifier = modifier.graphicsLayer { alpha = if (enabled) 1f else FeedbackDefaults.disabledOpacity }) {
+        if (showThumbValue) {
+            Spacer(modifier = Modifier.height(ControlGeometry.sliderValueLabelHeight))
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Leading label
+            if (leftLabel != null) {
+                Text(
+                    text = leftLabel,
+                    style = Theme.typography.bodyMedium,
+                    color = if (enabled) colors.foreground else colors.mutedForeground
+                )
+            }
+
+            // Thumb container
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(ControlGeometry.selectionTouchTarget)
+                    .onSizeChanged { sliderSize = it }
+                    .ownsHorizontalDrag { enabled }
+                    .then(
+                        if (enabled) {
+                            Modifier.pointerInput(displayStart, displayEnd, sliderSize) {
+                                detectTapGestures { offset ->
+                                    val tappedValue = calculateValue(offset.x)
+                                    val moveStart =
+                                        SliderMath.nearestThumb(tappedValue, displayStart, displayEnd) == 0
+
+                                    if (moveStart) {
+                                        val newStart = SliderMath.snap(tappedValue, valueRange, steps).coerceAtMost(displayEnd)
+                                        dragStartValue = newStart
+                                        val range = newStart..displayEnd
+                                        onChangeStart?.invoke(range)
+                                        onValuesChange(range)
+                                        onChangeEnd?.invoke(range)
+                                    } else {
+                                        val newEnd = SliderMath.snap(tappedValue, valueRange, steps).coerceAtLeast(displayStart)
+                                        dragEndValue = newEnd
+                                        val range = displayStart..newEnd
+                                        onChangeStart?.invoke(range)
+                                        onValuesChange(range)
+                                        onChangeEnd?.invoke(range)
+                                    }
+                                }
+                            }
+                        } else Modifier
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                // Track background
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(trackHeight)
+                        .clip(Theme.shapes.md)
+                        .background(colors.muted)
+                )
+
+                // Active track (the span between the thumbs)
+                val thumbRadiusPx = with(density) { thumbRadius.toPx() }
+                val effectiveWidth = getEffectiveWidth()
+                val startCenterPx = thumbRadiusPx + effectiveWidth * startNormalized
+                val endCenterPx = thumbRadiusPx + effectiveWidth * endNormalized
+                val activeStart = with(density) { startCenterPx.toDp() }
+                val activeWidth = with(density) { (endCenterPx - startCenterPx).coerceAtLeast(0f).toDp() }
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(trackHeight),
+                    contentAlignment = Alignment.CenterStart
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .offset(x = activeStart)
+                            .width(activeWidth)
+                            .height(trackHeight)
+                            .clip(Theme.shapes.md)
+                            .background(colors.primary)
+                    )
+                }
+
+                // Start thumb
+                val startThumbOffsetX = with(density) {
+                    SliderMath.thumbOffset(startNormalized, sliderSize.width.toFloat(), thumbSize.toPx()).toDp()
+                }
+
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .offset(x = startThumbOffsetX)
+                ) {
+                    if (showThumbValue) {
+                        Text(
+                            text = SliderMath.format(displayStart),
+                            style = Theme.typography.bodySmall,
+                            color = if (enabled) colors.foreground else colors.mutedForeground,
+                            modifier = Modifier
+                                .align(Alignment.TopCenter)
+                                .offset(y = (-24).dp)
+                        )
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .width(thumbSize)
+                            .height(ControlGeometry.selectionTouchTarget)
+                            .then(
+                                if (enabled) {
+                                    Modifier.pointerInput(Unit) {
+                                        detectSidewaysDrag(
+                                            onDragStart = {
+                                                draggingThumb = 0
+                                                dragStartValue = values.start
+                                                dragEndValue = values.endInclusive
+                                                onChangeStart?.invoke(values.start..values.endInclusive)
+                                            },
+                                            onDragEnd = {
+                                                val snappedStart = SliderMath.snap(dragStartValue, valueRange, steps).coerceAtMost(dragEndValue)
+                                                if (snappedStart != dragStartValue) {
+                                                    dragStartValue = snappedStart
+                                                    onValuesChange(snappedStart..dragEndValue)
+                                                }
+                                                draggingThumb = null
+                                                onChangeEnd?.invoke(dragStartValue..dragEndValue)
+                                            },
+                                            onDragCancel = {
+                                                draggingThumb = null
+                                            }
+                                        ) { change, dragAmount ->
+                                            change.consume()
+                                            val effectiveWidth = getEffectiveWidth()
+                                            if (effectiveWidth <= 0f) return@detectSidewaysDrag
+
+                                            val deltaRatio = dragAmount.x / effectiveWidth
+                                            val deltaValue =
+                                                (valueRange.endInclusive - valueRange.start) * deltaRatio
+                                            val newStart = (dragStartValue + deltaValue)
+                                                .coerceIn(valueRange.start, dragEndValue)
+                                                .coerceAtMost(dragEndValue)
+                                            dragStartValue = newStart
+                                            onValuesChange(newStart..dragEndValue)
+                                        }
+                                    }
+                                } else Modifier
+                            )
+                    ) { SliderThumbFace(draggingThumb == 0) }
+                }
+
+                // End thumb
+                val endThumbOffsetX = with(density) {
+                    SliderMath.thumbOffset(endNormalized, sliderSize.width.toFloat(), thumbSize.toPx()).toDp()
+                }
+
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .offset(x = endThumbOffsetX)
+                ) {
+                    if (showThumbValue) {
+                        Text(
+                            text = SliderMath.format(displayEnd),
+                            style = Theme.typography.bodySmall,
+                            color = if (enabled) colors.foreground else colors.mutedForeground,
+                            modifier = Modifier
+                                .align(Alignment.TopCenter)
+                                .offset(y = (-24).dp)
+                        )
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .width(thumbSize)
+                            .height(ControlGeometry.selectionTouchTarget)
+                            .then(
+                                if (enabled) {
+                                    Modifier.pointerInput(Unit) {
+                                        detectSidewaysDrag(
+                                            onDragStart = {
+                                                draggingThumb = 1
+                                                dragStartValue = values.start
+                                                dragEndValue = values.endInclusive
+                                                onChangeStart?.invoke(values.start..values.endInclusive)
+                                            },
+                                            onDragEnd = {
+                                                val snappedEnd = SliderMath.snap(dragEndValue, valueRange, steps).coerceAtLeast(dragStartValue)
+                                                if (snappedEnd != dragEndValue) {
+                                                    dragEndValue = snappedEnd
+                                                    onValuesChange(dragStartValue..snappedEnd)
+                                                }
+                                                draggingThumb = null
+                                                onChangeEnd?.invoke(dragStartValue..dragEndValue)
+                                            },
+                                            onDragCancel = {
+                                                draggingThumb = null
+                                            }
+                                        ) { change, dragAmount ->
+                                            change.consume()
+                                            val effectiveWidth = getEffectiveWidth()
+                                            if (effectiveWidth <= 0f) return@detectSidewaysDrag
+
+                                            val deltaRatio = dragAmount.x / effectiveWidth
+                                            val deltaValue =
+                                                (valueRange.endInclusive - valueRange.start) * deltaRatio
+                                            val newEnd = (dragEndValue + deltaValue)
+                                                .coerceIn(dragStartValue, valueRange.endInclusive)
+                                                .coerceAtLeast(dragStartValue)
+                                            dragEndValue = newEnd
+                                            onValuesChange(dragStartValue..newEnd)
+                                        }
+                                    }
+                                } else Modifier
+                            )
+                    ) { SliderThumbFace(draggingThumb == 1) }
+                }
+            }
+
+            // Trailing label
+            if (rightLabel != null) {
+                Text(
+                    text = rightLabel,
+                    style = Theme.typography.bodyMedium,
+                    color = if (enabled) colors.foreground else colors.mutedForeground
+                )
+            }
+        }
+
+        // Tick labels
+        if (showScaleValue && steps > 0) {
+            Spacer(modifier = Modifier.height(Spacing.xs))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = thumbRadius),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                val stepCount = steps + 1
+                for (i in 0..stepCount) {
+                    val stepValue = valueRange.start + (valueRange.endInclusive - valueRange.start) * i / stepCount
+                    Text(
+                        text = SliderMath.format(stepValue),
+                        style = Theme.typography.bodySmall,
+                        color = if (enabled) colors.mutedForeground else colors.mutedForeground
+                    )
+                }
+            }
+        }
+    }
+}

@@ -1,11 +1,10 @@
 package com.xiaozhi.admin
 
-import com.xiaozhi.admin.ui.*
 
 import com.tencent.kuikly.core.base.PagerScope
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.pager.Pager
-import com.tencent.kuikly.core.reactive.handler.observable
+import com.xiaozhi.admin.state.stateVar
 
 /**
  * 字段元数据（`GET /api/config/schema`）的**只读缓存**：目前只用于「多久生效」提示。
@@ -46,7 +45,7 @@ class FormSchemaState(private val scope: PagerScope) {
      * UI 必须读它才能对"元数据晚于首帧到达"保持响应（见 [fieldNote]）——Kuikly 只对
      * **闭包内读到的 observable** 做响应式跟踪，普通 Map 的写入不会触发任何重建。
      */
-    var version by scope.observable(0)
+    var version by stateVar(0)
 
     /** 拉取并展开 schema；失败静默保留旧缓存（服务端不可达时表单仍可用）。 */
     fun load(ctx: Pager, baseUrl: String = "") {

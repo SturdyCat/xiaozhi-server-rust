@@ -1,13 +1,11 @@
 package com.xiaozhi.admin
 
-import com.xiaozhi.admin.ui.*
 
 import com.tencent.kuikly.core.base.PagerScope
 import com.tencent.kuikly.core.nvi.serialization.json.JSONArray
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
-import com.tencent.kuikly.core.reactive.collection.ObservableList
-import com.tencent.kuikly.core.reactive.handler.observable
-import com.tencent.kuikly.core.reactive.handler.observableList
+import com.xiaozhi.admin.state.stateVar
+import com.xiaozhi.admin.state.stateListOf
 
 /**
  * 「指令闸门」（`[command]`）的表单状态。
@@ -30,18 +28,18 @@ import com.tencent.kuikly.core.reactive.handler.observableList
  */
 class CommandSectionState(private val scope: PagerScope) {
 
-    var enabled by scope.observable("true")
+    var enabled by stateVar("true")
     /// 指令词表：每行一个词（归一化后比较；「退下吧。」等价于「退下」）。
-    var keywords by scope.observable("退下\n闭嘴\n关闭")
+    var keywords by stateVar("退下\n闭嘴\n关闭")
     /// exact（整句相等，默认、安全）| contains（句中出现即命中，⚠️ 会让「关闭闹钟」也断线）。
-    var matchMode by scope.observable("exact")
+    var matchMode by stateVar("exact")
     /// 长度闸门：归一化后超过这么多字就不做指令判断（0 = 不限制）；留空/非法按默认 5 处理。
-    var maxChars by scope.observable("5")
+    var maxChars by stateVar("5")
     /// 命中后先说的告别语；留空 = 不说告别语（仍执行结束聆听）。
-    var reply by scope.observable("好的，我先退下了。")
+    var reply by stateVar("好的，我先退下了。")
 
-    /// 匹配方式下拉选项（官方 AlertDialog 要求 ObservableList）。
-    val matchModeOptions: ObservableList<Pair<String, String>> by scope.observableList()
+    /// 匹配方式下拉选项（可变列表；T05 起为 Compose 快照列表）。
+    val matchModeOptions: MutableList<Pair<String, String>> = stateListOf()
 
     init {
         matchModeOptions.addAll(

@@ -1,7 +1,5 @@
 package com.xiaozhi.admin
 
-import com.xiaozhi.admin.ui.*
-
 import platform.Foundation.NSData
 import platform.Foundation.NSURL
 import platform.Foundation.NSURLSession

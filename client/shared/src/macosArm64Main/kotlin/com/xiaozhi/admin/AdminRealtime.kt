@@ -1,7 +1,5 @@
 package com.xiaozhi.admin
 
-import com.xiaozhi.admin.ui.*
-
 /** macOS 客户端：经原生桥直连系统 WebSocket，支持。 */
 actual val PLATFORM_WS_SUPPORTED: Boolean = true
 

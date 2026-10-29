@@ -1,0 +1,88 @@
+package com.gearui.components.closebutton
+
+import com.gearui.components.icon.*
+import com.gearui.foundation.interaction.hitTarget
+import com.tencent.kuikly.compose.ui.semantics.Role
+import com.tencent.kuikly.compose.ui.draw.clip
+import com.tencent.kuikly.compose.ui.draw.alpha
+import com.tencent.kuikly.compose.foundation.interaction.collectIsPressedAsState
+import com.tencent.kuikly.compose.foundation.interaction.MutableInteractionSource
+import com.tencent.kuikly.compose.foundation.clickable
+import com.gearui.foundation.motion.FeedbackDefaults
+import com.gearui.foundation.interaction.pressedSurfaceColor
+import com.gearui.foundation.interaction.pressScale
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.Composable
+import com.gearui.components.icon.Icons
+import com.gearui.foundation.control.ControlGeometry
+import com.gearui.i18n.I18n
+import com.tencent.kuikly.compose.ui.semantics.contentDescription
+import com.tencent.kuikly.compose.ui.semantics.semantics
+import com.gearui.foundation.primitives.Icon
+import com.gearui.theme.Theme
+import com.tencent.kuikly.compose.foundation.background
+import com.tencent.kuikly.compose.foundation.layout.Box
+import com.tencent.kuikly.compose.foundation.layout.size
+import com.tencent.kuikly.compose.foundation.shape.CircleShape
+import com.tencent.kuikly.compose.ui.Alignment
+import com.tencent.kuikly.compose.ui.Modifier
+import com.tencent.kuikly.compose.ui.graphics.Color
+import com.tencent.kuikly.compose.ui.unit.Dp
+
+/**
+ * CloseButton — HeroUI Native `CloseButton`.
+ *
+ * An icon-only tertiary button: a 32 circle on the neutral fill with an 18 muted "x",
+ * pressing with the shared [PressableFeedback]. Use it for every dismiss affordance
+ * (dialogs, sheets, notifications, banners) so they look and respond the same.
+ *
+ * [contentDescription] is what a screen reader announces; override it when the button
+ * closes something specific ("Dismiss banner") rather than the surface it sits on.
+ *
+ * [containerColor] and [iconColor] exist for media surfaces such as an image viewer,
+ * where the neutral fill would disappear against the photo. [icon] swaps the glyph for
+ * another icon-only control of the same shape, such as a number field's step buttons.
+ */
+@Composable
+fun CloseButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    size: Dp = ControlGeometry.closeButtonSize,
+    iconSize: Dp = ControlGeometry.closeButtonIcon,
+    containerColor: Color = Color.Unspecified,
+    iconColor: Color = Color.Unspecified,
+    icon: IconSource = Icons.x,
+    contentDescription: String = I18n.strings.common.close,
+) {
+    val colors = Theme.colors
+    val source = remember { MutableInteractionSource() }
+    val pressed by source.collectIsPressedAsState()
+    val fill = if (containerColor.isSpecified()) containerColor else colors.muted
+    // The circle stays [size]; the hit region around it is at least 44 (see hitTarget).
+    Box(
+        modifier = modifier
+            .hitTarget()
+            .semantics { this.contentDescription = contentDescription }
+            .clickable(enabled = enabled, interactionSource = source, indication = null, role = Role.Button, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(size)
+                .alpha(if (enabled) 1f else FeedbackDefaults.disabledOpacity)
+                .pressScale(pressed = pressed && enabled)
+                .clip(CircleShape)
+                .background(pressedSurfaceColor(fill, pressed && enabled)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(icon,
+                size = iconSize,
+                tint = if (iconColor.isSpecified()) iconColor else colors.mutedForeground,
+            )
+        }
+    }
+}
+
+private fun Color.isSpecified(): Boolean = this != Color.Unspecified

@@ -1,0 +1,599 @@
+package com.gearui.components.popover
+
+import com.gearui.foundation.control.ControlGeometry
+import com.gearui.foundation.motion.FeedbackDefaults
+import com.gearui.foundation.motion.rowPressFeedback
+import com.tencent.kuikly.compose.foundation.interaction.MutableInteractionSource
+import com.tencent.kuikly.compose.ui.draw.alpha
+import com.tencent.kuikly.compose.ui.text.font.FontWeight
+import androidx.compose.runtime.*
+import com.tencent.kuikly.compose.foundation.background
+import com.tencent.kuikly.compose.foundation.border
+import com.tencent.kuikly.compose.foundation.clickable
+import com.tencent.kuikly.compose.foundation.layout.*
+import com.tencent.kuikly.compose.foundation.shape.RoundedCornerShape
+import com.tencent.kuikly.compose.ui.Alignment
+import com.tencent.kuikly.compose.ui.Modifier
+import com.tencent.kuikly.compose.ui.draw.clip
+import com.tencent.kuikly.compose.ui.draw.shadow
+import com.tencent.kuikly.compose.ui.geometry.Rect
+import com.tencent.kuikly.compose.ui.graphics.Color
+import com.tencent.kuikly.compose.ui.layout.boundsInRoot
+import com.tencent.kuikly.compose.ui.layout.onGloballyPositioned
+import com.tencent.kuikly.compose.ui.unit.Dp
+import com.tencent.kuikly.compose.ui.unit.dp
+import com.gearui.foundation.primitives.Text
+import com.gearui.overlay.OverlayOptions
+import com.gearui.overlay.OverlayPlacement
+import com.gearui.overlay.OverlayDismissPolicy
+import com.gearui.overlay.rememberOverlay
+import com.gearui.foundation.material.MaterialSurface
+import com.gearui.foundation.material.Materials
+import com.gearui.theme.Theme
+import com.gearui.foundation.layout.Spacing
+import kotlinx.coroutines.delay
+import com.gearui.overlay.OverlayDefaults
+import com.gearui.foundation.border.BorderWidth
+
+/**
+ * PopoverTheme - bubble theme
+ */
+enum class PopoverTheme {
+    DARK,
+    LIGHT,
+    BRAND,
+    SUCCESS,
+    WARNING,
+    ERROR
+}
+
+/**
+ * PopoverPlacement - popup position
+ */
+enum class PopoverPlacement {
+    TOP_LEFT,
+    TOP,
+    TOP_RIGHT,
+    RIGHT_TOP,
+    RIGHT,
+    RIGHT_BOTTOM,
+    BOTTOM_RIGHT,
+    BOTTOM,
+    BOTTOM_LEFT,
+    LEFT_BOTTOM,
+    LEFT,
+    LEFT_TOP
+}
+
+/**
+ * PopoverState - Popover state management
+ */
+@Stable
+class PopoverState {
+    var isVisible by mutableStateOf(false)
+        internal set
+
+    fun show() {
+        isVisible = true
+    }
+
+    fun hide() {
+        isVisible = false
+    }
+
+    fun toggle() {
+        isVisible = !isVisible
+    }
+}
+
+/**
+ * Remembers a Popover state
+ */
+@Composable
+fun rememberPopoverState(): PopoverState {
+    return remember { PopoverState() }
+}
+
+/**
+ * Popover - popup bubble
+ *
+ * Positioned precisely through the GearUI Overlay system
+ *
+ * Features:
+ * - 6 theme colours
+ * - 12 placements
+ * - optional arrow
+ * - custom content
+ * - tap outside to dismiss
+ */
+@Composable
+fun Popover(
+    state: PopoverState,
+    modifier: Modifier = Modifier,
+    placement: PopoverPlacement = PopoverPlacement.BOTTOM,
+    theme: PopoverTheme = PopoverTheme.LIGHT,
+    showArrow: Boolean = false,
+    offset: Dp = OverlayDefaults.anchorOffset,
+    closeOnClickOutside: Boolean = true,
+    content: @Composable () -> Unit,
+    trigger: @Composable (onClick: () -> Unit) -> Unit
+) {
+    val colors = Theme.colors
+    val overlay = rememberOverlay()
+
+    // Bounds of the trigger element
+    var triggerBounds by remember { mutableStateOf<Rect?>(null) }
+
+    // Background and text colour derived from the theme
+    val backgroundColor = remember(theme, colors) {
+        when (theme) {
+            PopoverTheme.DARK -> colors.foreground
+            PopoverTheme.LIGHT -> colors.popover
+            PopoverTheme.BRAND -> colors.primary
+            PopoverTheme.SUCCESS -> colors.success
+            PopoverTheme.WARNING -> colors.warning
+            PopoverTheme.ERROR -> colors.destructive
+        }
+    }
+
+    val textColor = remember(theme, colors) {
+        when (theme) {
+            PopoverTheme.DARK -> colors.background
+            PopoverTheme.LIGHT -> colors.foreground
+            PopoverTheme.BRAND -> colors.primaryForeground
+            PopoverTheme.SUCCESS -> colors.successForeground
+            PopoverTheme.WARNING -> colors.warningForeground
+            PopoverTheme.ERROR -> colors.destructiveForeground
+        }
+    }
+
+    val borderColor = remember(theme, colors) {
+        when (theme) {
+            PopoverTheme.LIGHT -> colors.border
+            else -> Color.Transparent
+        }
+    }
+
+    // Key the overlay so its lifecycle can be managed
+    val isVisible = state.isVisible
+    val bounds = triggerBounds
+
+    // DisposableEffect drives the overlay lifecycle
+    if (isVisible && bounds != null) {
+        val currentPlacement = placement
+        val currentOffset = offset
+        val currentCloseOnClickOutside = closeOnClickOutside
+        val currentBackgroundColor by rememberUpdatedState(backgroundColor)
+        val currentTextColor by rememberUpdatedState(textColor)
+        val currentShowArrow by rememberUpdatedState(showArrow)
+        val currentBorderColor by rememberUpdatedState(borderColor)
+        val currentContent by rememberUpdatedState(content)
+        val bodyPadding = LocalPopoverBodyPadding.current
+
+        DisposableEffect(bounds, currentPlacement, currentOffset) {
+            val overlayId = overlay.show(
+                anchorBounds = bounds,
+                options = OverlayOptions(
+                    placement = placementToOverlay(currentPlacement),
+                    offsetX = when (currentPlacement) {
+                        PopoverPlacement.LEFT, PopoverPlacement.LEFT_TOP, PopoverPlacement.LEFT_BOTTOM -> -currentOffset
+                        PopoverPlacement.RIGHT, PopoverPlacement.RIGHT_TOP, PopoverPlacement.RIGHT_BOTTOM -> currentOffset
+                        else -> 0.dp
+                    },
+                    offsetY = when (currentPlacement) {
+                        PopoverPlacement.TOP, PopoverPlacement.TOP_LEFT, PopoverPlacement.TOP_RIGHT -> -currentOffset
+                        PopoverPlacement.BOTTOM, PopoverPlacement.BOTTOM_LEFT, PopoverPlacement.BOTTOM_RIGHT -> currentOffset
+                        else -> 0.dp
+                    },
+                    modal = false,
+                    maskColor = null,
+                    dismissPolicy = if (currentCloseOnClickOutside) {
+                        OverlayDismissPolicy.Dropdown.copy(outsideClick = true)
+                    } else {
+                        OverlayDismissPolicy(
+                            outsideClick = false,
+                            scroll = false,
+                            backPress = true,
+                            routeChange = true,
+                            anchorDetached = true
+                        )
+                    }
+                ),
+                onDismiss = {
+                    state.isVisible = false
+                }
+            ) {
+                CompositionLocalProvider(LocalPopoverBodyPadding provides bodyPadding) {
+                PopoverContent(
+                    placement = currentPlacement,
+                    backgroundColor = currentBackgroundColor,
+                    textColor = currentTextColor,
+                    borderColor = currentBorderColor,
+                    showArrow = currentShowArrow,
+                    content = currentContent
+                )
+                }
+            }
+
+            onDispose {
+                overlay.dismiss(overlayId)
+            }
+        }
+    }
+
+    // Trigger element
+    Box(
+        modifier = modifier
+            .onGloballyPositioned { coordinates ->
+                triggerBounds = coordinates.boundsInRoot()
+            }
+    ) {
+        trigger {
+            state.toggle()
+        }
+    }
+}
+
+/**
+ * Popover content layout
+ */
+@Composable
+private fun PopoverContent(
+    placement: PopoverPlacement,
+    backgroundColor: Color,
+    textColor: Color,
+    borderColor: Color,
+    showArrow: Boolean,
+    content: @Composable () -> Unit
+) {
+    val arrowSize = ControlGeometry.popoverArrowSize
+
+    // Arrow position follows the placement
+    val isTop = placement in listOf(PopoverPlacement.TOP, PopoverPlacement.TOP_LEFT, PopoverPlacement.TOP_RIGHT)
+    val isBottom = placement in listOf(PopoverPlacement.BOTTOM, PopoverPlacement.BOTTOM_LEFT, PopoverPlacement.BOTTOM_RIGHT)
+    val isLeft = placement in listOf(PopoverPlacement.LEFT, PopoverPlacement.LEFT_TOP, PopoverPlacement.LEFT_BOTTOM)
+    val isRight = placement in listOf(PopoverPlacement.RIGHT, PopoverPlacement.RIGHT_TOP, PopoverPlacement.RIGHT_BOTTOM)
+
+    // Arrow alignment
+    val arrowAlignment = when (placement) {
+        PopoverPlacement.TOP_LEFT, PopoverPlacement.BOTTOM_LEFT -> Alignment.Start
+        PopoverPlacement.TOP_RIGHT, PopoverPlacement.BOTTOM_RIGHT -> Alignment.End
+        PopoverPlacement.LEFT_TOP, PopoverPlacement.RIGHT_TOP -> Alignment.Top
+        PopoverPlacement.LEFT_BOTTOM, PopoverPlacement.RIGHT_BOTTOM -> Alignment.Bottom
+        else -> Alignment.CenterHorizontally
+    }
+
+    if (isLeft || isRight) {
+        // Horizontal layout (left / right)
+        Row(
+            verticalAlignment = when (arrowAlignment) {
+                Alignment.Top -> Alignment.Top
+                Alignment.Bottom -> Alignment.Bottom
+                else -> Alignment.CenterVertically
+            }
+        ) {
+            if (isRight && showArrow) {
+                PopoverArrow(
+                    direction = ArrowDirection.LEFT,
+                    color = backgroundColor,
+                    size = arrowSize
+                )
+            }
+
+            PopoverBody(
+                backgroundColor = backgroundColor,
+                textColor = textColor,
+                borderColor = borderColor,
+                content = content
+            )
+
+            if (isLeft && showArrow) {
+                PopoverArrow(
+                    direction = ArrowDirection.RIGHT,
+                    color = backgroundColor,
+                    size = arrowSize
+                )
+            }
+        }
+    } else {
+        // Vertical layout (top / bottom)
+        Column(
+            horizontalAlignment = when (arrowAlignment) {
+                Alignment.Start -> Alignment.Start
+                Alignment.End -> Alignment.End
+                else -> Alignment.CenterHorizontally
+            }
+        ) {
+            if (isBottom && showArrow) {
+                PopoverArrow(
+                    direction = ArrowDirection.UP,
+                    color = backgroundColor,
+                    size = arrowSize,
+                    horizontalPadding = Spacing.lg
+                )
+            }
+
+            PopoverBody(
+                backgroundColor = backgroundColor,
+                textColor = textColor,
+                borderColor = borderColor,
+                content = content
+            )
+
+            if (isTop && showArrow) {
+                PopoverArrow(
+                    direction = ArrowDirection.DOWN,
+                    color = backgroundColor,
+                    size = arrowSize,
+                    horizontalPadding = Spacing.lg
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Popover body content
+ */
+@Composable
+private fun PopoverBody(
+    backgroundColor: Color,
+    textColor: Color,
+    borderColor: Color,
+    content: @Composable () -> Unit
+) {
+    val shapes = Theme.shapes
+
+    // Popover material: a transient surface anchored to a trigger.
+    //
+    // The chain has to be split: the shadow belongs outside the clip, the fill
+    // is what the material replaces, and the border is drawn over it. Keeping
+    // them in one chain is what stopped this surface from being a material.
+    Box {
+    MaterialSurface(
+        material = Materials.Popover,
+        shape = OverlayDefaults.panelShape,
+        fallback = backgroundColor,
+    ) {
+    // HeroUI Native popover.css: padding-inline 16 / padding-block 12, no border;
+    // the overlay shadow stack separates the surface in both themes.
+    Box(
+        modifier = Modifier.padding(LocalPopoverBodyPadding.current)
+    ) {
+        CompositionLocalProvider(
+            LocalPopoverTextColor provides textColor
+        ) {
+            content()
+        }
+    }
+    }
+    }
+}
+
+/**
+ * Arrow direction
+ */
+enum class ArrowDirection {
+    UP, DOWN, LEFT, RIGHT
+}
+
+/**
+ * Popover arrow
+ */
+@Composable
+private fun PopoverArrow(
+    direction: ArrowDirection,
+    color: Color,
+    size: Dp,
+    horizontalPadding: Dp = 0.dp
+) {
+    val width = when (direction) {
+        ArrowDirection.UP, ArrowDirection.DOWN -> size * 2
+        ArrowDirection.LEFT, ArrowDirection.RIGHT -> size
+    }
+    val height = when (direction) {
+        ArrowDirection.UP, ArrowDirection.DOWN -> size
+        ArrowDirection.LEFT, ArrowDirection.RIGHT -> size * 2
+    }
+
+    Box(
+        modifier = Modifier
+            .padding(horizontal = horizontalPadding)
+            .size(width = width, height = height)
+            .background(color, shape = TriangleShape(direction))
+    )
+}
+
+/**
+ * Triangle Shape
+ */
+// Arrow tips are triangle geometry approximated with corner radii, not a
+// surface radius, so they stay off the shape scale.
+private fun TriangleShape(direction: ArrowDirection) = when (direction) {
+    // shape-exempt: arrow tip geometry
+    ArrowDirection.UP -> RoundedCornerShape(
+        topStartPercent = 0, topEndPercent = 0, bottomEndPercent = 50, bottomStartPercent = 50
+    )
+    // shape-exempt: arrow tip geometry
+    ArrowDirection.DOWN -> RoundedCornerShape(
+        topStartPercent = 50, topEndPercent = 50, bottomEndPercent = 0, bottomStartPercent = 0
+    )
+    // shape-exempt: arrow tip geometry
+    ArrowDirection.LEFT -> RoundedCornerShape(
+        topStartPercent = 0, topEndPercent = 50, bottomEndPercent = 50, bottomStartPercent = 0
+    )
+    // shape-exempt: arrow tip geometry
+    ArrowDirection.RIGHT -> RoundedCornerShape(
+        topStartPercent = 50, topEndPercent = 0, bottomEndPercent = 0, bottomStartPercent = 50
+    )
+}
+
+/**
+ * Converts a PopoverPlacement into an OverlayPlacement
+ */
+private fun placementToOverlay(placement: PopoverPlacement): OverlayPlacement {
+    return when (placement) {
+        // Above
+        PopoverPlacement.TOP_LEFT -> OverlayPlacement.TopLeft
+        PopoverPlacement.TOP -> OverlayPlacement.TopCenter
+        PopoverPlacement.TOP_RIGHT -> OverlayPlacement.TopRight
+        // Below
+        PopoverPlacement.BOTTOM_LEFT -> OverlayPlacement.BottomLeft
+        PopoverPlacement.BOTTOM -> OverlayPlacement.BottomCenter
+        PopoverPlacement.BOTTOM_RIGHT -> OverlayPlacement.BottomRight
+        // Left
+        PopoverPlacement.LEFT_TOP -> OverlayPlacement.LeftTop
+        PopoverPlacement.LEFT -> OverlayPlacement.LeftCenter
+        PopoverPlacement.LEFT_BOTTOM -> OverlayPlacement.LeftBottom
+        // Right
+        PopoverPlacement.RIGHT_TOP -> OverlayPlacement.RightTop
+        PopoverPlacement.RIGHT -> OverlayPlacement.RightCenter
+        PopoverPlacement.RIGHT_BOTTOM -> OverlayPlacement.RightBottom
+    }
+}
+
+/**
+ * CompositionLocal carrying the Popover text colour
+ */
+val LocalPopoverTextColor = compositionLocalOf { Color.Unspecified }
+
+/**
+ * Inner padding of the popover surface. Read where [Popover] is called and handed to
+ * the overlay content, so [PopoverMenu] can use the menu padding instead.
+ */
+internal val LocalPopoverBodyPadding = compositionLocalOf {
+    PaddingValues(
+        horizontal = ControlGeometry.popoverPaddingInline,
+        vertical = ControlGeometry.popoverPaddingBlock,
+    )
+}
+
+/**
+ * Tooltip - simplified text hint
+ */
+@Composable
+fun Tooltip(
+    text: String,
+    state: PopoverState,
+    modifier: Modifier = Modifier,
+    placement: PopoverPlacement = PopoverPlacement.BOTTOM,
+    theme: PopoverTheme = PopoverTheme.DARK,
+    autoDismissMillis: Long = 1500L,
+    trigger: @Composable (onClick: () -> Unit) -> Unit
+) {
+    LaunchedEffect(state.isVisible, autoDismissMillis) {
+        if (state.isVisible && autoDismissMillis > 0) {
+            delay(autoDismissMillis)
+            if (state.isVisible) {
+                state.hide()
+            }
+        }
+    }
+
+    Popover(
+        state = state,
+        modifier = modifier,
+        placement = placement,
+        theme = theme,
+        closeOnClickOutside = true,
+        content = {
+            Text(
+                text = text,
+                style = Theme.typography.bodySmall,
+                color = LocalPopoverTextColor.current
+            )
+        },
+        trigger = { _ ->
+            trigger {
+                state.toggle()
+            }
+        }
+    )
+}
+
+/**
+ * PopoverMenuItem - Popover menu item
+ */
+data class PopoverMenuItem(
+    val label: String,
+    val icon: (@Composable () -> Unit)? = null,
+    val disabled: Boolean = false,
+    val danger: Boolean = false,
+    val onClick: () -> Unit
+)
+
+/**
+ * PopoverMenu - Popover holding menu items
+ */
+@Composable
+fun PopoverMenu(
+    state: PopoverState,
+    items: List<PopoverMenuItem>,
+    modifier: Modifier = Modifier,
+    placement: PopoverPlacement = PopoverPlacement.BOTTOM,
+    theme: PopoverTheme = PopoverTheme.LIGHT,
+    trigger: @Composable (onClick: () -> Unit) -> Unit
+) {
+    val colors = Theme.colors
+
+    // HeroUI Native menu.css: padding-inline 6 / padding-block 12, rows at radius 16,
+    // no separators, animated press fill (see rowPressFeedback).
+    CompositionLocalProvider(
+        LocalPopoverBodyPadding provides PaddingValues(
+            horizontal = ControlGeometry.menuPaddingInline,
+            vertical = ControlGeometry.menuPaddingBlock,
+        )
+    ) {
+    Popover(
+        state = state,
+        modifier = modifier,
+        placement = placement,
+        theme = theme,
+        showArrow = true,
+        content = {
+            val itemShape = RoundedCornerShape(ControlGeometry.radiusMenuItem)
+            Column(
+                modifier = Modifier.widthIn(min = ControlGeometry.menuMinWidth)
+            ) {
+                items.forEach { item ->
+                    val interaction = remember(item) { MutableInteractionSource() }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .rowPressFeedback(
+                                interaction = interaction,
+                                shape = itemShape,
+                                enabled = !item.disabled,
+                                danger = item.danger,
+                            )
+                            .clickable(enabled = !item.disabled, interactionSource = interaction, indication = null) {
+                                item.onClick()
+                                state.hide()
+                            }
+                            .padding(
+                                horizontal = ControlGeometry.menuItemPaddingInline,
+                                vertical = ControlGeometry.menuItemPaddingBlock,
+                            )
+                            .alpha(if (item.disabled) FeedbackDefaults.disabledOpacity else 1f),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(ControlGeometry.menuItemGap),
+                    ) {
+                        if (item.icon != null) {
+                            item.icon.invoke()
+                        }
+                        Text(
+                            text = item.label,
+                            style = Theme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
+                            color = when {
+                                item.danger -> colors.destructiveSoftForeground
+                                else -> LocalPopoverTextColor.current
+                            }
+                        )
+                    }
+                }
+            }
+        },
+        trigger = trigger
+    )
+    }
+}

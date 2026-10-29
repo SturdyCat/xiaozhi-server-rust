@@ -1,22 +1,12 @@
 package com.xiaozhi.admin
 
-import com.xiaozhi.admin.ui.*
-
-import com.tencent.kuikly.core.base.PagerScope
-import com.tencent.kuikly.core.base.ViewContainer
 import com.tencent.kuikly.core.base.ViewRef
-import com.tencent.kuikly.core.directives.velse
-import com.tencent.kuikly.core.directives.vif
 import com.tencent.kuikly.core.pager.Pager
-import com.tencent.kuikly.core.reactive.collection.ObservableList
-import com.tencent.kuikly.core.reactive.handler.observable
-import com.tencent.kuikly.core.reactive.handler.observableList
+import com.xiaozhi.admin.state.stateVar
+import com.xiaozhi.admin.state.stateListOf
 import com.tencent.kuikly.core.timer.setTimeout
 import com.tencent.kuikly.core.views.DivView
-import com.tencent.kuikly.core.views.SelectableOption
 import com.tencent.kuikly.core.views.SelectionType
-import com.tencent.kuikly.core.views.Text
-import com.tencent.kuikly.core.views.View
 
 /**
  * ASR / TTS 测试台状态（macOS 专用，macosArm64Main）。
@@ -26,78 +16,72 @@ import com.tencent.kuikly.core.views.View
  *
  * ⚠️ XiaoZhiModule 由持有它的 admin Pager（AdminPage，mac actual 经 platformExternalModules 注入）注册；
  *   本类不是 Pager，故方法都接收 ctx: Pager 来 acquireModule。
- *   渲染见文件底部的 ViewContainer.renderBench(bench, ctx) 扩展。
+ *   渲染见 TestBenchPage.kt（T12 起 Compose 版；旧 ViewContainer.renderBench 已删）。
+ *   （T13：随 ui/ 删除，TabUiState/scope 参数退役——tab 选中态归 TestBenchPage 的快照缓存。）
  */
-class TestBenchState(private val scope: PagerScope) {
+class TestBenchState {
 
-    /** 由统一服务器基址推导的 WS 端点；「切换服务器」时随 API 基址一起更新（见 renderTestbenchSection）。 */
-    var serverUrl by scope.observable("ws://127.0.0.1:8000/api/ws")
-    var token by scope.observable("")
-    var connected by scope.observable(false)
-    var connectionState by scope.observable("idle") // idle / connecting / connected / error
+    /** 由统一服务器基址推导的 WS 端点；「切换服务器」时随 API 基址一起更新（见 TestbenchSection）。 */
+    var serverUrl by stateVar("ws://127.0.0.1:8000/api/ws")
+    var token by stateVar("")
+    var connected by stateVar(false)
+    var connectionState by stateVar("idle")
 
     /** ASR 阶段：idle(未录) / starting(启动中) / recording(录音中) / recorded(已录待识别) / recognizing(识别中) */
-    var asrPhase by scope.observable("idle")
-    var asrText by scope.observable("")
+    var asrPhase by stateVar("idle")
+    var asrText by stateVar("")
 
     /** 录音计秒（秒，小数）：录音中由原生样本计数 200ms 轮询刷新 */
-    var recSeconds by scope.observable(0.0)
+    var recSeconds by stateVar(0.0)
 
     /** 上次识别的耗时（ms）：sendAsr 发出 → 收到 stt 的服务端往返 */
-    var asrElapsedMs by scope.observable(0)
+    var asrElapsedMs by stateVar(0)
 
     // 录音试听播放器（原生 recordingPcm）
-    var recWave by scope.observable(emptyList<Float>())
-    var recProgress by scope.observable(0f)
-    var recPlaying by scope.observable(false)
-    var recDuration by scope.observable(0.0)
+    var recWave by stateVar(emptyList<Float>())
+    var recProgress by stateVar(0f)
+    var recPlaying by stateVar(false)
+    var recDuration by stateVar(0.0)
 
     // TTS 回放播放器（原生 ttsPcm）
-    var ttsReady by scope.observable(false)
-    var ttsWave by scope.observable(emptyList<Float>())
-    var ttsProgress by scope.observable(0f)
-    var ttsPlaying by scope.observable(false)
-    var ttsDuration by scope.observable(0.0)
-
-    // Kuikly 2.29.2 原生 AudioView（TTS/录音试听）：KRAudioView 的 src 只绑定一次、播放器不复用，
-    // 因此每个来源各一个稳定 WAV 路径 + 一个独立 AudioView；命令值 0=不动作、1=PLAY、2=PAUSE、3=STOP。
-    var recAudioSrc by scope.observable("")
-    var ttsAudioSrc by scope.observable("")
-    var recPlayCommand by scope.observable(0)
-    var ttsPlayCommand by scope.observable(0)
+    var ttsReady by stateVar(false)
+    var ttsWave by stateVar(emptyList<Float>())
+    var ttsProgress by stateVar(0f)
+    var ttsPlaying by stateVar(false)
+    var ttsDuration by stateVar(0.0)
 
     /** 合成中（发 tts_test → 收到 tts stop）：按钮菊花 + 禁止再次合成 */
-    var ttsBusy by scope.observable(false)
-    var speaking by scope.observable(false)
+    var ttsBusy by stateVar(false)
+    var speaking by stateVar(false)
 
-    var ttsText by scope.observable("你好，小智")
+    var ttsText by stateVar("你好，小智")
 
     /** 最近一次合成立即失败的原因（服务端 tts_test 结果帧；空=无错误）。 */
-    var ttsError by scope.observable("")
+    var ttsError by stateVar("")
 
     /** 最近一次合成使用的引擎名（服务端回报：sherpa / xfyun）。 */
-    var ttsEngine by scope.observable("")
+    var ttsEngine by stateVar("")
 
     /** 合成语言：auto 自动（Kokoro 需明确 lang，auto 走服务器默认）/ zh / en */
-    var ttsLang by scope.observable("auto")
-    var ttsSpeed by scope.observable("1.0") // 参考 kokoro.js demo：语速
+    var ttsLang by stateVar("auto")
+    var ttsSpeed by stateVar("1.0")
 
     /** 语音角色 sid（Kokoro voices.bin 的索引）。UI 用「性别 + 音色」两级选择派生本值。 */
-    var ttsSpeaker by scope.observable(3) // 默认 zf_001（中文女声，sid=3；见 VoiceCatalog 注释）
+    var ttsSpeaker by stateVar(3)
 
     /** 音色性别筛选：female(中文女声) / male(中文男声) / en(英文女声) */
-    var voiceGender by scope.observable("female")
+    var voiceGender by stateVar("female")
 
     /** 已选音色（见 VoiceCatalog；与 ttsSpeaker 同步） */
-    var voiceId by scope.observable("zf_001")
+    var voiceId by stateVar("zf_001")
 
     /** 当前展开的下拉（"" = 全部收起）；放状态类里避免 Pager body 重建时丢失展开态 */
-    var openDropdown by scope.observable("")
+    var openDropdown by stateVar("")
 
-    // ===== 下拉选项（ObservableList：音色列表随性别切换增删，vfor 响应式渲染）=====
-    val langOptions: ObservableList<Pair<String, String>> by scope.observableList()
-    val genderOptions: ObservableList<Pair<String, String>> by scope.observableList()
-    val voiceOptions: ObservableList<Pair<String, String>> by scope.observableList()
+    // ===== 下拉选项（Compose 快照列表：音色列表随性别切换增删；GearUI Select 直读）=====
+    val langOptions: MutableList<Pair<String, String>> = stateListOf()
+    val genderOptions: MutableList<Pair<String, String>> = stateListOf()
+    val voiceOptions: MutableList<Pair<String, String>> = stateListOf()
 
     init {
         langOptions.addAll(LANG_OPTIONS)
@@ -111,10 +95,7 @@ class TestBenchState(private val scope: PagerScope) {
         voiceOptions.addAll(VoiceCatalog.options(voiceGender).map { it.id to "${it.id}（sid ${it.sid}）" })
     }
 
-    var statusMsg by scope.observable("")
-
-    /** 测试台标签页 UI 状态（连接 / ASR 识别 / TTS 合成 / LLM 对话 / NLU 意图 五个 tab，见 renderBench）。 */
-    val tabUi = TabUiState(scope)
+    var statusMsg by stateVar("")
 
     // ============================================================
     // 文本选中 / 复制（ASR 结果、LLM 回复；官方 SelectionContainer 能力）
@@ -125,8 +106,8 @@ class TestBenchState(private val scope: PagerScope) {
     var llmReplyRef: ViewRef<DivView>? = null
 
     /** 「复制」按钮的卡片内反馈（各卡片独立，避免串台）。 */
-    var asrCopyHint by scope.observable("")
-    var llmCopyHint by scope.observable("")
+    var asrCopyHint by stateVar("")
+    var llmCopyHint by stateVar("")
 
     /** 复制 ASR 识别结果（有选区复制选区，无选区复制整段）。 */
     fun copyAsr(ctx: Pager) = copySelectionOr(ctx, asrResultRef, asrText) { asrCopyHint = it }
@@ -326,15 +307,15 @@ class TestBenchState(private val scope: PagerScope) {
     // LLM 对话测试：发 llm_test → 服务端按最新配置直调 LLM → llm_test 回调
     // ============================================================
 
-    var llmPrompt by scope.observable("你好，请用一句话介绍你自己")
+    var llmPrompt by stateVar("你好，请用一句话介绍你自己")
 
     /** 回复正文（state=error 时是服务端返回的可读错误信息） */
-    var llmReply by scope.observable("")
-    var llmBusy by scope.observable(false)
-    var llmOk by scope.observable(false)
+    var llmReply by stateVar("")
+    var llmBusy by stateVar(false)
+    var llmOk by stateVar(false)
 
     /** 服务端直调 LLM 的总耗时（含到 LLM API 的网络往返），由 llm_test 回包携带 */
-    var llmElapsedMs by scope.observable(0)
+    var llmElapsedMs by stateVar(0)
 
     fun testLlm(ctx: Pager) {
         if (llmBusy) return
@@ -374,25 +355,25 @@ class TestBenchState(private val scope: PagerScope) {
     // NLU 意图测试：发 nlu_test → 服务端按最新配置构建 TinyBERT 直推 → nlu_test 回调
     // ============================================================
 
-    var nluInput by scope.observable("把客厅的灯打开")
+    var nluInput by stateVar("把客厅的灯打开")
 
     /** 识别到的意图名（低于阈值/出错时为空，原因看 nluText）。 */
-    var nluIntent by scope.observable("")
+    var nluIntent by stateVar("")
 
     /** 最高置信度 0~1；<0 表示本轮回包没带（出错帧）。 */
-    var nluConfidence by scope.observable(-1f)
-    var nluBusy by scope.observable(false)
-    var nluOk by scope.observable(false)
+    var nluConfidence by stateVar(-1f)
+    var nluBusy by stateVar(false)
+    var nluOk by stateVar(false)
 
     /** 说明文本：命中时是映射后的技能短语，未命中/出错时是服务端给出的可读原因。 */
-    var nluText by scope.observable("")
+    var nluText by stateVar("")
 
     /** 分词 / 推理耗时（ms），由 nlu_test 回包携带。 */
-    var nluTokenizeMs by scope.observable(0)
-    var nluInferMs by scope.observable(0)
+    var nluTokenizeMs by stateVar(0)
+    var nluInferMs by stateVar(0)
 
     var nluReplyRef: ViewRef<DivView>? = null
-    var nluCopyHint by scope.observable("")
+    var nluCopyHint by stateVar("")
 
     /** 复制 NLU 测试详情（有选区复制选区，无选区复制整段）。 */
     fun copyNlu(ctx: Pager) = copySelectionOr(ctx, nluReplyRef, nluResultText()) { nluCopyHint = it }
@@ -456,67 +437,80 @@ class TestBenchState(private val scope: PagerScope) {
     }
 
     // ============================================================
-    // 播放器控制（录音 / TTS 共用；进度由 AudioView 的 playTimeDidChanged 事件推送）
+    // 播放器控制（录音 / TTS 试听；T12 起播放控制下沉 XiaoZhiModule）
+    //
+    // 旧实现挂两个 1x1 原生 AudioView（src + playControl 命令 + playState/playTime
+    // 事件回推）；DSL 平台视图挂不进 Compose 树，且回归模块层本就有的视图无关播放
+    // API——AudioView 正是"替代原先 100ms 轮询原生播放器"引入的（见下），这里改回：
+    // UI 只发命令（playRecording/playTts/stopPlayback）+ 100ms 轮询 getAudioState
+    // （playing/position/duration）驱动进度与三态按钮。
     // ============================================================
 
+    /** 开始试听：原生从头播放对应缓冲（录音 → playRecording、TTS → playTts），并启动进度轮询。 */
     fun togglePlayback(ctx: Pager, source: String) {
         val playing = if (source == "tts") ttsPlaying else recPlaying
         if (playing) {
-            if (source == "tts") {
-                ttsPlayCommand = 3 // STOP
-                ttsPlaying = false
-                ttsProgress = 0f
-            } else {
-                recPlayCommand = 3
-                recPlaying = false
-                recProgress = 0f
-            }
+            xz(ctx).stopPlayback()
+            setPlayback(source, playing = false, progress = 0f)
             return
         }
-        // 原生把 PCM 缓冲导出为稳定 WAV 路径，再交给 AudioView 以 src 播放；
-        // 之后重复试听只覆盖文件 + 重新下发 PLAY（src 不变，原生 play 时重载同一 URL）。
-        xz(ctx).audioFileUrl(source) { st ->
-            val url = st?.optString("url", "") ?: ""
-            if (url.isEmpty()) {
-                statusMsg = "试听失败：音频缓冲为空或导出失败"
-                return@audioFileUrl
-            }
-            if (source == "tts") {
-                ttsAudioSrc = url
-                ttsPlayCommand = 1 // PLAY
-                ttsPlaying = true
-                ttsProgress = 0f
-            } else {
-                recAudioSrc = url
-                recPlayCommand = 1
-                recPlaying = true
-                recProgress = 0f
-            }
-        }
-    }
-
-    /** AudioView 播放状态回写（页面按来源把 PlayState 映射成这两个布尔）。 */
-    fun onAudioPlayState(source: String, playing: Boolean, ended: Boolean) {
+        // 模块层单播放器语义，起始一路前停另一路（旧双 AudioView 的"独立停止"在模块层不存在）：
+        // rec/tts 任一路开始时另一路立即复位，避免残留的 playing 态与真实播放器错乱。
+        stopOtherPlayback(ctx, source)
+        setPlayback(source, playing = true, progress = 0f)
         if (source == "tts") {
-            ttsPlaying = playing
-            if (ended) {
-                ttsProgress = 0f
-                ttsPlayCommand = 3 // 复位，保证下次 PLAY 是有效变更
+            xz(ctx).playTts { st ->
+                val d = st?.optDouble("duration") ?: 0.0
+                if (d > 0) ttsDuration = d
             }
         } else {
-            recPlaying = playing
-            if (ended) {
-                recProgress = 0f
-                recPlayCommand = 3
+            xz(ctx).playRecording { st ->
+                val d = st?.optDouble("duration") ?: 0.0
+                if (d > 0) recDuration = d
+            }
+        }
+        pollPlayback(ctx, source)
+    }
+
+    /** 播放进度轮询（100ms）：playing=true 推进进度并续轮询；false 视为播完/已停，复位并停止。 */
+    private fun pollPlayback(ctx: Pager, source: String) {
+        xz(ctx).getAudioState(source) { st ->
+            val stillPlaying = st?.optBoolean("playing", false) ?: false
+            val duration = st?.optDouble("duration", 0.0) ?: 0.0
+            val position = st?.optDouble("position", 0.0) ?: 0.0
+            if (duration > 0) {
+                if (source == "tts") ttsDuration = duration else recDuration = duration
+            }
+            if (stillPlaying) {
+                val p = if (duration > 0) (position / duration).toFloat().coerceIn(0f, 1f) else 0f
+                setPlayback(source, playing = true, progress = p)
+                ctx.setTimeout(PLAY_POLL_MS) { pollPlayback(ctx, source) }
+            } else {
+                // duration<=0 说明原生侧根本没有可播的缓冲（AudioView 时代的空导出兜底同因）
+                if (duration <= 0) statusMsg = "试听失败：音频缓冲为空或原生播放器不可用"
+                setPlayback(source, playing = false, progress = 0f)
             }
         }
     }
 
-    /** AudioView 进度回写（毫秒）：替代原先 100ms 轮询原生播放器。 */
-    fun onAudioTime(source: String, currentMs: Int, totalMs: Int) {
-        if (totalMs <= 0) return
-        val p = (currentMs.toFloat() / totalMs.toFloat()).coerceIn(0f, 1f)
-        if (source == "tts") ttsProgress = p else recProgress = p
+    /** 按来源写回播放态（rec/tts 两套同构字段，与旧 AudioView 事件回写同口径）。 */
+    private fun setPlayback(source: String, playing: Boolean, progress: Float) {
+        if (source == "tts") {
+            ttsPlaying = playing
+            ttsProgress = progress
+        } else {
+            recPlaying = playing
+            recProgress = progress
+        }
+    }
+
+    /** 模块层单播放器：起始 [source] 前停掉另一路（仅在它确实在播时才发原生 STOP）。 */
+    private fun stopOtherPlayback(ctx: Pager, source: String) {
+        val otherPlaying = if (source == "tts") recPlaying else ttsPlaying
+        if (otherPlaying) {
+            xz(ctx).stopPlayback()
+            setPlayback(if (source == "tts") "recording" else "tts", playing = false, progress = 0f)
+        }
     }
 
     /** 拉一次波形（录音/合成完成后各拉一次；波形静态，播放只推进度）。 */
@@ -546,6 +540,9 @@ class TestBenchState(private val scope: PagerScope) {
     }
 
     companion object {
+        /** 播放进度轮询间隔（ms）：原生 getAudioState 本就按该节奏设计（playing/position/duration）。 */
+        private const val PLAY_POLL_MS = 100
+
         /** auto → 交给服务器默认；zh/en 显式指定 Kokoro lang（Kokoro 的 lang 在建模时固定，
          *  测试台自动模式下由服务端回退配置默认值）。 */
         fun resolveLang(lang: String): String = if (lang == "auto") "" else lang

@@ -1,269 +1,324 @@
 package com.xiaozhi.admin
 
-import com.xiaozhi.admin.ui.*
-
-import com.tencent.kuikly.core.base.ViewContainer
-import com.tencent.kuikly.core.directives.vfor
-import com.tencent.kuikly.core.directives.vif
-import com.tencent.kuikly.core.pager.Pager
-import com.tencent.kuikly.core.views.Text
-import com.tencent.kuikly.core.views.View
+import androidx.compose.runtime.Composable
+import com.gearui.components.button.Button
+import com.gearui.components.button.ButtonType
+import com.gearui.foundation.layout.Spacing
+import com.gearui.foundation.primitives.Text
+import com.gearui.primitives.composite.Card
+import com.gearui.theme.Theme
+import com.tencent.kuikly.compose.foundation.layout.Column
+import com.tencent.kuikly.compose.foundation.layout.Row
+import com.tencent.kuikly.compose.foundation.layout.fillMaxWidth
+import com.tencent.kuikly.compose.foundation.layout.padding
+import com.tencent.kuikly.compose.ui.Alignment
+import com.tencent.kuikly.compose.ui.Modifier
+import com.tencent.kuikly.compose.ui.unit.dp
+import com.xiaozhi.admin.kit.fieldLabelRow
+import com.xiaozhi.admin.kit.labeledDecimalField
+import com.xiaozhi.admin.kit.labeledField
+import com.xiaozhi.admin.kit.labeledSelect
+import com.xiaozhi.admin.kit.labeledTextArea
+import com.xiaozhi.admin.kit.switchRow
 
 /**
- * 「技能」配置卡（`[nlu]`）：三级技能级联的**本地两级**（规则 + 轻量模型）。
+ * 「技能」配置卡（`[nlu]`）：三级技能级联的**本地两级**（规则 + 轻量模型）—— Compose 版。
  *
  * 级联全貌（服务端为唯一权威，见 `server/src/plugins/skill/mod.rs`）：
- * 终端 → ASR → ①规则模板命中即执行 → ②轻量模型打分达阈值即执行 → ③云 LLM
- * （LLM 若识别为技能，会以 `execute_skill` 工具调用回目录校验执行，槽位/动作白名单由
- * 服务端配置决定；否则正常聊天走 TTS）。这张卡只配置 ①② 与自定义意图/槽位；
- * 内置 `end_session` 在「指令」卡（`[command]`）配置。
+ * 终端 → ASR → ①规则模板命中即执行 → ②轻量模型打分达阈值即执行 → ③云 LLM。
+ * 这张卡只配置 ①② 与自定义意图/槽位；内置 `end_session` 在「指令」卡（`[command]`）配置。
  *
- * 独立文件的原因：与 `ConfigCommandCard.kt` 同思路——字段/文案自成一组，
- * 且 `ConfigCards.kt` 已超文件规模约定，不再往里加内容。
+ * ## 结构（5 个子块，与旧版一一对应）
+ *
+ * ```
+ * 启用技能级联（开关）
+ * ├ 执行阈值 / 领先余量
+ * ├ 轻量模型（生成 NLU 模型：POST /api/nlu/model/build）
+ * ├ 自定义技能（intents：名称 / 模板 / 动作 / MCP 工具名 / 应答语）
+ * └ 槽位定义（slots：名称 / 封闭值表 / 允许缺省）
+ * ```
+ *
+ * 旧版的列表指令循环改成 `for (d in nlu.intents)` —— `nlu.intents` 是快照列表
+ * (`SnapshotStateList`)，本身可观察，增删一项即重组，不需要桥接层。
  */
-fun ViewContainer<*, *>.nluConfigCard(form: ConfigFormState, ctx: Pager) {
+@Composable
+fun NluConfigCard(form: ConfigFormState) {
     val nlu = form.nlu
-    groupedCard("NLU · 意图与技能") {
-        // 整段档位提示（保存后新会话生效）：来自 /api/config/schema，服务端为唯一权威
-        vif({ form.schema.sectionNote("nlu").isNotEmpty() }) {
-            textNote(form.schema.sectionNote("nlu"), micro = true)
-        }
+    LabeledCard(title = "NLU · 意图与技能") {
+        val sectionNote = form.schema.sectionNote("nlu")
+        if (sectionNote.isNotEmpty()) HintLine(sectionNote)
+
         switchRow(
-            "启用技能级联", nlu.enabled == "true",
+            label = "启用技能级联",
+            checked = nlu.enabled == "true",
+            onToggle = { form.toggleStringBool(nlu::enabled) },
             help = "识别文本先过本地规则模板（命中即执行、不调大模型），再过本地轻量模型打分；" +
                 "两级都未命中才交给大模型。大模型若把话识别成下面的技能，也会回到这份白名单校验后执行——" +
                 "大模型不能凭空发明技能或动作。",
-        ) {
-            form.toggleStringBool(nlu::enabled)
-        }
-        vif({ nlu.enabled == "true" }) {
+        )
+
+        if (nlu.enabled == "true") {
             labeledDecimalField(
-                "执行阈值",
-                { nlu.modelThreshold },
-                { nlu.modelThreshold = it; form.markDirty() },
-                "0.9",
+                label = "执行阈值",
+                value = nlu.modelThreshold,
+                onValueChange = {
+                    nlu.modelThreshold = it
+                    form.markDirty()
+                },
+                placeholder = "0.9",
                 help = "轻量模型打分达到该值即本地执行，取值 0~1（默认 0.9）。调到 1.0 等于关闭这一级：" +
                     "只有规则模板完全命中的技能会本地执行，其余全部交给大模型（更省钱但更慢）。",
             )
-            vif({ (nlu.modelThreshold.trim().toDoubleOrNull() ?: 0.9) >= 1.0 }) {
-                textNote(
-                    "⚠️ 阈值 = 1.0 表示关闭轻量模型级：只有规则模板完全命中的技能会本地执行，其余全部交给大模型。",
-                    tone = "warn",
-                    micro = true,
-                )
+            if ((nlu.modelThreshold.trim().toDoubleOrNull() ?: 0.9) >= 1.0) {
+                HintLine("⚠️ 阈值 = 1.0 表示关闭轻量模型级：只有规则模板完全命中的技能会本地执行，其余全部交给大模型。")
             }
             labeledDecimalField(
-                "领先余量",
-                { nlu.modelMargin },
-                { nlu.modelMargin = it; form.markDirty() },
-                "0.1",
+                label = "领先余量",
+                value = nlu.modelMargin,
+                onValueChange = {
+                    nlu.modelMargin = it
+                    form.markDirty()
+                },
+                placeholder = "0.1",
                 help = "第一名必须比第二名高出该差值（0~1）才算「有把握」；调大更保守、误触发更少，" +
                     "但更多请求会落到大模型。",
             )
-            nluBuildModelSection(form, nlu, ctx)
-            nluIntentList(form, nlu)
-            nluSlotList(form, nlu)
-        }
-        vif({ nlu.enabled != "true" }) {
-            textNote("未启用：识别结果照常交给大模型（内置指令闸门不受影响，见「指令」卡）。", micro = true)
+            NluBuildModelSection(form, nlu)
+            NluIntentList(form, nlu)
+            NluSlotList(form, nlu)
+        } else {
+            HintLine("未启用：识别结果照常交给大模型（内置指令闸门不受影响，见「指令」卡）。")
         }
     }
 }
 
-// ===================== 生成 NLU 模型（本地轻量模型三件套） =====================
-
 /**
- * 「生成 NLU 模型」入口：POST /api/nlu/model/build 由服务端在宿主 docker 里
- * 基于当前技能（内置提醒技能 + 自定义 intents）训练并导出 ONNX int8 三件套
- * （model.onnx / tokenizer.json / labels.txt），产物供 `[nlu]` bert_* 配置指向。
+ * 「生成 NLU 模型」入口：`POST /api/nlu/model/build` 由服务端在宿主 docker 里
+ * 基于当前技能训练并导出 ONNX int8 三件套（model.onnx / tokenizer.json / labels.txt）。
  */
-private fun ViewContainer<*, *>.nluBuildModelSection(form: ConfigFormState, nlu: NluSectionState, ctx: Pager) {
-    fieldLabel(
-        "轻量模型（TinyBERT 语义打分）",
+@Composable
+private fun NluBuildModelSection(form: ConfigFormState, nlu: NluSectionState) {
+    val ctx = LocalAdminPagerOrThrow()
+    fieldLabelRow(
+        label = "轻量模型（TinyBERT 语义打分）",
         help = "可选增强：用当前技能定义自动生成一个本地语义分类模型，替换「轻量模型」级的启发式打分" +
             "（对口语化说法识别更稳，零外网推理）。训练在服务端宿主 docker 里进行，约数分钟；" +
             "产物为 model.onnx / tokenizer.json / labels.txt 三件套。",
         trailing = {
-            primaryButton("生成 NLU 模型", loading = { nlu.buildBusy }, loadingText = "训练中…") {
-                nlu.startBuildModel(ctx, form.serverBase)
-            }
+            Button(
+                text = if (nlu.buildBusy) "训练中…" else "生成 NLU 模型",
+                onClick = { nlu.startBuildModel(ctx, form.serverBase) },
+                loading = nlu.buildBusy,
+            )
         },
     )
-    vif({ nlu.buildMsg.isNotEmpty() }) {
-        textNote(nlu.buildMsg, tone = if (nlu.buildPhase == "failed") "warn" else "tertiary", micro = true)
+    if (nlu.buildMsg.isNotEmpty()) {
+        Text(
+            text = nlu.buildMsg,
+            modifier = Modifier.padding(top = 4.dp),
+            style = Theme.typography.caption,
+            color = if (nlu.buildPhase == "failed") Theme.colors.warning else Theme.colors.mutedForeground,
+        )
     }
-    vif({ nlu.buildLog.isNotEmpty() && (nlu.buildPhase == "running" || nlu.buildPhase == "failed") }) {
-        Text {
-            attr {
-                fontSize(AdminType.caption)
-                color(AdminColors.textTertiary)
-                text(nlu.buildLog.takeLast(1200))
-            }
-        }
+    if (nlu.buildLog.isNotEmpty() && (nlu.buildPhase == "running" || nlu.buildPhase == "failed")) {
+        Text(
+            text = nlu.buildLog.takeLast(1200),
+            modifier = Modifier.padding(top = Spacing.xs),
+            style = Theme.typography.caption,
+            color = Theme.colors.mutedForeground,
+        )
     }
 }
 
-// ===================== 自定义意图（intents） =====================
-
-private fun ViewContainer<*, *>.nluIntentList(form: ConfigFormState, nlu: NluSectionState) {
-    fieldLabel(
-        "自定义技能（${nlu.intents.size} 条）",
+/** 自定义技能列表：标题行带「＋ 添加意图」，逐条渲染 [NluIntentBlock]。 */
+@Composable
+private fun NluIntentList(form: ConfigFormState, nlu: NluSectionState) {
+    fieldLabelRow(
+        label = "自定义技能（${nlu.intents.size} 条）",
         help = "用「一句话模板 + 动作」描述本地技能，例如模板「把{room}的灯{action}」配动作「派发设备工具」。" +
             "匹配成功就不再调用大模型，直接执行并回一句应答语。",
         trailing = {
-            secondaryButton("＋ 添加意图") {
-                nlu.addIntent()
-                form.markDirty()
-            }
+            Button(
+                text = "＋ 添加意图",
+                onClick = {
+                    nlu.addIntent()
+                    form.markDirty()
+                },
+                type = ButtonType.OUTLINE,
+            )
         },
     )
-    vif({ nlu.intents.size == 0 }) {
-        textNote("还没有自定义技能。点右侧「添加意图」，用模板描述一句话指令（如「把{room}的灯{action}」），命名槽位后即可本地执行。", micro = true)
+    if (nlu.intents.isEmpty()) {
+        HintLine("还没有自定义技能。点右侧「添加意图」，用模板描述一句话指令（如「把{room}的灯{action}」），命名槽位后即可本地执行。")
     }
-    vfor({ nlu.intents }) { d ->
-        nluIntentBlock(form, nlu, d)
-    }
+    for (draft in nlu.intents) NluIntentBlock(form, nlu, draft)
 }
 
-/** 一条意图的编辑块：名称 / 模板 / 动作 / 应答语 + 删除。 */
-private fun ViewContainer<*, *>.nluIntentBlock(form: ConfigFormState, nlu: NluSectionState, d: IntentDraft) {
-    insetPanel {        View {
-            attr {
-                flexDirectionRow()
-                alignItemsCenter()
-            }
-            Text {
-                attr {
-                    flex(1f)
-                    fontSize(AdminType.body)
-                    fontWeightMedium()
-                    color(AdminColors.textSecondary)
-                    text(d.name.ifEmpty { "(未命名技能)" })
-                }
-            }
-            secondaryButton("删除") {
-                nlu.removeIntent(d)
-                form.markDirty()
-            }
+/** 一条意图的编辑块：名称 / 模板 / 动作 /（MCP 工具名）/ 应答语 + 删除。 */
+@Composable
+private fun NluIntentBlock(form: ConfigFormState, nlu: NluSectionState, draft: IntentDraft) {
+    InsetPanel {
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = draft.name.ifEmpty { "(未命名技能)" },
+                modifier = Modifier.weight(1f),
+                style = Theme.typography.bodyMedium,
+                color = Theme.colors.mutedForeground,
+            )
+            Button(
+                text = "删除",
+                onClick = {
+                    nlu.removeIntent(draft)
+                    form.markDirty()
+                },
+                type = ButtonType.OUTLINE,
+            )
         }
         labeledField(
-            "技能名",
-            { d.name },
-            { d.name = it; form.markDirty() },
-            "light_control",
+            label = "技能名",
+            value = draft.name,
+            onValueChange = {
+                draft.name = it
+                form.markDirty()
+            },
+            placeholder = "light_control",
             help = "技能唯一标识，仅用于本配置内部引用（可保留英文下划线写法）；重名会让后一条覆盖前一条。",
         )
         labeledTextArea(
-            "触发模板（每行一条）",
-            { d.templates },
-            { d.templates = it; form.markDirty() },
-            "把{room}的灯{action}",
-            height = 88f,
+            label = "触发模板（每行一条）",
+            value = draft.templates,
+            onValueChange = {
+                draft.templates = it
+                form.markDirty()
+            },
+            placeholder = "把{room}的灯{action}",
             help = "每行一个句式，{槽位名} 是可变部分（需在下方「槽位定义」里声明）。" +
                 "封闭槽位容忍「包含唯一值」的口语化说法（「把卧室灯打开」也能命中）。",
+            minLines = 3,
         )
-        dropdownField(
+        labeledSelect(
             label = "命中后动作",
-            currentLabel = {
-                nlu.actionOptions.firstOrNull { it.first == d.actionKind }?.second ?: d.actionKind
-            },
-            options = { nlu.actionOptions },
-            selectedId = { d.actionKind },
-            isOpen = { d.actionMenuOpen },
-            onToggle = { d.actionMenuOpen = !d.actionMenuOpen },
+            selectedId = draft.actionKind,
+            options = nlu.actionOptions,
             onSelect = {
-                d.actionKind = it
-                d.actionMenuOpen = false
+                draft.actionKind = it
                 form.markDirty()
             },
             help = "只应答 = 说一句应答语后结束；结束聆听 = 说应答语后让设备退出（等同指令闸门）；" +
                 "派发设备工具 = 把槽位作为参数调用设备声明的 MCP 工具。",
         )
-        vif({ d.actionKind == "mcp" }) {
+        if (draft.actionKind == "mcp") {
             labeledField(
-                "MCP 工具名",
-                { d.mcpTool },
-                { d.mcpTool = it; form.markDirty() },
-                "set_volume",
+                label = "MCP 工具名",
+                value = draft.mcpTool,
+                onValueChange = {
+                    draft.mcpTool = it
+                    form.markDirty()
+                },
+                placeholder = "set_volume",
                 help = "设备在 MCP 清单里声明的工具名，需精确匹配（清单见「MCP 工具」页）。" +
                     "命中后先说应答语，再把槽位作为参数派发；设备没有同名工具则跳过、不报错。",
             )
         }
         labeledField(
-            "应答语",
-            { d.reply },
-            { d.reply = it; form.markDirty() },
-            "好的，已为你打开灯。",
+            label = "应答语",
+            value = draft.reply,
+            onValueChange = {
+                draft.reply = it
+                form.markDirty()
+            },
+            placeholder = "好的，已为你打开灯。",
             help = "命中后要说的话（走 TTS 合成）。留空 = 只执行动作、不出声。",
         )
     }
 }
 
-// ===================== 槽位定义（slots） =====================
-
-private fun ViewContainer<*, *>.nluSlotList(form: ConfigFormState, nlu: NluSectionState) {
-    fieldLabel(
-        "槽位定义（${nlu.slots.size} 条）",
+/** 槽位定义列表：标题行带「＋ 添加槽位」，逐条渲染 [NluSlotBlock]。 */
+@Composable
+private fun NluSlotList(form: ConfigFormState, nlu: NluSectionState) {
+    fieldLabelRow(
+        label = "槽位定义（${nlu.slots.size} 条）",
         help = "模板里用到的 {槽位} 在这里命名并给出封闭值表（用于校验与抽取）；不给值表 = 开放槽位，" +
             "任意短语都接受。值表里的词会做归一化比对（忽略标点差异），命中后按配置原文回填。" +
             "含否定词（别/不要）或出现多个候选值时不会本地执行，交大模型判断。",
         trailing = {
-            secondaryButton("＋ 添加槽位") {
-                nlu.addSlot()
-                form.markDirty()
-            }
+            Button(
+                text = "＋ 添加槽位",
+                onClick = {
+                    nlu.addSlot()
+                    form.markDirty()
+                },
+                type = ButtonType.OUTLINE,
+            )
         },
     )
-    vif({ nlu.slots.size == 0 }) {
-        textNote("模板里用到的 {槽位} 在这里命名并给封闭值表；不给值表 = 开放槽位（任意短语）。", micro = true)
+    if (nlu.slots.isEmpty()) {
+        HintLine("模板里用到的 {槽位} 在这里命名并给封闭值表；不给值表 = 开放槽位（任意短语）。")
     }
-    vfor({ nlu.slots }) { s ->
-        nluSlotBlock(form, nlu, s)
-    }
+    for (slot in nlu.slots) NluSlotBlock(form, nlu, slot)
 }
 
-/** 一条槽位的编辑块：名称 / 值表 / 可缺省 + 删除。 */
-private fun ViewContainer<*, *>.nluSlotBlock(form: ConfigFormState, nlu: NluSectionState, s: SlotDraft) {
-    insetPanel {        View {
-            attr {
-                flexDirectionRow()
-                alignItemsCenter()
-            }
-            Text {
-                attr {
-                    flex(1f)
-                    fontSize(AdminType.body)
-                    fontWeightMedium()
-                    color(AdminColors.textSecondary)
-                    text("{${s.name.ifEmpty { "未命名槽位" }}}")
-                }
-            }
-            secondaryButton("删除") {
-                nlu.removeSlot(s)
-                form.markDirty()
-            }
+/** 一条槽位的编辑块：名称 / 封闭值表 / 允许缺省 + 删除。 */
+@Composable
+private fun NluSlotBlock(form: ConfigFormState, nlu: NluSectionState, slot: SlotDraft) {
+    InsetPanel {
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "{${slot.name.ifEmpty { "未命名槽位" }}}",
+                modifier = Modifier.weight(1f),
+                style = Theme.typography.bodyMedium,
+                color = Theme.colors.mutedForeground,
+            )
+            Button(
+                text = "删除",
+                onClick = {
+                    nlu.removeSlot(slot)
+                    form.markDirty()
+                },
+                type = ButtonType.OUTLINE,
+            )
         }
         labeledField(
-            "槽位名",
-            { s.name },
-            { s.name = it; form.markDirty() },
-            "room",
+            label = "槽位名",
+            value = slot.name,
+            onValueChange = {
+                slot.name = it
+                form.markDirty()
+            },
+            placeholder = "room",
             help = "必须与模板里的 {占位名} 完全一致（区分大小写）。改名后不会自动同步模板，需自行修改。",
         )
         labeledTextArea(
-            "封闭值表（每行一个）",
-            { s.values },
-            { s.values = it; form.markDirty() },
-            "卧室\n客厅\n书房",
-            height = 80f,
+            label = "封闭值表（每行一个）",
+            value = slot.values,
+            onValueChange = {
+                slot.values = it
+                form.markDirty()
+            },
+            placeholder = "卧室\n客厅\n书房",
             help = "列出这个槽位所有合法取值，用于校验与抽取；留空 = 开放槽位（任意短语都接受，不再校验）。",
+            minLines = 3,
         )
         switchRow(
-            "允许缺省", s.optional == "true",
+            label = "允许缺省",
+            checked = slot.optional == "true",
+            onToggle = { form.toggleStringBool(slot::optional) },
             help = "打开后模板里可以不说这个槽位（如「开灯」省略房间），缺省时以空值执行；" +
                 "关闭则该槽位必须出现。",
-        ) {
-            form.toggleStringBool(s::optional)
-        }
+        )
+    }
+}
+
+/**
+ * 内嵌面板（旧 DSL `insetPanel` 的等价物）：一张浅色卡片，用来把"一条意图/一个槽位"
+ * 在视觉上收成一块，避免多个编辑块混成一长串字段。
+ */
+@Composable
+private fun InsetPanel(content: @Composable () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(vertical = Spacing.xs),
+        containerColor = Theme.colors.muted,
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) { content() }
     }
 }

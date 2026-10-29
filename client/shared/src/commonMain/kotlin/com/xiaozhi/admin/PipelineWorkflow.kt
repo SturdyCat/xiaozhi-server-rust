@@ -1,6 +1,5 @@
 package com.xiaozhi.admin
 
-import com.xiaozhi.admin.ui.*
 
 /** A core stage or a selectable attachment point; an empty point is not a fake node. */
 data class WorkflowPosition(

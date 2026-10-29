@@ -6,7 +6,7 @@ target 'iosApp' do
   inhibit_all_warnings!
 
   # Kuikly iOS 渲染器（版本需与 shared 的 core 一致；iOS 渲染层用裸 Kuikly 版本号）
-  pod 'OpenKuiklyIOSRender', '2.29.2'
+  pod 'OpenKuiklyIOSRender', '2.30.0'
   # 本地链接 KMP 编译出的 shared 业务 framework
   pod 'shared', :path => '../shared'
 end

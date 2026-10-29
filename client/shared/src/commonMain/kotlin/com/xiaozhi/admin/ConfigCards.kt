@@ -1,28 +1,111 @@
 package com.xiaozhi.admin
 
-import com.xiaozhi.admin.ui.*
-
-import com.tencent.kuikly.core.base.ViewContainer
-import com.tencent.kuikly.core.directives.vfor
-import com.tencent.kuikly.core.directives.vif
-import com.tencent.kuikly.core.pager.Pager
-import com.tencent.kuikly.core.views.Text
-import com.tencent.kuikly.core.views.View
+import androidx.compose.runtime.Composable
+import com.gearui.components.alert.Alert
+import com.gearui.components.alert.AlertStatus
+import com.gearui.components.button.Button
+import com.gearui.components.button.ButtonType
+import com.gearui.primitives.composite.Card
+import com.gearui.foundation.layout.Spacing
+import com.gearui.foundation.primitives.Text
+import com.gearui.theme.Theme
+import com.tencent.kuikly.compose.foundation.layout.Arrangement
+import com.tencent.kuikly.compose.foundation.layout.Box
+import com.tencent.kuikly.compose.foundation.layout.Column
+import com.tencent.kuikly.compose.foundation.layout.Row
+import com.tencent.kuikly.compose.foundation.layout.fillMaxWidth
+import com.tencent.kuikly.compose.foundation.layout.padding
+import com.tencent.kuikly.compose.ui.Alignment
+import com.tencent.kuikly.compose.ui.Modifier
+import com.tencent.kuikly.compose.ui.unit.dp
+import com.xiaozhi.admin.kit.actionRow
+import com.xiaozhi.admin.kit.switchRow
 
 /**
- * section id → 对应能力 capability id（`GET /api/plugins` 的 `capabilities[].id`，见
- * `server/src/plugins/registry/mod.rs` 的 `Capability::id`）。除 AIUI 段在注册表里叫
- * `fullchain` 外，多数 section 与其能力 id 同名。server / audio / ota / mcp / overview
- * 无单一能力对应（不在表中 → 查询返回 null，不显示就绪点）。
+ * 配置 section 的**分发入口** + 每个 section 共用的头部横幅。
+ *
+ * ## ⚠️ 后续任务只改这个 `when` 的一行（并行协作的关键）
+ *
+ * T07–T11 每个任务的实现都落在**各自的文件**里，分发只在这里加/换一行：
+ *
+ * | id | 实现函数 | 所在文件 | 归属 |
+ * | --- | --- | --- | --- |
+ * | `vad` `asr` `tts` `llm` | `VadConfigCard` … `LlmConfigCard` | `ConfigStageCards.kt` | T07 |
+ * | `nlu` | `NluConfigCard` | `ConfigNluCard.kt` | T07 |
+ * | `command` | `CommandConfigCard` | `ConfigCommandCard.kt` | T07 |
+ * | `wakeup` | `WakeupConfigCard` | `ConfigWakeupCard.kt` | T07 |
+ * | `soul` / `memory` | `SoulConfigCard` / `MemoryConfigCard` | `ConfigSoulCard.kt` / `ConfigMemoryCard.kt` | T07 |
+ * | `audio` | `AudioConfigCard` | `ConfigAudioCard.kt` | T07 |
+ * | `overview` | `OverviewSection` | `ConfigOverviewCard.kt`（含 `EngineHealthCard.kt`） | T08 |
+ * | `presets` | `PresetSection` | `ConfigPresetCard.kt` | T08 |
+ * | `server` / `aiui` | `ServerSection` / `AiuiSection` | `ConfigInfrastructureCards.kt` | T08 |
+ * | `echomuse` | `EchoMuseSection` | `ConfigEchoMuseCard.kt` | T08 |
+ * | `mcp` | `McpSection` | `McpToolsCard.kt` | T08 |
+ * | `ota` | `OtaSection`（只做入口卡，上传归固件维护面） | `ConfigOtaEntryCard.kt` | T08 |
+ *
+ * 上表已全部落地（T07 + T08）：新增 section 时只在**自己的文件**里写一个 `@Composable`，
+ * 再在这里加一行分支；本文件不承载任何 section 的实现。
+ *
+ * ## 为什么横幅放在分发之外
+ *
+ * 「改动影响」「编辑对象」「就绪度」三条横幅是**所有 section 共用**的信息层，
+ * 放在分发外层就不会因为某个 section 重写而漏掉其中一条（旧实现正因为把它们写进
+ * `renderConfigSection` 的同一棵树里，每加一个 section 都要记得抄一遍）。
  */
+@Composable
+fun ConfigSectionHost(
+    form: ConfigFormState,
+    meta: PluginMetaState,
+    health: EngineHealthState,
+    mcp: McpToolsState,
+    ota: OtaState,
+    toast: ToastState,
+    id: String,
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        // 改动影响高亮：上次保存的 hot 投影到当前 section 头部（仅确有非即时影响时显示）
+        if (form.saveImpactNote.isNotEmpty()) {
+            Alert(
+                title = "本次保存的影响",
+                description = form.saveImpactNote,
+                status = AlertStatus.WARNING,
+                modifier = Modifier.fillMaxWidth().padding(bottom = Spacing.sm),
+            )
+        }
+        // 编辑对象横幅（P1-5）：设备个性化目标时显示（全局模式不渲染）
+        EditTargetBanner(form, toast)
+        // 就绪度徽标：对应能力 phase 偏离（degraded/failed）时显示状态 + 原因
+        SectionReadinessBanner(meta, id)
+
+        // ===== 分发：每个分支一行 =====
+        when (id) {
+            "vad" -> VadConfigCard(form)
+            "asr" -> AsrConfigCard(form)
+            "nlu" -> NluConfigCard(form)
+            "llm" -> LlmConfigCard(form)
+            "tts" -> TtsConfigCard(form)
+            "command" -> CommandConfigCard(form)
+            "wakeup" -> WakeupConfigCard(form)
+            "soul" -> SoulConfigCard(form)
+            "memory" -> MemoryConfigCard(form)
+            "audio" -> AudioConfigCard(form)
+            // ---- 以下 7 个属于「全局配置」（T08），各自实现落在自己的文件 ----
+            "overview" -> OverviewSection(form, meta, health)
+            "presets" -> PresetSection(form)
+            "server" -> ServerSection(form)
+            "aiui" -> AiuiSection(form)
+            "echomuse" -> EchoMuseSection(form)
+            "mcp" -> McpSection(mcp)
+            "ota" -> OtaSection(ota)
+            // 未注册内容不要静默留白（"新加了 section 却忘了写内容"会表现成点进去什么都没有）
+            else -> UnknownSectionCard(id)
+        }
+    }
+}
 
 /**
  * 取某 section 对应的能力行（来自 [PluginMetaState]，即 `GET /api/plugins` 的权威就绪态）。
  * 无对应能力返回 null。
- *
- * ⚠️ 在闭包内读 `meta` 的 observable 列表 → meta 加载/刷新后自动重算（Kuikly 响应式铁律：
- * 闭包内读取才被跟踪）。[CapabilityRow] 本身是不可变快照，meta 整表替换（clear + add）时
- * 列表被观察、触发重渲染。
  */
 internal fun sectionCapability(meta: PluginMetaState, sectionId: String): CapabilityRow? {
     val capId = ConfigSections.all.firstOrNull { it.id == sectionId }?.capabilityId ?: return null
@@ -32,232 +115,133 @@ internal fun sectionCapability(meta: PluginMetaState, sectionId: String): Capabi
 }
 
 /**
- * section 头部「就绪度」横幅：仅当对应能力 phase 偏离（`failed` / `degraded`）时显示
- * 状态徽标 + 原因（复用总览页同款 [statusBadge]，不另造样式）。
- * 正常（`active` / 未加载 / 无对应能力）不打扰。
+ * section 头部「就绪度」横幅：仅当对应能力 phase 偏离（`failed` / `degraded`）时显示状态 + 原因。
+ * 正常（`active` / 未加载 / 无对应能力）不打扰 —— 一屏绿点等于没有信息。
  */
-private fun ViewContainer<*, *>.sectionReadinessBanner(meta: PluginMetaState, sectionId: String) {
-    vif({ sectionCapability(meta, sectionId)?.phase in setOf("failed", "degraded") }) {
-        val row = sectionCapability(meta, sectionId)!!
-        val (badgeState, badgeText) = when (row.phase) {
-            "failed" -> "error" to "异常"
-            "degraded" -> "busy" to "降级"
-            else -> "idle" to row.phase
-        }
-        View {
-            attr {
-                flexDirectionRow()
-                alignItemsCenter()
-                marginBottom(AdminSpace.sm)
-            }
-            statusBadge(state = { badgeState }, text = { badgeText })
-            vif({ row.reason.isNotEmpty() }) {
-                hGap(AdminSpace.sm)
-                Text {
-                    attr {
-                        flex(1f)
-                        fontSize(AdminType.micro)
-                        color(if (row.phase == "failed") AdminColors.dangerTintText else AdminColors.warningTintText)
-                        text(row.reason)
-                    }
-                }
-            }
-        }
-    }
+@Composable
+private fun SectionReadinessBanner(meta: PluginMetaState, sectionId: String) {
+    val row = sectionCapability(meta, sectionId) ?: return
+    if (row.phase != "failed" && row.phase != "degraded") return
+    val failed = row.phase == "failed"
+    Alert(
+        title = if (failed) "该能力当前异常" else "该能力当前降级",
+        description = if (row.reason.isNotEmpty()) row.reason else "服务端未给出原因",
+        status = if (failed) AlertStatus.DANGER else AlertStatus.WARNING,
+        modifier = Modifier.fillMaxWidth().padding(bottom = Spacing.sm),
+    )
 }
 
 /**
- * 渲染单个配置 section（按 id 分发到既有卡片函数）。
- * 把 renderForm 里"全部 14 页塞进 PageList"的 `when` 收敛为"按需渲染一个"，
- * 卡片函数本身零改动、零重复。
+ * 「高级选项」开关行（P0-1）：放在卡片基础字段之后，其后的高级字段区由各卡片自己
+ * `if (form.showAdvanced) { … }` 展开。开关状态全局共享（同一时刻只看一个 section，无歧义）。
  */
-fun ViewContainer<*, *>.renderConfigSection(
-    form: ConfigFormState,
-    meta: PluginMetaState,
-    health: EngineHealthState,
-    mcp: McpToolsState,
-    ota: OtaState,
-    toast: ToastState,
-    ctx: Pager,
-    id: String,
-) {
-    // ⚠️ vfor 项闭包必须且仅能创建一个孩子节点（2.29.1 起严格校验，多个根节点直接抛
-    // "vfor creator闭包内必须需要且仅一个孩子节点"），所以 section 的全部内容
-    // （影响提示 / 横幅 / when 分支的多张卡）统一收进这一个列容器。
-    View {
-        attr {
-            flex(1f)
-            flexDirectionColumn()
-        }
-        // 改动影响高亮：上次保存的 hot 投影到当前 section 头部（仅确有非即时影响时显示）
-        vif({ form.saveImpactNote.isNotEmpty() }) {
-            textNote(form.saveImpactNote, tone = "warn", micro = true)
-            vGap(AdminSpace.sm)
-        }
-        // 编辑对象横幅（P1-5）：设备个性化目标时显示（全局模式不渲染）
-        editTargetBanner(form, toast, ctx)
-        // 就绪度徽标：对应能力 phase 偏离（degraded/failed）时显示状态 + 原因（位于 section 卡片上方）
-        sectionReadinessBanner(meta, id)
-        when (id) {
-            // 总览：能力总览卡（配置级状态）之下接能力健康卡（运行期探测合并结论，P1-6）
-            "overview" -> {
-                overviewCard(meta, ctx)
-                engineHealthCard(health, ctx) { section -> form.openConfigSection(section) }
-            }
-            // 预设（P1-5）：快照 / 应用 / 删除全局配置；设备个性化模式下不可用
-            "presets" -> {
-                vif({ form.editDeviceId.isEmpty() }) {
-                    presetCard(form, ctx)
-                }
-                vif({ form.editDeviceId.isNotEmpty() }) {
-                    groupedCard("预设") {
-                        textNote(
-                            "预设仅作用于全局配置；当前正在编辑设备的个性化配置，请先点顶部「返回全局」再管理预设。",
-                            micro = true,
-                        )
-                    }
-                }
-            }
-            "mcp" -> mcpToolsCard(mcp, ctx)
-            "ota" -> otaCard(ota, toast, ctx)
-            "server" -> serverConfigCard(form)
-            "audio" -> audioConfigCard(form)
-            "asr" -> asrConfigCard(form)
-            "vad" -> vadConfigCard(form, ctx)
-            "tts" -> ttsConfigCard(form, ctx)
-            "llm" -> llmConfigCard(form, ctx)
-            "command" -> commandConfigCard(form)
-            "nlu" -> nluConfigCard(form, ctx)
-            "wakeup" -> wakeupConfigCard(form)
-            "aiui" -> aiuiConfigCard(form)
-            "echomuse" -> echomuseConfigCard(form)
-            "soul" -> soulConfigCard(form, ctx)
-            "memory" -> memoryConfigCard(form, ctx)
-            // 未注册内容不要静默留白（"新加了 section 却忘了写内容"会表现成点进去什么都没有）
-            else -> groupedCard("未知配置页") {
-                textNote("管理页没有为 section「$id」注册内容（请检查 ConfigSections.all）。")
-            }
-        }
-    }
-}
-
-/**
- * 「高级选项」开关行（P0-1）：放在卡片基础字段之后，其后的 `vif({ form.showAdvanced })`
- * 块即高级字段区。开关状态全局共享（同一时刻只看一个 section，无歧义）。
- */
-fun ViewContainer<*, *>.advancedToggleRow(form: ConfigFormState) {
+@Composable
+fun AdvancedToggleRow(form: ConfigFormState) {
     switchRow(
-        "显示高级选项", form.showAdvanced,
+        label = "显示高级选项",
+        checked = form.showAdvanced,
+        onToggle = { form.showAdvanced = it },
         help = "高级字段是调优项（缓存容量、切句时序、检索预算、上下文长度等），" +
             "默认折叠以免淹没常用配置；展开状态全局共享，不影响保存内容。",
-    ) { form.showAdvanced = !form.showAdvanced }
+    )
 }
-
-// ============================================================
-// 各配置分组卡（renderForm 与测试台 tab 右栏共用；字段变更统一 markDirty）
-// ============================================================
 
 /**
  * 密钥输入框的占位提示。
  *
  * 服务端 `GET /api/config` 已打码（只回 `has_<field>` presence 标记），因此：
- * - `configured = true` 且输入框为空 → 提示"留空则不修改"，避免用户误以为密钥丢了、或
- *   以为必须重填（重填会覆盖）；
+ * - `configured = true` 且输入框为空 → 提示"留空则不修改"，避免用户误以为密钥丢了；
  * - `configured = false` → 明确提示尚未配置。
  */
 internal fun secretHint(configured: Boolean): String =
     if (configured) "已配置（留空则不修改）" else "未配置"
-
-// ============================================================
-// 设备个性化（P1-5）：编辑对象横幅
-// ============================================================
 
 /**
  * 「当前编辑对象」横幅：编辑目标为某设备时显示（全局模式不渲染）。
  *
  * 说清覆盖范围（只有会话内参数可按设备覆盖，结构型字段始终走全局）——不说清楚，
  * 用户会在设备模式里改 Server 端口、以为只影响这台设备（实际始终是全局值）。
- * 出口两个：「返回全局」只是切回全局编辑（不动设备 overlay）；
- * 「恢复全局配置」删除该设备 overlay（POST .../overlay/delete）后切回全局。
  */
-fun ViewContainer<*, *>.editTargetBanner(form: ConfigFormState, toast: ToastState, ctx: Pager) {
-    vif({ form.editDeviceId.isNotEmpty() }) {
-        groupedCard("当前编辑对象：设备 ${form.editDeviceId}") {
-            textNote(
-                "正在编辑设备「${form.editDeviceId}」的个性化配置：仅音色 / 语速 / 提示词 / 人格 / " +
-                    "唤醒问候 / 指令 / 记忆召回等会话内参数可按设备覆盖；Server / Audio / 模型与引擎等" +
-                    "结构型字段始终沿用全局。保存按钮提交的是相对全局的差量。",
-                micro = true,
+@Composable
+private fun EditTargetBanner(form: ConfigFormState, toast: ToastState) {
+    if (form.editDeviceId.isEmpty()) return
+    // Pager 只能在 @Composable 作用域取（onClick 闭包里不是 composable 上下文）→ 先取再闭包捕获
+    val pager = LocalAdminPagerOrThrow()
+    LabeledCard(title = "当前编辑对象：设备 ${form.editDeviceId}") {
+        Text(
+            text = "正在编辑设备「${form.editDeviceId}」的个性化配置：仅音色 / 语速 / 提示词 / 人格 / " +
+                "唤醒问候 / 指令 / 记忆召回等会话内参数可按设备覆盖；Server / Audio / 模型与引擎等" +
+                "结构型字段始终沿用全局。保存按钮提交的是相对全局的差量。",
+            style = Theme.typography.caption,
+            color = Theme.colors.mutedForeground,
+        )
+        actionRow {
+            Button(
+                text = "返回全局",
+                onClick = { form.backToGlobal(pager) },
+                type = ButtonType.OUTLINE,
             )
-            actionRow {
-                secondaryButton("返回全局") { form.backToGlobal(ctx) }
-                hGap(AdminSpace.sm)
-                secondaryButton("恢复全局配置") {
-                    form.clearDeviceOverlay(ctx) { msg, level -> toast.show(msg, level) }
-                }
-            }
+            Button(
+                text = "恢复全局配置",
+                onClick = {
+                    form.clearDeviceOverlay(pager) { msg, level -> toast.show(msg, level) }
+                },
+                type = ButtonType.OUTLINE,
+            )
         }
     }
 }
 
-// ============================================================
-// 配置预设（P1-5）：快照 / 应用 / 删除
-// ============================================================
+/**
+ * 取当前页面的 `Pager`（Compose 里原来靠 `ctx` 参数传，改用 CompositionLocal，
+ * 免得每个卡片都多一个 `ctx: Pager` 形参；壳层已在根容器 provide）。
+ */
+@Composable
+internal fun LocalAdminPagerOrThrow(): com.tencent.kuikly.core.pager.Pager =
+    requireNotNull(com.xiaozhi.admin.kit.LocalAdminPager.current) {
+        "LocalAdminPager 未提供：配置卡片必须在 AdminScopeHost 内渲染"
+    }
 
 /**
- * 配置预设卡：把当前全局配置快照为预设（服务端读盘），列表内逐项应用 / 删除。
- * 应用走 `PUT /api/config` 同款部分更新管线（服务端），成功后自动重载表单。
+ * 带标题的卡片壳（`Card` + 标题行）：所有 section 卡片共用的最小外壳。
+ *
+ * 旧 DSL 的 `groupedCard(title, withDivider)` 在这里只有"卡片 + 标题"两层，
+ * 内部分隔线交给各组自己用 `dividerH()`（Compose 版见 `kit/GearLayout.kt`）。
  */
-fun ViewContainer<*, *>.presetCard(form: ConfigFormState, ctx: Pager) {
-    groupedCard("配置预设") {
-        textNote(
-            "把当前全局配置快照为预设，随时一键应用（回滚）。预设仅作用于全局配置；" +
-                "保存的是服务端盘上的生效值（不是表单草稿）。",
-            micro = true,
-        )
-        labeledField(
-            "预设名",
-            { form.presetNameDraft },
-            { form.presetNameDraft = it; },
-            "如 night（字母数字与 - _ .）",
-        )
-        actionRow {
-            primaryButton(
-                "保存当前配置为预设",
-                loading = { form.presetBusy },
-                loadingText = "保存中…",
-            ) { form.savePreset(ctx, form.serverBase) }
-        }
-        vif({ form.presetMsg.isNotEmpty() }) {
-            textNote(
-                form.presetMsg,
-                tone = if (form.presetMsg.contains("失败")) "error" else "tertiary",
-                micro = true,
-            )
-        }
-        dividerH()
-        vif({ form.presetNames.size == 0 }) {
-            textNote("还没有预设。填好名称点「保存当前配置为预设」即可创建。", micro = true)
-        }
-        vfor({ form.presetNames }) { name ->
-            View {
-                attr {
-                    flexDirectionRow()
-                    alignItemsCenter()
-                    marginBottom(AdminSpace.xs)
-                }
-                Text {
-                    attr {
-                        flex(1f)
-                        fontSize(AdminType.body)
-                        color(AdminColors.textPrimary)
-                        text(name)
-                    }
-                }
-                secondaryButton("应用") { form.applyPreset(ctx, form.serverBase, name) }
-                hGap(AdminSpace.sm)
-                secondaryButton("删除") { form.deletePreset(ctx, form.serverBase, name) }
+@Composable
+fun LabeledCard(
+    title: String,
+    modifier: Modifier = Modifier,
+    trailing: (@Composable () -> Unit)? = null,
+    content: @Composable () -> Unit,
+) {
+    Card(modifier = modifier.fillMaxWidth().padding(bottom = Spacing.lg)) {
+        Column(modifier = Modifier.fillMaxWidth().padding(Spacing.lg)) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(bottom = Spacing.sm),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    text = title,
+                    style = Theme.typography.titleSmall,
+                    color = Theme.colors.foreground,
+                )
+                Box { if (trailing != null) trailing() }
             }
+            content()
         }
+    }
+}
+
+/** 未注册 section：明确报错而不是留白（"新加 section 忘了写内容"会表现成空页）。 */
+@Composable
+private fun UnknownSectionCard(id: String) {
+    LabeledCard(title = "未知配置页") {
+        Text(
+            text = "管理页没有为 section「$id」注册内容（请检查 ConfigSections.all 与 ConfigSectionHost 的 when）。",
+            style = Theme.typography.bodyMedium,
+            color = Theme.colors.destructive,
+        )
     }
 }

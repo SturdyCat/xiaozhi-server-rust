@@ -1,0 +1,440 @@
+package com.gearui.components.navbar
+
+import com.gearui.components.icon.*
+import androidx.compose.runtime.remember
+import com.tencent.kuikly.compose.foundation.interaction.MutableInteractionSource
+import com.gearui.foundation.interaction.pressScale
+import com.tencent.kuikly.compose.ui.semantics.Role
+import com.tencent.kuikly.compose.ui.semantics.role
+import com.tencent.kuikly.compose.ui.semantics.contentDescription
+import com.tencent.kuikly.compose.ui.semantics.semantics
+import com.gearui.i18n.I18n
+import com.gearui.foundation.control.ControlGeometry
+import androidx.compose.runtime.Composable
+import com.tencent.kuikly.compose.foundation.background
+import com.tencent.kuikly.compose.foundation.clickable
+import com.tencent.kuikly.compose.foundation.layout.*
+import com.tencent.kuikly.compose.ui.Alignment
+import com.tencent.kuikly.compose.ui.Modifier
+import com.tencent.kuikly.compose.ui.graphics.Color
+import com.tencent.kuikly.compose.ui.unit.Dp
+import com.tencent.kuikly.compose.ui.unit.dp
+import com.gearui.components.icon.Icons
+import com.gearui.foundation.primitives.Icon
+import com.gearui.foundation.primitives.Text
+import com.gearui.runtime.LocalRuntimeFlags
+import com.gearui.foundation.material.MaterialSurface
+import com.gearui.foundation.material.Materials
+import com.gearui.theme.Theme
+import com.gearui.foundation.border.BorderWidth
+import com.tencent.kuikly.compose.ui.text.style.TextOverflow
+import com.gearui.foundation.typography.IconSizes
+import com.gearui.runtime.rememberSafeAreaInset
+import com.gearui.runtime.SafeAreaEdge
+
+/**
+ * NavBar - navigation bar
+ *
+ * Used to move between pages. Sits above the content area and below the system status bar.
+ *
+ * Features:
+ * - centred or left-aligned title
+ * - optional back button on the left
+ * - custom action buttons on either side
+ * - custom title component
+ * - subtitle
+ * - custom background colour
+ *
+ * - centerTitle=true: a Box overlay layout, so the title is absolutely centred
+ * - centerTitle=false: a Row layout, with the title after the left buttons
+ */
+@Composable
+fun NavBar(
+    modifier: Modifier = Modifier,
+    title: String = "",
+    titleColor: Color? = null,
+    centerTitle: Boolean = true,
+    height: Dp = ControlGeometry.navBarHeight,
+    backgroundColor: Color? = null,
+    useDefaultBack: Boolean = false,
+    onBackClick: (() -> Unit)? = null,
+    leftItems: List<NavBarItem> = emptyList(),
+    rightItems: List<NavBarItem> = emptyList(),
+    titleWidget: (@Composable () -> Unit)? = null,
+    belowTitleWidget: (@Composable () -> Unit)? = null,
+    rightWidget: (@Composable () -> Unit)? = null,
+    /** Custom leading slot (a "Cancel" text button, say). Symmetric with [rightWidget]; when set it replaces the default back key and leftItems. */
+    leftWidget: (@Composable () -> Unit)? = null,
+    /** Slot width for [leftWidget]; null = one icon-only slot ([NavBarDefaults.actionSlotWidth]). Text buttons need an explicit larger value. */
+    leftWidgetWidth: Dp? = null,
+    /**
+     * Slot width for [rightWidget]. `null` (the default) uses [NavBarDefaults.actionSlotWidth] (one icon-only button).
+     * If rightWidget holds a text button such as "Done" or "Create (N)", pass a larger value explicitly
+     * (80-120dp suggested); the padding on both sides of a centred title follows this value so the two do not overlap.
+     */
+    rightWidgetWidth: Dp? = null,
+    showBottomDivider: Boolean = true
+) {
+    val colors = Theme.colors
+    // Defaults to the page background: in dark themes surface (#121212) is one step lighter than
+    // background (#0A0A0A), which paints a visible band across the top that does not meet the status bar. In light themes both are white, invisible.
+    // surface, not background: the bottom navigation bar already defaults to surface,
+    // and a screen carrying both drew its two chrome bars in two different colours —
+    // visibly so in dark mode, where the top bar came out near-black against the
+    // bottom bar's dark grey. Chrome is chrome; the page background belongs to the
+    // content between them.
+    val bgColor = backgroundColor ?: colors.surface
+    val textColor = titleColor ?: colors.foreground
+
+    // Safe area insets
+    val runtimeFlags = LocalRuntimeFlags.current
+    val safeAreaTop = rememberSafeAreaInset(
+        edge = SafeAreaEdge.Top,
+        consume = runtimeFlags.navBarConsumesTopSafeArea,
+    )
+    val actionSlotWidth = NavBarDefaults.actionSlotWidth
+
+    // Chrome material: a bar pinned over scrolling content. With the shipping
+    // policy (Never) this paints exactly [bgColor] and nothing changes; when a
+    // host turns blur on, the bar becomes translucent over what scrolls beneath.
+    // The fallback is [bgColor] rather than surface on purpose — see the comment
+    // on bgColor above, and MaterialSurface's `fallback` parameter.
+    MaterialSurface(
+        material = Materials.Chrome,
+        modifier = modifier.fillMaxWidth(),
+        fallback = bgColor,
+    ) {
+    Column(
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        // Top safe area filler
+        if (safeAreaTop > 0.dp) {
+            Spacer(modifier = Modifier.height(safeAreaTop))
+        }
+        if (centerTitle) {
+            // Centred mode: a Box overlay layout keeps the title absolutely centred
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(height)
+                    .padding(horizontal = ControlGeometry.navBarEdgeInset)
+            ) {
+                // Upper layer: left action area
+                val leftCount = (if (useDefaultBack) 1 else 0) + leftItems.size
+                val rightCount = rightItems.size
+                // Padding beside the title: the larger of the two action areas, so the centred title is never covered
+                val leftSlotWidth = when {
+                    leftWidget != null -> leftWidgetWidth ?: actionSlotWidth
+                    else -> (leftCount * actionSlotWidth.value).dp
+                }
+                val rightSlotWidth = when {
+                    rightWidget != null -> rightWidgetWidth ?: actionSlotWidth
+                    else -> (rightCount * actionSlotWidth.value).dp
+                }
+                val titlePadding = maxOf(leftSlotWidth, rightSlotWidth)
+
+                // Lower layer: title area (absolutely centred, clear of the side buttons)
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = titlePadding),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (titleWidget != null) {
+                        titleWidget()
+                    } else if (title.isNotEmpty()) {
+                        Text(
+                            text = title,
+                            style = Theme.typography.titleMedium,
+                            color = textColor,
+                            // A nav bar is a fixed-height strip, so its title
+                            // cannot be allowed to wrap. Without this a long
+                            // page name — a group chat's, say — rendered as two
+                            // clipped lines and pushed the bar 4dp taller than
+                            // its neighbours. `Text` defaults to unlimited
+                            // lines and Clip, which is right for body copy and
+                            // wrong for chrome.
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                if (leftWidget != null) {
+                    Box(
+                        modifier = Modifier
+                            .width(leftWidgetWidth ?: actionSlotWidth)
+                            .fillMaxHeight()
+                            .align(Alignment.CenterStart),
+                        contentAlignment = Alignment.CenterStart
+                    ) {
+                        leftWidget()
+                    }
+                } else Row(
+                    modifier = Modifier
+                        .width((leftCount * actionSlotWidth.value).dp)
+                        .fillMaxHeight()
+                        .align(Alignment.CenterStart),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Start
+                ) {
+                    if (useDefaultBack) {
+                        NavBarIconButton(
+                            icon = Icons.caretLeft,
+                            iconColor = textColor,
+                            onClick = onBackClick,
+                            contentDescription = I18n.strings.common.back,
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                        )
+                    }
+                    leftItems.forEach { item ->
+                        NavBarIconButton(
+                            icon = item.icon,
+                            contentDescription = item.contentDescription,
+                            iconColor = item.iconColor ?: textColor,
+                            onClick = item.onClick,
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                        )
+                    }
+                }
+
+                // Upper layer: right action area
+                if (rightWidget != null) {
+                    Box(
+                        modifier = Modifier
+                            .width(rightWidgetWidth ?: actionSlotWidth)
+                            .fillMaxHeight()
+                            .align(Alignment.CenterEnd),
+                        contentAlignment = Alignment.CenterEnd
+                    ) {
+                        rightWidget()
+                    }
+                } else {
+                    Row(
+                        modifier = Modifier
+                            .width((rightCount * actionSlotWidth.value).dp)
+                            .fillMaxHeight()
+                            .align(Alignment.CenterEnd),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        rightItems.forEach { item ->
+                            NavBarIconButton(
+                                icon = item.icon,
+                                contentDescription = item.contentDescription,
+                                iconColor = item.iconColor ?: textColor,
+                                onClick = item.onClick,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxHeight()
+                            )
+                        }
+                    }
+                }
+            }
+        } else {
+            // Left-aligned mode: a Row layout
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(height)
+                    .padding(horizontal = ControlGeometry.navBarEdgeInset),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Left button area
+                if (useDefaultBack) {
+                    NavBarIconButton(
+                        icon = Icons.caretLeft,
+                        iconColor = textColor,
+                        onClick = onBackClick,
+                        contentDescription = I18n.strings.common.back,
+                        modifier = Modifier
+                            .width(actionSlotWidth)
+                            .fillMaxHeight()
+                    )
+                }
+                leftItems.forEach { item ->
+                    NavBarIconButton(
+                        icon = item.icon,
+                        contentDescription = item.contentDescription,
+                        iconColor = item.iconColor ?: textColor,
+                        onClick = item.onClick,
+                        modifier = Modifier
+                            .width(actionSlotWidth)
+                            .fillMaxHeight()
+                    )
+                }
+
+                // Title area
+                Box(
+                    modifier = Modifier.weight(1f),
+                    contentAlignment = Alignment.CenterStart
+                ) {
+                    if (titleWidget != null) {
+                        titleWidget()
+                    } else if (title.isNotEmpty()) {
+                        Text(
+                            text = title,
+                            style = Theme.typography.titleMedium,
+                            color = textColor,
+                            // A nav bar is a fixed-height strip, so its title
+                            // cannot be allowed to wrap. Without this a long
+                            // page name — a group chat's, say — rendered as two
+                            // clipped lines and pushed the bar 4dp taller than
+                            // its neighbours. `Text` defaults to unlimited
+                            // lines and Clip, which is right for body copy and
+                            // wrong for chrome.
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+
+                // Right button area
+                if (rightWidget != null) {
+                    Box(
+                        modifier = Modifier
+                            .width(rightWidgetWidth ?: actionSlotWidth)
+                            .fillMaxHeight(),
+                        contentAlignment = Alignment.CenterEnd
+                    ) {
+                        rightWidget()
+                    }
+                } else {
+                    rightItems.forEach { item ->
+                        NavBarIconButton(
+                            icon = item.icon,
+                            contentDescription = item.contentDescription,
+                            iconColor = item.iconColor ?: textColor,
+                            onClick = item.onClick,
+                            modifier = Modifier
+                                .width(actionSlotWidth)
+                                .fillMaxHeight()
+                        )
+                    }
+                }
+            }
+        }
+
+        // Subtitle area
+        if (belowTitleWidget != null) {
+            belowTitleWidget()
+        }
+
+        if (showBottomDivider) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(BorderWidth.thin)
+                    .background(colors.border)
+            )
+        }
+    }
+}
+}
+
+/**
+ * NavBar icon button
+ */
+@Composable
+private fun NavBarIconButton(
+    icon: IconSource,
+    iconColor: Color,
+    onClick: (() -> Unit)?,
+    /** What a screen reader says; an icon alone gives it nothing to read. */
+    contentDescription: String?,
+    modifier: Modifier = Modifier
+        .fillMaxHeight()
+        .widthIn(min = ControlGeometry.navBarActionSlot)
+) {
+    val interaction = remember { MutableInteractionSource() }
+    Box(
+        modifier = modifier
+            .then(
+                if (onClick != null) {
+                    Modifier
+                        .semantics {
+                            role = Role.Button
+                            if (contentDescription != null) this.contentDescription = contentDescription
+                        }
+                        .pressScale(interaction)
+                        .clickable(interactionSource = interaction, indication = null) { onClick() }
+                } else {
+                    Modifier
+                }
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        // One rendering path, not two. This used to fall back to
+        // `Text(text = icon)` when the name was not in `Icons.all`, which made
+        // the same parameter mean two different things and invited exactly what
+        // `check_emoji_as_icon` forbids — the sample passed "⋯" eight times.
+        // It also hid typos: `icon = "chat_circl"` drew the literal string in
+        // the nav bar rather than failing visibly.
+        Icon(icon,
+            size = IconSizes.Default.xl,
+            tint = iconColor
+        )
+    }
+}
+
+/**
+ * NavBar geometry that callers must be able to reuse.
+ *
+ * A page that needs something other than a plain icon on the right — a menu
+ * anchor, a badge — used to hand-roll a Box with its own padding. Two pages
+ * doing that never agree, and the difference shows up as top icons that are
+ * slightly different sizes and unevenly spaced. Anything sitting in the action
+ * row should use [NavBarActionSlot] so it lands on the same grid as
+ * [NavBarItem].
+ */
+object NavBarDefaults {
+    /**
+     * Width of one action slot; matches an icon-only button. Slots sit side by side, so
+     * two icons are this minus the icon size apart; the bar adds [edgeInset] outside them.
+     */
+    val actionSlotWidth = ControlGeometry.navBarActionSlot
+
+    /** Between the bar's edge and its outermost slot, on each side. */
+    val edgeInset = ControlGeometry.navBarEdgeInset
+
+    /** Icon size inside an action slot. */
+    val actionIconSize = IconSizes.Default.xl
+}
+
+/**
+ * One action slot in the NavBar, with arbitrary content.
+ *
+ * Same width, height and centring as an icon [NavBarItem], so a menu anchor
+ * lines up with the icons beside it.
+ */
+@Composable
+fun NavBarActionSlot(
+    modifier: Modifier = Modifier,
+    onClick: (() -> Unit)? = null,
+    content: @Composable () -> Unit,
+) {
+    Box(
+        modifier = modifier
+            .width(NavBarDefaults.actionSlotWidth)
+            .fillMaxHeight()
+            .then(if (onClick != null) Modifier.clickable { onClick() } else Modifier),
+        contentAlignment = Alignment.Center,
+    ) {
+        content()
+    }
+}
+
+/**
+ * NavBar item data class
+ */
+data class NavBarItem(
+    val icon: IconSource,
+    val iconColor: Color? = null,
+    val onClick: (() -> Unit)? = null,
+    /** What a screen reader says for this icon-only action; set it for every tappable item. */
+    val contentDescription: String? = null,
+)

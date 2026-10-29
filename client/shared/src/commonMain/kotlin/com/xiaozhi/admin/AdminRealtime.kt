@@ -1,6 +1,5 @@
 package com.xiaozhi.admin
 
-import com.xiaozhi.admin.ui.*
 
 import com.tencent.kuikly.core.coroutines.Job
 import com.tencent.kuikly.core.coroutines.delay

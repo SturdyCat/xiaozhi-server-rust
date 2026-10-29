@@ -1,0 +1,827 @@
+package com.gearui.overlay
+
+import com.gearui.foundation.a11y.AccessibilityLayer
+import com.gearui.foundation.a11y.AccessibilityLayerBox
+import com.gearui.foundation.interaction.consumeNativeTouches
+import com.tencent.kuikly.compose.ui.graphics.graphicsLayer
+import com.gearui.foundation.motion.FeedbackDefaults
+import com.tencent.kuikly.compose.ui.unit.dp
+import com.tencent.kuikly.compose.ui.unit.IntOffset
+import com.tencent.kuikly.compose.ui.unit.IntSize
+import com.tencent.kuikly.compose.ui.draw.clipToBounds
+import kotlin.math.roundToInt
+import com.tencent.kuikly.compose.ui.unit.Density
+import com.tencent.kuikly.compose.animation.core.Animatable
+import com.tencent.kuikly.compose.animation.core.tween
+import com.tencent.kuikly.compose.BackHandler
+import androidx.compose.runtime.*
+import com.tencent.kuikly.compose.foundation.background
+import com.tencent.kuikly.compose.foundation.gestures.awaitEachGesture
+import com.tencent.kuikly.compose.foundation.gestures.awaitFirstDown
+import com.tencent.kuikly.compose.foundation.gestures.detectDragGestures
+import com.tencent.kuikly.compose.foundation.gestures.detectTapGestures
+import com.tencent.kuikly.compose.ui.input.pointer.PointerEventPass
+import com.tencent.kuikly.compose.ui.input.pointer.positionChange
+import com.tencent.kuikly.compose.foundation.layout.*
+import com.tencent.kuikly.compose.ui.Modifier
+import com.tencent.kuikly.compose.ui.draw.alpha
+import com.tencent.kuikly.compose.ui.geometry.Rect
+import com.tencent.kuikly.compose.ui.graphics.Color
+import com.tencent.kuikly.compose.ui.input.pointer.pointerInput
+import com.tencent.kuikly.compose.ui.layout.onSizeChanged
+import com.tencent.kuikly.compose.ui.platform.LocalDensity
+import com.tencent.kuikly.compose.ui.platform.LocalFocusManager
+import com.tencent.kuikly.compose.ui.platform.LocalSoftwareKeyboardController
+import com.tencent.kuikly.compose.ui.unit.*
+import com.tencent.kuikly.compose.ui.zIndex
+import com.gearui.runtime.LocalRuntimeEnvironment
+import com.gearui.foundation.keyboard.keyboardHeight
+import kotlinx.coroutines.delay
+
+/**
+ * True while an overlay is covering the page and the page must not react to touches.
+ *
+ * 🔴 Consuming pointer events is not enough to stop a Kuikly list from scrolling.
+ *
+ * Kuikly renders a lazy list as a **native** scroll view, and a native scroll view
+ * scrolls on the platform's own touch handling — it never asks the Compose pointer
+ * pipeline for permission. Consuming in the Initial pass blocks Compose-level
+ * gestures (clicks, drags wired through pointerInput) and nothing else: with a sheet
+ * open, dragging on the scrim still scrolled the conversation behind it.
+ *
+ * So scrollable containers have to stand down themselves. [com.gearui.foundation.primitives.GearLazyColumn]
+ * and friends read this and turn `userScrollEnabled` off; that is the whole reason
+ * those wrappers exist rather than calling LazyColumn directly.
+ *
+ * Only page content sees `true` — overlay content is composed outside the provider,
+ * so a list inside a sheet keeps scrolling normally.
+ */
+val LocalInputBlockedByOverlay = staticCompositionLocalOf { false }
+
+/**
+ * Whether the overlay containing this content is on its way in or on its way out.
+ *
+ * `true` from the frame the overlay mounts until it is dismissed; `false` for the whole
+ * exit. A surface that animates itself — a sheet sliding up from the bottom edge —
+ * reads this and drives its own motion, because only the surface knows how far it has
+ * to travel. The host keeps it mounted until [OverlayDefaults.transitionDurationMillis]
+ * has passed, which is the budget that motion has to fit in.
+ */
+val LocalOverlayVisible = staticCompositionLocalOf { true }
+
+/** Actual root geometry for anchored controls; never infer it from device size. */
+internal val LocalOverlayViewportSize = staticCompositionLocalOf { IntSize.Zero }
+
+/**
+ * OverlayHost - the render host for overlays.
+ *
+ * The most load-bearing piece of the overlay system: every overlay renders
+ * here, always on top of everything else.
+ *
+ * Responsibilities:
+ * - render every overlay
+ * - handle outside-click dismissal
+ * - handle scroll (drag) dismissal, by listening for drags whenever an overlay asks for it
+ * - handle timeout dismissal
+ * - bind OverlayManager so callers can notify it of events
+ */
+@Composable
+fun OverlayHost(
+    controller: OverlayController,
+    content: @Composable () -> Unit
+) {
+    // Bind the OverlayManager
+    DisposableEffect(controller) {
+        OverlayManager.bind(controller)
+        onDispose {
+            OverlayManager.unbind()
+        }
+    }
+
+    // 🔴 The keyboard is drawn by the system, above the app — so any overlay
+    // meant to be interacted with has to dismiss it first, or the long-press
+    // menu, the bottom sheet and the picker all sit underneath it, invisible
+    // and untappable.
+    //
+    // Here in the host rather than in each component, so a new overlay
+    // component inherits the behaviour instead of having to remember it. The
+    // ones that only report and never take focus — Toast, Snackbar, the
+    // notification banner — turn dismissKeyboardOnShow off: closing someone's
+    // keyboard mid-sentence to tell them "copied" is worse than a banner
+    // sitting over it.
+    // BACK dismisses the overlay, not the page under it.
+    //
+    // `OverlayDismissPolicy.backPress` has always defaulted to true and every
+    // preset — Dropdown, Sheet, Modal — sets it, `dispatchEvent` handles the
+    // event correctly, and `OverlayManager.notifyBackPress()` exists. Nothing
+    // ever called it, so with a dialog or sheet open BACK reached Navigator and
+    // popped the page instead, leaving the overlay over the screen behind.
+    //
+    // Registered **only while something wants it**, for the reason Navigator
+    // documents: Kuikly decides `consumed` from `backPressCallbackList
+    // .isNotEmpty()` before invoking anything, so a handler left registered with
+    // nothing to dismiss swallows BACK entirely. Being composed above Navigator
+    // makes this `list.last()`, which is what gets invoked.
+    //
+    // With the keyboard up, the first BACK only puts it away, as everywhere on Android:
+    // a field in a dialog is being typed into, and BACK closing the dialog left the
+    // keyboard on screen over a page with no field (seen on a device).
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val keyboardUp = keyboardHeight() > 0.dp
+    val backDismissible = controller.items.any { !it.exiting.value && it.options.dismissPolicy.backPress }
+    if (backDismissible) {
+        BackHandler {
+            if (keyboardUp) {
+                runCatching { focusManager.clearFocus(force = true) }
+                keyboardController?.hide()
+            } else {
+                OverlayManager.notifyBackPress()
+            }
+        }
+    }
+
+    val handledIds = remember(controller) { mutableSetOf<Long>() }
+    val pendingKeyboardDismiss = controller.items
+        .any { !it.exiting.value && it.options.dismissKeyboardOnShow && it.id !in handledIds }
+    LaunchedEffect(pendingKeyboardDismiss) {
+        if (!pendingKeyboardDismiss) return@LaunchedEffect
+        // Once per overlay: one that stays on the stack must not re-dismiss
+        // the keyboard on every recomposition, or a text field inside it can
+        // never raise one.
+        controller.items.forEach { handledIds.add(it.id) }
+        runCatching { focusManager.clearFocus(force = true) }
+        keyboardController?.hide()
+    }
+
+    // 🔴 An overlay freezes everything beneath it. UIKit semantics: presenting a
+    // modal makes the presenter's view non-interactive, full stop.
+    //
+    // Blocking used to be the scrim's job, and the scrim only consumes what reaches
+    // it. A drag that starts on the sheet itself never does — the sheet consumes the
+    // down — so the page's native scroll view underneath went on scrolling while the
+    // user was dragging the sheet. Pulling a sheet down scrolled the conversation
+    // behind it.
+    //
+    // So the page content, not the scrim, is what gets sealed, and in the Initial
+    // pass: that runs parent → child, ahead of anything the page's own scroll views
+    // would do with the gesture.
+    //
+    // passThroughOutside opts out — an in-app notification banner must not freeze
+    // the screen it floats over.
+    // An overlay on its way out stops blocking the moment it is dismissed: the page must
+    // be usable again as the panel slides away, not a fifth of a second later.
+    val blocksContentBelow = controller.items.any { !it.exiting.value && !it.options.passThroughOutside }
+
+    var hostSize by remember { mutableStateOf(IntSize.Zero) }
+    // Clipped: a panel as wide as the screen draws its shadow past both edges, and on the
+    // Web that overflow made the whole page scroll sideways.
+    Box(Modifier.fillMaxSize().clipToBounds().onSizeChanged { hostSize = it }) {
+        // Normal app content
+        Box(
+            Modifier
+                .fillMaxSize()
+                .then(
+                    if (!blocksContentBelow) {
+                        Modifier
+                    } else {
+                        Modifier.pointerInput(blocksContentBelow) {
+                            awaitEachGesture {
+                                var event = awaitPointerEvent(PointerEventPass.Initial)
+                                // Except a gesture that starts on an open dropdown's trigger
+                                // (its passThrough area): tapping the trigger again belongs to
+                                // the trigger — Select toggles, a focused ComboBox stays focused.
+                                val toTrigger = event.changes.any { change ->
+                                    controller.items.any { item ->
+                                        !item.exiting.value && item.passThrough.value?.contains(change.position) == true
+                                    }
+                                }
+                                while (true) {
+                                    if (!toTrigger) event.changes.forEach { it.consume() }
+                                    if (event.changes.all { !it.pressed }) break
+                                    event = awaitPointerEvent(PointerEventPass.Initial)
+                                }
+                            }
+                        }
+                    }
+                )
+        ) {
+            CompositionLocalProvider(
+                LocalInputBlockedByOverlay provides blocksContentBelow,
+                LocalOverlayViewportSize provides hostSize,
+            ) {
+                content()
+            }
+        }
+
+        // Overlay layer, always on top.
+        // Scroll dismissal is triggered by components such as GearLazyColumn via OverlayManager.notifyScroll().
+        // Overlay content needs the viewport too (a dialog sizes itself against it),
+        // not only the page content above.
+        CompositionLocalProvider(LocalOverlayViewportSize provides hostSize) {
+        controller.items.forEach { item ->
+            OverlayItemLayout(
+                item = item,
+                controller = controller
+            )
+        }
+        }
+    }
+}
+
+/**
+ * Overlay item layout, including positioning.
+ */
+@Composable
+private fun OverlayItemLayout(
+    item: OverlayItem,
+    controller: OverlayController
+) {
+    val density = LocalDensity.current
+    val runtimeEnvironment = LocalRuntimeEnvironment.current
+    val options = item.options
+    val policy = options.dismissPolicy
+
+    var popupSize by remember { mutableStateOf(IntSize.Zero) }
+    var screenSize by remember { mutableStateOf(IntSize.Zero) }
+
+    // Enter / exit animation. 0 = fully gone, 1 = fully present.
+    //
+    // The same progress drives the scrim for every transition; whether it also moves the
+    // content depends on the transition — a sliding surface animates itself (see
+    // LocalOverlayVisible), because the host cannot know how tall it is.
+    val transition = options.resolvedTransition
+    val visible = !item.exiting.value
+    val progress = remember { Animatable(if (transition == OverlayTransition.None) 1f else 0f) }
+    LaunchedEffect(visible) {
+        val target = if (visible) 1f else 0f
+        when {
+            transition == OverlayTransition.None -> progress.snapTo(target)
+            visible -> progress.animateTo(
+                target,
+                tween(OverlayDefaults.transitionDurationMillis, easing = FeedbackDefaults.overlayEaseOut),
+            )
+            // A sliding surface times its own exit against the enter duration; the host
+            // must not unmount it sooner.
+            transition == OverlayTransition.SurfaceSlide -> progress.animateTo(
+                target,
+                tween(OverlayDefaults.transitionDurationMillis, easing = FeedbackDefaults.overlayEaseOut),
+            )
+            // Reference: dialogs leave with ease-in, anchored panels with ease-out.
+            else -> progress.animateTo(
+                target,
+                tween(
+                    OverlayDefaults.exitDurationMillis,
+                    easing = if (options.placement == OverlayPlacement.Center) {
+                        FeedbackDefaults.overlayEaseIn
+                    } else {
+                        FeedbackDefaults.overlayEaseOut
+                    },
+                ),
+            )
+        }
+        // Dismissal only started the exit; the item is still mounted so it could animate.
+        // Now that it has, it can go.
+        if (!visible) controller.remove(item.id)
+    }
+
+    // Whether the position is settled; popupSize has to be measured first.
+    val isPositionReady = popupSize != IntSize.Zero && screenSize != IntSize.Zero
+
+    // The keyboard is drawn by the system over the bottom of the screen. A centred
+    // overlay — a dialog with a field in it — centres in the space left above it, as
+    // an iOS alert does; without this the dialog's actions sat under the keyboard.
+    // keyboardHeight() takes the host's report (Android) and the kit's own observer
+    // (iOS, where Kuikly reports none); the runtime environment alone is 0 on iOS.
+    val keyboardPx = with(density) { keyboardHeight().roundToPx() }
+    val offset = remember(item.anchorBounds, popupSize, screenSize, item.options, keyboardPx) {
+        computeOffset(
+            anchor = item.anchorBounds,
+            popupSize = popupSize,
+            screenSize = screenSize,
+            options = item.options,
+            density = density,
+            keyboardHeight = keyboardPx,
+        )
+    }
+
+    // Timeout dismissal
+    LaunchedEffect(item.id, policy.timeoutMillis) {
+        policy.timeoutMillis?.let { timeout ->
+            delay(timeout)
+            controller.dismiss(item.id)
+        }
+    }
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            .zIndex(1000f + options.zIndex)
+            .onSizeChanged { screenSize = it }
+    ) {
+        // What the layer is to a screen reader and to keyboard focus: a dialog or sheet
+        // takes focus and shuts out the page; an anchored panel only answers Escape. It
+        // lets go the moment it starts to close, so focus can return to its trigger.
+        val accessibilityLayer = when {
+            !visible || !policy.backPress -> AccessibilityLayer.None
+            !options.passThroughOutside && (options.modal || options.maskColor != null ||
+                options.placement == OverlayPlacement.Fullscreen) -> AccessibilityLayer.Modal
+            else -> AccessibilityLayer.Popup
+        }
+        AccessibilityLayerBox(accessibilityLayer, Modifier.fillMaxSize()) {
+            // ===== Backdrop touch layer: outside-click dismissal and event blocking =====
+            if (options.modal || options.maskColor != null) {
+                // With a scrim: intercept every gesture so nothing reaches scrollable content behind.
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .alpha(progress.value)
+                        .background(options.maskColor ?: OverlayDefaults.scrimColor)
+                        .consumeNativeTouches()
+                        // Consume every pointer change up front so a LazyColumn behind
+                        // never sees them. detectDragGestures is not enough — it lets the
+                        // down event reach the layer below first, where the native scroll
+                        // view takes it.
+                        .pointerInput(item.id) {
+                            // 🔴 Tap detection must happen inside THIS gesture loop. To keep the LazyColumn underneath
+                            // from scrolling, this layer consumes every pointer event — a .clickable attached afterwards
+                            // waits for an unconsumed down that never arrives, and tap-outside dismissal (outsideClick)
+                            // dies wholesale: sheets and pickers stop closing on scrim taps (iOS gesture semantics:
+                            // sheets close on a scrim tap, only alerts do not).
+                            val dragThreshold = 10f
+                            awaitEachGesture {
+                                val down = awaitFirstDown(requireUnconsumed = false)
+                                down.consume()
+                                var totalDrag = 0f
+                                while (true) {
+                                    val event = awaitPointerEvent()
+                                    event.changes.forEach {
+                                        totalDrag += kotlin.math.abs(it.positionChange().x) +
+                                            kotlin.math.abs(it.positionChange().y)
+                                        it.consume()
+                                    }
+                                    if (event.changes.all { !it.pressed }) {
+                                        // Finger up without a drag = tap; the policy decides whether to dismiss.
+                                        if (totalDrag <= dragThreshold && policy.outsideClick) {
+                                            controller.dismiss(item.id)
+                                        }
+                                        break
+                                    }
+                                }
+                            }
+                        }
+                )
+            } else if (policy.outsideClick || policy.scroll) {
+                // Transparent touch layer for click and drag dismissal.
+                val dismissGesture = Modifier.consumeNativeTouches().pointerInput(item.id) {
+                            val dragThreshold = 10f
+
+                            awaitEachGesture {
+                                val down = awaitFirstDown(requireUnconsumed = false)
+                                var totalDrag = 0f
+                                var isDrag = false
+
+                                // Track movement
+                                while (true) {
+                                    val event = awaitPointerEvent()
+                                    val change = event.changes.firstOrNull() ?: break
+
+                                    if (!change.pressed) {
+                                    // Finger lifted: if it was not a drag, it was a tap.
+                                        if (!isDrag && policy.outsideClick) {
+                                            controller.dismiss(item.id)
+                                        }
+                                        break
+                                    }
+
+                                    val delta = change.positionChange()
+                                    totalDrag += kotlin.math.abs(delta.x) + kotlin.math.abs(delta.y)
+
+                                    // Moved past the threshold, so treat it as a drag.
+                                    if (!isDrag && totalDrag > dragThreshold) {
+                                        isDrag = true
+                                        if (policy.scroll) {
+                                            controller.dismiss(item.id)
+                                        }
+                                    }
+                                }
+                            }
+                }
+                OutsideTouchLayer(item.passThrough.value, screenSize, dismissGesture)
+            }
+
+            // ===== Overlay content, above the touch layer =====
+            // Content must intercept clicks, or they fall through to the backdrop and dismiss it.
+            if (options.placement == OverlayPlacement.Fullscreen) {
+                // Fullscreen: fills the screen, no position calculation needed.
+                val safeTop = if (options.safeAreaTop) runtimeEnvironment.safeArea.top else 0.dp
+                val safeBottom = if (options.safeAreaBottom) runtimeEnvironment.safeArea.bottom else 0.dp
+                val safeLeft = if (options.safeAreaLeft) runtimeEnvironment.safeArea.left else 0.dp
+                val safeRight = if (options.safeAreaRight) runtimeEnvironment.safeArea.right else 0.dp
+                // passThroughOutside: a non-modal banner such as an in-app notification must
+                // not freeze the whole screen — gestures outside its content belong to the
+                // page below. The default is still to intercept, so modal and dialog
+                // semantics are unchanged.
+                val fullscreenModifier = if (options.passThroughOutside) {
+                    Modifier.fillMaxSize()
+                } else {
+                    Modifier
+                        .fillMaxSize()
+                        // 🔴 This layer fills the screen above the backdrop, so the backdrop's outsideClick never
+                        // receives an event. Tap-outside dismissal therefore has to be executed HERE rather than
+                        // blindly intercepting: sheets and pickers close on any tap outside the content (iOS gesture
+                        // semantics), while the real panel content (the surface) consumes its own clicks and nothing bubbles here.
+                        // A tap gesture, not `.clickable`: clickable carries click semantics, and a
+                        // full-screen accessibility element hides everything inside it from
+                        // VoiceOver and TalkBack — a dialog read as one node, its buttons out of
+                        // reach. Gesture handling is the same.
+                        .pointerInput(item.id, policy.outsideClick) {
+                            detectTapGestures(onTap = {
+                                if (policy.outsideClick) {
+                                    controller.dismiss(item.id)
+                                }
+                            })
+                        }
+                }
+                Box(fullscreenModifier) {
+                    Box(
+                        Modifier
+                            .fillMaxSize()
+                            // A sliding surface moves itself; fading it as well would make it
+                            // arrive twice over.
+                            .alpha(if (transition == OverlayTransition.Fade) progress.value else 1f)
+                            .padding(
+                                start = safeLeft,
+                                top = safeTop,
+                                end = safeRight,
+                                bottom = safeBottom
+                            )
+                    ) {
+                        CompositionLocalProvider(LocalOverlayVisible provides visible) {
+                            item.content()
+                        }
+                    }
+                }
+            } else {
+                // Other placements need measurement and position calculation.
+                val motion = remember(item.anchorBounds, offset, popupSize, options.placement) {
+                    anchoredEntryMotion(item.anchorBounds, offset, popupSize, options, density)
+                }
+                val p = progress.value
+                Box(
+                    Modifier
+                        .offset { offset }
+                        .onSizeChanged { popupSize = it }
+                        // Reference motion (use-popup-dialog/popover-content-animation.ts):
+                        // a centred dialog scales 0.96 -> 1 both ways; an anchored panel
+                        // slides in from its trigger by up to 12, scaling 0.97 -> 1 on the
+                        // way in only, and slides back out without scaling.
+                        .graphicsLayer {
+                            if (transition == OverlayTransition.Fade && isPositionReady) {
+                                val scale = when {
+                                    options.placement == OverlayPlacement.Center ->
+                                        FeedbackDefaults.dialogEnterScale + (1f - FeedbackDefaults.dialogEnterScale) * p
+                                    visible && motion != null ->
+                                        FeedbackDefaults.anchoredEnterScale + (1f - FeedbackDefaults.anchoredEnterScale) * p
+                                    else -> 1f
+                                }
+                                scaleX = scale
+                                scaleY = scale
+                                if (motion != null) {
+                                    val shift = motion.distancePx * (1f - p)
+                                    if (motion.vertical) translationY = shift else translationX = shift
+                                }
+                            }
+                        }
+                        // Fully transparent until the position is settled, then shown.
+                        // Two reasons to be invisible, one modifier: not yet positioned, and
+                        // not yet arrived.
+                        .alpha(if (isPositionReady) p else 0f)
+                        // Swallow taps so they do not reach the backdrop — as a gesture, not a
+                        // `.clickable`, which would make the whole panel one accessibility element.
+                        .pointerInput(item.id) {
+                            detectTapGestures(onTap = { })
+                        }
+                ) {
+                    CompositionLocalProvider(LocalOverlayVisible provides visible) {
+                        item.content()
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Axis and signed start offset for an anchored panel's slide, in pixels. */
+internal data class AnchoredEntryMotion(val vertical: Boolean, val distancePx: Float)
+
+/**
+ * Which way an anchored panel slides in, from where it actually landed.
+ *
+ * Uses the resolved position rather than the requested placement, so a panel that
+ * auto-flipped above its trigger still slides away from the trigger. Mirrors the
+ * reference: content below/right of the trigger starts at -distance, above/left at
+ * +distance, and the distance is the panel offset capped at 12.
+ */
+internal fun anchoredEntryMotion(
+    anchor: Rect?,
+    offset: IntOffset,
+    popupSize: IntSize,
+    options: OverlayOptions,
+    density: Density,
+): AnchoredEntryMotion? {
+    if (anchor == null || popupSize == IntSize.Zero) return null
+    val cap = with(density) { FeedbackDefaults.anchoredEnterTranslate.dp.toPx() }
+    val gapY = with(density) { options.offsetY.toPx() }
+    val gapX = with(density) { options.offsetX.toPx() }
+    val top = offset.y.toFloat()
+    val left = offset.x.toFloat()
+    return when {
+        top >= anchor.bottom - 1f -> AnchoredEntryMotion(true, -minOf(gapY.coerceAtLeast(0f), cap))
+        top + popupSize.height <= anchor.top + 1f -> AnchoredEntryMotion(true, minOf(gapY.coerceAtLeast(0f), cap))
+        left >= anchor.right - 1f -> AnchoredEntryMotion(false, -minOf(gapX.coerceAtLeast(0f), cap))
+        left + popupSize.width <= anchor.left + 1f -> AnchoredEntryMotion(false, minOf(gapX.coerceAtLeast(0f), cap))
+        else -> null
+    }
+}
+
+/**
+ * Position calculation.
+ * Supports 12 placements plus Center and Fullscreen.
+ *
+ * Internal (not private) so the algorithm can be unit tested.
+ *
+ * Fixes:
+ * 1. Boundary clamping accounts for the anchor, so the overlay never covers it.
+ * 2. Positions are recalculated correctly after an automatic flip.
+ * 3. Sensible handling when the overlay is larger than the space available.
+ */
+internal fun computeOffset(
+    anchor: Rect?,
+    popupSize: IntSize,
+    screenSize: IntSize,
+    options: OverlayOptions,
+    density: Density,
+    /** Pixels the keyboard covers at the bottom of the screen; 0 when it is down. */
+    keyboardHeight: Int = 0,
+): IntOffset {
+
+    if (anchor == null) {
+        // No anchor: centre in the part of the screen the keyboard leaves visible. A dialog
+        // taller than that keeps its top on screen; its own body scrolls.
+        val visibleHeight = (screenSize.height - keyboardHeight).coerceAtLeast(0)
+        return when (options.placement) {
+            OverlayPlacement.Center -> IntOffset(
+                ((screenSize.width - popupSize.width) / 2).coerceAtLeast(0),
+                ((visibleHeight - popupSize.height) / 2).coerceAtLeast(0)
+            )
+            OverlayPlacement.Fullscreen -> IntOffset.Zero
+            else -> IntOffset.Zero
+        }
+    }
+
+    val offsetX = with(density) { options.offsetX.roundToPx() }
+    val offsetY = with(density) { options.offsetY.roundToPx() }
+    val edge = with(density) { OverlayDefaults.screenEdgeMargin.roundToPx() }
+    // Horizontal room for a panel, keeping [edge] from both sides when it fits.
+    fun clampX(x: Int): Int {
+        val min = if (popupSize.width + 2 * edge <= screenSize.width) edge else 0
+        val max = (screenSize.width - popupSize.width - min).coerceAtLeast(min)
+        return x.coerceIn(min, max)
+    }
+
+    // Available space in each direction (Float)
+    val spaceBelow = screenSize.height - anchor.bottom
+    val spaceAbove = anchor.top
+    val spaceRight = screenSize.width - anchor.right
+    val spaceLeft = anchor.left
+
+    // Decide whether a flip is needed, based on the requested direction.
+    val isVerticalPlacement = options.placement in listOf(
+        OverlayPlacement.TopLeft, OverlayPlacement.TopCenter, OverlayPlacement.TopRight,
+        OverlayPlacement.BottomLeft, OverlayPlacement.BottomCenter, OverlayPlacement.BottomRight
+    )
+
+    val isTopPlacement = options.placement in listOf(
+        OverlayPlacement.TopLeft, OverlayPlacement.TopCenter, OverlayPlacement.TopRight
+    )
+
+    val isBottomPlacement = options.placement in listOf(
+        OverlayPlacement.BottomLeft, OverlayPlacement.BottomCenter, OverlayPlacement.BottomRight
+    )
+
+    val isLeftPlacement = options.placement in listOf(
+        OverlayPlacement.LeftTop, OverlayPlacement.LeftCenter, OverlayPlacement.LeftBottom
+    )
+
+    val isRightPlacement = options.placement in listOf(
+        OverlayPlacement.RightTop, OverlayPlacement.RightCenter, OverlayPlacement.RightBottom
+    )
+
+    // Resolve the actual direction, taking auto-flip into account.
+    val actuallyAbove = when {
+        isTopPlacement -> {
+            // Requested above: check whether it needs to flip below.
+            if (options.autoFlip && spaceAbove < popupSize.height && spaceBelow > spaceAbove) false else true
+        }
+        isBottomPlacement -> {
+            // Requested below: check whether it needs to flip above.
+            if (options.autoFlip && spaceBelow < popupSize.height && spaceAbove > spaceBelow) true else false
+        }
+        else -> false // left/right placements do not use the vertical axis
+    }
+
+    val actuallyLeft = when {
+        isLeftPlacement -> {
+            // Does not fit on the left; flip if there is more room on the right.
+            val shouldFlip = options.autoFlip && spaceLeft < popupSize.width && spaceRight > spaceLeft
+            !shouldFlip
+        }
+        isRightPlacement -> {
+            // Does not fit on the right; flip if there is more room on the left.
+            val shouldFlip = options.autoFlip && spaceRight < popupSize.width && spaceLeft > spaceRight
+            shouldFlip
+        }
+        else -> false
+    }
+
+    // X coordinate
+    val x = when (options.placement) {
+        // Above / below, left aligned
+        OverlayPlacement.TopLeft,
+        OverlayPlacement.BottomLeft ->
+            (anchor.left + offsetX).toInt()
+
+        // Above / below, centred
+        OverlayPlacement.TopCenter,
+        OverlayPlacement.BottomCenter ->
+            (anchor.center.x - popupSize.width / 2f + offsetX).toInt()
+
+        // Above / below, right aligned
+        OverlayPlacement.TopRight,
+        OverlayPlacement.BottomRight ->
+            (anchor.right - popupSize.width + offsetX).toInt()
+
+        // Left: the popup sits to the left of the anchor.
+        OverlayPlacement.LeftTop,
+        OverlayPlacement.LeftCenter,
+        OverlayPlacement.LeftBottom -> {
+            if (actuallyLeft) {
+                // Right edge aligns to the anchor's left edge, minus the offset.
+                (anchor.left - popupSize.width - offsetX).toInt()
+            } else {
+                // Flipped to the right
+                (anchor.right + offsetX).toInt()
+            }
+        }
+
+        // Right: the popup sits to the right of the anchor.
+        OverlayPlacement.RightTop,
+        OverlayPlacement.RightCenter,
+        OverlayPlacement.RightBottom -> {
+            if (!actuallyLeft) {
+                (anchor.right + offsetX).toInt()
+            } else {
+                // Flipped to the left
+                (anchor.left - popupSize.width - offsetX).toInt()
+            }
+        }
+
+        OverlayPlacement.Center ->
+            ((screenSize.width - popupSize.width) / 2f).toInt()
+
+        OverlayPlacement.Fullscreen -> 0
+    }
+
+    // Y coordinate
+    val y = when (options.placement) {
+        // Above: the popup sits above the anchor.
+        OverlayPlacement.TopLeft,
+        OverlayPlacement.TopCenter,
+        OverlayPlacement.TopRight -> {
+            if (actuallyAbove) {
+                (anchor.top - popupSize.height + offsetY).toInt()
+            } else {
+                // Flipped below
+                (anchor.bottom + offsetY).toInt()
+            }
+        }
+
+        // Below: the popup sits below the anchor.
+        OverlayPlacement.BottomLeft,
+        OverlayPlacement.BottomCenter,
+        OverlayPlacement.BottomRight -> {
+            if (!actuallyAbove) {
+                (anchor.bottom + offsetY).toInt()
+            } else {
+                // Flipped above
+                (anchor.top - popupSize.height + offsetY).toInt()
+            }
+        }
+
+        // Left / right, top aligned
+        OverlayPlacement.LeftTop,
+        OverlayPlacement.RightTop ->
+            (anchor.top + offsetY).toInt()
+
+        // Left / right, vertically centred
+        OverlayPlacement.LeftCenter,
+        OverlayPlacement.RightCenter ->
+            (anchor.center.y - popupSize.height / 2f + offsetY).toInt()
+
+        // Left / right, bottom aligned
+        OverlayPlacement.LeftBottom,
+        OverlayPlacement.RightBottom ->
+            (anchor.bottom - popupSize.height + offsetY).toInt()
+
+        OverlayPlacement.Center ->
+            ((screenSize.height - popupSize.height) / 2f).toInt()
+
+        OverlayPlacement.Fullscreen -> 0
+    }
+
+    // Boundary clamping — the core of the fix.
+    // For vertical placements, clamping must avoid covering the anchor.
+    val constrainedX: Int
+    val constrainedY: Int
+
+    if (isVerticalPlacement) {
+        // Vertical: clamp X with the screen margin; Y has to respect the anchor.
+        constrainedX = clampX(x)
+
+        constrainedY = if (actuallyAbove) {
+            // Above: the bottom must not pass anchor.top.
+            val maxY = (anchor.top - popupSize.height).toInt()
+            val minY = 0
+            if (maxY < minY) {
+                // Not enough room, so pin to the top of the screen.
+                minY
+            } else {
+                y.coerceIn(minY, maxY)
+            }
+        } else {
+            // Below: the top must not go above anchor.bottom.
+            val minY = anchor.bottom.toInt()
+            val maxY = (screenSize.height - popupSize.height).coerceAtLeast(minY)
+            y.coerceIn(minY, maxY)
+        }
+    } else if (isLeftPlacement || isRightPlacement) {
+        // Horizontal: clamp Y normally; X has to respect the anchor.
+        constrainedY = y.coerceIn(0, (screenSize.height - popupSize.height).coerceAtLeast(0))
+
+        constrainedX = if (actuallyLeft) {
+            // Left: the popup's right edge meets the anchor's left edge.
+            // If there is not enough room, let it overflow off-screen rather than cover the anchor.
+            x // keep the computed position as-is (may be negative, i.e. off the left edge)
+        } else {
+            // Right: the popup's left edge meets the anchor's right edge.
+            // If there is not enough room, let it overflow off-screen rather than cover the anchor.
+            x // keep the computed position as-is
+        }
+    } else {
+        // Centre or fullscreen: clamp normally.
+        constrainedX = x.coerceIn(0, (screenSize.width - popupSize.width).coerceAtLeast(0))
+        constrainedY = y.coerceIn(0, (screenSize.height - popupSize.height).coerceAtLeast(0))
+    }
+
+    return IntOffset(constrainedX, constrainedY)
+}
+
+/**
+ * The transparent layer that turns a tap or drag outside a non-modal overlay into a
+ * dismissal. With [hole] (the trigger, in the host's coordinates) it is four strips
+ * around that area instead of one full-screen box: a native view cannot be hit-tested
+ * through, so a full-screen layer swallowed taps on the trigger itself — a focused
+ * ComboBox lost its focus and its panel when tapped again.
+ */
+@Composable
+private fun OutsideTouchLayer(hole: Rect?, screen: IntSize, gesture: Modifier) {
+    if (hole == null || screen == IntSize.Zero) {
+        Box(Modifier.fillMaxSize().then(gesture))
+        return
+    }
+    val w = screen.width.toFloat()
+    val h = screen.height.toFloat()
+    val left = hole.left.coerceIn(0f, w)
+    val right = hole.right.coerceIn(left, w)
+    val top = hole.top.coerceIn(0f, h)
+    val bottom = hole.bottom.coerceIn(top, h)
+    Box(Modifier.fillMaxSize()) {
+        TouchStrip(0f, 0f, w, top, gesture)
+        TouchStrip(0f, bottom, w, h - bottom, gesture)
+        TouchStrip(0f, top, left, bottom - top, gesture)
+        TouchStrip(right, top, w - right, bottom - top, gesture)
+    }
+}
+
+@Composable
+private fun TouchStrip(x: Float, y: Float, width: Float, height: Float, gesture: Modifier) {
+    if (width <= 0f || height <= 0f) return
+    val density = LocalDensity.current
+    Box(
+        Modifier
+            .offset { IntOffset(x.roundToInt(), y.roundToInt()) }
+            .size(with(density) { width.toDp() }, with(density) { height.toDp() })
+            .then(gesture)
+    )
+}

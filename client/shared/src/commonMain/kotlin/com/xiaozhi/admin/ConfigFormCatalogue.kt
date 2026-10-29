@@ -1,10 +1,8 @@
 package com.xiaozhi.admin
 
-import com.xiaozhi.admin.ui.*
 
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.pager.Pager
-import com.tencent.kuikly.core.reactive.collection.ObservableList
 import com.tencent.kuikly.core.timer.setTimeout
 
 // 目录只操作 ConfigFormState 的原 observableList；不复制当前选择或配置密钥为状态。
@@ -135,7 +133,7 @@ internal fun ConfigFormState.selectProviderVoiceGroup(g: String) {
 /** 依已拉取目录反推当前 vcn 的性别分组与音色类型；目录未拉取时按前缀启发。 */
 internal fun ConfigFormState.deriveProviderVoiceGroupAndType() {
     val v = xfyunVoice
-    val inList: (ObservableList<Pair<String, String>>) -> Boolean = { l -> l.any { it.first == v } }
+    val inList: (MutableList<Pair<String, String>>) -> Boolean = { l -> l.any { it.first == v } }
     when {
         inList(voicesFemaleClassic) -> { xfyunVoiceGroup = "female"; xfyunVoiceType = "classic" }
         inList(voicesFemaleX6) -> { xfyunVoiceGroup = "female"; xfyunVoiceType = "x6" }
