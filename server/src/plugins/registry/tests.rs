@@ -204,8 +204,7 @@ fn default_config_validates_when_feature_enabled() {
 }
 
 /// **漂移护栏**：schema 里声明的每个字段 key 必须在 `Config` 里真实存在。
-/// 新增/重命名字段时若忘了改注册表，本测试直接打红。
-#[test]
+/// 新增/重命名字段时若忘了改注册表，本测试直接打红。#[test]
 fn field_keys_exist_in_config() {
     let cfg_json = serde_json::to_value(Config::default()).expect("Config → JSON");
     let lookup = |path: &[&str], key: &str| -> bool {
@@ -647,5 +646,42 @@ fn llm_enabled_switch_is_live_and_projected() {
     assert!(
         common.iter().any(|k| k == "enabled"),
         "管理页必须能看到 llm.enabled 开关，实际公共字段: {common:?}"
+    );
+}
+
+/// 备用链写时校验：不完整条目（缺 api_base 或 model）在保存/启动期即被拒绝，
+/// 且报错指名第几条（对齐 DSH「写时就拒绝，指名道姓」；不学 hermes 的静默忽略）。
+#[test]
+fn llm_fallback_incomplete_provider_is_rejected() {
+    let d = REGISTRY
+        .iter()
+        .find(|d| d.capability == Capability::Llm)
+        .expect("llm 描述符");
+    let mut cfg = Config::default();
+    cfg.llm.api_base = "https://api.example.com/v1/responses".into();
+    cfg.llm.fallback.providers = vec![crate::plugins::llm::LlmFallbackProvider {
+        api_base: String::new(),
+        api_key: "k".into(),
+        model: "m".into(),
+    }];
+    let err = (d.validate)(&cfg).unwrap_err().to_string();
+    assert!(
+        err.contains("llm.fallback.providers") && err.contains("第 1 条"),
+        "报错应指名备用条目: {err}"
+    );
+
+    cfg.llm.fallback.providers[0].api_base = "https://backup.example.com/v1/responses".into();
+    (d.validate)(&cfg).unwrap_or_else(|e| panic!("完整备用条目应通过: {e:#}"));
+
+    // 密钥为空的备用是**软性**问题：可启动，但状态必须 Degraded 提示（不静默）。
+    cfg.llm.fallback.providers.push(crate::plugins::llm::LlmFallbackProvider {
+        api_base: "https://backup2.example.com/v1/responses".into(),
+        api_key: String::new(),
+        model: "m2".into(),
+    });
+    let warn = (d.warn_if.expect("llm 应有 warn_if"))(&cfg).expect("空密钥应提示");
+    assert!(
+        warn.contains("第 2 条备用"),
+        "warn 应指名空密钥的备用条目: {warn}"
     );
 }

@@ -88,20 +88,38 @@ pub(super) fn validate_llm(cfg: &Config) -> Result<()> {
             "[llm].api_base 未配置：请填 OpenAI 兼容 **Responses API** 地址（如 https://api.example.com/v1/responses）。"
         );
     }
+    // 备用链：写时就拒绝不完整条目，指名道姓（对齐 DSH「写时校验」纪律；
+    // 不学 hermes 的"缺字段静默忽略"——静默丢弃正是本仓库最忌讳的失败模式）。
+    for (i, p) in cfg.llm.fallback.providers.iter().enumerate() {
+        if p.api_base.trim().is_empty() || p.model.trim().is_empty() {
+            anyhow::bail!(
+                "[llm.fallback.providers] 第 {} 条备用不完整：api_base 与 model 都必填（api_key 可空）。",
+                i + 1
+            );
+        }
+    }
     Ok(())
 }
 
 /// LLM 软性问题：密钥为空 —— 服务照常启动，但每次对话都会在上游 401/403。
 /// 状态上报为 `Degraded`（而不是静默），且热刷新时**不会**用空密钥覆盖正在工作的引擎。
 pub(super) fn warn_llm(cfg: &Config) -> Option<String> {
+    let mut notes: Vec<String> = Vec::new();
     if cfg.llm.api_key.trim().is_empty() {
-        Some(
+        notes.push(
             "[llm].api_key 为空：每次对话都会在上游报 401/403；在管理页填入密钥即可（新会话生效）"
                 .into(),
-        )
-    } else {
-        None
+        );
     }
+    for (i, p) in cfg.llm.fallback.providers.iter().enumerate() {
+        if p.api_key.trim().is_empty() {
+            notes.push(format!(
+                "[llm.fallback.providers] 第 {} 条备用 api_key 为空：轮到它时会在上游 401 并继续切下一条。",
+                i + 1
+            ));
+        }
+    }
+    (!notes.is_empty()).then(|| notes.join("；"))
 }
 
 pub(super) fn validate_aiui(cfg: &Config) -> Result<()> {

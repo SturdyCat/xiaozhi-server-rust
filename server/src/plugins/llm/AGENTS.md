@@ -3,6 +3,7 @@
 当前[OpenAI 实现](<openai.rs>)使用兼容 **Responses API**，不是 chat/completions；没有生产 mock。连接失败先查 api_base/api_key/model。
 
 - [LlmProvider](<mod.rs>)收 TurnPrompt；instructions 是稳定前缀，记忆块按 inject_position 进 input，不能把动态记忆一股脑拼进稳定人格。
+- 主备切换（`[llm.fallback]`，机制对齐 hermes-agent fallback providers）：[FallbackLlm](<fallback.rs>) 装饰器在主用重试预算耗尽后按序试备用；429/401/402/403 冷藏主用（Retry-After 到点 / 指数 60s→4h），瞬时失败按轮回主用；**已吐文本不切**、取消透传；备用不套重试（预算已在主用耗尽）。`api_key` 同样密钥打码（数组元素级 presence + 同下标回填，见 `gateway/ws/config.rs` 的 `SECRET_ARRAY_PATHS`）。
 - 失败按[具名类别](<failure.rs>)路由，不解析错误文案。超时分建连/请求兜底/流空闲，重试由[装饰器](<retry.rs>)执行，有次数与总预算。
 - 已吐文本后不重试，避免重复播报；取消不重试，空回复不是正常成功。失败经会话兜底而非静默。
 - usage 是 token 口径，不是金额；估算与真实上游用量区分，CJK 不能照搬四字符一 token。

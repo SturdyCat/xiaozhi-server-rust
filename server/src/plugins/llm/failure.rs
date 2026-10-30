@@ -47,8 +47,13 @@ pub enum LlmFailure {
     Timeout(String),
     /// 传输中断（已建立连接但读流失败）。
     Transport(String),
-    /// HTTP 非 2xx。
-    Status { code: u16, body: String },
+    /// HTTP 非 2xx。`retry_after`：`Retry-After` 头的**整数秒**（HTTP-date 形式不解析，
+    /// 记 `None`）——主备切换（`fallback.rs`）用它把主用"冷藏"到限流恢复时刻。
+    Status {
+        code: u16,
+        body: String,
+        retry_after: Option<u64>,
+    },
     /// 上游 200 但**没有任何文本也没有工具调用**（真·空回复）。
     EmptyResponse,
     /// 协议/解析错误（SSE 解析失败、响应 JSON 结构不符）。
@@ -67,6 +72,37 @@ impl LlmFailure {
         }
     }
 
+    /// 是否值得**切换备用**（`fallback.rs` 用）：可重试类失败在主用重试预算耗尽后，
+    /// 备用仍可能救得回来；鉴权/配额类（401/402/403）重试无意义，但备用账号可能可用。
+    /// 其余 4xx（参数错/model 不存在/协议错）换备用也救不了，不切。
+    ///
+    /// 机制对齐 hermes-agent 的 fallback 触发条件：限流（重试耗尽后）、5xx（重试耗尽后）、
+    /// 连接错误、鉴权失败（**立即**，不浪费时间重试主用）。
+    pub fn switchable(&self) -> bool {
+        if self.retryable() {
+            return true;
+        }
+        matches!(self, LlmFailure::Status { code, .. } if matches!(code, 401 | 402 | 403))
+    }
+
+    /// 是否"短期不会自愈"的失败（限流 429 / 鉴权 401 / 配额 402 / 拒绝 403）。
+    /// 这类失败切到备用后应把**主用冷藏**一段时间（见 `fallback.rs`），
+    /// 而不是每轮都先撞一次主用再切——那样每轮白付一次"主用失败"的延迟。
+    pub fn persistent(&self) -> bool {
+        matches!(self, LlmFailure::Status { code, .. } if matches!(code, 401 | 402 | 403 | 429))
+    }
+
+    /// 上游通过 `Retry-After` 头声明的恢复等待（仅整数秒形式）。
+    pub fn retry_after(&self) -> Option<Duration> {
+        match self {
+            LlmFailure::Status {
+                retry_after: Some(secs),
+                ..
+            } => Some(Duration::from_secs(*secs)),
+            _ => None,
+        }
+    }
+
     /// 稳定分类字符串（日志/UI/测试断言用；**不要**改语义，改名需同步测试）。
     pub fn category(&self) -> &'static str {
         match self {
@@ -75,6 +111,7 @@ impl LlmFailure {
             LlmFailure::Transport(_) => "transport",
             LlmFailure::Status { code, .. } if *code == 429 => "rate_limit",
             LlmFailure::Status { code, .. } if (500..600).contains(code) => "server",
+            LlmFailure::Status { code, .. } if matches!(code, 401 | 402 | 403) => "auth",
             LlmFailure::Status { .. } => "client",
             LlmFailure::EmptyResponse => "empty_response",
             LlmFailure::Protocol(_) => "protocol",
@@ -90,6 +127,9 @@ impl LlmFailure {
             LlmFailure::Timeout(_) => "模型服务响应超时：上游拥塞或地址不可达",
             LlmFailure::Transport(_) => "读模型响应时连接中断：网络不稳定",
             LlmFailure::Status { code: 429, .. } => "被上游限流（429）：稍后重试或换更低频的模型",
+            LlmFailure::Status { code: 402, .. } => {
+                "上游配额/额度耗尽（402）：充值或改用备用模型（[llm.fallback]）"
+            }
             LlmFailure::Status { code, .. } if *code == 401 || *code == 403 => {
                 "上游拒绝鉴权：检查 [llm].api_key 是否有效"
             }
@@ -136,7 +176,7 @@ impl fmt::Display for LlmFailure {
             LlmFailure::Connect(m) => write!(f, "连接 LLM 失败: {m}"),
             LlmFailure::Timeout(m) => write!(f, "LLM 请求超时: {m}"),
             LlmFailure::Transport(m) => write!(f, "LLM 传输中断: {m}"),
-            LlmFailure::Status { code, body } => {
+            LlmFailure::Status { code, body, .. } => {
                 write!(f, "LLM API 返回错误 {code}: {body}")
             }
             LlmFailure::EmptyResponse => write!(f, "LLM 返回空回复"),

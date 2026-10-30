@@ -163,3 +163,59 @@ fn echomuse_token_is_secret_and_enabled_passes_through() {
     assert!(out.echomuse.enabled, "echomuse.enabled 应透传生效");
     assert_eq!(out.echomuse.token, "em-pair-secret", "空串 token 保留原值");
 }
+
+/// 数组型敏感字段（`[[llm.fallback.providers]]`）：GET 逐元素摘除 `api_key` 留 presence；
+/// POST 整数组替换时，元素缺 `api_key` 从基线**同下标**回填（整表单回传不清密钥），
+/// 显式 `null` 仍可清除。
+#[test]
+fn fallback_provider_keys_are_redacted_per_element() {
+    let mut current = full_test_config();
+    current.llm.fallback.providers = vec![
+        crate::plugins::llm::LlmFallbackProvider {
+            api_base: "https://backup-a.example.com/v1/responses".into(),
+            api_key: "sk-backup-a".into(),
+            model: "m-a".into(),
+        },
+        crate::plugins::llm::LlmFallbackProvider {
+            api_base: "https://backup-b.example.com/v1/responses".into(),
+            api_key: "sk-backup-b".into(),
+            model: "m-b".into(),
+        },
+    ];
+
+    // GET 打码：两个元素的密钥都摘除，presence 分别为 true
+    let mut v = serde_json::to_value(&current).unwrap();
+    redact_secrets(&mut v);
+    let text = v.to_string();
+    assert!(!text.contains("\"sk-backup-a\"") && !text.contains("\"sk-backup-b\""));
+    let providers = v["llm"]["fallback"]["providers"].as_array().unwrap();
+    assert_eq!(providers[0]["has_api_key"], true);
+    assert_eq!(providers[1]["has_api_key"], true);
+    assert!(providers[0].get("api_key").is_none());
+
+    // POST：只改第 0 条的 model（api_key 被打码摘除，元素里没有该键）→ 密钥按同下标保留
+    let patch = serde_json::json!({
+        "llm": {"fallback": {"providers": [
+            {"api_base": "https://backup-a.example.com/v1/responses", "model": "m-a-new"},
+            {"api_base": "https://backup-b.example.com/v1/responses", "model": "m-b"},
+        ]}},
+    });
+    let out = simulate_put(&current, patch);
+    assert_eq!(out.llm.fallback.providers[0].model, "m-a-new");
+    assert_eq!(
+        out.llm.fallback.providers[0].api_key, "sk-backup-a",
+        "缺失的元素密钥应从基线回填，不得清空"
+    );
+    assert_eq!(out.llm.fallback.providers[1].api_key, "sk-backup-b");
+
+    // 显式 null = 清除该元素的密钥
+    let patch = serde_json::json!({
+        "llm": {"fallback": {"providers": [
+            {"api_base": "https://backup-a.example.com/v1/responses", "model": "m-a", "api_key": null},
+            {"api_base": "https://backup-b.example.com/v1/responses", "model": "m-b", "api_key": "sk-new-b"},
+        ]}},
+    });
+    let out = simulate_put(&current, patch);
+    assert_eq!(out.llm.fallback.providers[0].api_key, "");
+    assert_eq!(out.llm.fallback.providers[1].api_key, "sk-new-b");
+}

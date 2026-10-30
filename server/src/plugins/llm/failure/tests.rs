@@ -9,6 +9,7 @@ fn status(code: u16) -> LlmFailure {
     LlmFailure::Status {
         code,
         body: String::new(),
+        retry_after: None,
     }
 }
 
@@ -45,9 +46,64 @@ fn retryable_covers_transient_only() {
 fn categories_are_stable() {
     assert_eq!(status(429).category(), "rate_limit");
     assert_eq!(status(503).category(), "server");
-    assert_eq!(status(401).category(), "client");
+    assert_eq!(status(401).category(), "auth");
+    assert_eq!(status(403).category(), "auth");
+    assert_eq!(status(402).category(), "auth");
+    assert_eq!(status(404).category(), "client");
     assert_eq!(LlmFailure::EmptyResponse.category(), "empty_response");
     assert_eq!(LlmFailure::Timeout("x".into()).category(), "timeout");
+}
+
+/// 主备切换的触发面（对齐 hermes：限流/5xx/连接错误/鉴权失败可切；参数类 4xx 不切）。
+#[test]
+fn switchable_covers_fallback_triggers() {
+    for f in [
+        LlmFailure::Connect("dns".into()),
+        LlmFailure::Timeout("idle".into()),
+        LlmFailure::Transport("broken".into()),
+        LlmFailure::EmptyResponse,
+        status(429),
+        status(500),
+        status(503),
+        status(401),
+        status(402),
+        status(403),
+    ] {
+        assert!(f.switchable(), "{f:?} 应可切备用");
+    }
+    for f in [status(400), status(404), status(422)] {
+        assert!(!f.switchable(), "{f:?} 换备用也救不了，不应切换");
+    }
+    assert!(!LlmFailure::Protocol("bad json".into()).switchable());
+}
+
+/// 冷藏判定：限流/鉴权/配额短期不自愈 → 冷藏主用；瞬时失败逐轮回主用探测。
+#[test]
+fn persistent_only_for_long_outages() {
+    for f in [status(429), status(401), status(402), status(403)] {
+        assert!(f.persistent(), "{f:?} 应冷藏主用");
+    }
+    for f in [
+        status(500),
+        status(503),
+        LlmFailure::Connect("dns".into()),
+        LlmFailure::EmptyResponse,
+    ] {
+        assert!(!f.persistent(), "{f:?} 是瞬时失败，不应冷藏主用");
+    }
+}
+
+/// `Retry-After` 只认整数秒形式；HTTP-date 解析不了就记 `None`（上游解析职责在 openai.rs）。
+#[test]
+fn retry_after_exposed_as_duration() {
+    let f = LlmFailure::Status {
+        code: 429,
+        body: String::new(),
+        retry_after: Some(120),
+    };
+    assert_eq!(f.retry_after(), Some(Duration::from_secs(120)));
+    assert_eq!(status(429).retry_after(), None);
+    assert_eq!(LlmFailure::EmptyResponse.retry_after(), None);
 }
 
 /// 退避必须**递增且有界**（避免重试把语音延迟拖长）。

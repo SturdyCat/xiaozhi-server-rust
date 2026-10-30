@@ -62,6 +62,10 @@ pub struct LlmConfig {
     /// 300~800ms）高一个量级，避免误切；normalize clamp 到 `[0, 60000]`。
     #[serde(default = "default_sentence_flush_ms")]
     pub sentence_flush_ms: u32,
+    /// 主备切换（`[llm.fallback]`）：主用的重试预算耗尽后，按序尝试备用端点。
+    /// 机制对齐 hermes-agent 的 fallback providers（见 `fallback.rs` 模块文档）。
+    #[serde(default)]
+    pub fallback: LlmFallbackConfig,
 }
 fn default_api_base() -> String {
     "https://api.example.com/v1/responses".into()
@@ -97,7 +101,58 @@ fn default_sentence_flush_ms() -> u32 {
     1500
 }
 
+/// 一条备用端点（`[[llm.fallback.providers]]`）。
+///
+/// 只有 OpenAI 兼容 Responses 三件套：复用主用的协议实现与超时，仅换地址/密钥/模型。
+/// 校验纪律（对齐 DSH「写时就拒绝，指名道姓」）：`api_base`/`model` 必填，
+/// 缺任一条在 `validate_llm` 直接报错（**不**学 hermes 的"缺字段静默忽略"——静默丢弃
+/// 正是本仓库最忌讳的失败模式）；`api_key` 可空（空 = 调用时上游 401，自动切下一条）。
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct LlmFallbackProvider {
+    #[serde(default)]
+    pub api_base: String,
+    #[serde(default)]
+    pub api_key: String,
+    #[serde(default)]
+    pub model: String,
+}
+
+/// `[llm.fallback]`：主备切换配置。
+///
+/// 触发/冷藏机制见 [`fallback`]；生效档位 NextSession（换链要重建引擎）。
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct LlmFallbackConfig {
+    /// 限流恢复窗口小于该秒数时不切备用（对齐 hermes `fallback.min_switch_reset_seconds`，
+    /// 默认 0 = 恒切换）。设大 = 宁可本轮失败走会话兜底，也不降级到备用模型。
+    #[serde(default)]
+    pub min_switch_reset_seconds: u32,
+    /// 备用链，按序尝试。空 = 不启用主备切换（行为与从前完全一致）。
+    #[serde(default)]
+    pub providers: Vec<LlmFallbackProvider>,
+}
+
+impl Default for LlmFallbackConfig {
+    fn default() -> Self {
+        LlmFallbackConfig {
+            min_switch_reset_seconds: 0,
+            providers: Vec::new(),
+        }
+    }
+}
+
+impl LlmFallbackConfig {
+    /// 过滤掉字段全空的占位条目（TOML 里写了空表头但没填内容）；
+    /// **不完整**条目（填了一半）不在此处过滤，交给 `validate_llm` 报错。
+    fn usable_providers(&self) -> Vec<&LlmFallbackProvider> {
+        self.providers
+            .iter()
+            .filter(|p| !p.api_base.trim().is_empty() && !p.model.trim().is_empty())
+            .collect()
+    }
+}
+
 pub mod failure;
+pub mod fallback;
 mod openai;
 mod retry;
 
@@ -105,6 +160,7 @@ pub use failure::TokenUsage;
 // bin crate 内部暂无直接引用者（装饰器/实现走 `failure::` 路径）：作为插件对外 API 面保留
 #[allow(unused_imports)]
 pub use failure::LlmFailure;
+pub use fallback::FallbackLlm;
 pub use retry::RetryingLlm;
 
 // bin crate 内部暂无直接引用者：作为插件对外 API 面保留
@@ -116,6 +172,7 @@ use serde_json::Value;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 pub use crate::plugins::prompt::TurnPrompt;
 
@@ -219,11 +276,26 @@ pub type Llm = Arc<dyn LlmProvider>;
 
 /// 依据配置构造 LLM 引擎。
 ///
-/// 外层套 [`RetryingLlm`]：**provider 自己不重试**，重试/退避/预算统一由装饰器负责
-/// （对齐 DSH "服务不重试、执行器重试"）；换 provider 时自动获得同样的护栏。
+/// 组装分层（外到内）：`[FallbackLlm]`（仅当配了备用）→ `RetryingLlm`（主用专属，
+/// 备用**不套**重试——主用已耗尽 8s 预算，语音不能在备用上再来一轮退避）→ `LlmClient`。
+/// provider 自己不重试，重试/退避/预算统一由装饰器负责（对齐 DSH "服务不重试、
+/// 执行器重试"）；换 provider/加备用时自动获得同样的护栏。
 pub fn build_llm(cfg: &LlmConfig) -> Llm {
-    let inner: Llm = Arc::new(openai::LlmClient::new(cfg));
-    Arc::new(RetryingLlm::new(inner))
+    let primary: Llm = Arc::new(RetryingLlm::new(Arc::new(openai::LlmClient::new(cfg))));
+    let usable = cfg.fallback.usable_providers();
+    if usable.is_empty() {
+        return primary;
+    }
+    let mut chain = vec![primary];
+    for fb in usable {
+        let mut c = cfg.clone();
+        c.api_base = fb.api_base.clone();
+        c.api_key = fb.api_key.clone();
+        c.model = fb.model.clone();
+        chain.push(Arc::new(openai::LlmClient::new(&c)));
+    }
+    let min_switch_reset = Duration::from_secs(u64::from(cfg.fallback.min_switch_reset_seconds));
+    Arc::new(FallbackLlm::new(chain, min_switch_reset))
 }
 
 impl Default for LlmConfig {
@@ -239,6 +311,7 @@ impl Default for LlmConfig {
             temperature: default_temperature(),
             stream: default_stream(),
             sentence_flush_ms: default_sentence_flush_ms(),
+            fallback: LlmFallbackConfig::default(),
         }
     }
 }
@@ -252,5 +325,7 @@ impl LlmConfig {
         self.engine = self.engine_id();
         // clamp 到 [0, 60000]：0 = 关闭；上限防异常配置把 watchdog 周期拖到分钟级。
         self.sentence_flush_ms = self.sentence_flush_ms.min(60_000);
+        // 冷藏窗口上限 1 天：再大就该直接换主用配置而不是靠备用撑着。
+        self.fallback.min_switch_reset_seconds = self.fallback.min_switch_reset_seconds.min(86_400);
     }
 }

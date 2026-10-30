@@ -52,11 +52,13 @@ impl LlmProvider for FakeLlm {
                     LlmFailure::Status {
                         code: 401,
                         body: "bad key".into(),
+                        retry_after: None,
                     }
                 } else {
                     LlmFailure::Status {
                         code: 503,
                         body: "upstream busy".into(),
+                        retry_after: None,
                     }
                 };
                 return Err(anyhow::Error::new(f));

@@ -187,6 +187,23 @@ stream = true
 # 调大 → 行为趋近现状；0 = 关闭。上限 60000。
 sentence_flush_ms = 1500
 
+# ===== LLM 主备切换（可选）：主用额度/限流/故障时自动换备用端点 =====
+# 机制对齐 hermes-agent 的 fallback providers：
+#   · 触发：限流(429)/5xx/连接/超时/空回复在主用**重试预算耗尽后**切换；
+#     鉴权/配额(401/402/403)立即切换；参数类 4xx（model 写错等）不切。
+#   · 冷藏：429 带 Retry-After → 主用冷藏到恢复时刻；没带 → 指数退避 60s→4h。
+#     冷藏期内每轮直接走备用，不再白撞主用。5xx/断连等瞬时失败不冷藏（下一轮先回主用）。
+#   · 已吐过文本（用户已听到前半句）绝不切换，避免重复播报。
+#   · 生效：保存后**新会话**生效；api_key 同样密钥打码（GET 不回传明文）。
+[llm.fallback]
+# 限流恢复窗口小于该秒数时不切备用（默认 0 = 恒切换；hermes min_switch_reset_seconds）。
+min_switch_reset_seconds = 0
+# 备用链，按序尝试（可多条）。api_base 与 model 必填，缺一条启动/保存直接报错。
+# [[llm.fallback.providers]]
+# api_base = "https://backup.example.com/v1/responses"
+# api_key = "YOUR_BACKUP_API_KEY"
+# model = "gpt-4o-mini"
+
 # ===== 语音指令闸门（ASR → LLM 之间）：说「退下」就直接结束这次会话 =====
 # 默认开启（enabled = true）：标准行为，开机即用；不需要的用户改 false——
 # 关闭时行为与没有这一段完全一致（零开销）。

@@ -78,6 +78,11 @@ const SECRET_PATHS: &[&[&str]] = &[
     &["echomuse", "token"],
 ];
 
+/// 数组型敏感字段：路径指向**对象数组**，每个元素内的 `api_key` 都按敏感字段处理。
+/// （`SECRET_PATHS` 只能走对象路径，到不了 `[[llm.fallback.providers]]` 数组元素。）
+/// 约定：数组元素的敏感叶子固定为 `api_key`（当前唯一的数组密钥场景）。
+const SECRET_ARRAY_PATHS: &[&[&str]] = &[&["llm", "fallback", "providers"]];
+
 /// presence 标记字段名：`api_key` → `has_api_key`（`api_secret` → `has_api_secret`）。
 fn presence_key(leaf: &str) -> String {
     format!("has_{leaf}")
@@ -96,6 +101,23 @@ fn secret_parent<'a>(
     Some((cur.as_object_mut()?, leaf))
 }
 
+/// 定位路径指向的**数组**（数组型敏感字段用）；路径中缺任一层即 `None`（不创建）。
+fn array_parent<'a>(
+    v: &'a mut serde_json::Value,
+    path: &'a [&'a str],
+) -> Option<&'a mut Vec<serde_json::Value>> {
+    let mut cur = v;
+    for p in path {
+        cur = cur.get_mut(*p)?;
+    }
+    cur.as_array_mut()
+}
+
+/// 数组型敏感字段路径 → JSON Pointer（读取基线值用）。
+fn pointer_of(path: &[&str]) -> String {
+    path.iter().map(|p| format!("/{p}")).collect()
+}
+
 /// GET 打码：密钥字段**一律从响应中摘除**，只留 `has_<leaf>` 布尔标记（空值记 `false`）。
 ///
 /// 为什么是"摘掉"而不是替换成 `"***"`：客户端会把 GET 结果当基线回传，
@@ -112,6 +134,27 @@ fn redact_secrets(v: &mut serde_json::Value) {
             .is_some_and(|s| !s.trim().is_empty());
         obj.remove(leaf);
         obj.insert(presence_key(leaf), serde_json::Value::Bool(present));
+    }
+    redact_array_secrets(v);
+}
+
+/// 数组型敏感字段打码：每个元素独立摘除 `api_key`，只留该元素的 `has_api_key` 标记。
+fn redact_array_secrets(v: &mut serde_json::Value) {
+    for path in SECRET_ARRAY_PATHS {
+        let Some(arr) = array_parent(v, path) else {
+            continue;
+        };
+        for el in arr.iter_mut() {
+            let Some(obj) = el.as_object_mut() else {
+                continue;
+            };
+            let present = obj
+                .get("api_key")
+                .and_then(|x| x.as_str())
+                .is_some_and(|s| !s.trim().is_empty());
+            obj.remove("api_key");
+            obj.insert(presence_key("api_key"), serde_json::Value::Bool(present));
+        }
     }
 }
 
@@ -184,7 +227,89 @@ fn sanitize_patch(patch: &mut serde_json::Value) {
         }
         obj.remove(&presence_key(leaf));
     }
+    sanitize_array_secrets(patch);
     strip_wrapper_keys(patch);
+}
+
+/// 数组型敏感字段的 POST 前置：元素内空串 `api_key` 删除（= 保留原值）、
+/// presence 标记剔除（与 `SECRET_PATHS` 同一套语义，但作用于每个数组元素）。
+fn sanitize_array_secrets(patch: &mut serde_json::Value) {
+    for path in SECRET_ARRAY_PATHS {
+        let Some(arr) = array_parent(patch, path) else {
+            continue;
+        };
+        for el in arr.iter_mut() {
+            let Some(obj) = el.as_object_mut() else {
+                continue;
+            };
+            if obj
+                .get("api_key")
+                .and_then(|x| x.as_str())
+                .is_some_and(|s| s.trim().is_empty())
+            {
+                obj.remove("api_key");
+            }
+            obj.remove(&presence_key("api_key"));
+        }
+    }
+}
+
+/// 数组型敏感字段的「密钥回填」：整个 `providers` 数组在 merge 里是**按值替换**，
+/// 而 GET 已把密钥摘除——客户端回传的元素自然没有 `api_key`。不回填的话，
+/// 保存一次备用模型名就会把对应密钥清空（"配置改了却像没改"的又一种形态）。
+/// 语义：元素**缺** `api_key` → 从基线**同下标**元素回填；显式给了（含 `null`）
+/// → 不动（`null` 由 `merge_patch` 解释为清除）。
+fn fill_array_secrets(base: &Config, patch: &mut serde_json::Value) {
+    let Ok(base_v) = serde_json::to_value(base) else {
+        return;
+    };
+    for path in SECRET_ARRAY_PATHS {
+        let Some(base_arr) = base_v
+            .pointer(&pointer_of(path))
+            .and_then(|v| v.as_array())
+            .cloned()
+        else {
+            continue;
+        };
+        let Some(patch_arr) = array_parent(patch, path) else {
+            continue;
+        };
+        for (i, el) in patch_arr.iter_mut().enumerate() {
+            let Some(obj) = el.as_object_mut() else {
+                continue;
+            };
+            if obj.contains_key("api_key") {
+                continue;
+            }
+            if let Some(orig) = base_arr
+                .get(i)
+                .and_then(|b| b.get("api_key"))
+                .and_then(|x| x.as_str())
+            {
+                obj.insert("api_key".into(), serde_json::Value::String(orig.to_string()));
+            }
+        }
+    }
+}
+
+/// 数组型敏感字段的「null = 清除」落地：`merge_patch` 对对象层的 null 是**移除键**，
+/// 但数组是整体替换——元素里残留的 `api_key: null` 会让 `String` 反序列化失败。
+/// 合并后把数组元素内值为 `null` 的密钥键移除（键消失 → serde default = 空串），
+/// 与对象路径的"显式 null 清除"语义对齐。回填发生在合并前且 `contains_key` 会跳过
+/// null 元素，所以这里的移除不会被误当成"缺失"再次回填。
+fn strip_cleared_array_secrets(merged: &mut serde_json::Value) {
+    for path in SECRET_ARRAY_PATHS {
+        let Some(arr) = array_parent(merged, path) else {
+            continue;
+        };
+        for el in arr.iter_mut() {
+            if let Some(obj) = el.as_object_mut() {
+                if obj.get("api_key").is_some_and(serde_json::Value::is_null) {
+                    obj.remove("api_key");
+                }
+            }
+        }
+    }
 }
 
 /// 现盘配置 + 客户端补丁 → 新配置：**`put_config` 与单测共用的唯一管线**。
@@ -196,7 +321,9 @@ pub(crate) fn merge_client_patch(
     let mut merged = serde_json::to_value(base)?;
     let mut patch = patch.clone();
     sanitize_patch(&mut patch);
+    fill_array_secrets(base, &mut patch);
     merge_patch(&mut merged, &patch);
+    strip_cleared_array_secrets(&mut merged);
     // 合并结果可能是"旧位置"形状（旧客户端补丁）：与读盘同一套规范化，
     // 保证**保存出去的文件**与**内存里跑的配置**都是规范形状。
     let mut cfg: Config = serde_json::from_value(merged)?;

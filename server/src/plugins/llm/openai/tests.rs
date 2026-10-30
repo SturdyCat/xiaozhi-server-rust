@@ -15,6 +15,7 @@
 //! 不发 `ToolCall`/`Done`，但 `usage` 与部分文本**照常返回**（钱已花、观测要用）。
 
 use super::*;
+use crate::plugins::llm::LlmFallbackConfig;
 use crate::plugins::llm::LlmTurnResult;
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -61,6 +62,7 @@ fn build_input_maps_history_roles() {
         temperature: 0.7,
         stream: true,
         sentence_flush_ms: 1500,
+        fallback: LlmFallbackConfig::default(),
     };
     let client = LlmClient::new(&cfg);
     let history = vec![

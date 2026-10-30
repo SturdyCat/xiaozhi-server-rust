@@ -231,12 +231,20 @@ impl LlmClient {
 
         if !resp.status().is_success() {
             let status = resp.status();
+            // Retry-After 只认整数秒（`Retry-After: 120`）；HTTP-date 形式解析不了就放弃
+            //（主备切换没有它就退回指数退避冷藏，见 fallback.rs）。
+            let retry_after = resp
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.trim().parse::<u64>().ok());
             let body = resp.text().await.unwrap_or_default();
             // 截断巨长错误体：只用于日志/上报，不该把整页 HTML 灌进来
             let body: String = body.chars().take(500).collect();
             return Err(anyhow::Error::new(LlmFailure::Status {
                 code: status.as_u16(),
                 body,
+                retry_after,
             }));
         }
 
@@ -261,6 +269,7 @@ impl LlmClient {
                 return Err(anyhow::Error::new(LlmFailure::Status {
                     code: 200,
                     body: format!("上游在响应体里报错: {err}"),
+                    retry_after: None,
                 }));
             }
             let (text, calls) = parse_whole_response(&v);
