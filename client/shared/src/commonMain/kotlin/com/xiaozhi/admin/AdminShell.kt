@@ -327,7 +327,9 @@ private fun AdminSectionHost(page: AdminPage, viewport: AdminViewport) {
         "console" -> ConsolePage(console = page.console, toast = page.toast)
         // 文件（存储面）：面包屑 + 上传 + 新建目录 + 删除二次确认
         "files" -> FilesPage(state = page.files, toast = page.toast)
-        // EchoMuse 设备（T10）：六 tab 详情卡；「管理模型文件」跳「文件」页对应目录
+        // EchoMuse 设备（T10）：顶部「官方设备管理页（/em/）」入口卡 + 原有六 tab 详情卡。
+        // 官方页是按 EchoMuse 官方 dashboard 源码 vendor 的独立文档（web-only），
+        // 旧六 tab 保留专有能力（DLNA 音乐 / BLE GATT / 唤醒词资产 / WiFi 闭环）。
         "echomuse" -> EchoMusePage(
             state = page.echomuse,
             toast = page.toast,
@@ -336,6 +338,7 @@ private fun AdminSectionHost(page: AdminPage, viewport: AdminViewport) {
                 page.selectSection("files")
                 page.files.openPath(page, OWW_MODELS_DIR)
             },
+            officialEntry = { EmOfficialEntryCard(page) },
         )
         // 测试台（T12，mac-only）：五 tab 工作区（连接 / ASR 识别 / TTS 合成 / LLM 对话 / NLU 意图），
         // 播放控制下沉 XiaoZhiModule（Audio DSL 视图无法进 Compose 树，见 TestBenchPage.kt）

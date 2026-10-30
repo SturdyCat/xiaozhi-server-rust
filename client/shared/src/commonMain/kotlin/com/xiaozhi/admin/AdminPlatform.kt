@@ -68,3 +68,14 @@ expect fun pagerBaseUrl(pager: Pager): String
  * actual 内回落 `execCommand('copy')`；不支持剪贴板的平台返回 false（调用方 toast 提示）。
  */
 expect fun copyToClipboard(text: String): Boolean
+
+/**
+ * 打开一个管理台同源的网页（当前只有「官方 EchoMuse 设备管理页」用它）。
+ *
+ * 为什么需要：`/em/` 是原样 vendor 的官方 React 页面，与 Kuikly 管理台是**两个独立
+ * 文档**，Kuikly 的路由（`RouterModule`）只能打开 `@Page`，打不开纯静态页。
+ *
+ * 返回是否成功（弹窗被拦截、平台不支持 → false，调用方 toast 说明）。
+ * web 用 `window.open`；其余平台返回 false——该入口只在 web 侧有意义。
+ */
+expect fun openAdminUrl(url: String, newTab: Boolean = true): Boolean

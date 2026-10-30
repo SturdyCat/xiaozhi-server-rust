@@ -31,3 +31,6 @@ actual fun copyToClipboard(text: String): Boolean = try {
 } catch (_: Exception) {
     false
 }
+
+/** 官方设备管理页（`/em/`）只由 web 侧提供服务。 */
+actual fun openAdminUrl(url: String, newTab: Boolean): Boolean = false

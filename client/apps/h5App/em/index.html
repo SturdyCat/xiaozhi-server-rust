@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <!-- Management token travels in ?token=; never leak it to a third party. -->
+  <meta name="referrer" content="no-referrer" />
+  <title>EchoMuse 设备管理</title>
+  <style>
+    <!-- Fonts: hotlinked from Google Fonts (same URLs the upstream controller
+         image vendors at build time). No SRI for CSS url() — the gstatic paths
+         are version-pinned by their /vNN/ segment. -->
+    @font-face { font-family: 'DM Sans'; font-weight: 400; src: url('https://fonts.gstatic.com/s/dmsans/v17/rP2Yp2ywxg089UriI5-g4vlH9VoD8Cmcqbu0-K4.woff2') format('woff2'); }
+    @font-face { font-family: 'DM Sans'; font-weight: 500; src: url('https://fonts.gstatic.com/s/dmsans/v17/rP2Yp2ywxg089UriI5-g4vlH9VoD8Cmcqbu0-K4.woff2') format('woff2'); }
+    @font-face { font-family: 'DM Sans'; font-weight: 600; src: url('https://fonts.gstatic.com/s/dmsans/v17/rP2Yp2ywxg089UriI5-g4vlH9VoD8Cmcqbu0-K4.woff2') format('woff2'); }
+    @font-face { font-family: 'DM Mono'; font-weight: 400; src: url('https://fonts.gstatic.com/s/dmmono/v16/aFTR7PB1QTsUX8KYvumzEYOtbQ.woff2') format('woff2'); }
+    @font-face { font-family: 'DM Mono'; font-weight: 500; src: url('https://fonts.gstatic.com/s/dmmono/v16/aFTU7PB1QTsUX8KYthqQBA.woff2') format('woff2'); }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    /* ── Tokens ───────────────────────────────────────────────────────
+       Every colour the dashboard chrome uses. Light values are EXACTLY
+       what was hardcoded before, so the light theme is unchanged except
+       where near-duplicates were deliberately merged (four reds doing one
+       job, three ambers, three greens).
+
+       Three things are deliberately NOT tokens, because theming them
+       would be wrong rather than merely unfinished:
+         - LedRing / DeviceDiagram: they depict the physical Echo Dot and
+           the ring's real LED colours. A device rendered in "dark mode"
+           would be a different device.
+         - The LED colour pickers in DeviceConfigForm: those hexes are
+           values sent to the hardware, not styling.
+         - Shell's xterm theme: a 16-colour contract terminal programs
+           address by index.
+
+       Adding a value at a call site instead of here is how this got to
+       126 distinct hexes. Add it here. */
+    :root, :root[data-theme="light"] {
+      /* Surfaces, lightest to darkest */
+      --raised:    #e8e4de;
+      --card:      #e0dcd4;
+      --surface:   #d8d4cc;
+      --sunken:    #d0ccc4;
+      --bg:        #ccc8c0;
+
+      /* Borders */
+      --border:      #b8b4ac;
+      --border-soft: #c0bdb6;
+      --border-hard: #b0aca4;
+      --field-line: #777268;
+
+      /* Text */
+      --text:   #1e1c18;
+      --text2:  #4a4844;
+      --muted:  #575450;
+      --faint:  #767269;
+
+      /* Semantic state — one value each */
+      --ok:     #285e3f;
+      --warn:   #854212;
+      --error:  #973020;
+      --error-deep: #782020;
+      --on-error:   #f0d8d8;
+
+      /* Amber-tinted dark notice (the controller-update banner). */
+      --notice-bg:   linear-gradient(160deg,#2e2a1e,#221e14);
+      --notice-line: #3a3220;
+
+      /* Accent */
+      --accent:      #3e5675;
+      --accent-hi:   #4d698c;
+      --accent-deep: #304860;
+      --accent-lit:  #8ab0d0;
+      --accent-tint: #dde8f4;
+      --accent-line: #ccd8ec;
+
+      /* Inset dark regions: the LCD readouts, the console, the wizard
+         transcript. These stay dark in BOTH themes — they are meant to
+         read as a lit panel set into the surface. */
+      --lcd-bg:    #1e2219;
+      --lcd-green: #9aba80;
+      --lcd-amber: #c8a141;
+      --lcd-dim:   #95ae86;
+      --lcd-line:  #1a1c18;
+      --lcd-face:  #2a2e28;
+      --lcd-deep:  #1c1f18;
+      --lcd-faint: #3a4a30;
+      /* A device state's NAME on an LCD readout: the LED colour lifted to
+         4.5:1. The LED itself keeps its exact colour (deviceState.dot). */
+      --lcd-offline: #df956b;
+      --lcd-muted: #dc9393;
+      --lcd-speaking: #7eaadf;
+      --lcd-thinking: #c9a128;
+      --lcd-listening: #5db88d;
+
+      /* Shadows. Tokenised because a drop shadow tuned for a light ground
+         reads as a black smear on a dark one. */
+      --shadow-card:  0 4px 16px rgba(0,0,0,0.12), 0 1px 0 rgba(255,255,255,0.7) inset;
+      --shadow-hover: 0 8px 28px rgba(0,0,0,0.18), 0 1px 0 rgba(255,255,255,0.7) inset;
+      --shadow-inset: inset 0 2px 4px rgba(0,0,0,0.5);
+      --sheen:        rgba(255,255,255,0.4);
+      --hairline:     rgba(0,0,0,0.06);
+      --track:        rgba(0,0,0,0.10);
+    }
+
+    /* Dark theme. Not an inversion — the warm grey is the product's
+       identity, so this is the same hue family taken down past the LCD
+       rather than a neutral charcoal. Semantic colours are lifted, since
+       #286040 on a dark ground is unreadable. */
+    :root[data-theme="dark"] {
+      --raised:    #2b3024;
+      --card:      #22261c;
+      --surface:   #1b1e16;
+      --sunken:    #171a12;
+      --bg:        #14160f;
+
+      --border:      #343a2b;
+      --border-soft: #2c3124;
+      --border-hard: #414736;
+      --field-line: #7f8b69;
+
+      --text:   #ddd9d1;
+      --text2:  #b2ada4;
+      --muted:  #aaa8a4;
+      --faint:  #8a867f;
+
+      --ok:     #82b489;
+      --warn:   #d79b56;
+      --error:  #da978a;
+      --error-deep: #c16a5a;
+      --on-error:   #2a1512;
+
+      --notice-bg:   linear-gradient(160deg,#2a2718,#1b1810);
+      --notice-line: #3f3722;
+
+      --accent:      #8caac9;
+      --accent-hi:   #8fb0d0;
+      --accent-deep: #4a6a8c;
+      --accent-lit:  #a8c8e4;
+      --accent-tint: #1f2c3a;
+      --accent-line: #2f4054;
+
+      /* The panel has to stay distinguishable from a ground that is now
+         nearly as dark, so it goes slightly darker still and leans on its
+         own border. */
+      --lcd-bg:    #12150e;
+      --lcd-green: #9aba80;
+      --lcd-amber: #c8a141;
+      --lcd-dim:   #95ae86;
+      --lcd-line:  #0c0e08;
+      --lcd-face:  #1e2219;
+      --lcd-deep:  #14170f;
+      --lcd-faint: #3a4a30;
+      --lcd-offline: #df956b;
+      --lcd-muted: #dc9393;
+      --lcd-speaking: #7eaadf;
+      --lcd-thinking: #c9a128;
+      --lcd-listening: #5db88d;
+
+      --shadow-card:  0 4px 16px rgba(0,0,0,0.45), 0 1px 0 rgba(255,255,255,0.05) inset;
+      --shadow-hover: 0 8px 28px rgba(0,0,0,0.6),  0 1px 0 rgba(255,255,255,0.05) inset;
+      --shadow-inset: inset 0 2px 4px rgba(0,0,0,0.6);
+      --sheen:        rgba(255,255,255,0.05);
+      --hairline:     rgba(255,255,255,0.07);
+      --track:        rgba(0,0,0,0.35);
+    }
+
+    /* ── Scale tokens: type, font and corner radius ───────────────────
+       The same in both themes, so defined once. Each value is one the
+       dashboard already used, so converting a call site to its token
+       changes nothing on screen (#820). Values used too rarely to name
+       stay literal for now; tests/test_design_scale.py counts them and the
+       count can only fall. */
+    :root {
+      --font-sans: 'DM Sans', sans-serif;
+      --font-mono: 'DM Mono', monospace;
+
+      --fs-2xs:  8px;
+      --fs-xs:   9px;
+      --fs-sm:  10px;
+      --fs-md:  11px;
+      --fs-base: 12px;
+      --fs-lg:  14px;
+      --fs-xl:  16px;
+      --fs-2xl: 24px;
+      --fs-3xl: 28px;
+
+      --radius-xs:  2px;
+      --radius-sm:  4px;
+      --radius-md:  6px;
+      --radius-lg:  8px;
+      --radius-xl: 10px;
+      --radius-card:   14px;
+      --radius-dialog: 16px;
+
+      /* Letter-spacing by job: titles, mixed-case mono text, small
+         uppercase labels, section headings. */
+      --tracking-tight:   -0.02em;
+      --tracking-text:     0.05em;
+      --tracking-label:    0.1em;
+      --tracking-heading:  0.15em;
+
+      /* Spacing: --space-N is N x 2px, for gaps, padding and margins. A
+         2px step because 6, 10 and 14 are among the most used values;
+         odd values (3, 5, 7px...) stay literal until the scale is
+         collapsed. */
+      --space-1:   2px;
+      --space-2:   4px;
+      --space-3:   6px;
+      --space-4:   8px;
+      --space-5:  10px;
+      --space-6:  12px;
+      --space-7:  14px;
+      --space-8:  16px;
+      --space-9:  18px;
+      --space-10: 20px;
+      --space-12: 24px;
+      --space-14: 28px;
+      --space-16: 32px;
+      --space-18: 36px;
+      --space-24: 48px;
+      --space-30: 60px;
+    }
+
+    html, body { height: 100%; background: var(--bg); color: var(--text); }
+    /* No transition on the toggle itself — a 200ms cross-fade of an
+       entire dense dashboard reads as a glitch, not a flourish. */
+
+    /* ── Components ───────────────────────────────────────────────────
+       The repeated chrome, as classes rather than inline style objects, so
+       it can be retuned here without touching React. Declarations are ports
+       of what was inline — same values, same result.
+
+       Only genuinely repeated, structural things belong here. One-off
+       layout stays inline where it is read next to the markup it positions;
+       moving that into CSS trades an inline object for a class name plus a
+       rule somewhere else, which is not an improvement. */
+
+    /* Round icon control in the header: theme, settings, sign out. */
+    .em-iconbtn {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 30px; height: 30px; padding: 0;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 50%; cursor: pointer;
+      font-family: var(--font-mono); font-size: 13px; line-height: 1;
+      color: var(--text2);
+      box-shadow: 0 1px 0 var(--sheen) inset;
+      transition: background 0.12s, border-color 0.12s, color 0.12s;
+    }
+    .em-iconbtn:hover:not(:disabled) { background: var(--raised); border-color: var(--border-hard); color: var(--text); }
+    .em-iconbtn:active:not(:disabled) { background: var(--sunken); }
+    .em-iconbtn:disabled { cursor: default; }
+    /* Accent variant for the two actions that DO something to the fleet
+       (check for updates, deploy) as against the three that only change
+       what you are looking at. */
+    .em-iconbtn--accent {
+      background: linear-gradient(180deg, var(--accent-hi), var(--accent));
+      border-color: var(--accent-deep); color: var(--accent-tint);
+    }
+    /* Hover keeps the resting fill and adds a ring: a lighter fill dropped
+       the glyph under WCAG AA in light mode, and the themes would need
+       opposite fixes (dark mode puts dark ink on this accent). */
+    .em-iconbtn--accent:hover:not(:disabled) {
+      background: linear-gradient(180deg, var(--accent-hi), var(--accent));
+      border-color: var(--accent-deep); color: var(--accent-tint);
+      box-shadow: 0 0 0 2px var(--accent-line);
+    }
+    /* Busy state. An icon-only button has no room for "Checking…", so the
+       glyph itself carries the progress. */
+    .em-iconbtn--busy > svg { animation: em-spin 0.9s linear infinite; }
+    @keyframes em-spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) {
+      .em-iconbtn--busy > svg { animation: none; opacity: 0.55; }
+    }
+
+    /* Buttons. The variants are additive classes so a call site reads as
+       what it is (accent, danger, small) rather than as a ternary chain. */
+    .em-pill {
+      background: linear-gradient(180deg, var(--surface), var(--border-soft));
+      color: var(--text); border: 1px solid var(--faint); border-radius: 20px;
+      font-family: var(--font-sans); font-size: var(--fs-base); font-weight: 500;
+      padding: var(--space-4) var(--space-10); cursor: pointer; white-space: nowrap;
+      transition: all 0.1s;
+      box-shadow: 0 1px 0 rgba(255,255,255,0.15) inset, 0 2px 4px rgba(0,0,0,0.2);
+    }
+    .em-pill--small { font-size: var(--fs-md); padding: var(--space-3) var(--space-7); }
+    .em-pill--big   { font-size: var(--fs-lg); font-weight: 600; padding: var(--space-6) var(--space-14); }
+    .em-pill--accent {
+      background: linear-gradient(180deg, var(--accent-hi), var(--accent));
+      color: var(--accent-tint); border-color: var(--accent-deep);
+    }
+    .em-pill--danger {
+      background: linear-gradient(180deg, var(--error), var(--error-deep));
+      color: var(--on-error); border-color: var(--error-deep);
+    }
+    /* :disabled last so it wins over every variant without !important. */
+    .em-pill:disabled {
+      background: linear-gradient(180deg, var(--sunken), var(--border));
+      color: var(--muted); border-color: var(--border-hard);
+      cursor: not-allowed; box-shadow: none;
+    }
+
+    /* Bordered card grouping related controls. */
+    .em-panel {
+      background: linear-gradient(170deg, var(--raised), var(--card));
+      border: 1px solid var(--border); border-radius: var(--radius-xl);
+      padding: var(--space-7) var(--space-8) var(--space-8);
+      box-shadow: 0 1px 0 var(--sheen) inset;
+    }
+    /* A panel in a vertical stack of them (Settings): roomier, with the gap
+       below it. */
+    .em-panel--stacked { padding: var(--space-8) var(--space-9); margin-bottom: var(--space-9); }
+
+    /* Small uppercase mono heading. */
+    .em-label {
+      font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--muted);
+      text-transform: uppercase; letter-spacing: var(--tracking-heading); margin-bottom: var(--space-6);
+    }
+
+    /* Lit readout panel. */
+    .em-lcd {
+      background: linear-gradient(160deg, var(--lcd-face), var(--lcd-bg));
+      border: 1px solid var(--lcd-line); border-radius: var(--radius-md);
+      padding: var(--space-3) var(--space-5); min-width: 54px;
+      box-shadow: inset 0 1px 3px rgba(0,0,0,0.5);
+    }
+    .em-lcd__label {
+      font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--lcd-dim);
+      text-transform: uppercase; letter-spacing: var(--tracking-heading); margin-bottom: 3px;
+    }
+
+    /* Dark inset surface. Five sites re-typed the same four declarations —
+       the LCD panel enlarged. --em-inset-pad/--em-inset-radius let a site
+       vary the two things that actually differed between them. */
+    .em-inset {
+      background: linear-gradient(160deg, var(--lcd-face), var(--lcd-bg));
+      border: 1px solid var(--lcd-line);
+      border-radius: var(--em-inset-radius, 8px);
+      padding: var(--em-inset-pad, 12px 18px);
+      box-shadow: inset 0 2px 6px rgba(0,0,0,0.5);
+    }
+
+    /* Surfaces that are dark in BOTH themes. Text tokens inside them take the
+       dark theme's values, whatever the page theme is: a light-theme token is
+       tuned for a light panel and fails WCAG AA on these. test_contrast.py
+       holds these values equal to the dark theme's. Anything light nested
+       inside one (a pill, say) must set its own colours. */
+    .em-lcd, .em-inset, .em-console, .em-ctrl-update, .em-on-dark {
+      --text: #ddd9d1; --text2: #b2ada4; --muted: #aaa8a4; --faint: #8a867f;
+      --ok: #82b489; --warn: #d79b56; --error: #da978a; --accent: #8caac9;
+    }
+
+    /* Scrolling log/transcript output. */
+    .em-console {
+      background: linear-gradient(160deg, var(--lcd-face), var(--lcd-bg));
+      border: 1px solid var(--lcd-line); border-radius: var(--radius-lg);
+      box-shadow: var(--shadow-inset);
+      font-family: var(--font-mono); font-size: var(--fs-sm); line-height: 1.7;
+      padding: var(--space-5) var(--space-7); overflow-y: auto;
+    }
+    .em-console__line--head {
+      color: var(--accent-lit); letter-spacing: var(--tracking-label); font-weight: 600;
+      margin-top: var(--space-5); padding-top: var(--space-3);
+      border-top: 1px solid var(--lcd-faint);
+    }
+    .em-console__line--head:first-child { margin-top: 0; padding-top: 0; border-top: none; }
+    .em-console__line--error { color: var(--error); font-weight: 500; }
+    .em-console__line--ok    { color: var(--ok); }
+    .em-console__line--warn  { color: var(--warn); }
+    .em-console__line--wait  { color: var(--accent-lit); font-style: italic; }
+    .em-console__line--adb   { color: var(--lcd-dim); font-size: var(--fs-xs); }
+    .em-console__line--detail { color: var(--lcd-green); opacity: 0.85; }
+    .em-console__line--info  { color: var(--lcd-green); }
+
+    /* Provisioning wizard chrome. */
+    .em-wizard-progress { padding: var(--space-5) var(--space-7) var(--space-4); border-bottom: 1px solid var(--border); }
+    .em-wizard-progress__track {
+      height: 4px; background: var(--sunken); border-radius: var(--radius-xs); overflow: hidden;
+    }
+    .em-wizard-progress__fill {
+      height: 100%; background: var(--accent); border-radius: var(--radius-xs);
+      transition: width 0.25s ease;
+    }
+    .em-wizard-progress__label {
+      font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--muted);
+      letter-spacing: var(--tracking-label); text-transform: uppercase; margin-top: var(--space-3);
+    }
+    .em-wizard-step {
+      padding: 5px 12px; display: flex; align-items: flex-start; gap: var(--space-3);
+      border-left: 2px solid transparent;
+    }
+    .em-wizard-step--active {
+      background: var(--hairline); border-left-color: var(--accent);
+    }
+    .em-wizard-step--done   { opacity: 0.75; }
+    .em-wizard-step--error  { border-left-color: var(--warn); }
+    .em-wizard-step__num {
+      font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--muted);
+      flex-shrink: 0; width: 14px; padding-top: 1px;
+    }
+    .em-wizard-step__icon {
+      font-family: var(--font-mono); font-size: var(--fs-sm); flex-shrink: 0; width: 10px;
+    }
+    .em-wizard-step__label {
+      font-family: var(--font-mono); font-size: var(--fs-xs); letter-spacing: var(--tracking-text);
+      line-height: 1.4;
+    }
+    .em-wizard-step--active .em-wizard-step__label { color: var(--text); font-weight: 600; }
+    .em-wizard-step--pending .em-wizard-step__label { color: var(--muted); }
+    .em-wizard-status {
+      display: flex; align-items: center; gap: var(--space-4); margin-bottom: var(--space-5);
+      padding: var(--space-4) var(--space-6); border-radius: var(--radius-lg);
+      background: color-mix(in srgb, var(--accent) 12%, var(--hairline));
+      border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--border));
+      font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--text2);
+    }
+    .em-wizard-status__dot {
+      width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+      background: var(--accent);
+      animation: em-wizard-pulse 1.4s ease-in-out infinite;
+    }
+    .em-wizard-status--wait .em-wizard-status__dot { background: var(--warn); }
+    @keyframes em-wizard-pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.45; transform: scale(0.85); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .em-wizard-status__dot { animation: none; opacity: 0.7; }
+    }
+    .em-wizard-upcoming {
+      margin-bottom: var(--space-6); padding: var(--space-5) var(--space-6);
+      background: var(--hairline); border: 1px solid var(--border-soft);
+      border-radius: var(--radius-lg);
+    }
+    .em-wizard-upcoming__item { margin-top: var(--space-3); }
+    .em-wizard-upcoming__item:first-of-type { margin-top: 0; }
+    .em-wizard-upcoming__name {
+      font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text2);
+      letter-spacing: var(--tracking-text); display: block;
+    }
+    .em-wizard-upcoming__desc {
+      font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--muted);
+      line-height: 1.5; display: block; margin-top: var(--space-1);
+    }
+    .em-wizard-recovery { margin-bottom: var(--space-6); }
+    .em-wizard-recovery__hint {
+      font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--text2);
+      line-height: 1.6; margin: 0 0 var(--space-5);
+    }
+    .em-wizard-recovery__reason {
+      font-family: var(--font-mono); font-size: var(--fs-md); color: var(--warn);
+      line-height: 1.6; margin: 0 0 var(--space-4);
+    }
+    .em-wizard-recovery__actions { display: flex; gap: var(--space-4); flex-wrap: wrap; }
+    /* A light system scrollbar on these dark panes read as a white strip. */
+    .em-wizard-scroll, .em-console { scrollbar-width: thin; scrollbar-color: var(--muted) transparent; }
+
+    /* Keyboard focus. Inline styles cannot express :focus-visible at all, so
+       until now there was no focus ring anywhere in the dashboard. */
+    .em-iconbtn:focus-visible,
+    .em-pill:focus-visible,
+    .em-tab:focus-visible,
+    .em-input:focus-visible,
+    [role="button"]:focus-visible,
+    [role="switch"]:focus-visible {
+      outline: 2px solid var(--accent-hi); outline-offset: 2px;
+    }
+
+    /* Mobile layout — the dashboard is inline-styled, so phone-width
+       adjustments live here as class-targeted media overrides (the classes
+       are on the structural containers in dashboard.jsx). !important is
+       required to beat the inline styles; keep these to layout only. */
+    @media (max-width: 640px) {
+      .em-page    { padding: 16px 12px 48px !important; }
+      .em-header  { flex-wrap: wrap !important; gap: 10px !important; margin-bottom: 20px !important; }
+      .em-summary { flex-wrap: wrap !important; }
+      .em-summary > div { flex: 1 1 40% !important; }
+      .em-summary > .em-summary-release { flex: 1 1 100% !important; }
+      /* Modals go full-screen — the desktop frame is min(900px,95vw) ×
+         min(700px,90vh), which leaves useless slivers of backdrop on a
+         phone. 100dvh tracks the browser chrome collapsing on scroll. */
+      .em-modal      { width: 100vw !important; height: 100dvh !important; border-radius: 0 !important; }
+      .em-modal-head { padding: 12px 14px 0 !important; }
+      .em-modal-headrow { flex-wrap: wrap !important; gap: 10px !important; }
+      .em-modal-body { padding: 14px !important; }
+      /* Two-column content grids stack on phones. */
+      .em-grid2 { grid-template-columns: 1fr !important; }
+    }
+    /* Text inputs: the inset field. Used WITH .em-inset, which gives the
+       dark panel and turns the text tokens to their dark values, so the
+       field reads the same in both themes. An input with neither gets the
+       browser's white box, which is what eight of them were. */
+    .em-input {
+      font-family: var(--font-mono); font-size: var(--fs-md); color: var(--text);
+      border: 1px solid var(--field-line); min-width: 0;
+      /* The field is dark in both themes, so the browser's own parts (a
+         select's option list, autofill, the arrow) are drawn dark too. */
+      color-scheme: dark;
+    }
+    .em-input::placeholder { color: var(--muted); }
+
+    /* Form fields (Slider, NumberField, PasswordField, Toggle, Select,
+       ControllerEndpointsField): the wrapper, the label, a short aside
+       beside it and a help line under it. Layout particular to one field
+       stays inline in that component. */
+    .em-field { margin-bottom: var(--space-10); min-width: 0; }
+    .em-field__label { font-family: var(--font-mono); font-size: var(--fs-md); color: var(--text2); }
+    .em-field__label--disabled { color: var(--muted); }
+    .em-field__aside { font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--muted); margin-left: var(--space-4); }
+    .em-field__help {
+      font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--muted);
+      line-height: 1.6; margin-bottom: var(--space-4);
+    }
+
+    /* TabBar: the raised folder tabs of the device view and Settings. The
+       strip scrolls horizontally instead of overflowing on any width. */
+    .em-tabs {
+      display: flex; gap: var(--space-1);
+      overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none;
+    }
+    .em-tab {
+      background: transparent; color: var(--muted);
+      border: 1px solid transparent; border-radius: var(--radius-md) var(--radius-md) 0 0;
+      font-family: var(--font-mono); font-size: var(--fs-sm);
+      text-transform: uppercase; letter-spacing: var(--tracking-label);
+      padding: var(--space-4) var(--space-7); margin-bottom: -1px; cursor: pointer; transition: color 0.15s;
+    }
+    .em-tab--active {
+      background: linear-gradient(180deg, var(--raised), var(--surface)); color: var(--text);
+      border-color: var(--border-hard); border-bottom-color: var(--surface);
+    }
+    .em-tabs::-webkit-scrollbar { display: none; }
+    .em-tabs > button { flex-shrink: 0; }
+  </style>
+  <script>
+    // Theme is forced to light here: this page is hosted by the xiaozhi-server
+    // admin console, which is a light-theme GearUI app. Kept synchronous (before
+    // first paint) so there is no flash of the wrong palette.
+    (function () {
+      try {
+        document.documentElement.setAttribute('data-theme', 'light');
+      } catch (e) { /* no-op */ }
+    })();
+  </script>
+</head>
+<body>
+  <div id="root"></div>
+  <!-- Third-party libs from CDN (URLs identical to what the upstream
+       controller image vendors). SRI pins the exact bytes; crossorigin is
+       required for integrity checking. -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css"
+        integrity="sha384-tStR1zLfWgsiXCF3IgfB3lBa8KmBe/lG287CL9WCeKgQYcp1bjb4/+mwN6oti4Co" crossorigin="anonymous" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"
+          integrity="sha384-tMH8h3BGESGckSAVGZ82T9n90ztNXxvdwvdM6UoR56cYcf+0iGXBliJ29D+wZ/x8" crossorigin="anonymous"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"
+          integrity="sha384-bm7MnzvK++ykSwVJ2tynSE5TRdN+xL418osEVF2DE/L/gfWHj91J2Sphe582B1Bh" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"
+          integrity="sha384-J4qzUjBl1FxyLsl/kQPQIOeINsmp17OHYXDOMpMxlKX53ZfYsL+aWHpgArvOuof9" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"
+          integrity="sha384-XGqKrV8Jrukp1NITJbOEHwg01tNkuXr6uB6YEj69ebpYU3v7FvoGgEg23C1Gcehk" crossorigin="anonymous"></script>
+  <!-- adapter.js must load first: it installs the fetch/WebSocket shims that
+       translate upstream /api/devices* onto this server's /api/echomuse/*. -->
+  <script src="static/adapter.js"></script>
+  <script src="static/dashboard.js"></script>
+  <!-- host.js mounts the upstream Card/Detail globals; dashboard.jsx's own
+       App auto-mount is stripped at build time (tools/build_em_dashboard.sh). -->
+  <script src="static/host.js"></script>
+</body>
+</html>

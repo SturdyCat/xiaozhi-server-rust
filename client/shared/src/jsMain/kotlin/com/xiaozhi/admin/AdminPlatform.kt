@@ -26,6 +26,18 @@ actual fun Pager.stopAdminServerDiscovery() {
 actual fun pagerBaseUrl(pager: Pager): String = ""
 
 /**
+ * `window.open` 打开同源静态页（官方设备管理页 `/em/`）。
+ * 被浏览器弹窗拦截时 `window.open` 返回 null；它也可能"成功但返回 null"，
+ * 所以 null 只作为失败信号（调用方提示改用直接访问 URL）。
+ */
+actual fun openAdminUrl(url: String, newTab: Boolean): Boolean = try {
+    val opened = window.open(url, if (newTab) "_blank" else "_self")
+    opened != null
+} catch (_: Throwable) {
+    false
+}
+
+/**
  * 优先 async Clipboard API（https/localhost）；管理台常以 `http://LAN-IP` 访问，
  * 非 secure context 下 API 不存在，回落隐藏 textarea + `execCommand('copy')`。
  */

@@ -191,7 +191,10 @@ RUN --mount=type=cache,target=/home/gradle/.gradle \
       -Dorg.gradle.jvmargs="-Xmx${GRADLE_XMX} -Dfile.encoding=UTF-8" \
  && test -f apps/h5App/web/index.html \
  && test -f apps/h5App/web/nativevue2.js \
- && test -f apps/h5App/web/h5App.js
+ && test -f apps/h5App/web/h5App.js \
+ && test -f apps/h5App/web/em/index.html \
+ && test -f apps/h5App/web/em/static/dashboard.js \
+ && test -f apps/h5App/web/em/static/adapter.js
 
 # ---- Rust 构建阶段 ----
 # rust:1.92-bookworm = 满足 ort 2.0.0-rc.14（nlu 特性）的 rustc ≥ 1.92 最低要求

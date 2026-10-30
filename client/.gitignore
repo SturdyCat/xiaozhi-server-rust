@@ -41,6 +41,9 @@ iosApp.xcworkspace/
 # 是 :apps:h5App:publishWeb 构建输出，不入库（Docker web 阶段自行构建）。
 apps/h5App/web/*.js
 apps/h5App/web/*.js.map
+# 官方设备管理页（原样 vendor）的**发布产物**：源在 apps/h5App/em/（入库），
+# web/em/ 由 :apps:h5App:syncEmAssets 拷出，不入库。
+apps/h5App/web/em/
 # ⚠️ kotlin-js-store/yarn.lock（Kotlin/JS 的 npm 依赖锁）**必须入库**：
 # 没有 lockfile 时 yarn 自行解析传递依赖，与仓库锁定值漂移（xiaoya 实测 @types/node 26.4.1 → 26.6.2）。
 

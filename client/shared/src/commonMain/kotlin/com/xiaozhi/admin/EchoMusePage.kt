@@ -64,6 +64,13 @@ fun EchoMusePage(
     isActive: () -> Boolean,
     /** 唤醒词面板「管理模型文件（oww-models/）」入口（跳「文件」页对应目录，AdminPage 接线）。 */
     onOpenModelFiles: () -> Unit = {},
+    /**
+     * 页面顶部的插槽：当前用于「官方设备管理页（`/em/`）」入口卡。
+     *
+     * 放在正文最上方而不是外挂一个 `Column`：本页是 `Column{header; ScrollView(weight=1f)}`，
+     * 外层再套 Column 会让 `weight` 落进无界高度约束，滚动区高度不可预期。
+     */
+    officialEntry: (@Composable () -> Unit)? = null,
 ) {
     val pager = LocalAdminPagerOrThrow()
     val active = isActive()
@@ -77,6 +84,7 @@ fun EchoMusePage(
                     .fillMaxWidth()
                     .padding(horizontal = GearUiSpace.pagePadding, vertical = GearUiSpace.md),
             ) {
+                if (officialEntry != null) officialEntry()
                 EmPageBody(
                     state = state,
                     toast = toast,

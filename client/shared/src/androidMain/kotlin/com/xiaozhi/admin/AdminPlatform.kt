@@ -26,3 +26,6 @@ actual fun pagerBaseUrl(pager: Pager): String = ""
 
 /** Android 宿主未接 Context 桥，暂不支持一键复制（调用方 toast 提示）。 */
 actual fun copyToClipboard(text: String): Boolean = false
+
+/** 官方设备管理页（`/em/`）只由 web 侧提供服务。 */
+actual fun openAdminUrl(url: String, newTab: Boolean): Boolean = false

@@ -46,3 +46,6 @@ actual fun copyToClipboard(text: String): Boolean = try {
 } catch (_: Exception) {
     false
 }
+
+/** macOS 壳没有内嵌浏览器：官方设备管理页（`/em/`）只在 web 侧可用。 */
+actual fun openAdminUrl(url: String, newTab: Boolean): Boolean = false
