@@ -11,6 +11,10 @@ import org.w3c.dom.HTMLIFrameElement
 class EchoMuseOfficialViewHost : IKuiklyRenderViewExport {
     override val ele = (document.createElement("div") as HTMLDivElement).apply {
         style.setProperty("overflow", "hidden")
+        // Card's border/shadow canvases are appended after its children. Keep the
+        // interactive native document above those decorative siblings, within
+        // this modal's stacking context (later overlay layers still cover it).
+        style.setProperty("z-index", "1")
     }
     private var frame: HTMLIFrameElement? = null
     private var currentUrl: String? = null

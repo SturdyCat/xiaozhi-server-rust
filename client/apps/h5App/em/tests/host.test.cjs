@@ -244,14 +244,15 @@ test('standalone list without device still opens an official detail from its car
   assert.ok(detail(app));
 });
 
-test('embedded CSS beats inline/mobile modal styles and hides only detail Close', () => {
+test('embedded CSS renders body only without duplicate device chrome or nested-dialog damage', () => {
   const html = fs.readFileSync(path.join(base, 'index.html'), 'utf8');
   const css = html.slice(html.indexOf('/* Embedded host only:'));
   assert.match(css, /\.em-embedded-detail > div \{[^}]*position: static !important;[^}]*background: transparent !important;[^}]*backdrop-filter: none !important;/);
   assert.match(css, /\.em-embedded-detail > div > \.em-modal \{[^}]*width: 100% !important; height: 100% !important;[^}]*border: 0 !important; border-radius: 0 !important;[^}]*box-shadow: none !important;/);
-  assert.match(css, /\.em-embedded-detail \.em-modal-headrow button\[title="Close"\] \{ display: none !important; \}/);
-  assert.doesNotMatch(css, /\.em-modal-head\s*\{[^}]*display:\s*none/);
-  assert.match(css, /Keep the official device toolbar/);
+  assert.match(css, /\.em-embedded-detail > div > \.em-modal > \.em-modal-head \{ display: none !important; \}/);
+  assert.doesNotMatch(css, /(?:^|\n)\s*\.em-modal-head\s*\{/);
+  assert.doesNotMatch(css, /\.em-modal-body\s*\{[^}]*display:\s*none/);
+  assert.match(css, /Pending approval lives in the body/);
   assert.match(css, /\.em-embedded-detail \.em-embedded-tabbar-hidden \{ display: none !important; \}/);
   assert.ok(html.indexOf('/* Embedded host only:') > html.indexOf('@media (max-width: 640px)'));
 });

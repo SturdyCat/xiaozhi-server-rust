@@ -22,6 +22,7 @@ class KuiklyWebRenderViewDelegator : KuiklyRenderViewDelegatorDelegate {
     override fun registerExternalRenderView(kuiklyRenderExport: IKuiklyRenderExport) {
         super.registerExternalRenderView(kuiklyRenderExport)
         kuiklyRenderExport.renderViewExport("EchoMuseOfficialViewHost", { EchoMuseOfficialViewHost() })
+        kuiklyRenderExport.renderViewExport("EchoMuseConsoleKeyboardHost", { EchoMuseConsoleKeyboardHost() })
     }
 
     override fun registerExternalModule(kuiklyRenderExport: IKuiklyRenderExport) {

@@ -239,10 +239,11 @@ class EchoMuseState(scope: Pager) {
      * 批准一台设备。成功后回调 `onDone(true, msg)` 并由调用方刷新列表（approved 状态以
      * 服务端为准）；404 = 设备不存在（列表过期，刷新即可）。
      */
-    fun approve(ctx: Pager, deviceId: String, onDone: (ok: Boolean, msg: String) -> Unit) {
+    fun approve(ctx: Pager, deviceId: String, label: String = approveDraft, onDone: (ok: Boolean, msg: String) -> Unit) {
         if (actionBusy) return
         actionBusy = true
-        val body = JSONObject().apply { put("label", approveDraft.trim()) }
+        // 官方改名与首次审批共用 approve 端点；标题栏草稿不借用全局审批草稿。
+        val body = JSONObject().apply { put("label", label.trim()) }
         post(ctx, "/api/echomuse/devices/${echoMuseUrlComponent(deviceId)}/approve", body) { ok, code, reason, _ ->
             actionBusy = false
             if (ok) {

@@ -235,7 +235,8 @@
 
   // Separate component: embedded mode never mounts useDevices or fleet chrome.
   // Keep the upstream Detail implementation (including approval and all six tabs)
-  // untouched; .em-embedded makes its modal frame an ordinary full-height panel.
+  // untouched; .em-embedded flattens its frame and hides its complete header.
+  // The parent provides identity/actions/navigation; only the official body is UI.
   function EmbeddedPage() {
     var det = useDetail(DEVICE_ID);
     var detailRef = React.useRef(null);
@@ -290,8 +291,8 @@
       token: TOKEN,
       isAdmin: true,
       globalConfig: FLEET,
-      // Close is hidden and there is no backdrop. Upstream calls onClose
-      // after approval OR deletion: refresh the same id, never show fleet.
+      // The entire upstream header is hidden and there is no backdrop.
+      // Approval still calls onClose: refresh the same id, never show fleet.
       onClose: det.refresh,
       onApprove: function () {},
       onDeviceConfigChange: function (id, patch) {

@@ -13,8 +13,11 @@ import com.tencent.kuikly.compose.foundation.layout.*
 import com.tencent.kuikly.compose.ui.Alignment
 import com.tencent.kuikly.compose.ui.Modifier
 import com.xiaozhi.admin.kit.LocalAdminSpacing
+import com.xiaozhi.admin.kit.LocalAdminViewport
+import com.xiaozhi.admin.kit.GearUiBreakpoints
+import com.tencent.kuikly.compose.ui.unit.dp
 
-/** 列表只显示 Kuikly 设备摘要；单设备管理统一进入双 Tab 弹窗。 */
+/** 官方设备卡的 Kuikly 中文版；单设备管理进入唯一的混合 Tabs 弹窗。 */
 @Composable
 fun EchoMusePage(
     state: EchoMuseState,
@@ -26,6 +29,12 @@ fun EchoMusePage(
 ) {
     val pager = LocalAdminPagerOrThrow()
     val active = isActive()
+    val viewport = LocalAdminViewport.current
+    val spacing = LocalAdminSpacing.current
+    val contentWidth = viewport.width.value -
+        (if (viewport.isNarrow) 0f else GearUiBreakpoints.SIDEBAR_WIDTH + 1f) - spacing.pagePadding.value * 2
+    val columns = ((contentWidth + spacing.gutter.value) / (220f + spacing.gutter.value)).toInt().coerceAtLeast(1)
+    val cardWidth = ((contentWidth - spacing.gutter.value * (columns - 1)) / columns).coerceAtLeast(1f)
     var selectedId by remember(apiBase, token) { mutableStateOf<String?>(null) }
     val selected = state.devices.firstOrNull { it.deviceId == selectedId }
     DisposableEffect(state, active, apiBase, token) {
@@ -68,8 +77,14 @@ fun EchoMusePage(
                             description = "设备首次连上服务端后会出现在这里，经批准后即可管理。",
                             actionText = "刷新", onAction = { state.refresh(pager) }, modifier = Modifier.fillMaxWidth())
                     }
-                    for (row in state.devices) {
-                        EchoMuseDeviceCard(row = row, onOpen = { selectedId = row.deviceId })
+                    for (group in state.devices.chunked(columns)) {
+                        Row(modifier = Modifier.fillMaxWidth().padding(bottom = spacing.gutter),
+                            horizontalArrangement = Arrangement.spacedBy(spacing.gutter)) {
+                            for (row in group) {
+                                EchoMuseDeviceCard(row = row, onOpen = { selectedId = row.deviceId },
+                                    modifier = Modifier.width(cardWidth.dp))
+                            }
+                        }
                     }
                 }
             }

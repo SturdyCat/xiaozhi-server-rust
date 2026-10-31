@@ -209,118 +209,6 @@ fn frame_json(frame: &ConsoleFrame) -> serde_json::Value {
 }
 
 #[test]
-fn frame_types_and_codes_match_shared_contract() {
-    // ready：任何 output 之前的第一帧，mode 一期恒 "pipe"。
-    let ready = frame_json(&ConsoleFrame::Ready {
-        device_id: "d1".into(),
-        mode: frames::MODE_PIPE,
-        insecure: true,
-        notice: "n".into(),
-    });
-    assert_eq!(ready["type"], "ready");
-    assert_eq!(ready["device_id"], "d1");
-    assert_eq!(ready["mode"], "pipe");
-    assert_eq!(ready["insecure"], true);
-    assert_eq!(ready["notice"], "n");
-
-    let output = frame_json(&ConsoleFrame::Output {
-        text: "hi\n".into(),
-    });
-    assert_eq!(output["type"], "output");
-    assert_eq!(output["text"], "hi\n");
-
-    let notice = frame_json(&ConsoleFrame::Notice {
-        code: frames::NoticeCode::OutputCapped,
-        text: frames::COPY_CAPPED.into(),
-    });
-    assert_eq!(notice["type"], "notice");
-    assert_eq!(notice["code"], "output-capped");
-    assert_eq!(notice["text"], frames::COPY_CAPPED);
-
-    // error.code 五个字面量 + 定值文案（§5.2 / §8.3）。
-    for (code, literal, copy) in [
-        (ErrorCode::Busy, "busy", frames::COPY_BUSY),
-        (
-            ErrorCode::InputTooLong,
-            "input-too-long",
-            frames::COPY_INPUT_TOO_LONG,
-        ),
-        (
-            ErrorCode::RateLimited,
-            "rate-limited",
-            frames::COPY_RATE_LIMITED,
-        ),
-        (
-            ErrorCode::DeviceOffline,
-            "device-offline",
-            frames::COPY_DEVICE_OFFLINE,
-        ),
-    ] {
-        let json = frame_json(&ConsoleFrame::Error {
-            code,
-            error: code.message(""),
-        });
-        assert_eq!(json["type"], "error");
-        assert_eq!(json["code"], literal);
-        assert_eq!(json["error"], copy);
-    }
-    let internal = frame_json(&ConsoleFrame::Error {
-        code: ErrorCode::Internal,
-        error: ErrorCode::Internal.message("占槽失败"),
-    });
-    assert_eq!(internal["code"], "internal");
-    assert_eq!(
-        internal["error"],
-        format!("{}占槽失败", frames::COPY_INTERNAL)
-    );
-
-    // closed.reason 八个共享字面量 + 仅审计用的 client-closed（`code()` 与 serde 同步）。
-    let all = [
-        (CloseReason::IdleTimeout, "idle-timeout"),
-        (CloseReason::SessionLimit, "session-limit"),
-        (CloseReason::DeviceOffline, "device-offline"),
-        (CloseReason::Superseded, "superseded"),
-        (CloseReason::DeviceShellLost, "device-shell-lost"),
-        (CloseReason::Replaced, "replaced"),
-        (CloseReason::ServerShutdown, "server-shutdown"),
-        (CloseReason::Internal, "internal"),
-        (CloseReason::ClientClosed, "client-closed"),
-    ];
-    for (reason, literal) in all {
-        assert_eq!(reason.code(), literal);
-        assert_eq!(
-            serde_json::to_value(reason).unwrap().as_str(),
-            Some(literal),
-            "serde 与 code() 必须同字面量"
-        );
-        let json = frame_json(&ConsoleFrame::Closed {
-            reason,
-            detail: "d".into(),
-            inputs: 3,
-            bytes_out: 4096,
-            secs: 7,
-        });
-        assert_eq!(json["type"], "closed");
-        assert_eq!(json["reason"], literal);
-        assert_eq!(json["detail"], "d");
-        assert_eq!(json["inputs"], 3);
-        assert_eq!(json["bytes_out"], 4096);
-        assert_eq!(json["secs"], 7);
-    }
-
-    let pong = frame_json(&ConsoleFrame::Pong);
-    assert_eq!(pong["type"], "pong");
-
-    // shell_meta：与官方 dashboard 帧逐字一致（type 必须是 "shell_meta"，不是 kebab）。
-    let meta = frame_json(&ConsoleFrame::ShellMeta { pty: true });
-    assert_eq!(meta["type"], "shell_meta");
-    assert_eq!(meta["pty"], true);
-    let meta_pipe = frame_json(&ConsoleFrame::ShellMeta { pty: false });
-    assert_eq!(meta_pipe["type"], "shell_meta");
-    assert_eq!(meta_pipe["pty"], false);
-}
-
-#[test]
 fn inbound_frames_parse_by_type_and_reject_junk() {
     assert_eq!(
         frames::parse_incoming(r#"{"type":"input","data":"uname -a"}"#),
@@ -498,8 +386,9 @@ async fn device_route(
     ws: WebSocketUpgrade,
     Path(id): Path<String>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Query(query): Query<HashMap<String, String>>,
 ) -> Response {
-    match shell::claim(&id, peer.ip(), true) {
+    match shell::claim(&id, peer.ip(), !query.contains_key("pipe")) {
         Ok(tx) => ws.on_upgrade(move |socket| async move {
             let _ = tx.send(socket);
         }),
@@ -561,6 +450,8 @@ async fn loopback_ready_output_and_client_close_teardown() {
         let ready = next_json(&mut ws);
         assert_eq!(ready["type"], "ready");
         assert_eq!(ready["mode"], "pty");
+        assert_eq!(ready["raw_input"], true);
+        assert_eq!(ready["resize"], true);
         assert_eq!(ready["device_id"], client_id.as_str());
         assert_eq!(ready["insecure"], false);
         assert!(ready["notice"].as_str().is_some_and(|n| !n.is_empty()));
@@ -575,6 +466,17 @@ async fn loopback_ready_output_and_client_close_teardown() {
         // 2) 输入一行 → 服务端写设备 stdin（raw 字节 + 换行）。
         ws.send(tungstenite::Message::Text(
             r#"{"type":"input","data":"uname -a"}"#.into(),
+        ))
+        .unwrap();
+
+        ws.send(tungstenite::Message::Text(
+            serde_json::json!({"type":"input","data":"\u{1b}[A你好\r","raw":true})
+                .to_string()
+                .into(),
+        ))
+        .unwrap();
+        ws.send(tungstenite::Message::Text(
+            r#"{"type":"resize","cols":300,"rows":50}"#.into(),
         ))
         .unwrap();
 
@@ -608,7 +510,20 @@ async fn loopback_ready_output_and_client_close_teardown() {
             tungstenite::Message::Text(text) => text.as_bytes().to_vec(),
             other => panic!("意外的 stdin 帧：{other:?}"),
         };
-        assert_eq!(stdin, b"\x00uname -a\n", "PTY 模式输入必须带 0x00 帧头直达设备 stdin");
+        assert_eq!(
+            stdin, b"\x00uname -a\n",
+            "PTY 模式输入必须带 0x00 帧头直达设备 stdin"
+        );
+        match ws.read().unwrap() {
+            tungstenite::Message::Binary(bytes) => {
+                assert_eq!(bytes.as_ref(), "\0\u{1b}[A你好\r".as_bytes())
+            }
+            other => panic!("raw frame missing: {other:?}"),
+        }
+        match ws.read().unwrap() {
+            tungstenite::Message::Binary(bytes) => assert_eq!(bytes.as_ref(), &[1, 1, 44, 0, 50]),
+            other => panic!("resize frame missing: {other:?}"),
+        }
         ws.send(tungstenite::Message::Binary(
             b"fake-kernel\n".to_vec().into(),
         ))
@@ -639,3 +554,6 @@ async fn loopback_ready_output_and_client_close_teardown() {
     server.abort();
     em::hub_remove(id);
 }
+
+#[path = "console_contract_tests.rs"]
+mod contract_tests;

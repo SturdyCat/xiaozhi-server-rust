@@ -110,6 +110,7 @@ pub(super) struct ConsoleSession {
     last_input: Instant,
     inputs: u32,
     rate: TokenBucket,
+    raw_rate: frames::RawBudget,
     carry: Utf8Carry,
     budget: Budget,
     closed: bool,
@@ -135,6 +136,7 @@ impl ConsoleSession {
             last_input: now,
             inputs: 0,
             rate: TokenBucket::new(frames::INPUT_PER_SEC),
+            raw_rate: frames::RawBudget::new(now),
             carry: Utf8Carry::new(),
             budget: Budget::new(frames::SESSION_BYTES_CAP),
             closed: false,
@@ -159,10 +161,7 @@ impl ConsoleSession {
     /// 设备真实建立的 shell 模式（来自回拨 URL 的 `?pty=1`），经捕获的租约 `Operation`
     /// 读 `shell::pending` 里的 `pty` 标志。回拨之后才取得到（设备此时已拨回）。
     fn device_pty(&self) -> bool {
-        self.lease
-            .as_ref()
-            .map(|op| op.pty())
-            .unwrap_or(false)
+        self.lease.as_ref().map(|op| op.pty()).unwrap_or(false)
     }
 
     // ---- 审计（三行，全部 `tracing::info!`；含命令全文，按敏感数据对待） ----
@@ -214,6 +213,8 @@ impl ConsoleSession {
             } else {
                 frames::MODE_PIPE
             },
+            raw_input: self.pty,
+            resize: self.pty,
             insecure: self.insecure,
             notice: if self.pty {
                 frames::COPY_READY_NOTICE.to_string()
@@ -240,34 +241,6 @@ impl ConsoleSession {
     }
 
     // ---- 入站：浏览器 → 设备 ----
-
-    /// 处理一条浏览器文本帧。被拒（限流/超长）时**一个字节都不写设备**：
-    /// 决策由 `frames::plan_line`/`plan_ctrl_c` 给出，`Reject` 不携带字节。
-    async fn on_browser_text(
-        &mut self,
-        text: &str,
-        browser: &mut WebSocket,
-        device: &mut WebSocket,
-    ) {
-        match frames::parse_incoming(text) {
-            frames::Incoming::Ping => self.send(browser, &ConsoleFrame::Pong).await,
-            frames::Incoming::CtrlC => match frames::plan_ctrl_c(&mut self.rate, Instant::now(), self.pty) {
-                frames::InputAction::Write(bytes) => {
-                    self.write_device(device, bytes, "^C").await;
-                }
-                frames::InputAction::Reject(code) => self.reject(browser, code).await,
-            },
-            frames::Incoming::Input(data) => {
-                match frames::plan_line(&mut self.rate, Instant::now(), &data, self.pty) {
-                    frames::InputAction::Write(bytes) => {
-                        self.write_device(device, bytes, &data).await;
-                    }
-                    frames::InputAction::Reject(code) => self.reject(browser, code).await,
-                }
-            }
-            frames::Incoming::Unknown => {}
-        }
-    }
 
     /// 真正写设备 stdin（pipe 模式 raw 字节）。计时与审计只在"写成功路径"上发生。
     async fn write_device(&mut self, device: &mut WebSocket, bytes: Vec<u8>, audit: &str) {
@@ -591,3 +564,10 @@ mod tests;
 #[cfg(test)]
 #[path = "console_path_tests.rs"]
 mod path_tests;
+
+#[path = "console_input.rs"]
+mod input;
+
+#[cfg(test)]
+#[path = "console_raw_tests.rs"]
+mod raw_tests;

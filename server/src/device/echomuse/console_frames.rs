@@ -46,9 +46,7 @@ pub(super) const MODE_PTY: &str = "pty";
 /// `0x00`/`0x01`，其它首字节静默丢弃——这正是"控制台打不进命令"的根因：本项目此前把命令
 /// 裸字节（首字节是命令字符如 `'l'`=0x6C）直发设备，落入"其它"分支被吞）。
 pub(super) const SHELL_FRAME_STDIN: u8 = 0x00;
-/// PTY 模式 resize 帧头（官方 `shellFrameResize`）：`0x00` 之后跟 4 字节 cols/rows。
-/// 项目浏览器侧不做 resize（终端用默认窗口尺寸），本常量仅文档化对侧契约。
-#[allow(dead_code)]
+/// PTY resize：`0x01` 后跟 cols/rows 两个大端 u16。
 pub(super) const SHELL_FRAME_RESIZE: u8 = 0x01;
 
 // ---- 文案（服务端唯一出处，与 §8.3 前端 `ConsoleCopy` 逐字对齐） ----
@@ -76,6 +74,8 @@ pub(super) enum ErrorCode {
     RateLimited,
     DeviceOffline,
     Internal,
+    UnsupportedMode,
+    InvalidResize,
 }
 
 impl ErrorCode {
@@ -83,6 +83,8 @@ impl ErrorCode {
     /// 文案是定值，不受调用方影响，避免同 code 多套文案漂移）。
     pub(super) fn message(self, detail: &str) -> String {
         match self {
+            Self::UnsupportedMode => "设备不支持 PTY 原始输入或窗口调整".into(),
+            Self::InvalidResize => "终端尺寸必须为整数：列 1..500，行 1..200".into(),
             Self::Internal => format!("{COPY_INTERNAL}{detail}"),
             Self::Busy => COPY_BUSY.to_string(),
             Self::InputTooLong => COPY_INPUT_TOO_LONG.to_string(),
@@ -144,6 +146,8 @@ pub(super) enum ConsoleFrame {
     Ready {
         device_id: String,
         mode: &'static str,
+        raw_input: bool,
+        resize: bool,
         insecure: bool,
         notice: String,
     },
@@ -188,6 +192,9 @@ pub(super) fn encode(frame: &ConsoleFrame) -> String {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Incoming {
     Input(String),
+    RawInput(String),
+    Resize(u16, u16),
+    InvalidResize,
     CtrlC,
     Ping,
     Unknown,
@@ -203,9 +210,28 @@ pub(super) fn parse_incoming(text: &str) -> Incoming {
         Some("input") => match value.get("data").and_then(|d| d.as_str()) {
             // 前端的输入框可能带尾部换行；协议规定 data **不含** `\n`，
             // 这里容忍并剥掉尾部 CR/LF，避免发出一行空命令。
-            Some(data) => Incoming::Input(data.trim_end_matches(['\r', '\n']).to_string()),
+            Some(data) => match value.get("raw") {
+                Some(serde_json::Value::Bool(true)) => Incoming::RawInput(data.to_string()),
+                None | Some(serde_json::Value::Bool(false)) => {
+                    Incoming::Input(data.trim_end_matches(['\r', '\n']).to_string())
+                }
+                _ => Incoming::Unknown,
+            },
             None => Incoming::Unknown,
         },
+        Some("resize") => {
+            let dim = |key: &str, max: u64| {
+                value
+                    .get(key)
+                    .and_then(|n| n.as_u64())
+                    .filter(|n| (1..=max).contains(n))
+                    .map(|n| n as u16)
+            };
+            match (dim("cols", 500), dim("rows", 200)) {
+                (Some(cols), Some(rows)) => Incoming::Resize(cols, rows),
+                _ => Incoming::InvalidResize,
+            }
+        }
         Some("ctrl-c") => Incoming::CtrlC,
         Some("ping") => Incoming::Ping,
         _ => Incoming::Unknown,
@@ -258,7 +284,12 @@ pub(super) enum InputAction {
 ///   把命令首字符（如 `'l'`=0x6C）当"其它"静默丢弃——控制台打不进命令的直接原因；
 ///   换行照旧追加，pty 的 tty 行规程同样以 `\n` 触发执行。
 /// - pipe：裸 `data + "\n"`，老固件/一次性操作走这条（`sh` 行缓冲靠换行触发）。
-pub(super) fn plan_line(bucket: &mut TokenBucket, now: Instant, data: &str, pty: bool) -> InputAction {
+pub(super) fn plan_line(
+    bucket: &mut TokenBucket,
+    now: Instant,
+    data: &str,
+    pty: bool,
+) -> InputAction {
     if !bucket.allow(now) {
         return InputAction::Reject(ErrorCode::RateLimited);
     }
@@ -430,4 +461,70 @@ impl Utf8Carry {
         self.len = 0;
         text
     }
+}
+
+/// Raw keystrokes use their own bounded event and byte buckets, never the line bucket.
+pub(super) struct RawBudget {
+    events: TokenBucket,
+    bytes: f64,
+    last: Instant,
+}
+impl RawBudget {
+    pub(super) fn new(now: Instant) -> Self {
+        let events = TokenBucket::new(100);
+        Self {
+            events,
+            bytes: 65536.0,
+            last: now,
+        }
+    }
+    pub(super) fn take(&mut self, now: Instant, bytes: usize) -> bool {
+        let elapsed = now.duration_since(self.last).as_secs_f64();
+        self.last = now;
+        self.bytes = (self.bytes + elapsed * 65536.0).min(65536.0);
+
+        if self.bytes < bytes as f64 || !self.events.allow(now) {
+            return false;
+        }
+        self.bytes -= bytes as f64;
+        true
+    }
+}
+
+pub(super) fn plan_raw(data: &str, budget: &mut RawBudget, now: Instant, pty: bool) -> InputAction {
+    if !pty {
+        return InputAction::Reject(ErrorCode::UnsupportedMode);
+    }
+    if data.len() > LINE_MAX {
+        return InputAction::Reject(ErrorCode::InputTooLong);
+    }
+    if !budget.take(now, data.len()) {
+        return InputAction::Reject(ErrorCode::RateLimited);
+    }
+    let mut bytes = Vec::with_capacity(data.len() + 1);
+    bytes.push(SHELL_FRAME_STDIN);
+    bytes.extend_from_slice(data.as_bytes());
+    InputAction::Write(bytes)
+}
+
+pub(super) fn plan_resize(
+    cols: u16,
+    rows: u16,
+    budget: &mut RawBudget,
+    now: Instant,
+    pty: bool,
+) -> InputAction {
+    if !pty {
+        return InputAction::Reject(ErrorCode::UnsupportedMode);
+    }
+    if !(1..=500).contains(&cols) || !(1..=200).contains(&rows) {
+        return InputAction::Reject(ErrorCode::InvalidResize);
+    }
+    if !budget.take(now, 4) {
+        return InputAction::Reject(ErrorCode::RateLimited);
+    }
+    let mut bytes = vec![SHELL_FRAME_RESIZE];
+    bytes.extend_from_slice(&cols.to_be_bytes());
+    bytes.extend_from_slice(&rows.to_be_bytes());
+    InputAction::Write(bytes)
 }

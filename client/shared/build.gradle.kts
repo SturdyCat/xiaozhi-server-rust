@@ -235,7 +235,9 @@ tasks.matching { it.name == "check" || it.name.startsWith("packLocalJSBundle") }
 //   组件**（ui/Tabs.kt 的 TabUiState——tab 选中/展开态，随目录一并退役）带走了 3 处
 //   `stateVar(` 调用；stateListOf 48 不变（ui/ 无 stateListOf 调用），legacy 0 不变。
 //   ⚠️ 逐文件分布未留档（ui/ 文件未入 git 索引即被删除），数值以本护栏实测回填。
-val expectedStateVarCalls = 448
+// EchoMuse 原生终端：删除无消费方的 introSeen/aboutOpen 展示字段；display 快照由 VT frame 等量替换。
+// verifyComposeStateMigration 实测 448→446，列表仍 48，legacy 0；不保留死字段凑数。
+val expectedStateVarCalls = 446
 val expectedStateListCalls = 48
 val bridgeWhitelist = emptySet<String>()
 val verifyComposeStateMigration by tasks.registering {

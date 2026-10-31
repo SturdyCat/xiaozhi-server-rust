@@ -26,7 +26,7 @@ internal val EM_MANAGEMENT_TABS = listOf(
     Tab("music", "DLNA 音乐"), Tab("ble", "GATT 工具"), Tab("assets", "VAD 资产"),
     Tab("models", "模型文件"), Tab("wifi", "WiFi 确认"), Tab("diagnostics", "原始诊断"),
 )
-private val EM_OFFICIAL_TAB_IDS = setOf("status", "activity", "config", "shell", "updates", "logs")
+private val EM_OFFICIAL_TAB_IDS = setOf("status", "activity", "config", "updates", "logs")
 
 /** 管理工作区复用 GearUI modal overlay；显式尺寸不受普通 Dialog 的窄屏宽度上限限制。 */
 @Composable
@@ -91,6 +91,7 @@ private fun EchoMuseManagementContent(
     modelFiles: @Composable () -> Unit,
 ) {
     var tab by remember(row.deviceId, apiBase, token) { mutableStateOf("status") }
+    var headerInputBlocked by remember(row.deviceId) { mutableStateOf(false) }
     val viewport = LocalAdminViewport.current
     val spacing = LocalAdminSpacing.current
     val url = "${apiBase.trimEnd('/')}/em/?embed=1&device=${echoMuseUrlComponent(row.deviceId)}&tab=$tab" +
@@ -98,18 +99,17 @@ private fun EchoMuseManagementContent(
     Card(modifier = Modifier.width((viewport.width.value - 32f).coerceIn(1f, 1200f).dp)
         .height((viewport.height.value - 32f).coerceIn(1f, 900f).dp)) {
         Column(modifier = Modifier.fillMaxSize().padding(spacing.md)) {
-            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(text = row.title, style = Theme.typography.titleMedium,
-                    color = Theme.colors.foreground, modifier = Modifier.weight(1f))
-                Button(text = "关闭", onClick = onDismiss, type = ButtonType.TEXT)
-            }
+            EchoMuseDeviceHeader(row = row, state = state, toast = toast, onDismiss = onDismiss,
+                onInputBlocked = { headerInputBlocked = it })
             Tabs(
                 items = EM_MANAGEMENT_TABS, selectedId = tab, onSelect = { tab = it },
                 scrollable = true, modifier = Modifier.fillMaxWidth(),
             )
             when {
-                tab in EM_OFFICIAL_TAB_IDS ->
+                tab in EM_OFFICIAL_TAB_IDS || (tab == "shell" && !row.approved) ->
                     EchoMuseOfficialView(url = url, modifier = Modifier.weight(1f).fillMaxWidth())
+                tab == "shell" -> EchoMuseConsoleTab(row, state, toast, apiBase, token,
+                    inputBlocked = headerInputBlocked, modifier = Modifier.weight(1f).fillMaxWidth())
                 !row.approved -> EmNote("请先在「状态」中批准设备，再使用扩展功能。")
                 tab == "models" -> Column(modifier = Modifier.weight(1f).fillMaxWidth()) { modelFiles() }
                 else -> ScrollView(modifier = Modifier.weight(1f).fillMaxWidth()) {
