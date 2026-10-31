@@ -20,7 +20,7 @@ import com.tencent.kuikly.compose.ui.unit.dp
 import com.tencent.kuikly.core.pager.Pager
 import com.xiaozhi.admin.contracts.IconToken
 import com.xiaozhi.admin.icons.GearIcon
-import com.xiaozhi.admin.kit.GearUiSpace
+import com.xiaozhi.admin.kit.LocalAdminSpacing
 import com.xiaozhi.admin.kit.actionRow
 import com.xiaozhi.admin.kit.labeledField
 import com.xiaozhi.admin.kit.pageScroller
@@ -120,7 +120,7 @@ fun FilesPage(state: FilesState, toast: ToastState) {
 @Composable
 private fun FilesBreadcrumbs(state: FilesState, onOpen: (String) -> Unit) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(bottom = GearUiSpace.xs),
+        modifier = Modifier.fillMaxWidth().padding(bottom = LocalAdminSpacing.current.xs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         FilesCrumb(label = "存储目录", current = state.path.isEmpty()) { onOpen("") }

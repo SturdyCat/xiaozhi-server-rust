@@ -4,6 +4,9 @@ import androidx.compose.runtime.Composable
 import com.xiaozhi.admin.contracts.*
 import com.xiaozhi.admin.kit.AdminScopeHost
 import com.xiaozhi.admin.kit.GearFieldHelpDialog
+import com.xiaozhi.admin.kit.adminScale
+import com.xiaozhi.admin.kit.provideAdminSpacing
+import com.xiaozhi.admin.kit.systemDarkModeState
 
 import com.gearui.App
 import com.gearui.components.button.Button
@@ -22,6 +25,12 @@ import com.tencent.kuikly.compose.foundation.layout.padding
 import com.tencent.kuikly.compose.setContent
 import com.tencent.kuikly.compose.ui.Alignment
 import com.tencent.kuikly.compose.ui.Modifier
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
+import com.tencent.kuikly.compose.ui.layout.onSizeChanged
+import com.tencent.kuikly.compose.ui.platform.LocalDensity
 import com.tencent.kuikly.compose.ui.unit.dp
 import com.tencent.kuikly.core.annotations.Page
 
@@ -97,20 +106,46 @@ class ConfigPage : ComposeContainer(), FieldHelpHost {
     /**
      * 组合根：`setContent` 只在这里调用一次（与 [AdminPage] 同一生命周期点 `Pager.didInit`）。
      *
-     * `themeMode = Light` + `theme = null`：完全采用 GearUI 默认主题（不覆写色板）；
+     * 根容器先量视口（`onSizeChanged` → `viewportWidthDp`），再经 [adminScale] 算出
+     * `fontScale` / `spacingScale` 双轴同源缩放：Mac 两轴 1.2；web 按视口断点
+     * （<900→1.0 / ≥900→1.0625 / ≥1200→1.125 / ≥1440→1.1875）；iOS/Android 1.0。
+     * 二者分别注入 `Theme`（字号 ramp 同倍放大）与 `LocalAdminSpacing`（间距同倍放大）。
+     *
+     * `themeMode = ThemeMode.System` + 传 `isSystemDark = systemDarkModeState().value`：
+     * 跟随系统暗色（基础设施 `ProvideSystemDarkMode` / `Themes.Dark` 已就绪）；
+     * `theme = null` 表示不覆写 GearUI 默认色板；
      * `languageTag / fallbackLanguageTag = "zh-Hans"`：命中内置 `Strings.zh_Hans`。
      */
     override fun didInit() {
         super.didInit()
         val page = this
         setContent {
-            App(
-                themeMode = ThemeMode.Light,
-                theme = null,
-                languageTag = "zh-Hans",
-                fallbackLanguageTag = "zh-Hans",
+            val systemDark = systemDarkModeState()
+            // 视口宽度（dp）随窗口 resize 实时更新，驱动字号 fontScale 与间距 spacingScale 双轴同源缩放。
+            var viewportWidthDp by remember { mutableStateOf(0) }
+            // `LocalDensity.current` 是 Composable 读取，必须放在 onSizeChanged 之外（回调本身非 Composable）；
+            // 用普通 val 承接后在回调里以 with(density) 换算，与 AdminScopeHost 同一写法。
+            val density = LocalDensity.current
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .onSizeChanged { size ->
+                        viewportWidthDp = with(density) { size.width.toDp() }.value.toInt()
+                    },
             ) {
-                ConfigShell(page)
+                val (fontScale, spacingScale) = adminScale(IS_MACOS, viewportWidthDp)
+                provideAdminSpacing(spacingScale) {
+                    App(
+                        themeMode = ThemeMode.System,
+                        isSystemDark = systemDark.value,
+                        fontScale = fontScale,
+                        theme = null,
+                        languageTag = "zh-Hans",
+                        fallbackLanguageTag = "zh-Hans",
+                    ) {
+                        ConfigShell(page)
+                    }
+                }
             }
         }
     }

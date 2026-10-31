@@ -12,7 +12,7 @@ import com.tencent.kuikly.compose.foundation.layout.Column
 import com.tencent.kuikly.compose.foundation.layout.fillMaxWidth
 import com.tencent.kuikly.compose.foundation.layout.padding
 import com.tencent.kuikly.compose.ui.Modifier
-import com.xiaozhi.admin.kit.GearUiSpace
+import com.xiaozhi.admin.kit.LocalAdminSpacing
 
 /**
  * 「官方设备管理页」入口卡（web-only）。
@@ -47,7 +47,7 @@ fun EmOfficialEntryCard(page: AdminPage) {
     LabeledCard(title = "官方设备管理（网页版）") {
         Column(
             modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(GearUiSpace.sm),
+            verticalArrangement = Arrangement.spacedBy(LocalAdminSpacing.current.sm),
         ) {
             Text(
                 text = "按 EchoMuse 官方 dashboard 源码移植的设备卡列表与六 tab 详情" +
@@ -69,7 +69,7 @@ fun EmOfficialEntryCard(page: AdminPage) {
                 },
                 type = ButtonType.FILL,
                 theme = ButtonTheme.PRIMARY,
-                modifier = Modifier.padding(top = GearUiSpace.xs),
+                modifier = Modifier.padding(top = LocalAdminSpacing.current.xs),
             )
             Text(
                 text = "本项目专有能力（DLNA 音乐、BLE GATT、唤醒词资产安装、WiFi 三步闭环）" +

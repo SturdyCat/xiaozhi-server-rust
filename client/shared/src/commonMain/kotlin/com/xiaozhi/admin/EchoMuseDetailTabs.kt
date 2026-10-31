@@ -20,7 +20,7 @@ import com.tencent.kuikly.compose.foundation.layout.Column
 import com.tencent.kuikly.compose.foundation.layout.fillMaxWidth
 import com.tencent.kuikly.compose.foundation.layout.padding
 import com.tencent.kuikly.compose.ui.Modifier
-import com.xiaozhi.admin.kit.GearUiSpace
+import com.xiaozhi.admin.kit.LocalAdminSpacing
 import com.xiaozhi.admin.kit.actionRow
 import com.xiaozhi.admin.kit.labeledField
 
@@ -77,12 +77,12 @@ internal fun EchoMuseDetailTabs(
         items = EM_DETAIL_TABS.map { Tab(id = it, label = it) },
         selectedId = tab.takeIf { it in EM_DETAIL_TABS },
         onSelect = { label -> state.enterTab(row, label, pager) },
-        modifier = Modifier.fillMaxWidth().padding(top = GearUiSpace.md),
+        modifier = Modifier.fillMaxWidth().padding(top = LocalAdminSpacing.current.md),
         scrollable = true,
         showDivider = false,
         size = TabsSize.SMALL,
     )
-    Column(modifier = Modifier.fillMaxWidth().padding(top = GearUiSpace.md)) {
+    Column(modifier = Modifier.fillMaxWidth().padding(top = LocalAdminSpacing.current.md)) {
         when (tab) {
             EM_TAB_STATUS -> EchoMuseStatusTab(row = row, state = state, toast = toast)
             EM_TAB_ACTIVITY -> EchoMuseActivityTab(state = state)
@@ -136,9 +136,9 @@ private fun EmApprovalPanel(row: EchoMuseDeviceRow, state: EchoMuseState, toast:
         description = "批准前不能做任何远程管理（状态、配置、日志、控制台全部不可用）。" +
             "核对下面的设备号与 IP 是你要接入的那块板，再批准。",
         status = AlertStatus.WARNING,
-        modifier = Modifier.fillMaxWidth().padding(top = GearUiSpace.md),
+        modifier = Modifier.fillMaxWidth().padding(top = LocalAdminSpacing.current.md),
     )
-    EmInfoRow("设备号（Serial）", row.deviceId, topGap = GearUiSpace.sm)
+    EmInfoRow("设备号（Serial）", row.deviceId, topGap = LocalAdminSpacing.current.sm)
     EmInfoRow("IP", row.ip.ifEmpty { EM_DASH })
     EmInfoRow("首次接入", formatEpochSeconds(row.firstSeen).ifEmpty { EM_DASH })
     EmInfoRow("最近接入", formatEpochSeconds(row.lastSeen).ifEmpty { EM_DASH })

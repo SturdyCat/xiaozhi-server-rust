@@ -15,7 +15,7 @@ import com.tencent.kuikly.compose.ui.Alignment
 import com.tencent.kuikly.compose.ui.Modifier
 import com.tencent.kuikly.compose.ui.unit.Dp
 import com.tencent.kuikly.compose.ui.unit.dp
-import com.xiaozhi.admin.kit.GearUiSpace
+import com.xiaozhi.admin.kit.LocalAdminSpacing
 
 /**
  * EchoMuse 六 tab 共用的**最小呈现原语**（Compose 版）。
@@ -83,10 +83,10 @@ internal fun emNumber(obj: com.tencent.kuikly.core.nvi.serialization.json.JSONOb
 
 /** 分组小标题（原 DSL `groupLabel`）：上留白 + 小标题，行间不画线。 */
 @Composable
-internal fun EmGroupLabel(text: String, topGap: Dp = GearUiSpace.lg) {
+internal fun EmGroupLabel(text: String, topGap: Dp = LocalAdminSpacing.current.lg) {
     Text(
         text = text,
-        modifier = Modifier.fillMaxWidth().padding(top = topGap, bottom = GearUiSpace.xs),
+        modifier = Modifier.fillMaxWidth().padding(top = topGap, bottom = LocalAdminSpacing.current.xs),
         style = Theme.typography.titleSmall,
         color = Theme.colors.foreground,
     )
@@ -110,7 +110,7 @@ internal fun EmWarn(text: String, error: Boolean = false, modifier: Modifier = M
     if (text.isEmpty()) return
     Text(
         text = text,
-        modifier = modifier.fillMaxWidth().padding(top = GearUiSpace.xs),
+        modifier = modifier.fillMaxWidth().padding(top = LocalAdminSpacing.current.xs),
         style = Theme.typography.caption,
         color = if (error) Theme.colors.destructive else Theme.colors.warning,
     )
@@ -155,7 +155,7 @@ internal fun EmStatTile(
     hint: String,
     modifier: Modifier = Modifier,
 ) {
-    Column(modifier = modifier.padding(top = GearUiSpace.sm)) {
+    Column(modifier = modifier.padding(top = LocalAdminSpacing.current.sm)) {
         Text(
             text = label,
             style = Theme.typography.caption,

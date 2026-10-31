@@ -310,7 +310,7 @@ class EchoMuseConsoleState(private val ctx: Pager) {
     private fun connect() {
         val gen = generation
         val path = "/api/echomuse/devices/${echoMuseUrlComponent(deviceId)}/console"
-        socket = PlatformWsSocket(
+        socket = platformWsSocket(
             adminRealtimeUrl(baseUrl, token, path),
             onOpen = {
                 // WS 建连成功 ≠ 会话可用：服务端要先回拨设备 shell、占住槽，才发 `ready`。

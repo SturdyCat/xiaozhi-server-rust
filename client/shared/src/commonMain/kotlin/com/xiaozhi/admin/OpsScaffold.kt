@@ -21,7 +21,7 @@ import com.tencent.kuikly.compose.ui.text.style.TextAlign
 import com.tencent.kuikly.compose.ui.unit.dp
 import com.xiaozhi.admin.contracts.IconToken
 import com.xiaozhi.admin.icons.GearIcon
-import com.xiaozhi.admin.kit.GearUiSpace
+import com.xiaozhi.admin.kit.LocalAdminSpacing
 import com.xiaozhi.admin.kit.pageScroller
 
 /**
@@ -104,7 +104,7 @@ internal fun OpsLoadError(message: String, onRefresh: () -> Unit) {
         title = "加载失败",
         description = "$message（确认服务端可达后点「刷新」）",
         status = AlertStatus.DANGER,
-        modifier = Modifier.padding(top = GearUiSpace.sm, bottom = GearUiSpace.sm),
+        modifier = Modifier.padding(top = LocalAdminSpacing.current.sm, bottom = LocalAdminSpacing.current.sm),
         action = {
             Button(
                 text = "刷新",
@@ -119,11 +119,11 @@ internal fun OpsLoadError(message: String, onRefresh: () -> Unit) {
 /** 首次加载骨架：两段骨架行模拟"摘要 + 若干指标行"的节奏。 */
 @Composable
 internal fun OpsSkeleton() {
-    Column(modifier = Modifier.fillMaxWidth().padding(top = GearUiSpace.md)) {
+    Column(modifier = Modifier.fillMaxWidth().padding(top = LocalAdminSpacing.current.md)) {
         SkeletonText(lines = 3)
         SkeletonText(
             lines = 4,
-            modifier = Modifier.fillMaxWidth().padding(top = GearUiSpace.lg),
+            modifier = Modifier.fillMaxWidth().padding(top = LocalAdminSpacing.current.lg),
         )
     }
 }
@@ -135,7 +135,7 @@ internal fun OpsSkeleton() {
  */
 @Composable
 internal fun OpsEmptyState(message: String, description: String) {
-    Card(modifier = Modifier.fillMaxWidth().padding(bottom = GearUiSpace.lg)) {
+    Card(modifier = Modifier.fillMaxWidth().padding(bottom = LocalAdminSpacing.current.lg)) {
         EmptyState(
             message = message,
             description = description.ifEmpty { null },
@@ -159,7 +159,7 @@ internal fun OpsEmptyState(message: String, description: String) {
 internal fun OpsTile(label: String, value: String, note: String = "") {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        padding = PaddingValues(GearUiSpace.sm),
+        padding = PaddingValues(LocalAdminSpacing.current.sm),
     ) {
         Text(
             text = label,
@@ -168,7 +168,7 @@ internal fun OpsTile(label: String, value: String, note: String = "") {
         )
         Text(
             text = value,
-            modifier = Modifier.fillMaxWidth().padding(top = GearUiSpace.xs),
+            modifier = Modifier.fillMaxWidth().padding(top = LocalAdminSpacing.current.xs),
             style = Theme.typography.titleMedium,
             color = Theme.colors.foreground,
             textAlign = TextAlign.End,
@@ -177,7 +177,7 @@ internal fun OpsTile(label: String, value: String, note: String = "") {
         if (note.isNotEmpty()) {
             Text(
                 text = note,
-                modifier = Modifier.fillMaxWidth().padding(top = GearUiSpace.xs),
+                modifier = Modifier.fillMaxWidth().padding(top = LocalAdminSpacing.current.xs),
                 style = Theme.typography.caption,
                 color = Theme.colors.mutedForeground,
             )

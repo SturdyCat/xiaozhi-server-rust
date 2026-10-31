@@ -16,7 +16,7 @@ import com.tencent.kuikly.compose.ui.unit.dp
 import com.xiaozhi.admin.kit.GearTerminal
 import com.xiaozhi.admin.kit.GearTerminalText
 import com.xiaozhi.admin.kit.GearTerminalTone
-import com.xiaozhi.admin.kit.GearUiSpace
+import com.xiaozhi.admin.kit.LocalAdminSpacing
 import com.xiaozhi.admin.kit.actionRow
 import com.xiaozhi.admin.kit.labeledSelect
 import com.xiaozhi.admin.kit.pageScroller
@@ -116,7 +116,7 @@ fun ConsolePage(console: ConsoleState, toast: ToastState) {
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(CONSOLE_TERMINAL_HEIGHT)
-                    .padding(top = GearUiSpace.sm),
+                    .padding(top = LocalAdminSpacing.current.sm),
             ) {
                 ScrollView(modifier = Modifier.fillMaxSize()) {
                     GearTerminalText(

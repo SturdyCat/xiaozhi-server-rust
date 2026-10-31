@@ -11,7 +11,7 @@ import com.tencent.kuikly.compose.ui.Modifier
 import com.tencent.kuikly.compose.ui.unit.dp
 import com.xiaozhi.admin.contracts.IconToken
 import com.xiaozhi.admin.icons.GearIcon
-import com.xiaozhi.admin.kit.GearUiSpace
+import com.xiaozhi.admin.kit.LocalAdminSpacing
 import com.xiaozhi.admin.kit.actionRow
 
 /**
@@ -40,7 +40,7 @@ private const val EM_NOT_COLLECTED = "未采集（固件不上报该字段）"
  */
 @Composable
 internal fun EmDeviceHead(row: EchoMuseDeviceRow) {
-    Column(modifier = Modifier.fillMaxWidth().padding(top = GearUiSpace.md, bottom = GearUiSpace.xs)) {
+    Column(modifier = Modifier.fillMaxWidth().padding(top = LocalAdminSpacing.current.md, bottom = LocalAdminSpacing.current.xs)) {
         User(
             name = row.title,
             description = listOfNotNull(
@@ -62,7 +62,7 @@ internal fun EchoMuseDeviceFactsView(
     val detail = state.detail
     val pager = LocalAdminPagerOrThrow()
 
-    EmGroupLabel("设备", topGap = GearUiSpace.sm)
+    EmGroupLabel("设备", topGap = LocalAdminSpacing.current.sm)
     // 设备号/设备名：未改名时标题就是设备号，「设备名」行不重复渲染
     EmInfoRow("设备号", row.deviceId)
     if (row.renamed) {

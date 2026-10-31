@@ -22,7 +22,7 @@ import com.tencent.kuikly.compose.ui.Alignment
 import com.tencent.kuikly.compose.ui.Modifier
 import com.tencent.kuikly.core.pager.Pager
 import com.xiaozhi.admin.contracts.connectionLabel
-import com.xiaozhi.admin.kit.GearUiSpace
+import com.xiaozhi.admin.kit.LocalAdminSpacing
 import com.xiaozhi.admin.kit.LocalAdminViewport
 import com.xiaozhi.admin.kit.actionRow
 import com.xiaozhi.admin.kit.hGap
@@ -114,7 +114,7 @@ private fun TestBenchPage(
             onSelect = { tab.value = it },
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = GearUiSpace.pagePadding, end = GearUiSpace.pagePadding, top = GearUiSpace.sm),
+                .padding(start = LocalAdminSpacing.current.pagePadding, end = LocalAdminSpacing.current.pagePadding, top = LocalAdminSpacing.current.sm),
             scrollable = true,
             size = TabsSize.SMALL,
         )
@@ -122,7 +122,7 @@ private fun TestBenchPage(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = GearUiSpace.pagePadding, vertical = GearUiSpace.md),
+                    .padding(horizontal = LocalAdminSpacing.current.pagePadding, vertical = LocalAdminSpacing.current.md),
             ) {
                 // 双列阈值与旧版一致（>=900 左右并排，窄屏纵向堆叠）
                 val viewport = LocalAdminViewport.current
@@ -145,7 +145,7 @@ private fun BenchHeader(bench: TestBenchState) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = GearUiSpace.pagePadding, end = GearUiSpace.pagePadding, top = GearUiSpace.md),
+            .padding(start = LocalAdminSpacing.current.pagePadding, end = LocalAdminSpacing.current.pagePadding, top = LocalAdminSpacing.current.md),
     ) {
         Text(
             text = "测试台",
@@ -195,7 +195,7 @@ internal fun BenchConnectPage(
                         loading = bench.connectionState == "connecting",
                         disabled = bench.connectionState == "connecting",
                     )
-                    hGap(GearUiSpace.md)
+                    hGap(LocalAdminSpacing.current.md)
                     statusBadge(bench.connectionState, connectionLabel(bench.connectionState))
                 }
             }
@@ -255,7 +255,7 @@ internal fun BenchResultBlock(
     }
     Text(
         text = body,
-        modifier = Modifier.padding(top = GearUiSpace.xs),
+        modifier = Modifier.padding(top = LocalAdminSpacing.current.xs),
         style = Theme.typography.bodyMedium,
         color = if (bodyError) Theme.colors.destructive else Theme.colors.foreground,
     )
@@ -263,12 +263,12 @@ internal fun BenchResultBlock(
         HintLine(detail)
     }
     Row(
-        modifier = Modifier.padding(top = GearUiSpace.sm),
+        modifier = Modifier.padding(top = LocalAdminSpacing.current.sm),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Button(text = "复制", onClick = onCopy, type = ButtonType.OUTLINE)
         if (copyHint.isNotEmpty()) {
-            hGap(GearUiSpace.sm)
+            hGap(LocalAdminSpacing.current.sm)
             Text(
                 text = copyHint,
                 style = Theme.typography.caption,

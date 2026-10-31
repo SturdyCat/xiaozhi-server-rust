@@ -1,0 +1,39 @@
+{
+  "rootFontSizeSp": 16,
+  "ratiosByRem": {
+    "0.75": 1.333,
+    "0.875": 1.4286,
+    "1.0": 1.5,
+    "1.125": 1.556,
+    "1.25": 1.4,
+    "1.5": 1.333,
+    "1.875": 1.2,
+    "2.25": 1.111,
+    "3.0": 1.0
+  },
+  "tokens": {
+    "displayLarge":    { "rem": 3.0,   "weight": 800 },
+    "displayMedium":   { "rem": 2.25,  "weight": 800 },
+    "headlineLarge":   { "rem": 1.875, "weight": 800 },
+    "headlineMedium":  { "rem": 1.5,   "weight": 700 },
+    "headlineSmall":   { "rem": 1.25,  "weight": 700 },
+    "titleExtraLarge": { "rem": 1.25,  "weight": 700 },
+    "titleLarge":      { "rem": 1.125, "weight": 600 },
+    "titleMedium":     { "rem": 1.0,   "weight": 600 },
+    "titleSmall":      { "rem": 0.875, "weight": 600 },
+    "bodyExtraLarge":  { "rem": 1.25,  "weight": 400 },
+    "bodyLarge":       { "rem": 1.125, "weight": 400 },
+    "bodyMedium":      { "rem": 1.0,   "weight": 400 },
+    "bodySmall":       { "rem": 0.875, "weight": 400 },
+    "bodyExtraSmall":  { "rem": 0.75,  "weight": 400 },
+    "markLarge":       { "rem": 1.125, "weight": 500 },
+    "markMedium":      { "rem": 1.0,   "weight": 500 },
+    "markSmall":       { "rem": 0.875, "weight": 500 },
+    "markExtraSmall":  { "rem": 0.75,  "weight": 500 },
+    "linkLarge":       { "rem": 1.125, "weight": 400 },
+    "linkMedium":      { "rem": 1.0,   "weight": 400 },
+    "linkSmall":       { "rem": 0.875, "weight": 400 },
+    "caption":         { "rem": 0.75,  "weight": 400 },
+    "label":           { "rem": 0.75,  "weight": 400 }
+  }
+}

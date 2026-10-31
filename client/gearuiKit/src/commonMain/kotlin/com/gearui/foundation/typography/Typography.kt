@@ -5,6 +5,9 @@ import com.gearui.unit.TextUnit
 import com.gearui.theme.Typographies
 import com.tencent.kuikly.compose.ui.unit.sp
 
+/** Root font size: 16sp == 1rem. Final rendered size = 16.sp * rem * fontScale. */
+const val ROOT_FONT_SIZE_SP = 16f
+
 /**
  * TextStyle - text style token
  *
@@ -19,7 +22,34 @@ data class TextStyle(
     val fontWeight: FontWeight,
     val fontFamily: List<String> = listOf("system-ui"),
     val letterSpacing: TextUnit = 0.sp,
-)
+) {
+    companion object {
+        /**
+         * Build a [TextStyle] from a rem value.
+         *
+         * Rendered size = [ROOT_FONT_SIZE_SP].sp * rem * fontScale. `sp` absorbs system
+         * scaling, `rem` fixes the proportion, and `fontScale` (applied later via [scale])
+         * does platform / viewport magnification — the three are orthogonal. Both fontSize
+         * and lineHeight are stored in sp (line-height in sp, not dp) so Android measures the
+         * line box correctly.
+         */
+        fun fromRem(
+            rem: Double,
+            lineHeightRatio: Double = 1.5,
+            weight: FontWeight = FontWeight(400),
+        ): TextStyle = TextStyle(
+            fontSize = (ROOT_FONT_SIZE_SP * rem).sp,
+            lineHeight = (ROOT_FONT_SIZE_SP * rem * lineHeightRatio).sp,
+            fontWeight = weight,
+        )
+    }
+
+    /** Multiply only fontSize and lineHeight by [factor] (fontScale). Other fields unchanged. */
+    fun scale(factor: Float): TextStyle = copy(
+        fontSize = fontSize * factor,
+        lineHeight = lineHeight * factor,
+    )
+}
 
 /** Static defaults use the generated platform profile. Components read Theme.typography. */
 object Typography {

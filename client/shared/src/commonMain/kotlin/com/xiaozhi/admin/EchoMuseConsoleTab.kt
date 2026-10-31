@@ -19,7 +19,7 @@ import com.xiaozhi.admin.kit.GearTerminalKey
 import com.xiaozhi.admin.kit.GearTerminalPalette
 import com.xiaozhi.admin.kit.GearTerminalText
 import com.xiaozhi.admin.kit.GearTerminalTone
-import com.xiaozhi.admin.kit.GearUiSpace
+import com.xiaozhi.admin.kit.LocalAdminSpacing
 import com.xiaozhi.admin.kit.LocalAdminViewport
 
 /**
@@ -81,7 +81,7 @@ private fun EmTerminalFrame(row: EchoMuseDeviceRow, console: EchoMuseConsoleStat
     GearTerminal(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(top = GearUiSpace.sm)
+            .padding(top = LocalAdminSpacing.current.sm)
             .height(terminalHeight),
     ) {
         EmTerminalTitleBar(row = row, console = console)
@@ -103,7 +103,7 @@ private fun EmTerminalTitleBar(row: EchoMuseDeviceRow, console: EchoMuseConsoleS
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(GearUiSpace.sm),
+        horizontalArrangement = Arrangement.spacedBy(LocalAdminSpacing.current.sm),
     ) {
         GearTerminalText(
             text = "shell — ${row.deviceId}",
@@ -143,7 +143,7 @@ private fun EmTerminalOutput(console: EchoMuseConsoleState, modifier: Modifier =
     LazyColumn(
         modifier = modifier
             .fillMaxWidth()
-            .padding(top = GearUiSpace.xs),
+            .padding(top = LocalAdminSpacing.current.xs),
         state = listState,
     ) {
         items(lines.size) { index ->
@@ -163,9 +163,9 @@ private fun EmTerminalOutput(console: EchoMuseConsoleState, modifier: Modifier =
 @Composable
 private fun EmTerminalPrompt(console: EchoMuseConsoleState) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(top = GearUiSpace.xs),
+        modifier = Modifier.fillMaxWidth().padding(top = LocalAdminSpacing.current.xs),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(GearUiSpace.xs),
+        horizontalArrangement = Arrangement.spacedBy(LocalAdminSpacing.current.xs),
     ) {
         GearTerminalText(
             text = "❯",
@@ -205,7 +205,7 @@ private fun EmTerminalStatusLine(console: EchoMuseConsoleState) {
             // 未设设备 token = 同网段任何人可连入 root 通道（服务端 ready.insecure）
             if (console.insecure) append("\n").append(ConsoleCopy.INSECURE_WARN)
         },
-        modifier = Modifier.padding(top = GearUiSpace.xs),
+        modifier = Modifier.padding(top = LocalAdminSpacing.current.xs),
         tone = if (console.canInput) GearTerminalTone.Dim else GearTerminalTone.Fg,
     )
 }

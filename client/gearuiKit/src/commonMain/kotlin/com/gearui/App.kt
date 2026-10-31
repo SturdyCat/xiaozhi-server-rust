@@ -99,6 +99,7 @@ fun App(
      * That made "tokens are replaceable" true of colour alone.
      */
     typography: Typography = Typographies.Default,
+    fontScale: Float = 1f,
     shapes: Shapes = ShapesDefault.Default,
     elevation: Elevation = Elevations.Default,
     motion: Motion = Motions.Default,
@@ -115,11 +116,12 @@ fun App(
     I18nRoot(languageTag = languageTag, fallbackLanguageTag = fallbackLanguageTag) {
         I18nProvider(overrides = stringsOverrides) {
             ProvideSystemDarkMode(isSystemDark = isSystemDark) {
-                Theme(
-                    mode = themeMode,
-                    theme = theme,
-                    typography = typography,
-                    shapes = shapes,
+            Theme(
+                mode = themeMode,
+                theme = theme,
+                typography = typography,
+                fontScale = fontScale,
+                shapes = shapes,
                     elevation = elevation,
                     motion = motion,
                 ) {

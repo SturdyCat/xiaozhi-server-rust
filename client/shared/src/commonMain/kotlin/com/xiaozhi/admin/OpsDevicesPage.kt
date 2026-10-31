@@ -23,7 +23,7 @@ import com.tencent.kuikly.compose.ui.Modifier
 import com.tencent.kuikly.compose.ui.unit.dp
 import com.xiaozhi.admin.contracts.IconToken
 import com.xiaozhi.admin.icons.GearIcon
-import com.xiaozhi.admin.kit.GearUiSpace
+import com.xiaozhi.admin.kit.LocalAdminSpacing
 import com.xiaozhi.admin.kit.actionRow
 import com.xiaozhi.admin.kit.labeledField
 import com.xiaozhi.admin.kit.statusBadge
@@ -111,7 +111,7 @@ fun OpsDevicesPage(
                         val target = opened.getOrNull(index)
                         if (target != null) expanded.value = expanded.value - target.deviceId
                     },
-                    modifier = Modifier.fillMaxWidth().padding(bottom = GearUiSpace.lg),
+                    modifier = Modifier.fillMaxWidth().padding(bottom = LocalAdminSpacing.current.lg),
                 )
             }
         }
@@ -213,7 +213,7 @@ private fun DeviceDetailHeader(row: DeviceRow) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(GearUiSpace.xs),
+        horizontalArrangement = Arrangement.spacedBy(LocalAdminSpacing.current.xs),
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(

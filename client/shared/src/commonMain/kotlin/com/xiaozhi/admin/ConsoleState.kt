@@ -85,7 +85,7 @@ class ConsoleState(private val ctx: Pager) {
         if (!connected) status = "连接中…"
         val gen = generation
         val url = adminRealtimeUrl(apiBase, apiToken, "/api/logs")
-        socket = PlatformWsSocket(
+        socket = platformWsSocket(
             url,
             onOpen = {
                 if (gen == generation) {

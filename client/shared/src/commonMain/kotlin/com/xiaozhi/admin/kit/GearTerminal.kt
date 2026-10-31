@@ -1,4 +1,5 @@
 package com.xiaozhi.admin.kit
+import com.xiaozhi.admin.kit.LocalAdminSpacing
 
 import androidx.compose.runtime.Composable
 import com.gearui.foundation.primitives.BasicTextField
@@ -73,7 +74,7 @@ fun GearTerminal(
             .fillMaxWidth()
             .clip(RoundedCornerShape(10.dp))
             .background(GearTerminalPalette.bg)
-            .padding(horizontal = GearUiSpace.sm, vertical = GearUiSpace.xs),
+            .padding(horizontal = LocalAdminSpacing.current.sm, vertical = LocalAdminSpacing.current.xs),
         content = content,
     )
 }

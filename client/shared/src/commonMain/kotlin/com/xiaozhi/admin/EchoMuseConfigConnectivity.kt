@@ -11,7 +11,7 @@ import com.tencent.kuikly.compose.ui.Modifier
 import com.tencent.kuikly.compose.ui.unit.dp
 import com.xiaozhi.admin.contracts.IconToken
 import com.xiaozhi.admin.icons.GearIcon
-import com.xiaozhi.admin.kit.GearUiSpace
+import com.xiaozhi.admin.kit.LocalAdminSpacing
 import com.xiaozhi.admin.kit.actionRow
 import com.xiaozhi.admin.kit.labeledField
 import com.xiaozhi.admin.kit.splitRow
@@ -45,8 +45,8 @@ internal fun EchoMuseConnectivity(
     toast: ToastState,
 ) {
     val pager = LocalAdminPagerOrThrow()
-    EmGroupLabel("网络连接（官方 connectivity）", topGap = GearUiSpace.sm)
-    splitRow(spacing = GearUiSpace.md) {
+    EmGroupLabel("网络连接（官方 connectivity）", topGap = LocalAdminSpacing.current.sm)
+    splitRow(spacing = LocalAdminSpacing.current.md) {
         grow {
             EmNote("当前连接")
             EmInfoRow("网络", state.wifiCurrentSsid.ifEmpty { EM_DASH })
@@ -107,7 +107,7 @@ internal fun EchoMuseConnectivity(
             description = "设备重连新网成功后会在这里出现「确认新网络」；" +
                 "回滚窗口结束仍未确认，设备会自己回到原来的网络（切错网不失联的保险）。",
             status = AlertStatus.WARNING,
-            modifier = Modifier.fillMaxWidth().padding(top = GearUiSpace.sm),
+            modifier = Modifier.fillMaxWidth().padding(top = LocalAdminSpacing.current.sm),
         )
     }
     // 二次确认：只有设备回报 wifi_result.ok == true 才出现

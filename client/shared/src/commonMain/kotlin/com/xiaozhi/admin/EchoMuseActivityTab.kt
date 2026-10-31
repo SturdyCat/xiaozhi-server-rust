@@ -1,7 +1,7 @@
 package com.xiaozhi.admin
 
 import androidx.compose.runtime.Composable
-import com.xiaozhi.admin.kit.GearUiSpace
+import com.xiaozhi.admin.kit.LocalAdminSpacing
 import com.xiaozhi.admin.kit.splitRow
 
 /**
@@ -23,11 +23,11 @@ private const val EM_ACTIVITY_NOT_COLLECTED = "未采集（需服务端轮次打
 internal fun EchoMuseActivityTab(state: EchoMuseState) {
     val detail = state.detail
 
-    EmGroupLabel("聆听与播放（设备上行实况）", topGap = GearUiSpace.sm)
+    EmGroupLabel("聆听与播放（设备上行实况）", topGap = LocalAdminSpacing.current.sm)
     if (detail.runtime == null) {
         EmNote("尚未读取运行状态：进本 tab 会自动读一次，也可以到「状态」tab 手动刷新。")
     } else {
-        splitRow(divider = false, spacing = GearUiSpace.md) {
+        splitRow(divider = false, spacing = LocalAdminSpacing.current.md) {
             grow {
                 EmStatTile(
                     label = "State（聆听状态）",
@@ -52,12 +52,12 @@ internal fun EchoMuseActivityTab(state: EchoMuseState) {
     }
 
     EmGroupLabel("轮次统计")
-    splitRow(divider = false, spacing = GearUiSpace.md) {
+    splitRow(divider = false, spacing = LocalAdminSpacing.current.md) {
         grow { EmStatTile("Turns（最近 50 轮）", EM_DASH, EM_ACTIVITY_NOT_COLLECTED) }
         grow { EmStatTile("成功率", EM_DASH, EM_ACTIVITY_NOT_COLLECTED) }
         grow { EmStatTile("回复中位耗时", EM_DASH, EM_ACTIVITY_NOT_COLLECTED) }
     }
-    splitRow(divider = false, spacing = GearUiSpace.md) {
+    splitRow(divider = false, spacing = LocalAdminSpacing.current.md) {
         grow { EmStatTile("Near-misses（近失手）", EM_DASH, EM_ACTIVITY_NOT_COLLECTED) }
         grow { EmStatTile("—", EM_DASH, "本格无对应指标（保持与上一行同宽）") }
         grow { EmStatTile("—", EM_DASH, "本格无对应指标（保持与上一行同宽）") }

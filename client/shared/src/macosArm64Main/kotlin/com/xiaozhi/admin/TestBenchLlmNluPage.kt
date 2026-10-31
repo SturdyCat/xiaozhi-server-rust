@@ -11,7 +11,7 @@ import com.tencent.kuikly.compose.foundation.layout.padding
 import com.tencent.kuikly.compose.ui.Alignment
 import com.tencent.kuikly.compose.ui.Modifier
 import com.tencent.kuikly.core.pager.Pager
-import com.xiaozhi.admin.kit.GearUiSpace
+import com.xiaozhi.admin.kit.LocalAdminSpacing
 import com.xiaozhi.admin.kit.actionRow
 import com.xiaozhi.admin.kit.dividerH
 import com.xiaozhi.admin.kit.labeledField
@@ -58,7 +58,7 @@ internal fun BenchLlmPage(
                 }
                 // 状态徽标：独立一行
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(top = GearUiSpace.sm),
+                    modifier = Modifier.fillMaxWidth().padding(top = LocalAdminSpacing.current.sm),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     when {
@@ -121,7 +121,7 @@ internal fun BenchNluPage(
                 }
                 // 状态徽标：独立一行
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(top = GearUiSpace.sm),
+                    modifier = Modifier.fillMaxWidth().padding(top = LocalAdminSpacing.current.sm),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     when {

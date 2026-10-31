@@ -7,7 +7,7 @@ import com.gearui.components.button.ButtonType
 import com.tencent.kuikly.compose.ui.unit.dp
 import com.xiaozhi.admin.contracts.IconToken
 import com.xiaozhi.admin.icons.GearIcon
-import com.xiaozhi.admin.kit.GearUiSpace
+import com.xiaozhi.admin.kit.LocalAdminSpacing
 import com.xiaozhi.admin.kit.actionRow
 import com.xiaozhi.admin.kit.fieldLabelRow
 import com.xiaozhi.admin.kit.labeledField
@@ -41,7 +41,7 @@ internal fun EchoMuseBlePanel(row: EchoMuseDeviceRow, state: EchoMuseState) {
     val ble = state.ble
     val pager = LocalAdminPagerOrThrow()
 
-    EmGroupLabel("通用 BLE / GATT 管理", topGap = GearUiSpace.xs)
+    EmGroupLabel("通用 BLE / GATT 管理", topGap = LocalAdminSpacing.current.xs)
     if (ble.status.isNotEmpty()) EmNote(ble.status)
     EmNote(
         "仅面向你拥有或获授权的 IoT 外设。无配对/加密，需要安全属性可能返回 att:5。" +

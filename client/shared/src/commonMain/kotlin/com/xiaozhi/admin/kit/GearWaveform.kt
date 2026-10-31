@@ -1,4 +1,5 @@
 package com.xiaozhi.admin.kit
+import com.xiaozhi.admin.kit.LocalAdminSpacing
 
 import androidx.compose.runtime.Composable
 import com.gearui.components.slider.Slider
@@ -64,7 +65,7 @@ fun GearWaveform(
     val disabledBg = Theme.colors.muted
     val onAccent = Theme.colors.primaryForeground
 
-    Column(modifier.fillMaxWidth().padding(top = GearUiSpace.fieldGap)) {
+    Column(modifier.fillMaxWidth().padding(top = LocalAdminSpacing.current.fieldGap)) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -89,7 +90,7 @@ fun GearWaveform(
             // 波形区：32 根柱，已播放段用 accent
             Canvas(
                 modifier = Modifier
-                    .padding(start = GearUiSpace.sm)
+                    .padding(start = LocalAdminSpacing.current.sm)
                     .weight(1f)
                     .height(48.dp),
             ) {
@@ -118,7 +119,7 @@ fun GearWaveform(
 
             Text(
                 text = durationText,
-                modifier = Modifier.padding(start = GearUiSpace.xs),
+                modifier = Modifier.padding(start = LocalAdminSpacing.current.xs),
                 style = Theme.typography.caption,
                 color = Theme.colors.mutedForeground,
             )

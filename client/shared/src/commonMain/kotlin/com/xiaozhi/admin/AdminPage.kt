@@ -1,7 +1,20 @@
 package com.xiaozhi.admin
 
 import com.xiaozhi.admin.contracts.*
+import com.xiaozhi.admin.kit.adminScale
+import com.xiaozhi.admin.kit.provideAdminSpacing
+import com.xiaozhi.admin.kit.systemDarkModeState
 import com.xiaozhi.admin.state.stateVar
+
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
+import com.tencent.kuikly.compose.foundation.layout.Box
+import com.tencent.kuikly.compose.foundation.layout.fillMaxSize
+import com.tencent.kuikly.compose.ui.Modifier
+import com.tencent.kuikly.compose.ui.layout.onSizeChanged
+import com.tencent.kuikly.compose.ui.platform.LocalDensity
 
 import com.gearui.App
 import com.gearui.theme.ThemeMode
@@ -36,9 +49,13 @@ import com.tencent.kuikly.core.module.Module
  *
  * ## i18n 与主题（D2）
  *
- * - `themeMode = Light`、`theme = null`：完全采用 GearUI 默认主题，不覆写色板（Q1/A1）；
+ * - `themeMode = ThemeMode.System` + 传 `isSystemDark = systemDarkModeState().value`：跟随系统暗色
+ *   （基础设施 `ProvideSystemDarkMode` / `Themes.Dark` 已就绪）；`theme = null` 表示不覆写
+ *   GearUI 默认色板（Q1/A1）；
  * - `languageTag = fallbackLanguageTag = "zh-Hans"`：命中 GearUI 内置的 `Strings.zh_Hans`；
- * - `keyboardDismissMode` 用默认 `OnTapOrScroll`：点空白/滚动收起键盘，管理台表单正需要。
+ * - `keyboardDismissMode` 用默认 `OnTapOrScroll`：点空白/滚动收起键盘，管理台表单正需要；
+ * - 根容器先量视口（`onSizeChanged` → `viewportWidthDp`），再经 [adminScale] 算出
+ *   `fontScale` / `spacingScale` 双轴同源缩放，分别注入 `Theme` 与 `LocalAdminSpacing`。
  *
  * ## 状态机制（T05）
  *
@@ -171,13 +188,32 @@ class AdminPage : ComposeContainer(), FieldHelpHost {
         super.didInit()
         val page = this
         setContent {
-            App(
-                themeMode = ThemeMode.Light,
-                theme = null,
-                languageTag = "zh-Hans",
-                fallbackLanguageTag = "zh-Hans",
+            val systemDark = systemDarkModeState()
+            // 视口宽度（dp）随窗口 resize 实时更新，驱动字号 fontScale 与间距 spacingScale 双轴同源缩放。
+            var viewportWidthDp by remember { mutableStateOf(0) }
+            // `LocalDensity.current` 是 Composable 读取，必须放在 onSizeChanged 之外（回调本身非 Composable）；
+            // 用普通 val 承接后在回调里以 with(density) 换算，与 AdminScopeHost 同一写法。
+            val density = LocalDensity.current
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .onSizeChanged { size ->
+                        viewportWidthDp = with(density) { size.width.toDp() }.value.toInt()
+                    },
             ) {
-                AdminShell(page)
+                val (fontScale, spacingScale) = adminScale(IS_MACOS, viewportWidthDp)
+                provideAdminSpacing(spacingScale) {
+                    App(
+                        themeMode = ThemeMode.System,
+                        isSystemDark = systemDark.value,
+                        fontScale = fontScale,
+                        theme = null,
+                        languageTag = "zh-Hans",
+                        fallbackLanguageTag = "zh-Hans",
+                    ) {
+                        AdminShell(page)
+                    }
+                }
             }
         }
     }

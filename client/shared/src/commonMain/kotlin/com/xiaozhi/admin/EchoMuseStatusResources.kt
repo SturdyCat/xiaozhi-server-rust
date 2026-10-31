@@ -3,7 +3,7 @@ package com.xiaozhi.admin
 import androidx.compose.runtime.Composable
 import com.gearui.components.meter.Meter
 import com.gearui.components.progress.ProgressStatus
-import com.xiaozhi.admin.kit.GearUiSpace
+import com.xiaozhi.admin.kit.LocalAdminSpacing
 import com.xiaozhi.admin.kit.splitRow
 
 /**
@@ -28,7 +28,7 @@ import com.xiaozhi.admin.kit.splitRow
 @Composable
 internal fun EchoMuseResourcesView(state: EchoMuseState) {
     val detail = state.detail
-    EmGroupLabel("资源", topGap = GearUiSpace.sm)
+    EmGroupLabel("资源", topGap = LocalAdminSpacing.current.sm)
 
     if (detail.runtime?.optJSONObject("stats") == null) {
         EmNote("等待设备上报…（设备每轮上报一次标量快照；离线时只能看到历史上报）")
@@ -91,7 +91,7 @@ internal fun EchoMuseResourcesView(state: EchoMuseState) {
     }
 
     // ---- 三个无法用占用量程表达的指标（链路 / 延迟 / 温度） ----
-    splitRow(divider = false, spacing = GearUiSpace.md) {
+    splitRow(divider = false, spacing = LocalAdminSpacing.current.md) {
         grow {
             EmStatTile(
                 "链路（RSSI）",

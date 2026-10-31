@@ -72,12 +72,12 @@ private class WsDelegate(
  * （nil 回包 = 关闭/出错，统一归并为一次 onClosed）；发帧 sendMessage；关闭
  * cancelWithCloseCode（挂起的 receive 随之回调 error → onClosed，once 标记兜底）。
  */
-actual class PlatformWsSocket actual constructor(
+class IosWsSocket(
     url: String,
     onOpen: () -> Unit,
     onText: (String) -> Unit,
     onClosed: () -> Unit,
-) {
+) : PlatformWsSocket {
     private val onOpenCb = onOpen
     private val onTextCb = onText
     private val onClosedCb = onClosed
@@ -92,28 +92,22 @@ actual class PlatformWsSocket actual constructor(
         delegateQueue = null, // session 自建串行队列，回调统一经 notifyMain 切主线程
     )
 
-    private val task: NSURLSessionWebSocketTask?
+    private val task: NSURLSessionWebSocketTask
 
     init {
-        val nsUrl = NSURL(string = url)
-        if (nsUrl == null) {
-            // URL 非法：构造即失败，onClosed 一次（共享层据此走重连退避）
-            task = null
-            reportClosed()
-        } else {
-            val t = session.webSocketTaskWithURL(nsUrl)
-            task = t
-            receiveLoop(t)
-            t.resume()
-        }
+        // cinterop 下 NSURL(string:) 返回非空类型（无效串由 task 自身连接失败兜底 → onClosed）。
+        val t = session.webSocketTaskWithURL(NSURL(string = url))
+        task = t
+        receiveLoop(t)
+        t.resume()
     }
 
-    actual fun send(text: String) {
+    override fun send(text: String) {
         // completionHandler 为必填参数（Kotlin/Native 无单参重载）；结果不影响共享层语义。
         task?.sendMessage(NSURLSessionWebSocketMessage(text)) { }
     }
 
-    actual fun close() {
+    override fun close() {
         task?.cancelWithCloseCode(NSURLSessionWebSocketCloseCodeNormalClosure, null)
     }
 
@@ -139,3 +133,11 @@ actual class PlatformWsSocket actual constructor(
         notifyMain(onClosedCb)
     }
 }
+
+/** iOS 平台工厂（当前 PLATFORM_WS_SUPPORTED=false，共享层短路后不会被构造）。 */
+actual fun platformWsSocket(
+    url: String,
+    onOpen: () -> Unit,
+    onText: (String) -> Unit,
+    onClosed: () -> Unit,
+): PlatformWsSocket = IosWsSocket(url, onOpen, onText, onClosed)

@@ -14,7 +14,7 @@ import com.tencent.kuikly.compose.ui.Alignment
 import com.tencent.kuikly.compose.ui.Modifier
 import com.tencent.kuikly.core.pager.Pager
 import com.xiaozhi.admin.kit.GearWaveform
-import com.xiaozhi.admin.kit.GearUiSpace
+import com.xiaozhi.admin.kit.LocalAdminSpacing
 import com.xiaozhi.admin.kit.actionRow
 import com.xiaozhi.admin.kit.dividerH
 import com.xiaozhi.admin.kit.hGap
@@ -77,7 +77,7 @@ internal fun BenchAsrPage(
                     )
                     // 发送识别：仅在已录（且未在录/未在识别）时出现
                     if (bench.asrPhase == "recorded") {
-                        hGap(GearUiSpace.md)
+                        hGap(LocalAdminSpacing.current.md)
                         Button(
                             text = "发送识别",
                             onClick = { bench.sendAsr(pager) },
@@ -88,7 +88,7 @@ internal fun BenchAsrPage(
                 }
                 // 状态徽标：独立一行
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(top = GearUiSpace.sm),
+                    modifier = Modifier.fillMaxWidth().padding(top = LocalAdminSpacing.current.sm),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     when {
@@ -175,7 +175,7 @@ internal fun BenchTtsPage(
                     )
                     // 服务端回报的引擎名（sherpa/xfyun）；成功合成后可见
                     if (bench.ttsEngine.isNotEmpty()) {
-                        hGap(GearUiSpace.md)
+                        hGap(LocalAdminSpacing.current.md)
                         statusBadge(
                             if (bench.ttsError.isNotEmpty()) "error" else "connected",
                             "${bench.ttsEngine}${if (bench.ttsError.isNotEmpty()) " · 失败" else " · 就绪"}",
@@ -293,7 +293,7 @@ private fun BenchTtsRemotePickers(bench: TestBenchState, form: ConfigFormState) 
                 "再点「探测音色目录」生成可用音色列表。",
             style = Theme.typography.caption,
             color = Theme.colors.mutedForeground,
-            modifier = Modifier.padding(top = GearUiSpace.xs),
+            modifier = Modifier.padding(top = LocalAdminSpacing.current.xs),
         )
     }
     HintLine("密钥在右侧 TTS 配置卡维护；测试台合成会直接使用上方选中的音色（无需先保存配置）")

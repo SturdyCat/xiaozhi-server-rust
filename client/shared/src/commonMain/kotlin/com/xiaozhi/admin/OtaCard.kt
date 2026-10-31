@@ -31,7 +31,7 @@ import com.tencent.kuikly.compose.foundation.layout.padding
 import com.tencent.kuikly.compose.ui.Modifier
 import com.tencent.kuikly.compose.ui.unit.dp
 import com.tencent.kuikly.core.pager.Pager
-import com.xiaozhi.admin.kit.GearUiSpace
+import com.xiaozhi.admin.kit.LocalAdminSpacing
 import com.xiaozhi.admin.kit.actionRow
 import com.xiaozhi.admin.kit.labeledField
 import com.xiaozhi.admin.kit.switchRow
@@ -162,7 +162,7 @@ private fun OtaUploadCard(
         if (ota.hasPicked) {
             Text(
                 text = "已选：${ota.pickedName}（${formatBytes(ota.pickedSize)}）",
-                modifier = Modifier.fillMaxWidth().padding(top = GearUiSpace.xs),
+                modifier = Modifier.fillMaxWidth().padding(top = LocalAdminSpacing.current.xs),
                 style = Theme.typography.bodyMedium,
                 color = Theme.colors.primary,
             )
@@ -184,7 +184,7 @@ private fun OtaUploadCard(
                 title = "上传失败",
                 description = current.message,
                 status = AlertStatus.DANGER,
-                modifier = Modifier.padding(top = GearUiSpace.sm),
+                modifier = Modifier.padding(top = LocalAdminSpacing.current.sm),
             )
         }
 
@@ -276,7 +276,7 @@ private fun OtaUncertainProgress(hint: String) {
             repeatMode = RepeatMode.Reverse,
         ),
     )
-    Column(modifier = Modifier.fillMaxWidth().padding(top = GearUiSpace.sm)) {
+    Column(modifier = Modifier.fillMaxWidth().padding(top = LocalAdminSpacing.current.sm)) {
         LinearProgress(
             progress = sweep,
             modifier = Modifier.fillMaxWidth(),
@@ -285,7 +285,7 @@ private fun OtaUncertainProgress(hint: String) {
         )
         Text(
             text = hint,
-            modifier = Modifier.fillMaxWidth().padding(top = GearUiSpace.xs),
+            modifier = Modifier.fillMaxWidth().padding(top = LocalAdminSpacing.current.xs),
             style = Theme.typography.caption,
             color = Theme.colors.mutedForeground,
         )

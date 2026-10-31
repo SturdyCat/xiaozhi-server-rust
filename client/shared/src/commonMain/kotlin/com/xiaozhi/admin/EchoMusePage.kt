@@ -18,7 +18,7 @@ import com.tencent.kuikly.compose.foundation.layout.fillMaxWidth
 import com.tencent.kuikly.compose.foundation.layout.padding
 import com.tencent.kuikly.compose.ui.Alignment
 import com.tencent.kuikly.compose.ui.Modifier
-import com.xiaozhi.admin.kit.GearUiSpace
+import com.xiaozhi.admin.kit.LocalAdminSpacing
 
 /**
  * 「EchoMuse 设备」页（Compose 版，T10 重写）。
@@ -82,7 +82,7 @@ fun EchoMusePage(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = GearUiSpace.pagePadding, vertical = GearUiSpace.md),
+                    .padding(horizontal = LocalAdminSpacing.current.pagePadding, vertical = LocalAdminSpacing.current.md),
             ) {
                 if (officialEntry != null) officialEntry()
                 EmPageBody(
@@ -107,9 +107,9 @@ private fun EmPageHeader(state: EchoMuseState, onRefresh: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = GearUiSpace.pagePadding, end = GearUiSpace.pagePadding, top = GearUiSpace.md),
+            .padding(start = LocalAdminSpacing.current.pagePadding, end = LocalAdminSpacing.current.pagePadding, top = LocalAdminSpacing.current.md),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(GearUiSpace.sm),
+        horizontalArrangement = Arrangement.spacedBy(LocalAdminSpacing.current.sm),
     ) {
         Text(
             text = if (state.loading && !state.loaded) "加载中…" else state.summaryText(),
@@ -145,7 +145,7 @@ private fun EmPageBody(
             title = "设备列表加载失败",
             description = "${state.loadError}（确认管理令牌与服务端地址后点「刷新」）",
             status = AlertStatus.DANGER,
-            modifier = Modifier.fillMaxWidth().padding(bottom = GearUiSpace.sm),
+            modifier = Modifier.fillMaxWidth().padding(bottom = LocalAdminSpacing.current.sm),
         )
     }
     if (state.loading && !state.loaded) {

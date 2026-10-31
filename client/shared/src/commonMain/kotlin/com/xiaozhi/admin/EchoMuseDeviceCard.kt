@@ -19,7 +19,7 @@ import com.tencent.kuikly.compose.ui.Modifier
 import com.tencent.kuikly.compose.ui.unit.dp
 import com.xiaozhi.admin.contracts.IconToken
 import com.xiaozhi.admin.icons.GearIcon
-import com.xiaozhi.admin.kit.GearUiSpace
+import com.xiaozhi.admin.kit.LocalAdminSpacing
 import com.xiaozhi.admin.kit.statusBadge
 
 /**
@@ -61,12 +61,12 @@ internal fun EchoMuseDeviceCard(
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(bottom = GearUiSpace.gutter),
+            .padding(bottom = LocalAdminSpacing.current.gutter),
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(GearUiSpace.cardPadding),
+                .padding(LocalAdminSpacing.current.cardPadding),
         ) {
             EmDeviceHeader(row = row, onDelete = { state.confirmDeleteId = row.deviceId })
             EchoMuseDetailTabs(
@@ -105,7 +105,7 @@ private fun EmDeviceHeader(row: EchoMuseDeviceRow, onDelete: () -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(GearUiSpace.sm),
+        horizontalArrangement = Arrangement.spacedBy(LocalAdminSpacing.current.sm),
     ) {
         Avatar(
             fallback = row.title.take(2),
@@ -123,7 +123,7 @@ private fun EmDeviceHeader(row: EchoMuseDeviceRow, onDelete: () -> Unit) {
             if (!row.online || !row.approved) {
                 Row(
                     modifier = Modifier.padding(top = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(GearUiSpace.xs),
+                    horizontalArrangement = Arrangement.spacedBy(LocalAdminSpacing.current.xs),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     if (!row.online) statusBadge(state = "error", text = "离线")

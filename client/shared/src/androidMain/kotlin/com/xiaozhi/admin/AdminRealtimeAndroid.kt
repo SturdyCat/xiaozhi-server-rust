@@ -15,21 +15,26 @@ actual fun adminRealtimeUrl(base: String, token: String, path: String): String {
  * 不会被共享层构造（SUPPORTED=false 先短路）；构造即回调 onClosed 一次兜底，
  * 保证若被误用也不会挂死在「永远连接中」。
  */
-actual class PlatformWsSocket actual constructor(
-    url: String,
-    onOpen: () -> Unit,
-    onText: (String) -> Unit,
+class NoopWsSocket(
     onClosed: () -> Unit,
-) {
+) : PlatformWsSocket {
     init {
         onClosed()
     }
 
-    actual fun send(text: String) {
+    override fun send(text: String) {
         // 无 WS 能力：静默丢弃
     }
 
-    actual fun close() {
+    override fun close() {
         // 无 WS 能力：空实现
     }
 }
+
+/** Android 平台工厂（无 WS 能力的空实现）。 */
+actual fun platformWsSocket(
+    url: String,
+    onOpen: () -> Unit,
+    onText: (String) -> Unit,
+    onClosed: () -> Unit,
+): PlatformWsSocket = NoopWsSocket(onClosed)

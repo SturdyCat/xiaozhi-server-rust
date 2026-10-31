@@ -3,6 +3,7 @@ package com.xiaozhi.admin.kit
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.staticCompositionLocalOf
 import com.tencent.kuikly.compose.ui.unit.Dp
+import com.tencent.kuikly.compose.ui.unit.dp
 import com.tencent.kuikly.core.pager.Pager
 import com.xiaozhi.admin.contracts.AdminFieldHelpState
 
@@ -75,7 +76,8 @@ val LocalAdminPager = staticCompositionLocalOf<Pager?> { null }
 
 /** 当前视口尺寸。壳层提供；未提供时给一个"宽屏"默认值，避免组件在预览/测试里崩。 */
 val LocalAdminViewport = staticCompositionLocalOf {
-    AdminViewport(width = GearUiSpace.pagePadding * 60, height = GearUiSpace.pagePadding * 40)
+    // 静态兜底值（= pagePadding 基值 24dp），非 Composable 上下文读不到 LocalAdminSpacing，故落字面量、不随缩放。
+    AdminViewport(width = 24.dp * 60, height = 24.dp * 40)
 }
 
 /** 当前页面的字段帮助状态；null = 该页不渲染 ⓘ（同旧 `FieldHelpHost` 未实现的语义）。 */

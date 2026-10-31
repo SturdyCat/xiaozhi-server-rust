@@ -7,7 +7,7 @@ import com.tencent.kuikly.compose.foundation.layout.fillMaxWidth
 import com.tencent.kuikly.compose.ui.Modifier
 import com.xiaozhi.admin.contracts.IconToken
 import com.xiaozhi.admin.icons.GearIcon
-import com.xiaozhi.admin.kit.GearUiSpace
+import com.xiaozhi.admin.kit.LocalAdminSpacing
 import com.xiaozhi.admin.kit.actionRow
 import com.xiaozhi.admin.kit.labeledIntField
 import com.xiaozhi.admin.kit.splitRow
@@ -39,7 +39,7 @@ internal fun EchoMuseStatusTab(row: EchoMuseDeviceRow, state: EchoMuseState, toa
     val pager = LocalAdminPagerOrThrow()
 
     EmDeviceHead(row)
-    splitRow(divider = false, spacing = GearUiSpace.lg) {
+    splitRow(divider = false, spacing = LocalAdminSpacing.current.lg) {
         grow { EchoMuseDeviceFactsView(row = row, state = state, toast = toast) }
         grow { EchoMuseResourcesView(state = state) }
     }

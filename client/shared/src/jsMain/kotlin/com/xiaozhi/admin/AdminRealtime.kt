@@ -32,12 +32,12 @@ private fun httpToWsAuthority(base: String): String {
  * onclose/onerror 都归并为一次 onClosed（浏览器在 error 后通常还会补发 close，
  * [reportClosed] 的 once 标记保证至多回调一次）。
  */
-actual class PlatformWsSocket actual constructor(
+class BrowserWsSocket(
     url: String,
     onOpen: () -> Unit,
     onText: (String) -> Unit,
     onClosed: () -> Unit,
-) {
+) : PlatformWsSocket {
     private val onOpenCb = onOpen
     private val onTextCb = onText
     private val onClosedCb = onClosed
@@ -53,11 +53,11 @@ actual class PlatformWsSocket actual constructor(
         ws.onerror = { reportClosed() }
     }
 
-    actual fun send(text: String) {
+    override fun send(text: String) {
         ws.send(text)
     }
 
-    actual fun close() {
+    override fun close() {
         ws.close() // 浏览器随后触发 onclose → onClosed 一次（共享层据此收尾）
     }
 
@@ -67,3 +67,11 @@ actual class PlatformWsSocket actual constructor(
         onClosedCb()
     }
 }
+
+/** web 平台工厂：浏览器原生 WebSocket。 */
+actual fun platformWsSocket(
+    url: String,
+    onOpen: () -> Unit,
+    onText: (String) -> Unit,
+    onClosed: () -> Unit,
+): PlatformWsSocket = BrowserWsSocket(url, onOpen, onText, onClosed)
