@@ -1,6 +1,7 @@
 package com.xiaozhi.admin
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import com.gearui.components.button.Button
 import com.gearui.components.button.ButtonTheme
 import com.gearui.components.button.ButtonType
@@ -328,18 +329,17 @@ private fun AdminSectionHost(page: AdminPage, viewport: AdminViewport) {
         "console" -> ConsolePage(console = page.console, toast = page.toast)
         // 文件（存储面）：面包屑 + 上传 + 新建目录 + 删除二次确认
         "files" -> FilesPage(state = page.files, toast = page.toast)
-        // EchoMuse 设备（T10）：顶部「官方设备管理页（/em/）」入口卡 + 原有六 tab 详情卡。
-        // 官方页是按 EchoMuse 官方 dashboard 源码 vendor 的独立文档（web-only），
-        // 旧六 tab 保留专有能力（DLNA 音乐 / BLE GATT / 唤醒词资产 / WiFi 闭环）。
+        // EchoMuse：Kuikly 设备卡 + 双 Tab 管理弹窗，官方详情原样嵌入，不再另开页面。
         "echomuse" -> EchoMusePage(
             state = page.echomuse,
             toast = page.toast,
             isActive = { page.selectedSection == "echomuse" },
-            onOpenModelFiles = {
-                page.selectSection("files")
-                page.files.openPath(page, OWW_MODELS_DIR)
+            modelFiles = {
+                LaunchedEffect(Unit) { page.files.openPath(page, OWW_MODELS_DIR) }
+                FilesPage(state = page.files, toast = page.toast)
             },
-            officialEntry = { EmOfficialEntryCard(page) },
+            apiBase = page.apiBase,
+            token = page.adminRequestToken(),
         )
         // 测试台（T12，mac-only）：五 tab 工作区（连接 / ASR 识别 / TTS 合成 / LLM 对话 / NLU 意图），
         // 播放控制下沉 XiaoZhiModule（Audio DSL 视图无法进 Compose 树，见 TestBenchPage.kt）

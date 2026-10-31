@@ -15,6 +15,12 @@
 
   var qs = new URLSearchParams(location.search);
   var TOKEN = qs.get('token') || '';
+  // Opt in explicitly. A device deep-link alone retains the standalone list/modal.
+  var EMBED = qs.get('embed') === '1';
+  var DEVICE_ID = qs.get('device') || '';
+  // The parent owns the tab navigation. Keep the public contract stable even
+  // though the official Detail calls its shell tab "console" internally.
+  var EMBED_TAB = ({ status: 'status', activity: 'activity', config: 'config', shell: 'console', updates: 'updates', logs: 'logs' })[qs.get('tab')] || 'status';
   var h = React.createElement;
   var AD = window.EMAdapter;
 
@@ -112,24 +118,30 @@
    */
   function useDetail(id) {
     var devSt = React.useState(null);
+    var errSt = React.useState('');
     var aliveRef = React.useRef(true);
     function tick() {
       if (!id) { devSt[1](null); return; }
       Promise.all([AD.getDevice(id), AD.getRuntime(id)]).then(function (r) {
-        if (aliveRef.current) devSt[1](AD.device(r[0], r[1]));
-      }).catch(function () {
-        if (aliveRef.current) devSt[1](null);
+        if (!aliveRef.current) return;
+        errSt[1]('');
+        devSt[1](AD.device(r[0], r[1]));
+      }).catch(function (e) {
+        if (!aliveRef.current) return;
+        errSt[1](String((e && e.message) || e));
+        devSt[1](null);
       });
     }
     React.useEffect(function () {
       aliveRef.current = true;
       devSt[1](null);
+      errSt[1]('');
       if (!id) return function () { aliveRef.current = false; };
       tick();
       var iv = setInterval(tick, 3000);
       return function () { aliveRef.current = false; clearInterval(iv); };
     }, [id]);
-    return { device: devSt[0], refresh: tick, patch: devSt[1] };
+    return { device: devSt[0], error: errSt[0], refresh: tick, patch: devSt[1] };
   }
 
   var FONT_LABEL = {
@@ -221,6 +233,76 @@
     );
   }
 
+  // Separate component: embedded mode never mounts useDevices or fleet chrome.
+  // Keep the upstream Detail implementation (including approval and all six tabs)
+  // untouched; .em-embedded makes its modal frame an ordinary full-height panel.
+  function EmbeddedPage() {
+    var det = useDetail(DEVICE_ID);
+    var detailRef = React.useRef(null);
+    React.useEffect(function () {
+      // Detail owns its tab state and is intentionally vendored byte-for-byte.
+      // Once its DOM exists, select the requested official button by its exact
+      // lower-case value, then hide only that scoped tab strip. MutationObserver
+      // covers React's first commit and later approval/device refresh commits;
+      // it never searches or clicks outside this embedded Detail.
+      if (!detailRef.current || !det.device || !det.device.approved) return;
+      var pane = detailRef.current;
+      var applied = false;
+      function apply() {
+        var buttons = pane.querySelectorAll ? pane.querySelectorAll('.em-tabs button') : [];
+        for (var i = 0; i < buttons.length; i += 1) {
+          if (String(buttons[i].textContent || '').trim() !== EMBED_TAB) continue;
+          if (!applied) {
+            applied = true;
+            if (typeof buttons[i].click === 'function') buttons[i].click();
+          }
+          var strip = buttons[i].parentElement;
+          if (strip && strip.classList) strip.classList.add('em-embedded-tabbar-hidden');
+          return true;
+        }
+        return false;
+      }
+      apply();
+      var observer = typeof MutationObserver === 'function'
+        ? new MutationObserver(apply) : null;
+      if (observer) observer.observe(pane, { childList: true, subtree: true });
+      return function () { if (observer) observer.disconnect(); };
+    }, [DEVICE_ID, EMBED_TAB, det.device && det.device.approved]);
+    var message = !DEVICE_ID ? 'Missing device parameter.'
+      : det.error ? 'Unable to read device: ' + det.error
+      : !det.device ? 'Reading device…' : '';
+
+    if (message) {
+      return h('div', {
+        role: det.error || !DEVICE_ID ? 'alert' : 'status',
+        style: { padding: 'var(--space-12)', fontFamily: 'var(--font-mono)', color: 'var(--muted)' }
+      }, message);
+    }
+
+    return h('div', {
+      className: 'em-embedded-detail' + (det.device.approved ? ' em-embedded-approved' : ''),
+      ref: detailRef
+    }, h(window.Detail, {
+      // Approval normally closes upstream's modal. Remount on that transition
+      // here so its internal tab switches from 'approve' to 'status'.
+      key: DEVICE_ID + ':' + det.device.approved,
+      device: det.device,
+      token: TOKEN,
+      isAdmin: true,
+      globalConfig: FLEET,
+      // Close is hidden and there is no backdrop. Upstream calls onClose
+      // after approval OR deletion: refresh the same id, never show fleet.
+      onClose: det.refresh,
+      onApprove: function () {},
+      onDeviceConfigChange: function (id, patch) {
+        det.patch(function (prev) {
+          return prev && prev.device_id === id ? Object.assign({}, prev, patch) : prev;
+        });
+      }
+    }));
+  }
+
   var root = document.getElementById('root');
-  ReactDOM.createRoot(root).render(h(Page));
+  if (EMBED) root.classList.add('em-embedded');
+  ReactDOM.createRoot(root).render(h(EMBED ? EmbeddedPage : Page));
 })();

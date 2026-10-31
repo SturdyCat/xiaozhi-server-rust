@@ -530,6 +530,30 @@
     }
     .em-tabs::-webkit-scrollbar { display: none; }
     .em-tabs > button { flex-shrink: 0; }
+
+    /* Embedded host only: keep official device content/tabs, not a second
+       backdrop or floating dialog inside the management console's container.
+       Direct-child selectors deliberately leave any inner dialogs alone. */
+    #root.em-embedded, .em-embedded-detail { height: 100%; min-height: 0; }
+    .em-embedded-detail > div {
+      position: static !important; inset: auto !important;
+      height: 100%; min-height: 0; background: transparent !important;
+      align-items: stretch !important; justify-content: flex-start !important;
+      z-index: auto !important; backdrop-filter: none !important;
+    }
+    .em-embedded-detail > div > .em-modal {
+      width: 100% !important; height: 100% !important; min-width: 0; min-height: 0;
+      border: 0 !important; border-radius: 0 !important;
+      box-shadow: none !important; animation: none !important;
+    }
+    .em-embedded-detail > div > .em-modal > .em-modal-head { flex-shrink: 0; }
+    /* Keep the official device toolbar: rename/delete live here, not in a tab.
+       Only its redundant tab strip and Close action are hidden below. */
+    .em-embedded-detail > div > .em-modal > .em-modal-body { min-height: 0; }
+    .em-embedded-detail .em-modal-headrow button[title="Close"] { display: none !important; }
+    /* The parent owns navigation; this is added by the host only after the
+       requested official tab has been selected. */
+    .em-embedded-detail .em-embedded-tabbar-hidden { display: none !important; }
   </style>
   <script>
     // Theme is forced to light here: this page is hosted by the xiaozhi-server

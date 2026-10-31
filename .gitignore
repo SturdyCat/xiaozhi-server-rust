@@ -35,3 +35,6 @@ __pycache__/
 .agents/skills/**/references/
 
 **/*.log
+
+# Isolated local admin development database and managed assets
+/.dev/

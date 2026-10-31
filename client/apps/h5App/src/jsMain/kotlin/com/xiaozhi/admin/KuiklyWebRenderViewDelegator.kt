@@ -6,8 +6,7 @@ import com.tencent.kuikly.core.render.web.ktx.SizeI
 import com.tencent.kuikly.core.render.web.runtime.web.expand.KuiklyRenderViewDelegator
 
 /**
- * 实现 Web Render 提供的代理接口：传入 H5 页面初始化参数，并注册自定义模块。
- * （管理台图标为 shared 内嵌矢量 Canvas 绘制，Web 侧无需注册自定义 View。）
+ * 实现 Web Render 提供的代理接口：传入 H5 页面初始化参数，注册自定义模块与内嵌官方页。
  */
 class KuiklyWebRenderViewDelegator : KuiklyRenderViewDelegatorDelegate {
     private val delegate = KuiklyRenderViewDelegator(this)
@@ -19,6 +18,11 @@ class KuiklyWebRenderViewDelegator : KuiklyRenderViewDelegatorDelegate {
     fun resume() = delegate.onResume()
     fun pause() = delegate.onPause()
     fun detach() = delegate.onDetach()
+
+    override fun registerExternalRenderView(kuiklyRenderExport: IKuiklyRenderExport) {
+        super.registerExternalRenderView(kuiklyRenderExport)
+        kuiklyRenderExport.renderViewExport("EchoMuseOfficialViewHost", { EchoMuseOfficialViewHost() })
+    }
 
     override fun registerExternalModule(kuiklyRenderExport: IKuiklyRenderExport) {
         super.registerExternalModule(kuiklyRenderExport)

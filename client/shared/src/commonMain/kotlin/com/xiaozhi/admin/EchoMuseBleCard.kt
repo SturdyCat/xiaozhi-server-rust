@@ -37,7 +37,7 @@ import com.xiaozhi.admin.kit.labeledTextArea
  * 清单直接排进页面流，少一层滚动嵌套，也少一处高度魔法。
  */
 @Composable
-internal fun EchoMuseBlePanel(row: EchoMuseDeviceRow, state: EchoMuseState) {
+internal fun EchoMuseBlePanel(row: EchoMuseDeviceRow, state: EchoMuseState, showSettings: Boolean = true) {
     val ble = state.ble
     val pager = LocalAdminPagerOrThrow()
 
@@ -47,7 +47,8 @@ internal fun EchoMuseBlePanel(row: EchoMuseDeviceRow, state: EchoMuseState) {
         "仅面向你拥有或获授权的 IoT 外设。无配对/加密，需要安全属性可能返回 att:5。" +
             "通用字节不具备开关等业务语义，先查外设协议。",
     )
-    EchoMuseBleSettings(ble = ble, state = state)
+    if (showSettings) EchoMuseBleSettings(ble = ble, state = state)
+    else EmNote("BLE 扫描与连接开关请在「官方 UI → 配置 → 蓝牙」中设置。")
 
     // ---- 1. 广播快照与目标外设 ----
     fieldLabelRow("1. 广播快照与目标外设")

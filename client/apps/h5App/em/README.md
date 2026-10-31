@@ -9,7 +9,7 @@
 
 ```
 em/
-├── index.html                 裁剪自上游 dashboard.html（只改 4 处，见下）
+├── index.html                 裁剪自上游 dashboard.html（宿主适配见下）
 ├── LICENSE                    上游 MIT 全文（Copyright (c) 2026 Wil Bowes）
 ├── README.md                  本文件
 ├── README.sha256              源码/产物摘要（tools/build_em_dashboard.sh 生成）
@@ -20,9 +20,9 @@ em/
     └── host.js                本项目新增：挂载官方 Card + Detail 的宿主
 ```
 
-`index.html` 相对上游 `dashboard.html` 只改 4 处：`<title>`、删 favicon 行、加
-`<meta name="referrer" content="no-referrer">`（token 在 URL 里）、主题强制浅色，以及
-`<body>` 末尾多加载 `adapter.js` / `host.js`。
+`index.html` 相对上游 `dashboard.html` 的宿主适配：`<title>`、删 favicon 行、加
+`<meta name="referrer" content="no-referrer">`（token 在 URL 里）、主题强制浅色、
+`<body>` 末尾多加载 `adapter.js` / `host.js`，以及仅嵌入模式生效的布局 CSS。
 
 ## 第三方库走 CDN（不入库）
 
@@ -119,8 +119,44 @@ fleet 默认值重刷（例如把设备真实的 `startupVolume=60` 悄悄写成
 以及 `/devices/{id}/console` 的 WebSocket（`ready` → `shell_meta{pty:false}` →
 `output`），然后：
 
-- 列表：`/em/?token=t`
-- 详情：`/em/?token=t&device=<id>`（`Detail` 的 tab 是内部状态，靠点击切换）
+- 独立列表：`/em/?token=t`
+- 独立详情：`/em/?token=t&device=<encoded-id>`（列表 + 官方模态详情，关闭后仍是列表）
+- 嵌入单设备：`/em/?embed=1&device=<encoded-id>&token=<encoded-token>`
+
+### 嵌入 URL 契约
+
+- `embed` 仅精确值 `1` 启用嵌入；缺省、`0`、`true` 等均保留独立模式。
+- `device` 是原始设备 id 经 `encodeURIComponent(id)` 编码后的查询参数；宿主使用
+  `URLSearchParams` 解码一次，适配器在请求设备端点时重新编码。不要把原始 `+`、`&`、
+  `#` 等直接拼入查询串，也不要预先二次编码。
+- `token` 可选，使用 `encodeURIComponent(token)` 编码；鉴权方式与独立模式一致。
+  路径必须是带尾斜杠的 `/em/`，参数顺序不限。
+- `tab` 可选且仅接受 `status`、`activity`、`config`、`shell`、`updates`、`logs`；缺省或非法值回退
+  `status`。`shell` 映射官方 Detail 的内部 `console` tab。嵌入宿主在官方 Detail 首次提交后按精确
+  tab 文本选择该 tab，再隐藏**本 Detail 范围内**的官方 tab bar；官方设备工具栏保留，
+  因为改名与删除动作位于该处。适配器不修改 React 源码，也不做全局 DOM 搜索或点击。
+  未审批设备忽略 `tab`，继续显示官方审批表单。
+- 嵌入模式只读取指定设备的记录与 runtime（每 3 秒轮询），不请求设备列表，不渲染全局
+  计数、返回管理台链接或设备卡。缺少/空 `device` 直接显示错误且不发设备请求；读取失败
+  显示内联错误并继续轮询同一个 id，绝不回退列表或其他设备。
+- 官方 `Detail` 原样复用：已审批设备保留状态 / 活动 / 配置 / 控制台 / 更新 / 日志六 tab；
+  未审批设备仍按官方流程显示审批表单，审批后刷新并进入状态 tab。删除后刷新同一个 id，
+  显示服务端返回的不存在错误，不跳转全局列表。
+- 嵌入 CSS 只将详情最外层遮罩/浮动模态框展开成填满容器的普通面板（无遮罩、模糊、外边框、
+  圆角和阴影），隐藏详情 Close 与内部 tab bar；保留官方设备工具栏中的改名、删除与审批能力。
+  父容器/iframe 应提供明确高度，详情正文在容器内滚动。
+  官方源码和生成 bundle 无须改动或重建。
+
+### Node 回归测试
+
+```bash
+node --test client/apps/h5App/em/tests/host.test.cjs
+node --check client/apps/h5App/em/static/host.js
+```
+
+测试无需安装依赖，执行真实宿主和适配器，覆盖 URL 编解码/鉴权、嵌入加载/错误恢复、缺少 id、
+审批/删除回调、配置局部更新、独立列表与深链兼容，并校验 CSS 隔离及官方 bundle 摘要。
+测试使用轻量 hook 驱动、将官方组件视为叶子，不代替浏览器里的布局、tab 交互和 xterm 验证。
 
 ## 第三方许可
 
@@ -136,9 +172,10 @@ fonts.gstatic）。
 
 ## 与 Kuikly 管理台的关系
 
-Kuikly 管理台的「EchoMuse」页顶部有一张入口卡（`EchoMuseOfficialEntry.kt`）指向
-`/em/?token=…`。原 Kuikly 六 tab 页面**保留**，承载本项目专有能力：DLNA 音乐、
-BLE GATT 面板、唤醒词资产（VAD）安装等官方界面没有的功能。
+Kuikly 管理台的「EchoMuse」页使用设备摘要卡打开同一管理弹窗，顶部由 GearUI 系统 Tabs
+统一导航：官方状态/活动/配置/控制台/更新/日志六项，与 DLNA 音乐/GATT 工具/VAD 资产/
+模型文件/WiFi 确认/原始诊断六个原生扩展混排。不再另开官方页面，不设「官方/原生」二级切换；
+功能相同的旧原生六 Tab 源码已移除，官方内容通过带 `tab` 的 embed URL 嵌入。
 
 ## 注意
 

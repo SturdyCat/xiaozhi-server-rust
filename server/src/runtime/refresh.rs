@@ -12,6 +12,9 @@ impl Engines {
     /// 读盘解析 `[tts]`，签名变化才重建并替换；失败保持当前引擎并回报原因。
     /// **阻塞调用**（sherpa 重建可能加载模型数秒），调用方须包 `spawn_blocking`。
     pub fn refresh_tts_from_disk(&self) -> Result<(), String> {
+        if self.dev_mode {
+            return Err(DEV_UNAVAILABLE.to_string());
+        }
         let _refresh = self.refresh_lock.lock().unwrap_or_else(|e| e.into_inner());
         if self.config_path().is_none() {
             return Ok(()); // 内置默认配置，无可刷新
@@ -39,6 +42,9 @@ impl Engines {
     /// 返回值 = 面向日志/调用方的告警文本（空 = 一切正常）。
     /// **阻塞调用**（sherpa 重建可能加载模型数秒），调用方须包 `spawn_blocking`。
     pub fn refresh_from_disk(&self) -> Vec<String> {
+        if self.dev_mode {
+            return vec![DEV_UNAVAILABLE.to_string()];
+        }
         let _refresh = self.refresh_lock.lock().unwrap_or_else(|e| e.into_inner());
         if self.config_path().is_none() {
             return Vec::new(); // 内置默认配置，无可刷新

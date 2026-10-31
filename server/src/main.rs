@@ -16,6 +16,7 @@
 
 mod benchmark;
 mod config;
+mod dev;
 mod device;
 mod gateway;
 mod media;
@@ -43,7 +44,14 @@ use crate::runtime::Engines;
 
 fn main() -> Result<()> {
     // 配置在 runtime 构建前加载（worker_threads 需要它）。
-    let (config, config_store) = load_config();
+    if std::env::args().any(|a| a == "--help" || a == "-h") {
+        println!("xiaozhi-server-rust [--config-db <文件>] [--dev [--port <端口>]]\n--dev: 本地管理台开发模式，不加载模型；默认独立 .dev/data.db，监听 127.0.0.1:8000");
+        return Ok(());
+    }
+    let options = dev::Options::parse(std::env::args().skip(1))?;
+    let (mut config, config_store) = load_config(&options);
+    options.apply(&mut config);
+    let dev_mode = options.enabled;
 
     // tokio 多线程 runtime：worker 线程数由 [server].worker_threads 控制（默认 2），
     // 避免默认按 CPU 核数拉满，在 N5105 这类 4 核主机上挤占其他服务。
@@ -52,10 +60,10 @@ fn main() -> Result<()> {
         .worker_threads(workers)
         .enable_all()
         .build()?
-        .block_on(run(config, config_store))
+        .block_on(run(config, config_store, dev_mode))
 }
 
-async fn run(config: Config, config_store: Arc<dyn ConfigStore>) -> Result<()> {
+async fn run(config: Config, config_store: Arc<dyn ConfigStore>, dev_mode: bool) -> Result<()> {
     // registry + 各层手工组装：日志采集层（/api/logs WS）需要插在 fmt 之前，
     // SubscriberBuilder 的 `.with` 只接受格式层，无法直接挂自定义 Layer。
     // 默认 info，但压掉 ort::logging（ONNX Runtime C 库转发的会话初始化明细，
@@ -76,13 +84,23 @@ async fn run(config: Config, config_store: Arc<dyn ConfigStore>) -> Result<()> {
         );
     tracing::subscriber::set_global_default(subscriber)?;
 
+    let bind_host = if dev_mode { "127.0.0.1" } else { "0.0.0.0" };
     tracing::info!(
-        "配置加载完成：ASR=SenseVoice, TTS=Kokoro, LLM=http, 监听=0.0.0.0:{}, tokio worker={} 线程",
+        "配置加载完成：模式={}, 监听={bind_host}:{}, tokio worker={} 线程",
+        if dev_mode {
+            "dev-admin（无模型）"
+        } else {
+            "production"
+        },
         config.server.port,
         config.server.worker_threads.max(1)
     );
-
-    let engines = Engines::new(&config, config_store)?;
+    let engines = if dev_mode {
+        tracing::warn!("{}", dev::DISABLED);
+        Engines::new_dev(&config, config_store)?
+    } else {
+        Engines::new(&config, config_store)?
+    };
     // 延迟/事件聚合（P1-1）：进程最早的订阅者——spawn 越早，broadcast 环形缓冲越不丢
     // 早期事件（LAGGED 只告警；聚合口径是近似值，见 app/metrics 模块注释）。
     tokio::spawn(crate::observability::metrics::subscriber(
@@ -105,7 +123,9 @@ async fn run(config: Config, config_store: Arc<dyn ConfigStore>) -> Result<()> {
     }
     // 发音人目录：读盘缓存/离线兜底 + 配置了控制台会话时后台刷新一次（失败非致命）
     crate::device::voices::init();
-    crate::device::voices::spawn_startup_probe(engines.clone());
+    if !dev_mode {
+        crate::device::voices::spawn_startup_probe(engines.clone());
+    }
     // 唤醒问候语的音频复用是否可用（"为什么重启后又要重新合成"的第一现场）：
     // 只有加载了配置文件才有落盘目录（与 PUT /api/config 的持久化前提同源）。
     match (engines.hot_audio.is_persistent(), engines.hot_audio.dir()) {
@@ -132,11 +152,14 @@ async fn run(config: Config, config_store: Arc<dyn ConfigStore>) -> Result<()> {
         }
     }
     // clone 而非 move：专用端口监听（下方 echomuse 段）还需要同一份 Engines。
-    let app = router(engines.clone());
+    let app = router(engines.clone()).layer(axum::middleware::from_fn_with_state(
+        engines.clone(),
+        dev::guard,
+    ));
 
     // 监听：永远 0.0.0.0，唯一可配的是端口（[server].port，默认 8000）——
     // 容器/局域网可达性由端口映射或防火墙决定，不存在"绑错地址"一类的问题。
-    let addr = format!("0.0.0.0:{}", config.server.port);
+    let addr = format!("{bind_host}:{}", config.server.port);
     let listener = match TcpListener::bind(&addr).await {
         Ok(l) => l,
         Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
@@ -149,22 +172,29 @@ async fn run(config: Config, config_store: Arc<dyn ConfigStore>) -> Result<()> {
     tracing::info!("xiaozhi-server-rust 监听于 {addr}");
     // 把用户真正要填的连接地址打出来：macApp/设备需要 IP:port（监听永远 0.0.0.0，
     // 打 bind 地址没意义）。IP 无配置项，动态探测部署机默认出口。
-    match crate::device::local_ipv4() {
+    if dev_mode {
+        tracing::info!(
+            "UI 开发地址: http://127.0.0.1:{} （不广播设备发现，不启动模型下载）",
+            config.server.port
+        );
+    }
+    match (!dev_mode).then(crate::device::local_ipv4).flatten() {
         Some(ip) => tracing::info!(
             "局域网连接地址（macApp / 设备填写）: ws://{ip}:{}",
             config.server.port
         ),
-        None => tracing::warn!(
+        None if !dev_mode => tracing::warn!(
             "无法探测局域网 IPv4（容器部署常见），macApp 请手动填宿主机 IP，端口 {}",
             config.server.port
         ),
+        None => {}
     }
     // EchoMuse 设备发现（`[echomuse].enabled=true` 时）：广播 `_emcontroller._tcp`，
     // emOS 设备在同网段即可发现本服务器。失败只告警（设备也可凭 endpoint 文件直连）。
     // 广播端口跟随实际监听：`[echomuse].plain_port`（默认 8767，官方明文 controller
     // 端口——上游固件 tcp_peer() 只认远端 8767/8770 的连接为 controller）额外监听
     // 成功则指向专用端口；绑定失败或 plain_port=0 时回退主端口（/em/* 两边都在）。
-    if config.echomuse.enabled {
+    if config.echomuse.enabled && !dev_mode {
         let mdns_port = match crate::device::echomuse::listen::dedicated_port(&config.echomuse) {
             Some(p) => crate::device::echomuse::listen::spawn_dedicated(engines.clone(), p)
                 .await
@@ -183,12 +213,14 @@ async fn run(config: Config, config_store: Arc<dyn ConfigStore>) -> Result<()> {
     // 宣告 `bluetooth_proxy`（Dot 2 当 BLE 代理）。见
     // docs/research/emx-integration-analysis.md §4.1.1 / §4.1.2。
     #[cfg(feature = "esp_home")]
-    if config.esp_home.enabled {
+    if config.esp_home.enabled && !dev_mode {
         crate::device::esp_home::spawn(config.esp_home.clone(), engines.clone());
     }
     // 管理客户端发现（常驻、无配置项）：广播 `_xiaozhi-admin._tcp`，macApp 等
     // 非 web 客户端经 Bonjour 浏览后自动连接，免手填 IP（见 app/discovery.rs）。
-    crate::device::discovery::spawn_admin_mdns(config.server.port);
+    if !dev_mode {
+        crate::device::discovery::spawn_admin_mdns(config.server.port);
+    }
     // 设备主动拨回的受限 shell 面必须绑定当前 control 的真实对端地址；
     // ConnectInfo 来自 TCP 连接，不信任可伪造的转发头。
     // 带 TCP keepalive（src/serve.rs）：设备断电不发 FIN，半开连接靠内核探测
@@ -216,8 +248,8 @@ fn default_log_filter() -> String {
 ///    外置 config.toml 配置逻辑已移除，`data.db` 同时承载配置与 memory）。
 ///
 /// 返回加载到的配置与配置存储后端（SQLite），供 `PUT /api/config` 写回使用。
-fn load_config() -> (Config, Arc<dyn ConfigStore>) {
-    let (mut config, store) = load_config_inner();
+fn load_config(options: &dev::Options) -> (Config, Arc<dyn ConfigStore>) {
+    let (mut config, store) = load_config_inner(options);
     // [server].admin_dir 支持环境变量覆盖（Docker 镜像内置 XIAOZHI_ADMIN_DIR=/app/web）。
     // env 只影响本次运行的生效配置，不写回（GET /api/config 展示的仍是库内原值）。
     if let Ok(dir) = std::env::var("XIAOZHI_ADMIN_DIR") {
@@ -228,19 +260,25 @@ fn load_config() -> (Config, Arc<dyn ConfigStore>) {
     (config, store)
 }
 
-fn load_config_inner() -> (Config, Arc<dyn ConfigStore>) {
-    // 1) 解析配置库路径
-    let mut db_path: String = std::env::var("XIAOZHI_CONFIG_DB")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .or_else(|| {
-            let args: Vec<String> = std::env::args().collect();
-            args.iter()
-                .position(|a| a == "--config-db")
-                .and_then(|pos| args.get(pos + 1).cloned())
-                .filter(|s| !s.is_empty())
-        })
-        .unwrap_or_else(|| "/data/data.db".to_string());
+fn load_config_inner(options: &dev::Options) -> (Config, Arc<dyn ConfigStore>) {
+    // Development ignores inherited production DB environment; explicit --config-db still works.
+    let mut db_path: String = if options.enabled {
+        options.dev_db()
+    } else {
+        std::env::var("XIAOZHI_CONFIG_DB")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .or_else(|| options.config_db.clone())
+            .unwrap_or_else(|| "/data/data.db".to_string())
+    };
+    if options.enabled {
+        if let Some(parent) = std::path::Path::new(&db_path)
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+        {
+            std::fs::create_dir_all(parent).expect("无法创建开发配置库目录");
+        }
+    }
 
     // :memory: 兜底：回退到文件路径并告警（进程内临时、重建即丢，不能当配置库）
     if db_path == ":memory:" {

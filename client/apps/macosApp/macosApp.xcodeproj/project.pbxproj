@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		ECA001000000000000000001 /* EchoMuseOfficialViewHost.m in Sources */ = {isa = PBXBuildFile; fileRef = ECA001000000000000000002 /* EchoMuseOfficialViewHost.m */; };
 		1728254144B5234A4C6E9683 /* XiaoZhiModule+Discovery.m in Sources */ = {isa = PBXBuildFile; fileRef = TEMP_237E7B12-7043-410E-B0DF-09A1D818B339 /* XiaoZhiModule+Discovery.m */; };
 		1771F164FC13F447F470724A /* XiaoZhiModule+AdminWs.m in Sources */ = {isa = PBXBuildFile; fileRef = TEMP_F7556648-F87C-4996-8796-C2A668C7AD49 /* XiaoZhiModule+AdminWs.m */; };
 		29525065B9543CB39B49DBB5 /* XzAudioView.m in Sources */ = {isa = PBXBuildFile; fileRef = TEMP_85FF2CBF-C801-4BB6-8593-E16FC41A8FB8 /* XzAudioView.m */; };
@@ -39,6 +40,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		ECA001000000000000000002 /* EchoMuseOfficialViewHost.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = EchoMuseOfficialViewHost.m; sourceTree = "<group>"; };
 		19A91FE7257121734DABBD4B /* Pods-macosApp.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-macosApp.release.xcconfig"; path = "Target Support Files/Pods-macosApp/Pods-macosApp.release.xcconfig"; sourceTree = "<group>"; };
 		21A65A091E316382E5730E83 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		2421D1DB0C53B7FAE9A7324B /* Pods-macosApp.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-macosApp.debug.xcconfig"; path = "Target Support Files/Pods-macosApp/Pods-macosApp.debug.xcconfig"; sourceTree = "<group>"; };
@@ -127,6 +129,7 @@
 			isa = PBXGroup;
 			children = (
 				21A65A091E316382E5730E83 /* Assets.xcassets */,
+				ECA001000000000000000002 /* EchoMuseOfficialViewHost.m */,
 				37CA18A20F8D336501580691 /* build */,
 				315E352E3C275F0534E1E571 /* Frameworks */,
 				572842642664AE95291FC9D0 /* Products */,
@@ -290,6 +293,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				36F393A715F2080CDD0F946A /* AppDelegate.m in Sources */,
+				ECA001000000000000000001 /* EchoMuseOfficialViewHost.m in Sources */,
 				B8348788051A9E9DADD6E535 /* KRRouterHandler.m in Sources */,
 				40875CC00E2B7A9D243F6E00 /* KuiklyRenderViewController.m in Sources */,
 				5D3D850122709C1F21F73301 /* SceneDelegate.m in Sources */,

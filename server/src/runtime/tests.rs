@@ -99,3 +99,31 @@ fn tts_refresh_decisions() {
         other => panic!("与 feature 组合不符的决策结果: {other:?}"),
     }
 }
+
+#[test]
+fn dev_constructor_is_model_free_and_reports_inference_errors() {
+    let store = crate::config::store::sqlite::SqliteConfigStore::open(":memory:").unwrap();
+    let engines = Engines::new_dev(&Config::default(), store).unwrap();
+    assert!(engines.dev_mode);
+    assert_eq!(
+        engines.asr.recognize(&[], 16_000).unwrap_err().to_string(),
+        DEV_UNAVAILABLE
+    );
+    assert_eq!(
+        engines
+            .tts()
+            .synthesize("hello", 1.0, 0)
+            .unwrap_err()
+            .to_string(),
+        DEV_UNAVAILABLE
+    );
+    assert!(engines.bert_engine(&NluConfig::default()).is_none());
+    assert_eq!(
+        engines.refresh_from_disk(),
+        vec![DEV_UNAVAILABLE.to_string()]
+    );
+    assert_eq!(
+        engines.refresh_tts_from_disk().unwrap_err(),
+        DEV_UNAVAILABLE
+    );
+}

@@ -76,6 +76,23 @@ curl http://127.0.0.1:8000/api/health              # => {"status":"ok",...}
 
 ---
 
+## 本地 UI 开发（无需模型）
+
+```bash
+./dev-server.sh                  # 真实 Rust server + 已构建的 Kuikly 管理台
+./dev-server.sh --build-web      # 修改 UI 后重建 Web 再启动
+./dev-server.sh --port 8001      # 自定义本地端口
+```
+
+默认访问 **http://127.0.0.1:8000/**。缺少 Web 产物时脚本自动构建；不启动另一套前端 mock server。Rust 默认 feature 即可运行，不需要 sherpa、libopus 或语音模型；首次编译需下载 Cargo 依赖，首次 Web 构建需 JDK/Gradle。
+
+- 配置、文件、日志与管理台 WS 都走真实 API；数据隔离在 `.dev/`（已忽略），重启保留。默认不伪造设备或模型输出，设备列表为空是正常状态。
+- `--dev` 仅监听回环地址，不广播 mDNS、不开放设备专用监听、不预下载模型。ASR/TTS/VAD/LLM、节点测试、语音会话与训练返回明确的开发模式不可用错误；能力状态不伪装健康。
+- 开发模式忽略 `XIAOZHI_CONFIG_DB`，可显式用 `--config-db <文件>` 选择独立开发库；不要传入生产库。`XIAOZHI_ADMIN_DIR` 可指定已有 Web 目录。UI 修改后需重建并刷新浏览器，不承诺热更新。
+- 等价后端命令：`cargo run --manifest-path server/Cargo.toml --no-default-features -- --dev`。不带 `--dev` 的生产启动仍要求真实模型与对应 feature。
+
+---
+
 ## 文档
 
 | 文档 | 内容 |
