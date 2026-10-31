@@ -47,6 +47,13 @@
 #   本地能编、ACR 必败，差异就在这里（本机 `:sharedCompose:compileKotlinJs` 有产物 195 KiB）。
 #   修法：COPY 清单层与源码层都要带上 sharedCompose（见下方两处 COPY 与源码断言）。
 #
+# 🚨 2026-10-31 第五次复现：报错形态回到第三次（COPY `"/client/sharedCompose": not found`），
+#   但根因**反转**：`638849b`（GearUI 全量迁移）已删除整个 :sharedCompose 模块——
+#   Kuikly 升 2.30.0 上游补齐了 material3 缺失 API，补丁按预案删除（settings/build 脚本
+#   同步清理，本地三端编译全绿可证），但本文件的 COPY 与源码断言**没有同步删除**，
+#   COPY 一个仓库里已不存在的目录 → buildx 直接失败。修法：删除全部 sharedCompose
+#   COPY/断言/注释（本轮），后续若再引入新模块，COPY 清单与构建脚本必须同一提交内同步。
+#
 # 🚨 2026-10-27 第四次复现：编译全绿后死在业务包 webpack（cgroup OOM 第二形态）。
 #   断点：`:shared:jsBrowserProductionWebpack` 刚打印 webpack patch 已加载即 EOF。
 #   此时配置阶段已过（sharedCompose 修复生效）、:shared 两个 Kotlin/JS 编译全部完成、
@@ -106,11 +113,7 @@ COPY client/gradlew client/gradlew.bat client/gradle.properties client/build.gra
 COPY client/gradle ./client/gradle
 COPY client/kotlin-js-store ./client/kotlin-js-store
 COPY client/shared/build.gradle.kts client/shared/build.gradle.kts
-# 🚨 settings.gradle.kts 里 include(":sharedCompose")，且 shared/build.gradle.kts 通过
-#   implementation(project(":sharedCompose")) 依赖它。这个模块的构建脚本必须进依赖缓存层，
-#   否则配置 :shared 时 `:sharedCompose` 是空 project（无脚本、无 js 产物），
-#   publishWeb 解析依赖阶段必失败——见文件头 2026-10-27 第三次复现记录。
-COPY client/sharedCompose/build.gradle.kts client/sharedCompose/build.gradle.kts
+COPY client/gearuiKit/build.gradle.kts client/gearuiKit/build.gradle.kts
 COPY client/apps/h5App/build.gradle.kts client/apps/h5App/build.gradle.kts
 WORKDIR /src/client
 # Gradle 用户主目录显式钉到挂载路径（官方 gradle 镜像的默认值，写出来防镜像漂移）。
@@ -121,19 +124,16 @@ ENV GRADLE_USER_HOME=/home/gradle/.gradle
 RUN --mount=type=cache,target=/home/gradle/.gradle \
     ./gradlew :apps:h5App:help --no-daemon
 
-# 业务源码：shared（KMP 共享层，@Page 页面 + Kuikly 插件打业务包）+ sharedCompose + h5App 壳
+# 业务源码：shared（KMP 共享层，@Page 页面 + Kuikly 插件打业务包）+ gearuiKit + h5App 壳
 # ⚠️ 上方 WORKDIR 已切到 /src/client（上面那个 help 任务的需要），COPY 的 dest 相对 WORKDIR 解析：
-#    必须写 ./shared、./sharedCompose、./apps/h5App（= Gradle 根 /src/client 下的模块目录，
-#    对应 settings 的 :shared、:sharedCompose、:apps:h5App）。曾误写 ./client/shared，源码实际
+#    必须写 ./shared、./gearuiKit、./apps/h5App（= Gradle 根 /src/client 下的模块目录，
+#    对应 settings 的 :shared、:gearuiKit、:apps:h5App）。曾误写 ./client/shared，源码实际
 #    落盘 /src/client/client/shared（双层嵌套）：COPY 静默成功，Gradle 侧 shared/ 只有
 #    build.gradle.kts 没有 src → js 源集 NO-SOURCE → KSP 不生成 KuiklyCoreEntry.kt →
 #    打包任务深处 FileNotFoundException。
 COPY client/shared ./shared
-# sharedCompose：:shared 的依赖模块（Kuikly Compose 组件层 + 上游 compose-settings 补丁）。
-# ⚠️ 漏掉这一步就是「本地能编、ACR 必败」：settings 里 include 了它，缺源码则 :shared 的
-#    js 依赖链断在这里，日志停在配置阶段末尾（典型末行 `Configuration 'jsNpmAggregated'
-#    was resolved during configuration time.`），既无 OOM 也无编译错误。
-COPY client/sharedCompose ./sharedCompose
+# gearuiKit：:shared 的依赖模块（GearUI 组件库，settings include :gearuiKit）。
+COPY client/gearuiKit ./gearuiKit
 COPY client/apps/h5App ./apps/h5App
 
 # 🚨 源码断言：验证业务源码真的落在了 Gradle 工程期望的位置（而非嵌套错位或上下文缺目录）。
@@ -142,9 +142,9 @@ COPY client/apps/h5App ./apps/h5App
 #   Gradle 前快速失败，错误信息直指根因。
 RUN if ! (test -d shared/src/commonMain/kotlin \
           && test -f shared/src/commonMain/kotlin/com/xiaozhi/admin/ConfigPage.kt \
-          && test -f sharedCompose/src/commonMain/kotlin/com/alorma/compose/settings/ui/SettingsGroup.kt \
+          && test -d gearuiKit/src/commonMain/kotlin \
           && test -f apps/h5App/src/jsMain/kotlin/com/xiaozhi/admin/Main.kt); then \
-      echo "❌ web 构建缺业务源码：/src/client/{shared,sharedCompose,apps/h5App}/src 未就位（COPY 目标路径错位或上下文不完整）" >&2; \
+      echo "❌ web 构建缺业务源码：/src/client/{shared,gearuiKit,apps/h5App}/src 未就位（COPY 目标路径错位或上下文不完整）" >&2; \
       exit 1; \
     fi
 
