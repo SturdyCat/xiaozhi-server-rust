@@ -66,7 +66,7 @@ fn sel_wake(cfg: &Config) -> bool {
     cfg.wakeup.enabled
 }
 fn sel_nlu(cfg: &Config) -> bool {
-    cfg.nlu.enabled || !cfg.nlu.intents.is_empty()
+    cfg.nlu.enabled
 }
 
 // ---- 未知 engine 校验（P4 约定：静默回退默认是最糟的失败模式，必须报错并给可选值）----
@@ -142,28 +142,14 @@ fn sig_command(cfg: &Config) -> String {
 fn sig_wake(cfg: &Config) -> String {
     cfg.wakeup.signature()
 }
-/// NLU 无共享实例（每会话按快照构造技能目录），签名只用于状态上报与热切换判定。
-/// 涵盖 enabled + 阈值 + 意图数 + 槽位数 + 每个意图的模板原文（模板/阈值改动必须触发重建）。
+/// 目录/动作plan/槽位值表全部入签；不再遗漏只改动作或条件的保存。
 fn sig_nlu(cfg: &Config) -> String {
-    let mut s = format!(
-        "{}|{}|{}|{}|{}",
-        cfg.nlu.enabled,
-        cfg.nlu.model_threshold,
-        cfg.nlu.model_margin,
-        cfg.nlu.intents.len(),
-        cfg.nlu.slots.len()
-    );
-    // bert_* 一并入签：模型/词表/标签路径或阈值改动必须触发 TinyBERT 引擎重建。
-    s.push_str(&crate::plugins::nlu::bert_signature(&cfg.nlu));
-    for it in &cfg.nlu.intents {
-        s.push('|');
-        s.push_str(&it.name);
-        for t in &it.templates {
-            s.push('|');
-            s.push_str(t);
-        }
+    let mut value = serde_json::to_value(&cfg.nlu).unwrap_or_default();
+    if let Some(object) = value.as_object_mut() {
+        object.remove("model_threshold");
+        object.remove("model_margin");
     }
-    s
+    format!("{}|{}", value, cfg.command.signature())
 }
 
 // ---- 构建入口 ----
@@ -411,15 +397,11 @@ pub const FIRMWARE_HOST: PluginDescriptor = PluginDescriptor {
     selected: sel_always,
 };
 
-/// 语音指令闸门（`[command]`）：ASR → LLM **之前**的拦截。
-///
-/// **可选能力**：默认 `enabled=false` 时不选中、零开销、行为与加它之前完全一致；
-/// 坏配置（启用但词表为空）只降级（`Degraded`），绝不阻止启动——语音服务照常。
-/// 无共享实例：每会话按配置快照构造 `CommandGate`（与 VAD 同为"每会话有状态对象"模式）。
+/// end_session保存态训练词表；不再提供关键词识别。执行复用统一模型门禁。
 pub const COMMAND_GATE: PluginDescriptor = PluginDescriptor {
     id: "command.gate",
     capability: Capability::Command,
-    display: "指令闸门（退下/闭嘴/关闭 → 结束聆听）",
+    display: "结束聆听（模型技能训练词表）",
     local: true,
     hot: HotReload::NextSession,
     requires: &[],
@@ -454,15 +436,12 @@ pub const WAKE_GREETING: PluginDescriptor = PluginDescriptor {
     selected: sel_wake,
 };
 
-/// 规则 NLU（`[nlu]`）：ASR → LLM **之间**的本地意图识别层，是 `[command]` 的超集。
-///
-/// **可选能力**：默认 `enabled=false` 时不选中、零开销、行为与加它之前完全一致；
-/// 坏配置（启用但意图无模板）只降级（`Degraded`），绝不阻止启动——语音服务照常。
-/// 无共享实例：每会话按配置快照构造 `NluEngine`（与 `[command]`/`[wakeup]` 同为"每会话有状态对象"模式）。
+/// 统一模型意图目录。常量名保留源码兼容，公开实现ID为nlu.model。
+/// 默认模型开关关闭，启用却不可用时由识别入口明确失败，不做规则或LLM回退。
 pub const NLU_RULES: PluginDescriptor = PluginDescriptor {
-    id: "nlu.rules",
+    id: "nlu.model",
     capability: Capability::Nlu,
-    display: "规则 NLU（意图+槽位，替代送 LLM）",
+    display: "模型意图（唯一识别与同技能抽槽）",
     local: true,
     hot: HotReload::NextSession,
     requires: &[],

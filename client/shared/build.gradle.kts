@@ -242,8 +242,9 @@ tasks.matching { it.name == "check" || it.name.startsWith("packLocalJSBundle") }
 // 统一模式等量替换 showAdvanced；WorkflowEditorState 新增5项、保存确认/基线版本新增2项。
 // verifyComposeStateMigration 实测 450→457，列表48与legacy0不变。
 // NLU 候选闭环：4个旧训练字段收敛为1个版本状态，新增1个BERT配置快照；codemod实测457→455。
-val expectedStateVarCalls = 455
-val expectedStateListCalls = 48
+// 模型唯一路径：删除4个启发式/旧关键词状态与1个死选项列表，新增1个只读技能目录快照。
+val expectedStateVarCalls = 452
+val expectedStateListCalls = 47
 val bridgeWhitelist = emptySet<String>()
 val verifyComposeStateMigration by tasks.registering {
     group = "verification"

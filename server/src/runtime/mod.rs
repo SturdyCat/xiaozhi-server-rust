@@ -96,6 +96,8 @@ pub struct Engines {
     /// 会话注入注册表（P1-2）：活跃会话注册 `mpsc::Sender`，HTTP 端点据此投递文本
     /// （`POST /api/devices/{id}/inject`）；见 `app/inject` 模块注释。
     pub inject: crate::workflow::pipeline::inject::Injector,
+    /// 稳定技能能力与持久任务/outbox；识别模型只有提名权，不直接操作系统。
+    pub skill_system: Arc<crate::skills::SkillSystem>,
     /// 推理并发闸门（缺口①）：ASR/TTS 各一把 Semaphore，包在全部 `spawn_blocking`
     /// 推理调用点外（会话 / 预取 worker / 测试台共用）；见 `app/inference` 模块注释。
     pub inference: crate::workflow::pipeline::inference::InferenceGates,
@@ -113,6 +115,7 @@ pub struct Engines {
 }
 
 mod refresh;
+pub(crate) mod skill_tasks;
 mod tts;
 use refresh::decide_refresh;
 pub use tts::TtsLease;
@@ -210,6 +213,16 @@ impl Engines {
             config.tts.cache_entries,
             hot_audio.clone(),
         ));
+        // 跟随 SQLite 配置库所在卷；测试/内置存储没有 location 时再使用 memory 落点。
+        // SkillSystem 懒开库，装配不写盘、不因可选技能库故障阻断核心语音服务。
+        let skill_dir = config_store
+            .location()
+            .and_then(|p| std::path::Path::new(p).parent())
+            .filter(|p| !p.as_os_str().is_empty())
+            .or_else(|| std::path::Path::new(&config.memory.db_path).parent())
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| std::path::Path::new("."));
+        let skill_system = Arc::new(crate::skills::SkillSystem::new(skill_dir.join("skills.db")));
         Arc::new(Self {
             asr: booted.asr,
             tts: tts::TtsSlot::new(config, booted.tts),
@@ -228,6 +241,7 @@ impl Engines {
             metrics: crate::observability::metrics::Metrics::new(),
             mcp: crate::workflow::mcp::registry::McpRegistry::new(),
             inject: crate::workflow::pipeline::inject::Injector::new(),
+            skill_system,
             inference: crate::workflow::pipeline::inference::InferenceGates::new(config),
             config: Arc::new(config.clone()),
             config_store,
@@ -261,7 +275,7 @@ impl Engines {
             Ok(engine) => Some(engine),
             Err(e) => {
                 tracing::warn!(
-                    "TinyBERT 引擎构建失败（技能级联回落启发式打分；测试台 nlu_test 可见完整错误）: {e:#}"
+                    "NLU 模型构建失败（技能识别不可用，不回落规则/启发式；测试台 nlu_test 可见完整错误）: {e:#}"
                 );
                 None
             }

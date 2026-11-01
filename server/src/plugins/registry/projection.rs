@@ -94,9 +94,7 @@ pub static ADVANCED_KEYS: &[&str] = &[
     "llm.max_history",
     "llm.temperature",
     "llm.stream",
-    // NLU fuzzy/BERT tuning and model assets
-    "nlu.model_threshold",
-    "nlu.model_margin",
+    // Model-only NLU tuning and assets; deprecated fuzzy knobs are not UI fields.
     "nlu.bert_model",
     "nlu.bert_vocab",
     "nlu.bert_labels",

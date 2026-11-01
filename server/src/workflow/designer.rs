@@ -1,6 +1,7 @@
 //! Declarative plugin workflow schema, compiler, and stable API projection.
 //! The compiler is intentionally independent of runtime engines: it validates
-//! topology and produces an ordered plan without changing the legacy pipeline.
+//! topology and produces an ordered plan; nlu.model is the sole model gate.
+//! Legacy intent IDs remain serialization aliases, never rule recognizers.
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashSet;
@@ -78,7 +79,8 @@ pub struct CompiledWorkflow {
 }
 
 const PLUGINS: &[(&str, &str, &str, &[&str])] = &[
-    ("skill.gate", "技能闸门", "nlu", &["nlu"]),
+    ("nlu.model", "模型意图", "nlu", &["nlu"]),
+    ("skill.gate", "模型门控（兼容）", "nlu", &["nlu"]),
     (
         "soul.profile",
         "人格档案",
@@ -93,10 +95,10 @@ const PLUGINS: &[(&str, &str, &str, &[&str])] = &[
     ),
     ("memory.writeback", "记忆写回", "end", &["end"]),
     ("wakeup.greeting", "唤醒问候", "start", &["start"]),
-    ("nlu.rules", "规则意图", "nlu", &["nlu"]),
+    ("nlu.rules", "模型意图（兼容）", "nlu", &["nlu"]),
     (
         "command.gate",
-        "指令闸门",
+        "模型门控（旧指令兼容）",
         "link.asr.nlu",
         &["link.asr.nlu"],
     ),
@@ -107,8 +109,7 @@ pub fn default_config() -> WorkflowConfig {
         ("wakeup.greeting", "start"),
         ("soul.profile", "link.nlu.llm"),
         ("memory.recall", "link.nlu.llm"),
-        ("command.gate", "link.asr.nlu"),
-        ("nlu.rules", "nlu"),
+        ("nlu.model", "nlu"),
         ("memory.writeback", "end"),
     ];
     WorkflowConfig {
@@ -147,9 +148,6 @@ pub fn compile(value: &Value) -> Result<CompiledWorkflow, String> {
     let mut ids = HashSet::new();
     let mut seen_plugins = HashSet::new();
     let mut plan = Vec::new();
-    let mut skill_gate = false;
-    let mut command_gate = false;
-    let mut nlu_rules = false;
     let mut bindings: Vec<_> = cfg.bindings.iter().collect();
     bindings.sort_by(|a, b| a.id.cmp(&b.id));
     for b in bindings {
@@ -226,15 +224,6 @@ pub fn compile(value: &Value) -> Result<CompiledWorkflow, String> {
         if !b.enabled {
             continue;
         }
-        match b.plugin_id.as_str() {
-            "skill.gate" => skill_gate = true,
-            "command.gate" => command_gate = true,
-            "nlu.rules" => nlu_rules = true,
-            _ => {}
-        }
-        if skill_gate && (command_gate || nlu_rules) {
-            return Err("skill.gate 不可与 command.gate/nlu.rules 同时启用，避免重复执行".into());
-        }
         plan.push(CompiledBinding {
             plugin_id: b.plugin_id.clone(),
             position_id: b.position_id.clone(),
@@ -256,7 +245,10 @@ pub fn compile(value: &Value) -> Result<CompiledWorkflow, String> {
 }
 
 fn safety_gate(id: &str) -> bool {
-    matches!(id, "command.gate" | "nlu.rules" | "skill.gate")
+    matches!(
+        id,
+        "nlu.model" | "command.gate" | "nlu.rules" | "skill.gate"
+    )
 }
 
 fn condition_kinds(id: &str) -> &'static [&'static str] {
@@ -289,11 +281,10 @@ fn plugin_json((id, label, owner, allowed): &(&str, &str, &str, &[&str])) -> Val
         "soul.profile" => vec!["soul"],
         "memory.recall" | "memory.writeback" => vec!["memory"],
         "wakeup.greeting" => vec!["wakeup"],
-        "command.gate" => vec!["command"],
-        "nlu.rules" => vec!["nlu"],
+        "nlu.model" | "command.gate" | "nlu.rules" | "skill.gate" => vec!["nlu", "command"],
         _ => vec![],
     };
-    json!({"id":id,"label":label,"owner_position":owner,"allowed_positions":if runtime { *allowed } else { &[] as &[&str] },"config_paths":config_paths,"input_type":"event","output_type":"event","repeatable":false,"order_constraints":[],"tests":[],"actions":[],"condition_kinds":if runtime { condition_kinds(id) } else { &[] as &[&str] },"on_error_options":if runtime { error_options(id) } else { &[] as &[&str] }})
+    json!({"id":id,"label":label,"alias_of":if safety_gate(id) && *id != "nlu.model" { Some("nlu.model") } else { None },"owner_position":owner,"allowed_positions":if runtime { *allowed } else { &[] as &[&str] },"config_paths":config_paths,"input_type":"event","output_type":"event","repeatable":false,"order_constraints":[],"tests":[],"actions":[],"condition_kinds":if runtime { condition_kinds(id) } else { &[] as &[&str] },"on_error_options":if runtime { error_options(id) } else { &[] as &[&str] }})
 }
 fn core_plugins_json() -> Vec<Value> {
     use crate::plugins::registry::{Capability, REGISTRY};

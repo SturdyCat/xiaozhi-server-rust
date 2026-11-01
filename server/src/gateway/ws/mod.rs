@@ -81,6 +81,7 @@ mod mcp;
 mod memory;
 mod nlu_build;
 mod nlu_model;
+mod skill_api;
 // 延迟/事件聚合（P1-1）：只读投影，数据源 observability::metrics（事件总线订阅者）
 mod metrics;
 mod ota;
@@ -177,6 +178,8 @@ pub fn router(engines: Arc<Engines>) -> Router {
         .route("/api/config/db/backup", axum::routing::post(db_backup))
         // Unified snapshot-isolated node diagnostics; legacy paths retained and admin-authenticated.
         .merge(crate::gateway::ws::bench_api::routes(&engines))
+        // 稳定技能目录与任务 CRUD；不绕过统一配置保存/鉴权，不执行候选模型。
+        .merge(skill_api::routes())
         // 记忆：状态 / 测试召回 / 立即维护 / 清空（"记忆开了没用"的当场验证入口）
         .route("/api/memory/status", get(memory_status))
         .route("/api/memory/recall", axum::routing::post(memory_recall))
@@ -226,7 +229,10 @@ pub fn router(engines: Arc<Engines>) -> Router {
         .route("/api/nlu/model/build", get(build_status).post(start_build))
         // 单次训练的聚焦日志流（全局日志流见 /api/logs）：终态帧后服务端主动关闭。
         .route("/api/nlu/model/build/log", get(build_log_ws))
-        .route("/api/nlu/model/test", axum::routing::post(nlu_model::test_model))
+        .route(
+            "/api/nlu/model/test",
+            axum::routing::post(nlu_model::test_model),
+        )
         // 服务器全局实时日志流：macApp 连上即可实时看到全部运行日志；
         // AI/脚本客户端也可连它，一边调 /api 测试端点一边读日志观察效果。
         .route("/api/logs", get(log_stream::logs_ws))

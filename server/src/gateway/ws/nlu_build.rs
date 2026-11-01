@@ -139,6 +139,16 @@ fn validate_buildable(nlu: &crate::plugins::nlu::NluConfig) -> Result<(), String
     Ok(())
 }
 
+fn training_catalog(cfg: &Config) -> Result<crate::plugins::nlu::NluConfig, String> {
+    let mut nlu = crate::plugins::skill::effective_catalog(&cfg.command, &cfg.nlu)
+        .map_err(|e| e.to_string())?;
+    // New runs emit canonical catalog names; imported model label maps do not apply.
+    // Older manifests are loaded verbatim and never passed through this function.
+    nlu.bert_label_map.clear();
+    validate_buildable(&nlu)?;
+    Ok(nlu)
+}
+
 fn saved_snapshot(
     store: &dyn ConfigStore,
     expected: Option<&str>,
@@ -204,10 +214,10 @@ pub(super) async fn start_build(
             )
         }
     };
-    let nlu = cfg.nlu.with_builtins();
-    if let Err(e) = validate_buildable(&nlu) {
-        return error(StatusCode::BAD_REQUEST, "invalid_config", e);
-    }
+    let nlu = match training_catalog(&cfg) {
+        Ok(catalog) => catalog,
+        Err(e) => return error(StatusCode::BAD_REQUEST, "invalid_config", e),
+    };
     let id = uuid::Uuid::new_v4().to_string();
     let data = data_dir(&cfg);
     let out = artifact::output_dir(&data, &id).expect("generated UUID");
@@ -243,6 +253,7 @@ pub(super) async fn start_build(
             .map(|i| i.name.clone())
             .chain(std::iter::once("other".into()))
             .collect(),
+        catalog_source: Some("effective_command_nlu_v1".into()),
         files: Vec::new(),
         nlu,
     };

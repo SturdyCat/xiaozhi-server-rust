@@ -3,7 +3,7 @@
 # 空库以内置默认启动并落库，改配置走管理页 / PUT /api/config（写库）。
 # 本文件仅 enumerates 全部可配字段及默认值/注释，供初始化与查阅。
 #
-# 默认值口径：唤醒问候语 / 指令闸门 / 技能级联 / 人格档案 / 记忆 / EchoMuse 入口 / LLM 对话
+# 默认值口径：唤醒问候语 / 结束会话目录 / 配置技能目录 / 人格档案 / 记忆 / EchoMuse 入口 / LLM 对话
 # 这些「标准行为」默认 enabled = true —— 装机零配置即可用，不想要可在管理页显式关闭。
 # 存量配置库在启动时按 defaults_version 自动对齐：仍是旧默认的项跟随新默认，用户显式
 # 改过的项原样保留（见 server/src/config/defaults.rs）。
@@ -167,7 +167,7 @@ voice = "xiaoyan"
 [llm]
 # 引擎选择（P4 约定，可选 openai）；改后对新会话生效。
 engine = "openai"
-# 总开关（默认 true，新会话生效）：false = 回声模式——技能级联（command/nlu）照常，
+# 总开关（默认 true，新会话生效）：false = 回声模式——已启模型识别的技能（command/nlu）照常，
 # 未命中时不调云端 LLM，把 ASR 文本原样 TTS 回放（测试 ASR→TTS 链路用；不写历史/记忆）。
 enabled = true
 # LLM 恒为 OpenAI 兼容 Responses API（HTTP），无 mock。
@@ -187,75 +187,76 @@ stream = true
 # 调大 → 行为趋近现状；0 = 关闭。上限 60000。
 sentence_flush_ms = 1500
 
-# ===== 语音指令闸门（ASR → LLM 之间）：说「退下」就直接结束这次会话 =====
-# 默认开启（enabled = true）：标准行为，开机即用；不需要的用户改 false——
-# 关闭时行为与没有这一段完全一致（零开销）。
-# 打开后，识别文本在送进 LLM **之前**先按指令词表匹配：命中则先说一句告别语
-# （走本地 TTS 一次性合成），随后**断开本次 WebSocket 会话**，一次大模型调用都不发。
-#
-# 匹配口径（安全优先）：识别文本先去标点/空白/emoji，再剥掉句末语气助词
-#   「退下吧。」→「退下」✅ 命中；「关闭闹钟」→「关闭闹钟」❌ 不命中（默认 exact）。
-#   ⚠️ match_mode = "contains" 会让「关闭闹钟」「把灯关闭」也断线，请确认场景后再改。
-# 生效时机：保存后**新会话**生效（与 [tts]/[llm]/[soul]/[memory] 一致）。
-# 注：AIUI 全链路模式下识别在云端闭环内完成，指令只能在轮次回来后生效（本轮云端回复被丢弃）。
+# ===== 结束会话技能：与其他技能共用真实模型，不再直接匹配关键词 =====
+# keywords 仅是 end_session 的训练例句与目录来源；变更后须重新训练并验收。
+# match_mode/max_chars 仅兼容读取，不再参与识别，不能绕过模型执行。
 [command]
-enabled = true                      # 默认 true = 启用指令闸门（不需要可改 false）
-keywords = ["退下", "闭嘴", "关闭"]  # 指令词表（归一化后比较；每项一个词）
-match_mode = "exact"                # exact（整句相等，推荐）| contains（句中出现即命中）
-max_chars = 5                       # 只对 ≤5 个字（去标点/语气词后）的识别文本做指令判断；
-                                    # 更长 = 携带信息的句子，直接交给大模型避免误断（0 = 不限制）
-reply = "好的，我先退下了。"          # 命中后先说这句，再用 MCP 让设备结束聆听（音频通道保留、
-                                    # 下次唤醒不重连）；设备不支持 MCP 或调用失败时降级为断开本次会话。
-                                    # 留空 = 不说告别语（仍执行结束聆听）。
+enabled = true
+keywords = ["退下", "闭嘴", "关闭"]
+reply = "好的，我先退下了。"          # 模型接受后先告别，再 MCP stop；旧设备兼容关闭当前会话。
 
-# ===== 技能级联（`[nlu]` + `[command]`）：ASR → LLM **之间**的本地识别层 =====
-# 默认开启（标准行为，不需要可关）。识别文本按三级级联处理：**规则模板命中 → 本地轻量模型打分 → 云 LLM 兜底**：
-#   1) 规则：模板锚点 + 封闭槽位值表确定性命中（零误判），命中即本地执行、不送大模型；
-#   2) 轻量模型：规则未命中时本地打分（零外网），达到 model_threshold 且领先
-#      model_margin 也直接执行（容忍「帮我把客厅的灯打开一下」这类口语化说法；
-#      含否定词/多值歧义的槽位不执行、交 LLM）；
-#   3) 云 LLM：前两级都未命中才调用；LLM 识别为技能时会以 `execute_skill` 工具调用
-#      回到本目录校验执行，否则正常聊天走 TTS。
-# 它"含有" `[command]` 的 end_session（退下/闭嘴/关闭，配置仍在上段），
-# 并允许在此定义更多带槽位的本地指令（如「把{room}的灯{action}」）。
-# 设计原则：确定性优先——漏触发（该拦没拦）远好过误触发（把正常请求当指令断线），
-# 因此模板用字面锚点 + 封闭槽位值表约束，结果可单测、可解释。
-# ⚠️ `intents` / `slots` 是**嵌套数组结构**（通用 schema 无法用单个输入框表达），请直接书写此段：
-#   - `intents` 每项含 `name` / `templates`（含 {slot} 占位）/ `action`（`kind` + `reply`）；
-#     `action.kind = "end_session"` 走「说告别语 + MCP 结束聆听」；
-#     `kind = "mcp:<设备工具名>"` 说完 reply 后把槽位作为参数派发到**设备声明的**同名 MCP 工具；
-#     其余 kind 为本地应答（只说 reply、不送 LLM）。
-#   - `slots` 每项含 `name` / `values`（封闭值表，用于校验与抽取）/ `optional`（空槽位是否允许）。
-#   改完保存后**新会话**生效（与 [command]/[wakeup] 一致）。
-#
-# TinyBERT 语义分类（可选，把上面的第 2 级升级为本地 BERT 推理）：
-#   需服务端以 `--features nlu` 构建（默认构建不含 ONNX 依赖）；打开后规则未命中的文本
-#   先过 TinyBERT 推理，置信度 ≥ bert_threshold 即按标签映射执行技能（空槽位交 LLM 补齐），
-#   否则照常放行。模型/词表/标签路径与标签映射是嵌套高级配置，直接书写：
-#   三件套无需手工准备：`[nlu] enabled = true` 后在管理台点「生成 NLU 模型」
-#   （POST /api/nlu/model/build），服务端用内置训练器在宿主 docker 里基于当前技能
-#   （内置三个提醒技能 + 自定义 intents）自动训练并导出，产物落在 <数据目录>/models/nlu/。
-# bert_enabled = false
-# bert_model = "models/nlu/model.onnx"         # ONNX 模型（int8 量化，max_len=64）
-# bert_vocab = "models/nlu/tokenizer.json"     # ⚠️ 是 HuggingFace tokenizer.json，不是 vocab.txt 原文
-# bert_labels = "models/nlu/labels.txt"        # 每行一个标签，顺序 = 模型输出 logits 顺序
-# bert_threshold = 0.75                        # 0~1，越高越保守
-# bert_num_threads = 1                         # ONNX Runtime 会话线程数
-# bert_max_len = 64                            # 分词截断长度，须与模型导出一致
-# bert_label_map = { light_on = "control_light" }  # 模型标签 → 技能名映射（缺省同名）
+# ===== NLU：真实模型唯一识别 + 配置驱动技能 =====
+# 不存在关键词、模板规则、启发式评分或 LLM 工具重新选择技能的回退。
+# bert_enabled=false 时只允许普通聊天；启用但缺文件/加载失败则明确报错，不伪造分类。
+# other、低分、未知标签与未进入有效目录的技能均不得执行；缺参数明确澄清。
+# templates 是训练语料，运行时只为模型已接受的同一技能抽取槽位，不能靠模板选技能。
+# 保存技能 -> 以保存态版本构建 -> 独立候选测试 -> 明确采用并保存启用。
+# 构建和分类测试均不执行步骤，不代表提醒已创建、到期已投递或设备已播报。
+# 初始11项时钟技能来自 server/src/plugins/nlu/defaults.json；显式 intents=[]/slots=[] 表示清空。
+# 存量同名 reply 技能原样保留，不自动升级为有副作用的 plan。
+# GET /api/skills/catalog 读取保存态有效清单，GET /api/skills/capabilities 读取稳定能力。
 [nlu]
-enabled = true                      # 默认 true = 启用技能级联（自定义技能）；end_session 仍由 [command] 决定。
-model_threshold = 0.9               # 轻量模型接受阈值（0~1；1.0 = 关闭该级）。越高越保守。
-model_margin = 0.1                  # 最高分需领先其他技能的幅度（防「开灯/关灯」歧义误触发）。
-# 示例（取消注释即可启用一条"控制灯"的本地指令）：
-# intents = [
-#   { name = "control_light", templates = ["把{room}的灯{action}"],
-#     action = { kind = "mcp:mcp_light_control", reply = "好的，已为你{action}{room}的灯" } },
-# ]
-# slots = [
-#   { name = "room", values = ["客厅", "卧室"], optional = false },
-#   { name = "action", values = ["打开", "关闭"], optional = false },
-# ]
+enabled = true                      # 配置技能目录开关；command 目录开关独立，识别模型共用。
+bert_enabled = false                # 唯一分类器开关，需支持 nlu feature 的服务端与有效模型文件。
+bert_model = ""                     # 采用候选后写入受管 ONNX 模型路径。
+bert_vocab = ""                     # 配套 HuggingFace tokenizer.json，不是 vocab.txt。
+bert_labels = ""                    # 每行一个标签，顺序与输出 logits 一致。
+bert_threshold = 0.75
+bert_num_threads = 1
+bert_max_len = 64
+bert_label_map = {}
+# 旧 model_threshold/model_margin 仅兼容读取，已无识别效果，不再展示为调优参数。
+# 稳定 Rust 能力 + 配置条件/步骤；新增技能不改 Rust，新增标签仍需训练验收。
+# 条件 kind：slot_present{slot}、slot_equals{slot,value}、device_kind{value}。
+# 步骤 api：tasks.create/list/get/cancel、messages.send、devices.call、sessions.end、replies.say。
+# args 按 JSON 树替换 {{slots.name}} / {{ctx.device_id}} / {{ctx.session_id}}；API/工具名必须是字面量。
+# replies.say.text 可引用已执行的前序 tasks.create/list/cancel 真实结果，如 {{steps.0.speech}}；
+# 不可用于其他参数，不可引用未来步骤。action.reply 保持空，避免与真实结果重复应答。
+# plan 最多 16 条条件/16 步/32768 字节；不执行任意脚本、Shell 或下载代码。
+# tasks.create 的 after/at/interval/daily/hourly/workdays/weekly/monthly/yearly 九择一。
+# 默认时钟使用北京时间 Asia/Shanghai；底层也接受 UTC，不支持其他时区或猜测夏令时。
+# at 支持今天/明天/后天/大后天与上午/下午/晚上；未说日期的钟点取下一次到达并回读完整日期。
+# 显式今天但已过去的时刻不能默默顺延；模糊或无效参数明确澄清，不伪造创建成功。
+# hourly 是每小时的 0..59 分钟（可写20或“20分”）；workdays 是钟点，仅周一至周五，非法定节假日日历。
+# weekly={weekday=1..7,time=钟点}；monthly={day=1..31,time=钟点}；yearly={month=1..12,day=1..31,time=钟点}。
+# 每月31日/每年2月29日遇不存在的日期跳过，绝不夹到月底；2月30日等永不存在日期拒绝。
+# tasks.cancel 的 task_id 或 text 恰选一个；text 精确同名多条时先澄清，不批量删除。
+# 到期投递先短铃声再读文案；调度完成/音频已提交都不等于设备已实际播报。
+intents = [
+  { name = "reminder_countdown", templates = ["{delay}后提醒我{task}", "过{delay}提醒我{task}", "{delay}之后提醒我{task}"], action = { kind = "plan", reply = "", plan = { conditions = [], steps = [{ api = "tasks.create", args = { text = "{{slots.task}}", after = "{{slots.delay}}", timezone = "Asia/Shanghai" } }, { api = "replies.say", args = { text = "{{steps.0.speech}}" } }] } } },
+  { name = "reminder_schedule", templates = ["{time}提醒我{task}", "在{time}提醒我{task}"], action = { kind = "plan", reply = "", plan = { conditions = [], steps = [{ api = "tasks.create", args = { text = "{{slots.task}}", at = "{{slots.time}}", timezone = "Asia/Shanghai" } }, { api = "replies.say", args = { text = "{{steps.0.speech}}" } }] } } },
+  { name = "reminder_repeat", templates = ["每隔{interval}提醒我{task}", "间隔{interval}提醒我{task}"], action = { kind = "plan", reply = "", plan = { conditions = [], steps = [{ api = "tasks.create", args = { text = "{{slots.task}}", interval = "{{slots.interval}}", timezone = "Asia/Shanghai" } }, { api = "replies.say", args = { text = "{{steps.0.speech}}" } }] } } },
+  { name = "reminder_daily", templates = ["每天{daily_time}提醒我{task}", "每日{daily_time}提醒我{task}"], action = { kind = "plan", reply = "", plan = { conditions = [], steps = [{ api = "tasks.create", args = { text = "{{slots.task}}", daily = "{{slots.daily_time}}", timezone = "Asia/Shanghai" } }, { api = "replies.say", args = { text = "{{steps.0.speech}}" } }] } } },
+  { name = "reminder_workdays", templates = ["每个工作日{daily_time}提醒我{task}", "每工作日{daily_time}提醒我{task}", "工作日{daily_time}提醒我{task}"], action = { kind = "plan", reply = "", plan = { conditions = [], steps = [{ api = "tasks.create", args = { text = "{{slots.task}}", workdays = "{{slots.daily_time}}", timezone = "Asia/Shanghai" } }, { api = "replies.say", args = { text = "{{steps.0.speech}}" } }] } } },
+  { name = "reminder_weekly", templates = ["每周{weekday}的{daily_time}提醒我{task}", "每周{weekday}{daily_time}提醒我{task}", "每星期{weekday}的{daily_time}提醒我{task}"], action = { kind = "plan", reply = "", plan = { conditions = [], steps = [{ api = "tasks.create", args = { text = "{{slots.task}}", weekly = { weekday = "{{slots.weekday}}", time = "{{slots.daily_time}}" }, timezone = "Asia/Shanghai" } }, { api = "replies.say", args = { text = "{{steps.0.speech}}" } }] } } },
+  { name = "reminder_monthly", templates = ["每月{day}日{daily_time}提醒我{task}", "每月{day}号{daily_time}提醒我{task}"], action = { kind = "plan", reply = "", plan = { conditions = [], steps = [{ api = "tasks.create", args = { text = "{{slots.task}}", monthly = { day = "{{slots.day}}", time = "{{slots.daily_time}}" }, timezone = "Asia/Shanghai" } }, { api = "replies.say", args = { text = "{{steps.0.speech}}" } }] } } },
+  { name = "reminder_yearly", templates = ["每年{month}月{day}日{daily_time}提醒我{task}", "每年{month}月{day}号{daily_time}提醒我{task}"], action = { kind = "plan", reply = "", plan = { conditions = [], steps = [{ api = "tasks.create", args = { text = "{{slots.task}}", yearly = { month = "{{slots.month}}", day = "{{slots.day}}", time = "{{slots.daily_time}}" }, timezone = "Asia/Shanghai" } }, { api = "replies.say", args = { text = "{{steps.0.speech}}" } }] } } },
+  { name = "reminder_hourly", templates = ["每小时的{minute}分提醒我{task}", "每小时{minute}分提醒我{task}"], action = { kind = "plan", reply = "", plan = { conditions = [], steps = [{ api = "tasks.create", args = { text = "{{slots.task}}", hourly = "{{slots.minute}}", timezone = "Asia/Shanghai" } }, { api = "replies.say", args = { text = "{{steps.0.speech}}" } }] } } },
+  { name = "reminder_list", templates = ["查询我的提醒", "我有哪些提醒"], action = { kind = "plan", reply = "", plan = { conditions = [], steps = [{ api = "tasks.list", args = {} }, { api = "replies.say", args = { text = "{{steps.0.speech}}" } }] } } },
+  { name = "reminder_cancel", templates = ["取消提醒{task}", "取消{task}的提醒"], action = { kind = "plan", reply = "", plan = { conditions = [], steps = [{ api = "tasks.cancel", args = { text = "{{slots.task}}" } }, { api = "replies.say", args = { text = "{{steps.0.speech}}" } }] } } },
+]
+slots = [
+  { name = "delay", values = [], optional = false },
+  { name = "time", values = [], optional = false },
+  { name = "daily_time", values = [], optional = false },
+  { name = "interval", values = [], optional = false },
+  { name = "task", values = [], optional = false },
+  { name = "weekday", values = ["一", "二", "三", "四", "五", "六", "七", "日", "天", "1", "2", "3", "4", "5", "6", "7"], optional = false },
+  { name = "day", values = [], optional = false },
+  { name = "month", values = [], optional = false },
+  { name = "minute", values = [], optional = false },
+]
+# 兼容已有 action.kind=reply/end_session/mcp:<固定设备工具名>；不自动替换旧配置。
 
 [wakeup]
 enabled = true                      # 默认 true = 启用唤醒问候语（不需要可改 false）

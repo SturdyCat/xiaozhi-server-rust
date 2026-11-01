@@ -24,6 +24,7 @@ DOCS_RS=1 ~/.cargo/bin/cargo check --manifest-path server/Cargo.toml --features 
 - [配置](<src/config/AGENTS.md>)：来源、兼容迁移、ConfigStore。
 - [运行期装配](<src/runtime/mod.rs>)（原 `engine.rs`）：共享实例、VAD 池、CPU 预算与热刷新。
 - [工作流](<src/workflow/AGENTS.md>)：会话 / 流水线 / 协议 / 下行 / MCP 的编排与边界。
+- [技能系统](<src/skills/AGENTS.md>)：稳定能力白名单、声明式 plan、真实 SQLite 任务/outbox；[模型唯一识别与默认技能清单](<../docs/model-only-skills.md>)说明配置、迁移与发布边界。
 - [设备](<src/device/AGENTS.md>)：EchoMuse 直连、固件 OTA、音色、发现、设备注册表。
 - [网关](<src/gateway/AGENTS.md>)：WS 网关、配置 / 观测 HTTP、文件托管、SSE。
 - [评测](<src/benchmark/AGENTS.md>)：节点测试服务与样本目录（原 `app/bench_api`）。

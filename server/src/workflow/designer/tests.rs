@@ -5,9 +5,31 @@ use serde_json::json;
 fn missing_workflow_uses_legacy_default() {
     let c = compile(&Value::Null).unwrap();
     assert_eq!(c.config.version, 1);
-    assert_eq!(c.plan.len(), 6);
+    assert_eq!(c.plan.len(), 5);
     assert_eq!(c.plan[0].plugin_id, "wakeup.greeting");
 }
+#[test]
+fn default_has_one_model_gate_and_legacy_ids_are_marked_as_aliases() {
+    let compiled = compile(&Value::Null).unwrap();
+    let gates: Vec<_> = compiled
+        .plan
+        .iter()
+        .filter(|b| safety_gate(&b.plugin_id))
+        .collect();
+    assert_eq!(gates.len(), 1);
+    assert_eq!(gates[0].plugin_id, "nlu.model");
+    let metadata = projection(&Value::Null, "r".into());
+    for id in ["command.gate", "nlu.rules", "skill.gate"] {
+        let row = metadata["plugins"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["id"] == id)
+            .unwrap();
+        assert_eq!(row["alias_of"], "nlu.model");
+    }
+}
+
 #[test]
 fn rejects_unknown_and_duplicate() {
     assert!(compile(
@@ -122,11 +144,11 @@ fn equal_position_and_order_uses_stable_binding_id_order() {
 }
 
 #[test]
-fn skill_gate_cannot_coexist_with_command_or_nlu() {
+fn legacy_aliases_can_coexist_without_creating_multiple_recognizers() {
     let b = json!({"version":1,"bindings":[
       {"id":"a","plugin_id":"skill.gate","position_id":"nlu","on_error":"stop"},
       {"id":"b","plugin_id":"nlu.rules","position_id":"nlu","on_error":"stop"}]});
-    assert!(compile(&b).unwrap_err().contains("避免重复"));
+    assert_eq!(compile(&b).unwrap().plan.len(), 2);
 }
 
 #[test]

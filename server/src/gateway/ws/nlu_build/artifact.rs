@@ -30,6 +30,9 @@ pub(crate) struct Artifact {
     pub trainer_image_id: String,
     pub trainer_script_sha256: String,
     pub labels: Vec<String>,
+    /// Absent in older manifests: their NLU and label snapshots remain unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog_source: Option<String>,
     pub files: Vec<FileIdentity>,
     pub nlu: NluConfig,
 }
@@ -139,7 +142,7 @@ impl Artifact {
         json!({"build_id":self.build_id,"source_revision":self.source_revision,
             "source_input_sha256":self.source_input_sha256,"trainer_image":self.trainer_image,
             "trainer_image_id":self.trainer_image_id,"trainer_script_sha256":self.trainer_script_sha256,"model_sha256":self.model_sha256(),
-            "labels":self.labels,"files":self.files,"output_dir":dir,
+            "labels":self.labels,"catalog_source":self.catalog_source,"files":self.files,"output_dir":dir,
             "expected_config":{"bert_enabled":true,"bert_model":cfg.bert_model,
                 "bert_vocab":cfg.bert_vocab,"bert_labels":cfg.bert_labels,
                 "bert_threshold":cfg.bert_threshold,"bert_num_threads":cfg.bert_num_threads,

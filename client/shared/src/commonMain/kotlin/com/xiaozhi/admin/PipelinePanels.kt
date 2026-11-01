@@ -65,7 +65,7 @@ object PipelinePanels {
             ),
         ),
         NodePanelDescriptor(
-            VoiceStageId.Nlu, "NLU · 意图与技能", "规则与轻量模型提名技能，命中后可跳过 LLM", IconToken.Intent,
+            VoiceStageId.Nlu, "NLU · 意图与技能", "真实模型识别意图，按配置条件调用系统能力", IconToken.Intent,
             PanelRendererKey.Nlu, listOf("command"), listOf("nlu", "command"),
             listOf(NodeTestDescriptor("nlu.classify", "文本意图测试")),
         ),

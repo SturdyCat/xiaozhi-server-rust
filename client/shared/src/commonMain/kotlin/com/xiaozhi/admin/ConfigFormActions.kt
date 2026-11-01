@@ -160,6 +160,13 @@ internal class ConfigFormActions(private val form: ConfigFormState, private val 
      */
     fun save(ctx: Pager, baseUrl: String = "", onResult: ((String, String) -> Unit)? = null): Unit = with(form) {
         if (saving) return@with
+        val nluError = nlu.validationError()
+        if (nluError.isNotEmpty()) {
+            statusMsg = nluError
+            saveResult = "error"
+            onResult?.invoke(nluError, "error")
+            return@with
+        }
         val candidate = buildConfigDraft()
         val epoch = loadEpoch
         val access = ctx.adminAccessRevision()

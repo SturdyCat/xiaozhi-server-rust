@@ -1,16 +1,9 @@
 //! 每连接会话状态机与语音流水线。
 //!
-//! 两条路径（由 hello 的 `test` 参数区分）：
-//! - ESP 设备（正式流程）：上行 Opus → 解码 → VAD → ASR → stt → **技能级联** → tts → 下行 Opus。
-//!   其中 ASR 与 LLM **之间**是本地技能目录（`[nlu]`+`[command]`，见 [`crate::plugins::skill`]）：
-//!   **规则命中 → 轻量模型打分达阈值**两级都在本地执行、跳过 LLM；都未命中才放行给云 LLM——
-//!   LLM 若识别为技能（`execute_skill` 工具调用）同样回到目录校验执行，否则正常聊天走 TTS。
-//!   内置 `end_session`（退下/闭嘴/关闭）识别到即说一句告别语，随后
-//!   **通过 MCP 通知设备「结束聆听」**（见 [`mcp`] 子模块）——设备回到待唤醒、音频通道保留，
-//!   下次唤醒复用连接不重连；只有在设备不支持 MCP 或调用失败时才降级为断开本次会话。
-//! - macApp 测试台（hello 带 `test:true`）：`asr_test`/`tts_test`/`llm_test` 三种
-//!   **独立服务请求-响应**（各自直调对应真实引擎、各自回包），不进设备流水线；
-//!   设备会话收到这三类消息一律忽略。
+//! 生产：音频 → ASR → 一次真实模型意图 → 校验后的技能动作，或无工具纯聊天 → TTS。
+//! 不做规则/启发式识别，也不允许 LLM 重选技能；缺槽位只明确澄清。
+//! 设备定时消息由独立 outbox 投递，不伪装成用户话语。
+//! 测试台 hello.test=true 仅受理独立 ASR/TTS/LLM/NLU 请求，不投递任务消息。
 //!
 //! ## 与设备的关系（MCP 方向，勿反）
 //!
@@ -47,8 +40,11 @@ enum UtteranceDecision {
 }
 
 mod aiui;
+mod alarm;
 mod bench;
 mod command;
+mod delivery;
+mod delivery_audio;
 mod hooks;
 mod mcp;
 mod media;
@@ -56,6 +52,7 @@ mod observe;
 mod plan;
 mod producer;
 mod reply;
+mod skill_plan;
 mod start;
 mod utterance;
 mod wakeup;
@@ -168,14 +165,10 @@ pub struct Session<'a, T: Transport> {
     /// 下行节拍器：按帧长匀速下发（保护 ESP 解码队列，见 `downlink` 模块文档）。
     /// 一次回复内跨句共享时间表（句间无缝）；每轮回复开始时 reset。
     pacer: DownlinkPacer,
-    /// 技能目录（`[nlu]` + `[command]` 的统一编译，见 [`crate::plugins::skill`]）：
-    /// ASR → LLM 之间的本地识别层。规则 / 轻量模型两级命中即本地执行（不再送 LLM），
-    /// 未命中才放行；云 LLM 侧的 `execute_skill` 工具调用也回到这份目录校验执行。
-    /// 会话开始时按配置快照构造一次 = 注册表声明的 `next_session` 语义。
+    /// 会话固定目录 + 共享模型。只有真实模型的一次决策拥有技能授权。
     skills: SkillRegistry,
-    command_skills: SkillRegistry,
-    nlu_skills: SkillRegistry,
-    skills_bert: Option<Arc<dyn crate::plugins::nlu::BertClassify>>,
+    skill_turn_id: TurnId,
+    delivery_idle: bool,
     workflow: crate::workflow::designer::CompiledWorkflow,
     /// 指令要求断开本次会话（告别语已下发）：主循环收尾时主动关闭承载。
     close_requested: bool,
@@ -235,15 +228,23 @@ impl<'a, T: Transport> Session<'a, T> {
                 break;
             }
         }
+        let mut delivery_tick = tokio::time::interval(std::time::Duration::from_secs(1));
+        delivery_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         while !closed && !self.close_requested {
             // 双路等待：上行帧（正常语音/协议消息）与管理台注入文本（P1-2，见 `app/inject`）。
             // `transport.recv()` 基于 `socket.next().await`（取消安全）：select 竞争失败
             // 只是放弃等待，帧不丢；注入到达时若流水线正忙，会等当前帧处理完才被消费
             // （mpsc 排队，串行化避免与语音轮次并发写下行）。
             tokio::select! {
+                biased;
                 frame = self.transport.recv() => {
                     if !self.handle_frame(frame).await {
                         break;
+                    }
+                }
+                _ = delivery_tick.tick() => {
+                    if self.delivery_idle && !self.is_test && self.aiui.is_none() {
+                        self.deliver_pending_message().await;
                     }
                 }
                 injected = inject_next(&mut self.inject_rx) => {
@@ -442,40 +443,22 @@ impl<'a, T: Transport> Session<'a, T> {
         }
     }
 
-    /// 文本/控制侧优先级管线（P0-4）：一条用户话语的**有序**处理入口，
-    /// 级联流水线（`recognize_segments`）与 AIUI 全链路（`aiui_segments`）共用。
-    ///
-    /// Stage 顺序与语义（新增文本侧变换——记忆注入/敏感词/指令扩展——在此序列中按需
-    /// 插入，勿破坏相对顺序与 Stop 语义）：
-    ///
-    /// 1. **记录**（`note_user_turn` + MessageAdded 事件）：优先级最低但**必须先做**——
-    ///    被闸掉的话也是真实听到的话，记录不能丢；
-    /// 2. **本地技能级联**（`[nlu]`+`[command]` 统一目录，最高优先级，先于 LLM）：
-    ///    规则命中即执行；规则未命中再过轻量模型打分（达阈值也执行）——两级都命中
-    ///    **先执行副作用**（end_session：告别语 + MCP 让设备结束聆听 / 本地指令：应答或
-    ///    设备工具派发）**再返回 Stop**，一次 LLM 都不调用；都未命中放行 LLM，
-    ///    LLM 若以 `execute_skill` 工具调用回提技能，同样回到该目录校验执行；
-    /// 3. **响应**（调用方执行）：级联走 `stream_response`，AIUI 走 `aiui_downlink`。
-    ///
-    /// wakeup（`listen state=detect`）是独立消息类型（非 ASR 文本），优先级同样最高，
-    /// 在 `handle_text` 分支即拦截（早于任何 ASR/LLM），不进本管线。
-    ///
-    /// ⚠️ AIUI 路径此前**缺用户话语记录**（管理页对话记录看不见 AIUI 听到什么），
-    /// 统一入口后一并补齐（与级联流水线同一口径）。
-    ///
-    /// `turn_id` 显式传参（不藏字段）：用户轮与其后续助手轮次共享同一个轮次 id，
-    /// 订阅者据此把"用户问了什么"与"这一轮慢在哪一段"拼起来（见
-    /// [`crate::observability::events::ServerEvent::MessageAdded`]）。
+    /// 用户话语：先记录，再一次模型授权，最后（仅未消费时）无工具聊天。
+    /// AIUI 仍在云端结果后进入，唤醒 detect 与定时 outbox 不经过此入口。
     async fn decide_user_text(&mut self, user_text: &str, turn_id: TurnId) -> UtteranceDecision {
         // Stage 1：记录（注册表观测 + 事件总线叠加层，见 observe.rs / events.rs）
+        self.abort.store(false, Ordering::Relaxed); // new user turn, not a receipt
+        self.skill_turn_id = turn_id;
         self.note_user_turn(user_text);
         self.emit_message_added(turn_id, "user", user_text, None);
-        // Stage 2：本地技能级联（规则 → 轻量模型）：命中即本地执行（end_session 退下 /
-        // 本地指令应答或设备工具派发），两级都未命中放行 LLM——确定性优先、可解释。
-        if self.handle_skill_gate(user_text).await {
-            return UtteranceDecision::NluStop;
+        // Stage 2: the only intent decision; no LLM action nomination follows.
+        let consumed = self.handle_skill_gate(user_text).await;
+        self.delivery_idle = true;
+        if consumed {
+            UtteranceDecision::NluStop
+        } else {
+            UtteranceDecision::Respond
         }
-        UtteranceDecision::Respond
     }
 
     /// 测试台专用端点（`hello.test=true` 才受理）：非测试会话收到一律忽略并记日志。
@@ -510,6 +493,7 @@ impl<'a, T: Transport> Session<'a, T> {
                 // 状态机细节，默认 info 档不重复刷屏（排障 `RUST_LOG=debug` 可见）。
                 tracing::debug!("session {session_id} 进入 listening");
                 // 观测：管理页「会话」里能看到"这台设备正在聆听"（只记录，不影响流水线）
+                self.delivery_idle = false;
                 self.note_phase(crate::device::registry::Phase::Listening);
             }
             ClientMessage::Listen { state, text, .. } if state == "detect" => {
@@ -524,9 +508,13 @@ impl<'a, T: Transport> Session<'a, T> {
                     "session {session_id} 收到唤醒上报（唤醒词/来源：{:?}）",
                     text.as_deref().filter(|t| !t.is_empty()).unwrap_or("未知")
                 );
+                self.delivery_idle = false;
                 self.run_wake_hooks(text.as_deref()).await?;
             }
             ClientMessage::Listen { state, .. } => {
+                if state == "stop" {
+                    self.delivery_idle = true;
+                }
                 tracing::info!("listen state={state}");
             }
             ClientMessage::Abort { .. } => {

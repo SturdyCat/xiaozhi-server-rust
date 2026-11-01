@@ -18,80 +18,28 @@ import com.tencent.kuikly.compose.ui.unit.dp
 import com.xiaozhi.admin.contracts.IconToken
 import com.xiaozhi.admin.icons.GearIcon
 import com.xiaozhi.admin.kit.fieldLabelRow
-import com.xiaozhi.admin.kit.labeledDecimalField
 import com.xiaozhi.admin.kit.labeledField
 import com.xiaozhi.admin.kit.labeledSelect
 import com.xiaozhi.admin.kit.labeledTextArea
 import com.xiaozhi.admin.kit.switchRow
 
-/**
- * 「技能」配置卡（`[nlu]`）：三级技能级联的**本地两级**（规则 + 轻量模型）—— Compose 版。
- *
- * 级联全貌（服务端为唯一权威，见 `server/src/plugins/skill/mod.rs`）：
- * 终端 → ASR → ①规则模板命中即执行 → ②轻量模型打分达阈值即执行 → ③云 LLM。
- * 这张卡只配置 ①② 与自定义意图/槽位；内置 `end_session` 在「指令」卡（`[command]`）配置。
- *
- * ## 结构（5 个子块，与旧版一一对应）
- *
- * ```
- * 启用技能级联（开关）
- * ├ 执行阈值 / 领先余量
- * ├ 轻量模型（生成 NLU 模型：POST /api/nlu/model/build）
- * ├ 自定义技能（intents：名称 / 模板 / 动作 / MCP 工具名 / 应答语）
- * └ 槽位定义（slots：名称 / 封闭值表 / 允许缺省）
- * ```
- *
- * 旧版的列表指令循环改成 `for (d in nlu.intents)` —— `nlu.intents` 是快照列表
- * (`SnapshotStateList`)，本身可观察，增删一项即重组，不需要桥接层。
- */
+/** Model-only intent recognition; skills compose registered capabilities using configuration. */
 @Composable
 fun NluConfigCard(form: ConfigFormState) {
     val nlu = form.nlu
     LabeledCard(title = "NLU · 意图与技能") {
-        val sectionNote = form.schema.sectionNote("nlu")
-        if (sectionNote.isNotEmpty()) HintLine(sectionNote)
-
         switchRow(
-            label = "启用技能级联",
+            label = "启用配置技能目录",
             checked = nlu.enabled == "true",
             onToggle = { form.toggleStringBool(nlu::enabled) },
-            help = "识别文本先过本地规则模板（命中即执行、不调大模型），再过本地轻量模型打分；" +
-                "两级都未命中才交给大模型。大模型若把话识别成下面的技能，也会回到这份白名单校验后执行——" +
-                "大模型不能凭空发明技能或动作。",
+            help = "控制下方配置技能是否进入有效目录；结束会话技能的目录开关独立。所有技能都必须通过已训练并启用的真实模型接受，才提取参数并检查条件、执行配置步骤。",
         )
-
-        if (nlu.enabled == "true") {
-            if (form.showAdvanced) labeledDecimalField(
-                label = "执行阈值",
-                value = nlu.modelThreshold,
-                onValueChange = {
-                    nlu.modelThreshold = it
-                    form.markDirty()
-                },
-                placeholder = "0.9",
-                help = "轻量模型打分达到该值即本地执行，取值 0~1（默认 0.9）。调到 1.0 等于关闭这一级：" +
-                    "只有规则模板完全命中的技能会本地执行，其余全部交给大模型（更省钱但更慢）。",
-            )
-            if ((nlu.modelThreshold.trim().toDoubleOrNull() ?: 0.9) >= 1.0) {
-                HintLine("⚠️ 阈值 = 1.0 表示关闭轻量模型级：只有规则模板完全命中的技能会本地执行，其余全部交给大模型。")
-            }
-            if (form.showAdvanced) labeledDecimalField(
-                label = "领先余量",
-                value = nlu.modelMargin,
-                onValueChange = {
-                    nlu.modelMargin = it
-                    form.markDirty()
-                },
-                placeholder = "0.1",
-                help = "第一名必须比第二名高出该差值（0~1）才算「有把握」；调大更保守、误触发更少，" +
-                    "但更多请求会落到大模型。",
-            )
-            NluIntentList(form, nlu)
-            NluSlotList(form, nlu)
-            NluBuildModelSection(form, nlu)
-        } else {
-            HintLine("未启用：识别结果照常交给大模型（内置指令闸门不受影响，见「指令」卡）。")
-        }
+        HintLine("没有启用可用模型就不能识别技能。训练例句只用于生成语料，不是快捷触发指令；技能条件与步骤由服务器能力白名单校验。")
+        if (nlu.enabled != "true") HintLine("下方配置技能未进入有效目录；结束会话目录开关独立。可继续编辑配置，构建只使用保存态有效目录。")
+        NluCatalogSection(form)
+        NluIntentList(form, nlu)
+        if (form.showAdvanced) NluSlotList(form, nlu)
+        NluBuildModelSection(form, nlu)
     }
 }
 
@@ -100,8 +48,7 @@ fun NluConfigCard(form: ConfigFormState) {
 private fun NluIntentList(form: ConfigFormState, nlu: NluSectionState) {
     fieldLabelRow(
         label = "自定义技能（${nlu.intents.size} 条）",
-        help = "用「一句话模板 + 动作」描述本地技能，例如模板「把{room}的灯{action}」配动作「派发设备工具」。" +
-            "匹配成功就不再调用大模型，直接执行并回一句应答语。",
+        help = "每个技能由名称、训练例句与配置动作组成。新技能可组合现有 Rust 能力，设置条件与参数，不需要改写服务器代码；新增模型标签后仍须重新训练与验收。",
         trailing = {
             Button(
                 text = "添加技能",
@@ -115,7 +62,7 @@ private fun NluIntentList(form: ConfigFormState, nlu: NluSectionState) {
         },
     )
     if (nlu.intents.isEmpty()) {
-        HintLine("点「添加技能」填写名称、触发模板与应答语，然后保存配置。无槽位技能无需添加槽位；每类训练至少需要两条不同句子。")
+        HintLine("点「添加技能」填写名称、训练例句与动作，然后保存配置。无槽位技能无需添加槽位；每类训练至少需要两条不同句子。")
     }
     for (draft in nlu.intents) key(draft) { NluIntentBlock(form, nlu, draft) }
 }
@@ -152,7 +99,7 @@ private fun NluIntentBlock(form: ConfigFormState, nlu: NluSectionState, draft: I
             help = "技能唯一标识，用于模型标签和技能白名单（可用英文下划线）；同名技能会被服务端拒绝，不能使用保留标签 other。",
         )
         labeledTextArea(
-            label = "触发模板（每行一条）",
+            label = "训练例句（每行一条）",
             value = draft.templates,
             onValueChange = {
                 draft.templates = it
@@ -164,16 +111,28 @@ private fun NluIntentBlock(form: ConfigFormState, nlu: NluSectionState, draft: I
             minLines = 3,
         )
         labeledSelect(
-            label = "命中后动作",
+            label = "技能动作",
             selectedId = draft.actionKind,
             options = nlu.actionOptions,
             onSelect = {
                 draft.actionKind = it
                 form.markDirty()
             },
-            help = "只应答 = 说一句应答语后结束；结束聆听 = 说应答语后让设备退出（等同指令闸门）；" +
-                "派发设备工具 = 把槽位作为参数调用设备声明的 MCP 工具。",
+            help = "能力组合 = 声明条件与系统能力步骤；已有应答、结束聆听与设备工具动作继续兼容。动作名称与工具名由配置确定，模型不能创建任意 API 或脚本。",
         )
+        if (draft.actionKind == "plan") {
+            labeledTextArea(
+                label = "条件与步骤（完整 JSON）",
+                value = draft.planJson,
+                onValueChange = { draft.planJson = it; form.markDirty() },
+                placeholder = "{\"conditions\":[],\"steps\":[{\"api\":\"replies.say\",\"args\":{\"text\":\"你好\"}}]}",
+                minLines = 6,
+                help = "完整保留条件、步骤与嵌套参数。条件支持 slot_present、slot_equals、device_kind；步骤使用读取技能清单得到的能力定义。参数支持 {{slots.名称}}、{{ctx.device_id}}、{{ctx.session_id}}；仅应答步骤的文本可引用前序任务创建、查询或取消结果，如 {{steps.0.speech}}。不可引用未来步骤、改写 API/工具名或把结果插入有副作用的参数。最多 16 条条件与 16 个步骤，最终以服务端校验为准。",
+            )
+            val planError = draft.validationError()
+            if (planError.isNotEmpty()) HintLine(planError)
+            HintLine("分类测试不会运行这些步骤。提醒任务创建、到期投递与设备实际播报是不同环节，需分别验收。")
+        }
         if (draft.actionKind == "mcp") {
             labeledField(
                 label = "MCP 工具名",
@@ -187,7 +146,7 @@ private fun NluIntentBlock(form: ConfigFormState, nlu: NluSectionState, draft: I
                     "命中后先说应答语，再把槽位作为参数派发；设备没有同名工具则跳过、不报错。",
             )
         }
-        labeledField(
+        if (draft.actionKind != "plan") labeledField(
             label = "应答语",
             value = draft.reply,
             onValueChange = {
@@ -205,9 +164,7 @@ private fun NluIntentBlock(form: ConfigFormState, nlu: NluSectionState, draft: I
 private fun NluSlotList(form: ConfigFormState, nlu: NluSectionState) {
     fieldLabelRow(
         label = "槽位定义（${nlu.slots.size} 条）",
-        help = "模板里用到的 {槽位} 在这里命名并给出封闭值表（用于校验与抽取）；不给值表 = 开放槽位，" +
-            "任意短语都接受。值表里的词会做归一化比对（忽略标点差异），命中后按配置原文回填。" +
-            "含否定词（别/不要）或出现多个候选值时不会本地执行，交大模型判断。",
+        help = "训练例句中的 {槽位} 在这里声明。只有模型已经接受同一技能后，才提取、校验这些参数；缺少必填参数时明确请求补充，不从分数、其他技能或大模型猜造参数。",
         trailing = {
             Button(
                 text = "添加槽位",

@@ -379,11 +379,9 @@ fn command_gate_is_optional_and_hot_reloadable() {
         field_hot(&["command", "keywords"]),
         Some(HotReload::NextSession)
     );
-    // 长度闸门同样必须是"新会话生效"（漏了它管理页会永远显示"需重启"）
-    assert_eq!(
-        field_hot(&["command", "max_chars"]),
-        Some(HotReload::NextSession)
-    );
+    // 旧长度/匹配开关仅兼容读入，不再作为可调识别字段暴露。
+    assert_eq!(field_hot(&["command", "max_chars"]), None);
+    assert_eq!(field_hot(&["command", "match_mode"]), None);
     assert_eq!(section_hot("command"), HotReload::NextSession);
 
     // 启用但词表为空 = 闸门不生效：必须能被说成"配置问题"（而不是静默不拦）
@@ -405,24 +403,17 @@ fn command_gate_is_optional_and_hot_reloadable() {
         .iter()
         .filter_map(|f| f["key"].as_str())
         .collect();
-    assert_eq!(
-        keys,
-        vec!["enabled", "keywords", "match_mode", "max_chars", "reply"],
-        "{keys:?}"
-    );
+    assert_eq!(keys, vec!["enabled", "keywords", "reply"], "{keys:?}");
 }
 
-/// 规则 NLU（`[nlu]`）的注册表语义护栏（与指令闸门 `[command]` 同构）。
-///
-/// 它同样有"必须"：① 默认不选中（加插件不许改变现有部署行为）；
-/// ② 启用后必须**新会话生效**且**字段档位有出处**；③ 坏配置（启用但意图无模板）只降级、不阻止启动。
-/// 额外一条：启用 + 声明了意图却没给模板 = 永远命中不了 = 静默失效，必须被拦下并说清修法。
+/// 模型唯一 NLU 的配置意图与运行状态分离；目录默认存在不等于模型已启用。
+/// 坏目录拒绝保存，模型缺依赖不得回落规则，字段档位仍由注册表声明。
 #[test]
-fn nlu_rules_is_optional_and_hot_reloadable() {
+fn nlu_model_is_optional_and_hot_reloadable() {
     let mut cfg = Config::default();
     // 默认已改为启用（产品决策：标准行为、开机即用）；显式关闭=回到旧行为，仍是可选能力。
     assert!(cfg.nlu.enabled, "规则 NLU 默认必须启用");
-    assert_eq!(active_impl(&cfg, Capability::Nlu), Some("nlu.rules"));
+    assert_eq!(active_impl(&cfg, Capability::Nlu), Some("nlu.model"));
     assert!(
         !Capability::Nlu.required() && !Capability::Nlu.fatal_if_enabled(),
         "可选能力：坏配置只降级，不阻止启动"
@@ -432,9 +423,16 @@ fn nlu_rules_is_optional_and_hot_reloadable() {
     cfg.nlu.enabled = false;
     assert_eq!(active_impl(&cfg, Capability::Nlu), None);
     cfg.nlu.enabled = true;
-    assert_eq!(active_impl(&cfg, Capability::Nlu), Some("nlu.rules"));
-    let d = find("nlu.rules").expect("应注册 nlu.rules");
-    (d.validate)(&cfg).unwrap_or_else(|e| panic!("默认（无意图）应通过校验: {e:#}"));
+    assert_eq!(active_impl(&cfg, Capability::Nlu), Some("nlu.model"));
+    let d = find("nlu.model").expect("应注册 nlu.model");
+    assert_eq!(find("nlu.rules").map(|legacy| legacy.id), Some(d.id));
+    assert_eq!(
+        impls_of(Capability::Nlu).count(),
+        1,
+        "兼容别名不得新增规则实现"
+    );
+    assert!(!cfg.nlu.bert_enabled, "默认技能种子不得自动打开未验收模型");
+    (d.validate)(&cfg).unwrap_or_else(|e| panic!("默认技能种子应通过校验: {e:#}"));
     assert_eq!(d.hot, HotReload::NextSession);
     // 字段级档位：enabled 是"新会话生效"（POST /api/config 的 hot 据此判定）
     assert_eq!(field_hot(&["nlu", "enabled"]), Some(HotReload::NextSession));
@@ -448,9 +446,12 @@ fn nlu_rules_is_optional_and_hot_reloadable() {
     let err = (d.validate)(&cfg).unwrap_err().to_string();
     assert!(err.contains("templates"), "{err}");
     // 补上模板后即通过
-    cfg.nlu.intents[0]
+    cfg.nlu
+        .intents
+        .last_mut()
+        .unwrap()
         .templates
-        .push("把{room}的灯{action}".into());
+        .push("查看帮助".into());
     (d.validate)(&cfg).unwrap_or_else(|e| panic!("补上模板后应通过: {e:#}"));
 
     // schema 必须把这张卡的顶层字段暴露出去（管理页「NLU」页签的数据源）
@@ -473,8 +474,6 @@ fn nlu_rules_is_optional_and_hot_reloadable() {
         keys,
         vec![
             "enabled",
-            "model_threshold",
-            "model_margin",
             "bert_enabled",
             "bert_model",
             "bert_vocab",

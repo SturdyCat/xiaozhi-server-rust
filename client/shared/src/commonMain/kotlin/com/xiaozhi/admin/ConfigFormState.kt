@@ -217,7 +217,7 @@ class ConfigFormState(private val scope: PagerScope) {
     /// 拆到 `ConfigWakeupState`（同上：`AGENTS.md` §5.10 文件规模约定）。
     val wake = WakeupSectionState(scope)
 
-    // ===== [nlu]：技能级联（规则 → 轻量模型 → LLM 白名单执行）=====
+    // ===== [nlu]：模型唯一识别与配置技能（条件/系统能力步骤）=====
     /// 拆到 `ConfigNluState`（同上：`AGENTS.md` §5.10 文件规模约定）。
     val nlu = NluSectionState(scope)
 
@@ -497,6 +497,7 @@ class ConfigFormState(private val scope: PagerScope) {
         testRequests.invalidate()
         nodeTests.invalidateScope()
         nlu.model.invalidate()
+        nlu.catalog.invalidate()
     }
     fun refreshNodeTests(ctx: Pager) = nodeTests.refresh(ctx, serverBase, ctx.adminRequestToken(), editDeviceId)
     fun runNodeTest(ctx: Pager, descriptor: NodeTestDescriptor) = nodeTests.run(ctx, descriptor, serverBase, ctx.adminRequestToken(), editDeviceId)

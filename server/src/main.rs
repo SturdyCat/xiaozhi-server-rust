@@ -24,6 +24,7 @@ mod observability;
 mod plugins;
 mod runtime;
 mod serve;
+mod skills;
 mod workflow;
 
 #[cfg(test)]
@@ -101,6 +102,10 @@ async fn run(config: Config, config_store: Arc<dyn ConfigStore>, dev_mode: bool)
     } else {
         Engines::new(&config, config_store)?
     };
+    // 定时任务只生成持久 outbox；真正音频由设备会话串行投递，不走 ASR/NLU 注入。
+    // UI 开发模式可检验任务 CRUD，但不启动生产调度或伪造设备播报。
+    let _skill_tasks =
+        (!dev_mode).then(|| crate::runtime::skill_tasks::start(&engines.skill_system));
     // 延迟/事件聚合（P1-1）：进程最早的订阅者——spawn 越早，broadcast 环形缓冲越不丢
     // 早期事件（LAGGED 只告警；聚合口径是近似值，见 app/metrics 模块注释）。
     tokio::spawn(crate::observability::metrics::subscriber(

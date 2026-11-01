@@ -6,6 +6,8 @@
 - `asr_test` / `tts_test` / `llm_test` 仅 `hello.test=true` 会话受理，且经 [推理闸门](<../workflow/pipeline/inference/AGENTS.md>)。
 - 能力只读投影（`capabilities.rs`）、无副作用本地流水线诊断（`pipeline.rs`）、隔离真实 provider 工厂（`providers.rs`）；wire 契约只增不改，**绝不序列化配置或凭据**（`contracts.rs`）。
 - 样本为闭集内嵌目录（`samples.rs`），不接受来自请求的文件路径或远程 URL；精确上限、请求形状与样本来源见[契约实现](<contracts.rs>)与 [node-test-samples](<../../../docs/node-test-samples.md>)。
+- `nlu.classify` 与旧 `command.match` action 都调用共享 `SkillRegistry::recognize`，唯一意图来源为真实模型；没有关键词、规则模板、启发式或 LLM 重新提名回退。模型关闭只报告 `model_not_inferred`，不可声称推理成功；模型故障失败关闭，同技能槽位不足只澄清。
+- 原生模型实际执行标 `real_onnx_inference`；测试注入分类器只标 `test_double_inference`，不会冒充真实模型验收。全链路诊断始终 `executed=false`，不执行声明式任务、MCP 或结束会话。
 - 测试不证明原生模型可加载、真实 TTS 音色可用、设备收到数据或扬声器播放。
 
 ## 上级入口

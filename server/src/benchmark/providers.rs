@@ -186,14 +186,31 @@ pub(super) async fn nlu(ctx: &RunContext, text: String) -> StageResult {
     ctx.blocking("nlu",None,move |ctx| {
         let t = Instant::now();
         let registry = ctx.factory.skills(&ctx.cfg).map_err(|e| unavailable("nlu",e))?;
-        let hit = registry.parse_staged(&text);
+        use crate::plugins::skill::Recognition;
+        let hit = registry.recognize(&text);
         let mut r = StageResult::ok("nlu",ms(t),"skill_registry");
-        r.measurement = "dry_run_classification";
+        let inferred = !matches!(&hit, Recognition::Disabled | Recognition::Unavailable { .. });
+        r.measurement = if !inferred { "model_not_inferred" }
+            else if ctx.factory.native() { "real_onnx_inference" } else { "test_double_inference" };
         r.details = match hit {
-            Some((stage,inv)) => { r.text = Some(inv.reply.clone()); json!({"matched":true,"recognition_stage":stage.as_str(),"skill":inv.name,"slots":inv.slots,"action":format!("{:?}",inv.action),"reply":inv.reply,"dry_run":true,"executed":false}) },
-            None => json!({"matched":false,"next":"llm","dry_run":true,"executed":false}),
+            Recognition::Accepted { inv, confidence } => {
+                r.text = Some(inv.reply.clone());
+                json!({"matched":true,"recognition_stage":"model","skill":inv.name,"confidence":confidence,
+                    "slots":inv.slots,"action":format!("{:?}",inv.action),"reply":inv.reply})
+            },
+            Recognition::NeedsSlots { name, missing, confidence } => {
+                r.text = Some(format!("请补充：{}", missing.join("、")));
+                json!({"matched":false,"recognition_stage":"model","skill":name,"confidence":confidence,
+                    "missing_slots":missing,"next":"clarify","reject_reason":"needs_slots"})
+            },
+            Recognition::Disabled => json!({"matched":false,"next":"llm","reject_reason":"model_disabled"}),
+            Recognition::Rejected => json!({"matched":false,"recognition_stage":"model","next":"llm","reject_reason":"model_rejected"}),
+            Recognition::Unavailable { .. } => return Err(StageResult::error("nlu","provider_unavailable","Real intent model is unavailable; no rule, heuristic or LLM intent fallback was used")),
         };
-        ctx.verified(&mut r);
+        r.details["recognition"] = json!("model_only");
+        r.details["dry_run"] = json!(true);
+        r.details["executed"] = json!(false);
+        if inferred { ctx.verified(&mut r); }
         Ok(r)
     }).await.unwrap_or_else(|r|r)
 }

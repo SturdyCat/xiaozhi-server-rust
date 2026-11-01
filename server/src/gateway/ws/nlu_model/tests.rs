@@ -9,7 +9,12 @@ use crate::{
 };
 
 fn artifact() -> Artifact {
-    let nlu = NluConfig::default().with_builtins();
+    // Freeze the pre-clock-expansion label set, rather than silently using current defaults.
+    let nlu: NluConfig = serde_json::from_value(json!({"enabled":true,"intents":[
+        {"name":"reminder_countdown","templates":["旧版倒计时"],"action":{"kind":"reply","reply":"旧版仅应答"}},
+        {"name":"reminder_schedule","templates":["旧版定时"],"action":{"kind":"reply","reply":"旧版仅应答"}},
+        {"name":"reminder_repeat","templates":["旧版循环"],"action":{"kind":"reply","reply":"旧版仅应答"}}
+    ],"slots":[]})).unwrap();
     Artifact {
         build_id: uuid::Uuid::new_v4().to_string(),
         source_revision: "saved".into(),
@@ -23,9 +28,46 @@ fn artifact() -> Artifact {
             .map(|i| i.name.clone())
             .chain(std::iter::once("other".into()))
             .collect(),
+        catalog_source: None, // Pre-unified manifest compatibility fixture.
         files: vec![],
         nlu,
     }
+}
+#[test]
+fn new_effective_command_label_is_testable_without_global_activation() {
+    let mut a = artifact();
+    let cfg = Config::default();
+    a.nlu = crate::plugins::skill::effective_catalog(&cfg.command, &cfg.nlu).unwrap();
+    a.labels = a
+        .nlu
+        .intents
+        .iter()
+        .map(|i| i.name.clone())
+        .chain(std::iter::once("other".into()))
+        .collect();
+    a.catalog_source = Some("effective_command_nlu_v1".into());
+    let value = prediction(&a, hit("end_session", 0.99), Some("end_session")).unwrap();
+    assert_eq!(value["accepted"], true);
+    assert_eq!(value["expected_match"], true);
+    assert_eq!(value["executed"], false);
+    assert!(prediction(&artifact(), hit("end_session", 0.99), None).is_err());
+    let old = artifact();
+    let old_snapshot = serde_json::to_value(&old.nlu).unwrap();
+    for label in [
+        "reminder_hourly",
+        "reminder_workdays",
+        "reminder_weekly",
+        "reminder_monthly",
+        "reminder_yearly",
+        "reminder_list",
+        "reminder_cancel",
+    ] {
+        let tested = prediction(&a, hit(label, 0.99), Some(label)).unwrap();
+        assert_eq!(tested["accepted"], true);
+        assert_eq!(tested["executed"], false);
+        assert!(prediction(&old, hit(label, 0.99), None).is_err());
+    }
+    assert_eq!(serde_json::to_value(&old.nlu).unwrap(), old_snapshot);
 }
 fn hit(label: &str, confidence: f32) -> BertHit {
     BertHit {

@@ -1,6 +1,6 @@
 //! 测试台（macApp，`hello.test=true`）四个专用端点的处理实现：
 //! `asr_test`（录音缓冲整段识别）/ `tts_test`（合成 + 流式下发）/ `llm_test`（直调 LLM 验证）
-//! / `nlu_test`（直调 TinyBERT 意图分类验证技能级联第二级）。
+//! / `nlu_test`（直调 TinyBERT 意图分类验证模型输出）。
 //!
 //! ⚠️ 这四类消息**仅测试会话受理**（`session.rs` 的 match 臂先做 `is_test` 检查）；
 //! 本文件作为 [`super::Session`] 的子模块 impl 扩展拆分自 `session.rs`（可访问会话私有字段）。
@@ -482,7 +482,7 @@ impl<'a, T: Transport> Session<'a, T> {
 
     /// `nlu_test`：按**磁盘最新配置**临时构建 TinyBERT 分类器直调（跳过 ASR/LLM），
     /// 结果回 `nlu_test`。带分词/推理耗时拆解；低于 `bert_threshold` 时 `intent=None`
-    /// 并在 `text` 说明会放行 LLM（与技能级联行为一致）。
+    /// `other` / 低分不授权动作，普通聊天也不开放技能工具。
     pub(super) async fn handle_nlu_test(&mut self, text: String) -> anyhow::Result<()> {
         let session_id = self.session_id.clone();
         // 测试台专用端点：仅 hello.test=true 的会话受理。
@@ -493,8 +493,6 @@ impl<'a, T: Transport> Session<'a, T> {
         if text.trim().is_empty() {
             return Ok(());
         }
-        // 按**磁盘上最新配置**构建分类器——改完 `[nlu].bert_*` 配置无需重启即可验证；
-        // 未指定配置文件（内置默认）或读盘失败时退回启动时的内存配置。
         let nlu_cfg = if self.engines.config_path().is_none() {
             self.engines.config.nlu.clone() // 内置默认配置：无来源可读
         } else {
@@ -507,7 +505,6 @@ impl<'a, T: Transport> Session<'a, T> {
                     self.engines.config.nlu.clone()
                 })
         };
-        // 构建失败原样回测试台（含怎么修文案），方便当场定位模型/词表路径问题。
         let bert = match build_bert_checked(&nlu_cfg) {
             Ok(bert) => bert,
             Err(e) => {
@@ -528,17 +525,23 @@ impl<'a, T: Transport> Session<'a, T> {
                 return Ok(());
             }
         };
-        // ort 推理是同步阻塞调用，隔离出 async 执行器。
         let input = text.clone();
         let result = tokio::task::spawn_blocking(move || bert.classify_timed(&input))
             .await
             .map_err(|e| anyhow::anyhow!("NLU 测试任务异常: {e}"))?;
         match result {
             Ok(hit) => {
-                let below = hit.confidence < nlu_cfg.bert_threshold;
-                let text = if below {
+                let rejected =
+                    hit.label == "other" || nlu_cfg.bert_map_label(&hit.label) == "other";
+                let below = rejected
+                    || !hit.confidence.is_finite()
+                    || !(0.0..=1.0).contains(&hit.confidence)
+                    || hit.confidence < nlu_cfg.bert_threshold;
+                let text = if rejected {
+                    Some("模型正常拒识（other），不执行技能。".into())
+                } else if below {
                     Some(format!(
-                        "最高置信度 {:.3} 低于阈值 {}，技能级联会放行 LLM",
+                        "置信度 {:.3} 未获阈值 {} 授权，仅允许无工具聊天，不执行技能",
                         hit.confidence, nlu_cfg.bert_threshold
                     ))
                 } else {

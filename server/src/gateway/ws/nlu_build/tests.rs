@@ -7,6 +7,41 @@
 use super::*;
 
 #[test]
+fn training_catalog_contains_command_and_canonical_labels_but_not_deleted_seeds() {
+    let mut cfg = Config::default();
+    cfg.nlu
+        .bert_label_map
+        .insert("old_external_label".into(), "end_session".into());
+    let nlu = training_catalog(&cfg).unwrap();
+    let command = nlu
+        .intents
+        .iter()
+        .find(|i| i.name == "end_session")
+        .unwrap();
+    assert_eq!(command.templates, cfg.command.keywords);
+    assert!(nlu.bert_label_map.is_empty());
+    let effective = crate::plugins::skill::effective_catalog(&cfg.command, &cfg.nlu).unwrap();
+    assert_eq!(
+        serde_json::to_value(&nlu.intents).unwrap(),
+        serde_json::to_value(&effective.intents).unwrap()
+    );
+    for name in ["reminder_list", "reminder_cancel"] {
+        let intent = nlu.intents.iter().find(|i| i.name == name).unwrap();
+        let plan = intent.action.plan.as_ref().unwrap();
+        assert_eq!(plan.steps[1].api, "replies.say");
+        assert_eq!(plan.steps[1].args["text"], "{{steps.0.speech}}");
+        assert!(intent.action.reply.is_empty());
+    }
+    assert!(!nlu.intents.iter().any(|i| i.name == "help_guide_demo"));
+    cfg.nlu.intents.clear();
+    let only_command = training_catalog(&cfg).unwrap();
+    assert_eq!(only_command.intents.len(), 1);
+    assert_eq!(only_command.intents[0].name, "end_session");
+    cfg.command.enabled = false;
+    assert!(training_catalog(&cfg).is_err());
+}
+
+#[test]
 fn validate_rejects_when_nlu_disabled() {
     // 默认已改为 enabled=true（标准行为）；显式关闭的用户点训练必须被拦下并说清修法。
     let mut nlu = crate::plugins::nlu::NluConfig::default();
@@ -19,6 +54,7 @@ fn validate_rejects_when_nlu_disabled() {
 fn validate_rejects_when_no_intents() {
     let mut nlu = crate::plugins::nlu::NluConfig::default();
     nlu.enabled = true;
+    nlu.intents.clear();
     let err = validate_buildable(&nlu).unwrap_err();
     assert!(err.contains("intents 为空"), "{err}");
 }
@@ -27,8 +63,8 @@ fn validate_rejects_when_no_intents() {
 fn validate_accepts_builtin_reminders() {
     let mut nlu = crate::plugins::nlu::NluConfig::default();
     nlu.enabled = true;
-    // 内置提醒技能合并后即使配置零意图也可训练。
-    assert!(validate_buildable(&nlu.with_builtins()).is_ok());
+    // Shipped defaults are actual config seeds, not hidden reinjection during training.
+    assert!(validate_buildable(&nlu).is_ok());
 }
 
 #[tokio::test]
@@ -156,11 +192,16 @@ fn saved_snapshot_reads_latest_sqlite_not_startup_or_live_cache() {
         action: crate::plugins::nlu::ActionDef {
             kind: "reply".into(),
             reply: "帮助".into(),
+            ..Default::default()
         },
     });
     store.persist(&saved).unwrap();
     let (actual, revision) = saved_snapshot(store.as_ref(), None).unwrap();
-    assert_eq!(actual.nlu.intents[0].name, "new_saved_skill");
+    assert!(actual
+        .nlu
+        .intents
+        .iter()
+        .any(|i| i.name == "new_saved_skill"));
     assert_ne!(revision, old_revision);
     assert_eq!(revision, super::super::config::config_revision(&actual));
     assert!(saved_snapshot(store.as_ref(), Some(&old_revision)).is_err());

@@ -1,6 +1,5 @@
 //! Session-pinned executable hook selection. Missing context never matches.
 use super::{DeviceKind, Session};
-use crate::plugins::skill::SkillRegistry;
 use crate::workflow::designer::{CompiledBinding, CompiledWorkflow, Condition};
 use crate::workflow::protocol::Transport;
 
@@ -50,7 +49,7 @@ pub(super) fn hook_result(
         if binding.on_error == "stop"
             || matches!(
                 binding.plugin_id.as_str(),
-                "command.gate" | "nlu.rules" | "skill.gate"
+                "nlu.model" | "command.gate" | "nlu.rules" | "skill.gate"
             )
         {
             return Err(error.context(format!("workflow {} stopped turn", binding.plugin_id)));
@@ -81,24 +80,62 @@ impl<'a, T: Transport> Session<'a, T> {
         )
     }
 
-    pub(super) fn text_hook_bindings(&self, text: &str) -> Vec<CompiledBinding> {
-        // Fixed stage order; order only reorders bindings within one position.
-        let mut selected = self.hook_bindings("link.asr.nlu", Some(text));
-        selected.extend(self.hook_bindings("nlu", Some(text)));
-        selected
+    pub(super) fn model_gate_allows(
+        &self,
+        text: &str,
+        confidence: Option<f32>,
+        name: &str,
+    ) -> bool {
+        if !confidence.is_some_and(|c| c.is_finite() && (0.0..=1.0).contains(&c)) {
+            return false;
+        }
+        self.model_gate_bindings(text, confidence, false)
+            .iter()
+            .any(|binding| match binding.plugin_id.as_str() {
+                "command.gate" => self.eff_config.command.enabled && name == "end_session",
+                "nlu.rules" => {
+                    self.eff_config.nlu.enabled
+                        && self
+                            .eff_config
+                            .nlu
+                            .intents
+                            .iter()
+                            .any(|intent| intent.name == name)
+                }
+                "nlu.model" | "skill.gate" => true,
+                _ => false,
+            })
     }
 
-    pub(super) fn turn_skills(&self, text: &str) -> SkillRegistry {
-        let selected = self.text_hook_bindings(text);
-        let mut command = self.eff_config.command.clone();
-        let mut nlu = self.eff_config.nlu.clone();
-        command.enabled &= selected
+    /// Legacy IDs select one shared model authorization gate. Confidence is
+    /// evaluated only after that single decision, never by another inference.
+    pub(super) fn model_gate_bindings(
+        &self,
+        text: &str,
+        confidence: Option<f32>,
+        before_model: bool,
+    ) -> Vec<CompiledBinding> {
+        let kind = match self.params.kind {
+            DeviceKind::XiaozhiEsp => "xiaozhi_esp",
+            DeviceKind::EchoMuse => "echomuse",
+        };
+        let ctx = HookContext {
+            text: Some(text),
+            device_kind: Some(kind),
+            confidence,
+        };
+        self.workflow
+            .plan
             .iter()
-            .any(|b| matches!(b.plugin_id.as_str(), "command.gate" | "skill.gate"));
-        nlu.enabled &= selected
-            .iter()
-            .any(|b| matches!(b.plugin_id.as_str(), "nlu.rules" | "skill.gate"));
-        SkillRegistry::new(&command, &nlu, self.skills_bert.clone())
+            .filter(|binding| {
+                matches!(
+                    binding.plugin_id.as_str(),
+                    "nlu.model" | "command.gate" | "nlu.rules" | "skill.gate"
+                ) && ((before_model && matches!(binding.condition, Condition::Confidence { .. }))
+                    || matches(&binding.condition, &ctx))
+            })
+            .cloned()
+            .collect()
     }
 }
 

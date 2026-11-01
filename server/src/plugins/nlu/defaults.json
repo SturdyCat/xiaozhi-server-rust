@@ -1,0 +1,147 @@
+{
+  "intents": [
+    {
+      "name": "reminder_countdown",
+      "templates": ["{delay}后提醒我{task}", "过{delay}提醒我{task}", "{delay}之后提醒我{task}"],
+      "action": {
+        "kind": "plan",
+        "reply": "",
+        "plan": {"conditions": [], "steps": [
+          {"api": "tasks.create", "args": {"text": "{{slots.task}}", "after": "{{slots.delay}}", "timezone": "Asia/Shanghai"}},
+          {"api": "replies.say", "args": {"text": "{{steps.0.speech}}"}}
+        ]}
+      }
+    },
+    {
+      "name": "reminder_schedule",
+      "templates": ["{time}提醒我{task}", "在{time}提醒我{task}"],
+      "action": {
+        "kind": "plan",
+        "reply": "",
+        "plan": {"conditions": [], "steps": [
+          {"api": "tasks.create", "args": {"text": "{{slots.task}}", "at": "{{slots.time}}", "timezone": "Asia/Shanghai"}},
+          {"api": "replies.say", "args": {"text": "{{steps.0.speech}}"}}
+        ]}
+      }
+    },
+    {
+      "name": "reminder_repeat",
+      "templates": ["每隔{interval}提醒我{task}", "间隔{interval}提醒我{task}"],
+      "action": {
+        "kind": "plan",
+        "reply": "",
+        "plan": {"conditions": [], "steps": [
+          {"api": "tasks.create", "args": {"text": "{{slots.task}}", "interval": "{{slots.interval}}", "timezone": "Asia/Shanghai"}},
+          {"api": "replies.say", "args": {"text": "{{steps.0.speech}}"}}
+        ]}
+      }
+    },
+    {
+      "name": "reminder_daily",
+      "templates": ["每天{daily_time}提醒我{task}", "每日{daily_time}提醒我{task}"],
+      "action": {
+        "kind": "plan",
+        "reply": "",
+        "plan": {"conditions": [], "steps": [
+          {"api": "tasks.create", "args": {"text": "{{slots.task}}", "daily": "{{slots.daily_time}}", "timezone": "Asia/Shanghai"}},
+          {"api": "replies.say", "args": {"text": "{{steps.0.speech}}"}}
+        ]}
+      }
+    },
+    {
+      "name": "reminder_workdays",
+      "templates": ["每个工作日{daily_time}提醒我{task}", "每工作日{daily_time}提醒我{task}", "工作日{daily_time}提醒我{task}"],
+      "action": {
+        "kind": "plan",
+        "reply": "",
+        "plan": {"conditions": [], "steps": [
+          {"api": "tasks.create", "args": {"text": "{{slots.task}}", "workdays": "{{slots.daily_time}}", "timezone": "Asia/Shanghai"}},
+          {"api": "replies.say", "args": {"text": "{{steps.0.speech}}"}}
+        ]}
+      }
+    },
+    {
+      "name": "reminder_weekly",
+      "templates": ["每周{weekday}的{daily_time}提醒我{task}", "每周{weekday}{daily_time}提醒我{task}", "每星期{weekday}的{daily_time}提醒我{task}"],
+      "action": {
+        "kind": "plan",
+        "reply": "",
+        "plan": {"conditions": [], "steps": [
+          {"api": "tasks.create", "args": {"text": "{{slots.task}}", "weekly": {"weekday": "{{slots.weekday}}", "time": "{{slots.daily_time}}"}, "timezone": "Asia/Shanghai"}},
+          {"api": "replies.say", "args": {"text": "{{steps.0.speech}}"}}
+        ]}
+      }
+    },
+    {
+      "name": "reminder_monthly",
+      "templates": ["每月{day}日{daily_time}提醒我{task}", "每月{day}号{daily_time}提醒我{task}"],
+      "action": {
+        "kind": "plan",
+        "reply": "",
+        "plan": {"conditions": [], "steps": [
+          {"api": "tasks.create", "args": {"text": "{{slots.task}}", "monthly": {"day": "{{slots.day}}", "time": "{{slots.daily_time}}"}, "timezone": "Asia/Shanghai"}},
+          {"api": "replies.say", "args": {"text": "{{steps.0.speech}}"}}
+        ]}
+      }
+    },
+    {
+      "name": "reminder_yearly",
+      "templates": ["每年{month}月{day}日{daily_time}提醒我{task}", "每年{month}月{day}号{daily_time}提醒我{task}"],
+      "action": {
+        "kind": "plan",
+        "reply": "",
+        "plan": {"conditions": [], "steps": [
+          {"api": "tasks.create", "args": {"text": "{{slots.task}}", "yearly": {"month": "{{slots.month}}", "day": "{{slots.day}}", "time": "{{slots.daily_time}}"}, "timezone": "Asia/Shanghai"}},
+          {"api": "replies.say", "args": {"text": "{{steps.0.speech}}"}}
+        ]}
+      }
+    },
+    {
+      "name": "reminder_hourly",
+      "templates": ["每小时的{minute}分提醒我{task}", "每小时{minute}分提醒我{task}"],
+      "action": {
+        "kind": "plan",
+        "reply": "",
+        "plan": {"conditions": [], "steps": [
+          {"api": "tasks.create", "args": {"text": "{{slots.task}}", "hourly": "{{slots.minute}}", "timezone": "Asia/Shanghai"}},
+          {"api": "replies.say", "args": {"text": "{{steps.0.speech}}"}}
+        ]}
+      }
+    },
+    {
+      "name": "reminder_list",
+      "templates": ["查询我的提醒", "我有哪些提醒"],
+      "action": {
+        "kind": "plan",
+        "reply": "",
+        "plan": {"conditions": [], "steps": [
+          {"api": "tasks.list", "args": {}},
+          {"api": "replies.say", "args": {"text": "{{steps.0.speech}}"}}
+        ]}
+      }
+    },
+    {
+      "name": "reminder_cancel",
+      "templates": ["取消提醒{task}", "取消{task}的提醒"],
+      "action": {
+        "kind": "plan",
+        "reply": "",
+        "plan": {"conditions": [], "steps": [
+          {"api": "tasks.cancel", "args": {"text": "{{slots.task}}"}},
+          {"api": "replies.say", "args": {"text": "{{steps.0.speech}}"}}
+        ]}
+      }
+    }
+  ],
+  "slots": [
+    {"name": "delay", "values": [], "optional": false},
+    {"name": "time", "values": [], "optional": false},
+    {"name": "daily_time", "values": [], "optional": false},
+    {"name": "interval", "values": [], "optional": false},
+    {"name": "task", "values": [], "optional": false},
+    {"name": "weekday", "values": ["一", "二", "三", "四", "五", "六", "七", "日", "天", "1", "2", "3", "4", "5", "6", "7"], "optional": false},
+    {"name": "day", "values": [], "optional": false},
+    {"name": "month", "values": [], "optional": false},
+    {"name": "minute", "values": [], "optional": false}
+  ]
+}

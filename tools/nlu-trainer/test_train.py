@@ -1,5 +1,6 @@
 """语料生成回归：只用 Python 标准库，不下载模型、不导入 torch。"""
 import importlib.util
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -294,6 +295,100 @@ else:
             capture_output=True, text=True, check=False,
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
+class DefaultSkillCorpusTests(unittest.TestCase):
+    """训练只消费配置数据；动作步骤不能进入正句，也不能执行任何能力。"""
+
+    @staticmethod
+    def default_catalog():
+        path = Path(__file__).resolve().parents[2] / "server/src/plugins/nlu/defaults.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        # 服务端共享 catalog 的命令源由 Rust 回归验证；这里验证无槽位命令与
+        # 同一份默认技能 JSON 能共同生成不重叠语料，而不是第二套默认定义。
+        intents = [{"name": "end_session", "templates": ["退下", "闭嘴", "关闭"]}]
+        return intents + data["intents"], {s["name"]: s for s in data["slots"]}
+
+    def test_initial_catalog_includes_commands_and_all_default_skill_labels(self):
+        intents, slots = self.default_catalog()
+        texts, labels = train.build_corpus(intents, slots)
+        expected = [intent["name"] for intent in intents] + ["other"]
+        self.assertTrue({"end_session", "reminder_countdown", "reminder_schedule",
+                         "reminder_repeat", "reminder_daily", "reminder_workdays",
+                         "reminder_weekly", "reminder_monthly", "reminder_yearly",
+                         "reminder_hourly", "reminder_list", "reminder_cancel",
+                         "other"}.issubset(labels))
+        self.assertEqual(len(texts), len(set(texts)))
+        by_text = dict(zip(texts, labels))
+        for phrase in intents[0]["templates"]:
+            self.assertEqual(by_text[phrase], "end_session")
+        training, testing = train.stratified_split_indices(labels, expected)
+        self.assertFalse(set(training) & set(testing))
+        for indices in (training, testing):
+            self.assertEqual({labels[i] for i in indices}, set(expected))
+
+    def test_interval_and_daily_open_slots_have_meaningful_training_values(self):
+        self.assertNotEqual(train.fill_values("interval", {}), train.GENERIC_FILLER)
+        self.assertNotEqual(train.fill_values("daily_time", {}), train.GENERIC_FILLER)
+        for value in train.fill_values("daily_time", {}):
+            self.assertFalse(any(marker in value for marker in ("明天", "后天", "每周")))
+        intents, slots = self.default_catalog()
+        daily = next(intent for intent in intents if intent["name"] == "reminder_daily")
+        expanded = [sentence for template in daily["templates"]
+                    for sentence in train.expand_template(template, slots, 40)]
+        self.assertTrue(expanded)
+        for sentence in expanded:
+            self.assertNotIn("明天", sentence)
+            self.assertNotIn("后天", sentence)
+            self.assertNotIn("这件事提醒", sentence)
+
+    def test_calendar_expansion_covers_multiple_months_and_days_within_the_same_budget(self):
+        _, slots = self.default_catalog()
+        expanded = train.expand_template(
+            "每年{month}月{day}日{daily_time}提醒我{task}", slots, 40)
+        self.assertLessEqual(len(expanded), 40)
+        for month in train.fill_values("month", slots):
+            self.assertTrue(any(text.startswith(f"每年{month}月") for text in expanded), month)
+        for day in train.fill_values("day", slots):
+            self.assertTrue(any(f"月{day}日" in text for text in expanded), day)
+        for name in ("weekday", "day", "month", "minute"):
+            self.assertNotEqual(train.fill_values(name, slots), train.GENERIC_FILLER)
+
+    def test_unseparated_numeric_slots_are_not_synthesized_as_executable_positives(self):
+        import re
+        _, slots = self.default_catalog()
+        stats = train.Counter()
+        expanded = train.expand_template(
+            "每周{weekday}{daily_time}提醒我{task}", slots, 40, stats=stats)
+        self.assertTrue(expanded)
+        self.assertGreater(stats["expansion_ambiguous_adjacent_values_skipped"], 0)
+        for text in expanded:
+            self.assertIsNone(re.match(r"每周[1-7][0-9]", text), text)
+        with_separator = train.expand_template(
+            "每周{weekday}的{daily_time}提醒我{task}", slots, 40)
+        self.assertTrue(any(re.match(r"每周[1-7]的", text) for text in with_separator))
+
+    def test_all_clock_actions_use_static_capabilities_and_real_result_receipts(self):
+        intents, _ = self.default_catalog()
+        for intent in intents[1:]:
+            with self.subTest(intent=intent["name"]):
+                action = intent["action"]
+                self.assertEqual(action["kind"], "plan")
+                self.assertEqual(action["reply"], "")
+                steps = action["plan"]["steps"]
+                self.assertIn(steps[0]["api"], ("tasks.create", "tasks.list", "tasks.cancel"))
+                self.assertEqual(steps[-1], {"api": "replies.say", "args": {"text": "{{steps.0.speech}}"}})
+                if steps[0]["api"] == "tasks.create":
+                    self.assertEqual(steps[0]["args"]["timezone"], "Asia/Shanghai")
+
+    def test_configured_command_phrases_are_not_replaced_with_builtin_keywords(self):
+        phrases = ["暂停对话", "结束本次聆听"]
+        texts, labels = train.build_corpus(
+            [{"name": "end_session", "templates": phrases}], {})
+        by_text = dict(zip(texts, labels))
+        self.assertEqual({text for text, label in by_text.items() if label == "end_session"},
+                         set(phrases))
+        self.assertNotIn("退下", by_text)
 
 
 if __name__ == "__main__":

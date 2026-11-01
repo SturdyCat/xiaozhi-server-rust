@@ -105,7 +105,7 @@ internal fun NluBuildModelSection(form: ConfigFormState, nlu: NluSectionState) {
             onToggle = { nlu.bert = nlu.bert.copy(enabled = if (nlu.bert.enabled == "true") "false" else "true"); form.markDirty() },
             help = "这里是当前配置草稿，不是运行状态。修改必须保存；候选独立测试无需开启。",
         )
-        HintLine(if (nlu.bert.enabled == "true") "草稿中已开启语义模型；是否保存、生效及加载成功请以保存反馈和服务端状态为准。" else "语义模型关闭；规则与大模型回退仍由各自开关决定。")
+        HintLine(if (nlu.bert.enabled == "true") "草稿中已开启语义模型；是否保存、生效及加载成功请以保存反馈和服务端状态为准。" else "语义模型关闭：不能识别技能，不会通过关键词或其他方式补选技能；普通聊天仍可继续。")
         if (nlu.bert.model.isNotEmpty()) HintLine("配置模型：${nlu.bert.model}")
         if (form.showAdvanced) {
             labeledDecimalField("语义接受阈值", nlu.bert.threshold,

@@ -1,8 +1,46 @@
 use super::*;
 use crate::plugins::nlu::NluConfig;
 
+#[test]
+fn legacy_manifest_does_not_invent_command_label_or_expand_its_catalog() {
+    let (data, id, dir, artifact) = fixture();
+    let mut legacy = serde_json::to_value(&artifact).unwrap();
+    legacy.as_object_mut().unwrap().remove("catalog_source");
+    std::fs::write(
+        dir.join("manifest.json"),
+        serde_json::to_vec(&legacy).unwrap(),
+    )
+    .unwrap();
+    let (loaded, _) = load_candidate(&data, &id).unwrap();
+    assert!(loaded.catalog_source.is_none());
+    assert_eq!(loaded.labels, artifact.labels);
+    assert_eq!(
+        loaded.labels,
+        [
+            "reminder_countdown",
+            "reminder_schedule",
+            "reminder_repeat",
+            "other"
+        ]
+    );
+    assert!(!loaded
+        .labels
+        .iter()
+        .any(|l| l == "reminder_monthly" || l == "reminder_list" || l == "end_session"));
+    assert!(!loaded
+        .config(&dir)
+        .intents
+        .iter()
+        .any(|i| i.name == "end_session"));
+}
+
 fn candidate(id: &str) -> Artifact {
-    let nlu = NluConfig::default().with_builtins();
+    // A legacy snapshot must not grow when the shipped default seed grows.
+    let nlu: NluConfig = serde_json::from_value(json!({"enabled":true,"intents":[
+        {"name":"reminder_countdown","templates":["旧版倒计时"],"action":{"kind":"reply","reply":"旧版仅应答"}},
+        {"name":"reminder_schedule","templates":["旧版定时"],"action":{"kind":"reply","reply":"旧版仅应答"}},
+        {"name":"reminder_repeat","templates":["旧版循环"],"action":{"kind":"reply","reply":"旧版仅应答"}}
+    ],"slots":[]})).unwrap();
     Artifact {
         build_id: id.into(),
         source_revision: "saved-revision".into(),
@@ -16,6 +54,7 @@ fn candidate(id: &str) -> Artifact {
             .map(|i| i.name.clone())
             .chain(std::iter::once("other".into()))
             .collect(),
+        catalog_source: None,
         files: vec![],
         nlu,
     }

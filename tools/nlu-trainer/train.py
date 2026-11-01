@@ -1,6 +1,6 @@
 # NLU 意图分类训练脚本（容器内运行）。
 #
-# 输入：/work/input.json —— 服务端从 [nlu] 配置导出：
+# 输入：/work/input.json —— 服务端从保存态统一技能目录导出（含启用 command 词表的 end_session）：
 #   {"intents": [{"name": ..., "templates": ["把{room}的灯{action}", ...]}],
 #    "slots":   [{"name": "room", "values": ["客厅", "卧室"], "optional": false}]}
 # 输出（/work/output/）：model.onnx（int8 动态量化）、tokenizer.json、labels.txt。
@@ -30,7 +30,14 @@ TEMPLATE_SCAN_LIMIT = 4000
 OPEN_FILLERS = {
     "task": ["喝水", "开会", "起床", "吃药", "给妈妈打电话", "写周报", "关火", "取快递"],
     "delay": ["10分钟", "半小时", "一小时", "两分钟", "五分钟", "20分钟"],
-    "time": ["八点", "明天早上七点", "下午三点", "晚上九点半", "后天上午十点"],
+    "interval": ["五分钟", "十分钟", "半小时", "一小时", "10分钟", "30分钟"],
+    # 每日钟点不混入“明天/后天”，避免合成“每天明天早上七点”这类矛盾句。
+    "daily_time": ["八点", "早上七点", "下午三点", "晚上九点半", "08:00", "21:30"],
+    "time": ["八点", "明天上午十点", "下午三点", "晚上九点半", "后天上午十点", "大后天下午三点"],
+    "weekday": ["一", "1", "二", "2", "五", "5", "日", "7"],
+    "day": ["1", "一", "15", "十五", "28", "二十八", "31", "三十一"],
+    "month": ["1", "一", "2", "二", "6", "六", "12", "十二"],
+    "minute": ["0", "零", "5", "五", "20", "二十", "45", "四十五"],
     "repeat": ["每天", "每周一", "工作日", "每周五", "每个月一号"],
 }
 GENERIC_FILLER = ["这件事", "那个事", "重要的事"]
@@ -65,6 +72,7 @@ def expand_template(template, slots, cap, *, stats=None):
         raise ValueError("template output cap and scan limit must be positive")
     # 同一占位符多次出现仍表示同一个值，不能增加无效的组合维度。
     names = list(dict.fromkeys(re.findall(r"\{(\w+)\}", template)))
+    adjacent = re.findall(r"(?=\{(\w+)\}\{(\w+)\})", template)
     pools = []
     for name in names:
         values = fill_values(name, slots)
@@ -73,11 +81,29 @@ def expand_template(template, slots, cap, *, stats=None):
             stats["slot_value_duplicates_removed"] += len(values) - len(unique)
         pools.append(unique)
 
-    combos = iter(itertools.product(*pools))
+    # 多槽模板先覆盖各维度，再补笛卡尔积，避免40条配额全耗在
+    # 同一个月份/日期上。仅改变有界候选顺序，不增加展开预算。
+    if len(pools) > 1:
+        diagonal = dict.fromkeys(
+            tuple(pool[i % len(pool)] for pool in pools)
+            for i in range(min(cap, max(map(len, pools))))
+        )
+        combos = itertools.chain(
+            diagonal,
+            (combo for combo in itertools.product(*pools) if combo not in diagonal),
+        )
+    else:
+        combos = iter(itertools.product(*pools))
     out, seen = [], set()
     for combo in itertools.islice(combos, TEMPLATE_SCAN_LIMIT):
         if stats is not None:
             stats["expansion_combinations_scanned"] += 1
+        values = dict(zip(names, combo))
+        if any(values[left].rstrip()[-1:].isdecimal() and
+               values[right].lstrip()[:1].isdecimal() for left, right in adjacent):
+            if stats is not None:
+                stats["expansion_ambiguous_adjacent_values_skipped"] += 1
+            continue
         sentence = template
         for name, value in zip(names, combo):
             sentence = sentence.replace("{" + name + "}", value)
