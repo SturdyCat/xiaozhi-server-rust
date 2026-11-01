@@ -3,7 +3,6 @@ package com.xiaozhi.admin
 import com.tencent.kuikly.core.render.web.export.IKuiklyRenderViewExport
 import com.tencent.kuikly.core.render.web.ktx.KuiklyRenderCallback
 import kotlinx.browser.document
-import kotlinx.browser.window
 import org.w3c.dom.Element
 import org.w3c.dom.HTMLDivElement
 import org.w3c.dom.HTMLTextAreaElement
@@ -21,9 +20,21 @@ class EchoMuseConsoleKeyboardHost : IKuiklyRenderViewExport {
     private var enabled = false
     private var composing = false
     private var disposed = false
-    private var focusTimer: Int? = null
+    // A view-scoped document listener is necessary: non-focusable Kuikly text/canvas
+    // does not naturally blur a textarea. It never cancels or redirects the outside click.
+    private val outsidePointer: (org.w3c.dom.events.Event) -> Unit = { event ->
+        val target = event.target as? org.w3c.dom.Node
+        val viewport = ele.parentElement
+        if (target != null && viewport != null && !viewport.contains(target)) input.blur()
+    }
     init {
         ele.appendChild(input)
+        document.addEventListener("pointerdown", outsidePointer, true)
+        input.addEventListener("focus", { if (!disposed) callback?.invoke(mapOf("kind" to "focus", "focused" to true)) })
+        input.addEventListener("blur", {
+            composing = false; input.value = ""
+            if (!disposed) callback?.invoke(mapOf("kind" to "focus", "focused" to false))
+        })
         input.addEventListener("keydown", { event ->
             val e = event.asDynamic()
             val key = e.key as? String ?: ""
@@ -60,9 +71,8 @@ class EchoMuseConsoleKeyboardHost : IKuiklyRenderViewExport {
             val active = propValue == true || propValue == 1
             if (active != enabled) {
                 enabled = active; input.disabled = !active
-                if (active) {
-                    focusTimer = window.setTimeout({ focusTimer = null; focus() }, 0)
-                } else { composing = false; input.value = ""; input.blur() }
+                if (!active) { composing = false; input.value = ""; input.blur() }
+                // Availability is not a focus request. Only an explicit terminal click focuses it.
             }
             true
         }
@@ -76,7 +86,7 @@ class EchoMuseConsoleKeyboardHost : IKuiklyRenderViewExport {
     private fun emit(value: Map<String, Any>) { if (enabled && !disposed) callback?.invoke(value) }
     private fun dispose() {
         disposed = true; enabled = false; composing = false
-        focusTimer?.let { window.clearTimeout(it) }; focusTimer = null
+        document.removeEventListener("pointerdown", outsidePointer, true)
         input.value = ""; input.blur(); callback = null
     }
     override fun onRemoveFromParent(parent: Element) = dispose()

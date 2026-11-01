@@ -13,20 +13,20 @@ import com.gearui.theme.Theme
 import com.tencent.kuikly.compose.foundation.layout.*
 import com.tencent.kuikly.compose.ui.Alignment
 import com.tencent.kuikly.compose.ui.Modifier
+import com.tencent.kuikly.compose.ui.zIndex
 import com.tencent.kuikly.compose.ui.unit.dp
 import com.xiaozhi.admin.kit.LocalAdminSpacing
 import com.xiaozhi.admin.kit.LocalAdminViewport
 import com.xiaozhi.admin.kit.LocalAdminPager
 import com.xiaozhi.admin.kit.LocalFieldHelp
 
-/** 同一套系统 Tabs 混排官方六项与原生六项；不再有官方/原生两级切换。 */
+/** 单一 Kuikly 管理工作区；沿用官方分区顺序与布局，不再嵌入英文官方文档。 */
 internal val EM_MANAGEMENT_TABS = listOf(
     Tab("status", "状态"), Tab("activity", "活动"), Tab("config", "配置"),
     Tab("shell", "控制台"), Tab("updates", "更新"), Tab("logs", "日志"),
     Tab("music", "DLNA 音乐"), Tab("ble", "GATT 工具"), Tab("assets", "VAD 资产"),
     Tab("models", "模型文件"), Tab("wifi", "WiFi 确认"), Tab("diagnostics", "原始诊断"),
 )
-private val EM_OFFICIAL_TAB_IDS = setOf("status", "activity", "config", "updates", "logs")
 
 /** 管理工作区复用 GearUI modal overlay；显式尺寸不受普通 Dialog 的窄屏宽度上限限制。 */
 @Composable
@@ -94,11 +94,16 @@ private fun EchoMuseManagementContent(
     var headerInputBlocked by remember(row.deviceId) { mutableStateOf(false) }
     val viewport = LocalAdminViewport.current
     val spacing = LocalAdminSpacing.current
-    val url = "${apiBase.trimEnd('/')}/em/?embed=1&device=${echoMuseUrlComponent(row.deviceId)}&tab=$tab" +
-        if (token.isEmpty()) "" else "&token=${echoMuseUrlComponent(token)}"
+    val pager = LocalAdminPagerOrThrow()
+    val label = if (tab == "assets") EM_TAB_UPDATES else EM_MANAGEMENT_TABS.first { it.id == tab }.label
+    DisposableEffect(row.deviceId, apiBase, token, tab, row.approved) {
+        if (row.approved) state.enterTab(row, label, pager)
+        onDispose { state.detail.pauseTab() }
+    }
+    SideEffect { state.detail.sync(listOf(row)) }
     Card(modifier = Modifier.width((viewport.width.value - 32f).coerceIn(1f, 1200f).dp)
         .height((viewport.height.value - 32f).coerceIn(1f, 900f).dp)) {
-        Column(modifier = Modifier.fillMaxSize().padding(spacing.md)) {
+        Column(modifier = Modifier.fillMaxSize().zIndex(1f).padding(spacing.md)) {
             EchoMuseDeviceHeader(row = row, state = state, toast = toast, onDismiss = onDismiss,
                 onInputBlocked = { headerInputBlocked = it })
             Tabs(
@@ -106,11 +111,18 @@ private fun EchoMuseManagementContent(
                 scrollable = true, modifier = Modifier.fillMaxWidth(),
             )
             when {
-                tab in EM_OFFICIAL_TAB_IDS || (tab == "shell" && !row.approved) ->
-                    EchoMuseOfficialView(url = url, modifier = Modifier.weight(1f).fillMaxWidth())
+                !row.approved -> EchoMuseApprovalTab(row, state, toast, Modifier.weight(1f).fillMaxWidth())
                 tab == "shell" -> EchoMuseConsoleTab(row, state, toast, apiBase, token,
                     inputBlocked = headerInputBlocked, modifier = Modifier.weight(1f).fillMaxWidth())
-                !row.approved -> EmNote("请先在「状态」中批准设备，再使用扩展功能。")
+                tab == "config" -> EchoMuseNativeConfigTab(row, state, toast, Modifier.weight(1f).fillMaxWidth())
+                tab == "updates" -> EchoMuseNativeUpdatesTab(row, state, toast, Modifier.weight(1f).fillMaxWidth())
+                tab == "logs" -> EchoMuseNativeLogsTab(row, state, toast, Modifier.weight(1f).fillMaxWidth())
+                tab == "status" || tab == "activity" -> ScrollView(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                    Column(Modifier.fillMaxWidth().padding(top = spacing.md)) {
+                        if (tab == "status") EchoMuseNativeStatusTab(row, state, toast)
+                        else EchoMuseNativeActivityTab(row, state, toast)
+                    }
+                }
                 tab == "models" -> Column(modifier = Modifier.weight(1f).fillMaxWidth()) { modelFiles() }
                 else -> ScrollView(modifier = Modifier.weight(1f).fillMaxWidth()) {
                     EchoMuseExtensionContent(row, state, toast, tab)

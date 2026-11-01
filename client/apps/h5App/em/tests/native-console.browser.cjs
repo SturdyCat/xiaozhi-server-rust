@@ -52,16 +52,32 @@ const device = { device_id:'test-dot2', label:'测试音箱', approved:true, onl
   await page.goto('http://echomuse.test/?page_name=admin');
   await page.getByText('EchoMuse',{exact:true}).first().click({force:true});
   await page.getByText('测试音箱',{exact:true}).first().click({force:true});
-  await page.locator('iframe').waitFor();
+  await page.getByText('读取运行状态',{exact:true}).waitFor();
+   assert.equal(await page.locator('iframe').count(),0,'all management tabs are native');
   await shellTab().click({force:true});
   await terminalInput().waitFor({state:'attached'});
   await wait(()=>sessions.length===1&&sent.some(f=>f.type==='resize'));
   assert.equal(await page.locator('iframe').count(),0,'native console must not contain an official iframe');
+   assert.equal(await terminalInput().evaluate(el=>document.activeElement===el),false,'ready must not acquire focus');
+   assert.ok(await output().evaluate(el=>parseFloat(getComputedStyle(el).fontSize)>=15),'terminal body uses larger readable font');
   await terminalInput().evaluate(el=>{window.__consoleEvents=[];for(const kind of ['focus','blur','keydown','input'])el.addEventListener(kind,e=>window.__consoleEvents.push({kind,key:e.key,value:el.value}));});
   await output().click({timeout:10000});
   await wait(()=>terminalInput().evaluate(el=>document.activeElement===el));
   if(process.env.EM_FOCUS_DEBUG) console.log('focus',await terminalInput().evaluate(el=>({active:document.activeElement===el,disabled:el.disabled,parents:el.parentElement.parentElement.outerHTML.slice(0,1200)})));
-  await page.keyboard.type('echo native-ok'); await page.keyboard.press('Enter');
+  // Clicking non-focusable header text must blur without disconnecting the shell.
+   await page.getByText('测试音箱',{exact:true}).last().click();
+   await wait(async()=>!(await terminalInput().evaluate(el=>document.activeElement===el)));
+   const unfocusedInputCount=sent.filter(f=>f.type==='input').length;
+   sessions[0].socket.send(JSON.stringify({type:'output',text:'\r\nbackground-output-no-focus\r\nroot@dot2:/ # '}));
+   await page.waitForTimeout(700);
+   assert.equal(await terminalInput().evaluate(el=>document.activeElement===el),false,'output must never steal focus');
+   await page.keyboard.type('not-a-shell-command');
+   assert.equal(sent.filter(f=>f.type==='input').length,unfocusedInputCount,'unfocused typing is not terminal input');
+   assert.equal(sessions.length,1,'blur retains the shell session');
+   await page.screenshot({path:path.resolve(web,'../../../build/echomuse-native-console-blur.png')});
+   await output().click();
+   await wait(()=>terminalInput().evaluate(el=>document.activeElement===el));
+   await page.keyboard.type('echo native-ok'); await page.keyboard.press('Enter');
   await wait(()=>sent.some(f=>f.type==='input'&&f.raw&&f.data==='\r'));
   assert.equal(sent.filter(f=>f.type==='input'&&f.raw).map(f=>f.data).join(''),'echo native-ok\r');
   await page.getByText('native-command-ok',{exact:false}).first().waitFor();
@@ -100,6 +116,7 @@ const device = { device_id:'test-dot2', label:'测试音箱', approved:true, onl
   await page.getByText('取消',{exact:true}).last().click({force:true});
   await wait(async()=>!(await terminalInput().isDisabled()));
   await page.getByText('删除设备记录？',{exact:true}).waitFor({state:'detached'});
+   assert.equal(await terminalInput().evaluate(el=>document.activeElement===el),false,'cancelled overlay must not steal focus');
   await page.getByText('状态',{exact:true}).last().click({force:true});
   await wait(()=>sessions[0].closed); assert.equal(await terminalInput().count(),0);
   await shellTab().click({force:true}); await wait(()=>sessions.length===2);
@@ -112,14 +129,15 @@ const device = { device_id:'test-dot2', label:'测试音箱', approved:true, onl
   // Old server / pipe firmware must still accept ordinary commands, never raw/resize frames.
   readyMode='pipe';raw=false;sent.length=0;
   await page.getByText('测试音箱',{exact:true}).first().click({force:true});
-  await page.locator('iframe').waitFor(); await shellTab().click({force:true});
+  await page.getByText('读取运行状态',{exact:true}).waitFor();
+   assert.equal(await page.locator('iframe').count(),0,'all management tabs are native'); await shellTab().click({force:true});
   await terminalInput().waitFor({state:'attached'}); await page.waitForTimeout(200); await terminalInput().focus();
   await page.keyboard.type('echo legacy');await page.keyboard.press('Enter');
   await wait(()=>sent.some(f=>f.type==='input'&&f.data==='echo legacy'&&!f.raw));
   assert.equal(sent.some(f=>f.raw||f.type==='resize'),false,'pipe must not receive raw/resize');
   await page.getByText('关闭',{exact:true}).last().click({force:true});
   assert.deepEqual(errors,[]);
-  console.log(JSON.stringify({result:'PASS',sessions:sessions.length,checks:'native keys/IME/paste/VT/resize/modal/dispose/reconnect/pipe',errors}));
+  console.log(JSON.stringify({result:'PASS',sessions:sessions.length,checks:'native keys/IME/paste/VT/resize/focus-blur/larger-font/modal/dispose/reconnect/pipe',errors}));
  } catch(error) {
   console.error('diagnostics',JSON.stringify({errors,sent,events:await page.evaluate(()=>window.__consoleEvents),active:await page.evaluate(()=>document.activeElement?.outerHTML?.slice(0,300)),url:page.url(),text:(await page.locator('body').innerText()).slice(-3500)}));
   throw error;

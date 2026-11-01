@@ -10,6 +10,9 @@ import com.gearui.components.empty.EmptyState
 import com.gearui.components.skeleton.SkeletonText
 import com.gearui.foundation.primitives.Text
 import com.gearui.primitives.composite.Card
+import com.gearui.components.tooltip.Tooltip
+import com.gearui.components.tooltip.TooltipPlacement
+import com.gearui.components.tooltip.rememberTooltipState
 import com.gearui.theme.Theme
 import com.tencent.kuikly.compose.foundation.layout.Column
 import com.tencent.kuikly.compose.foundation.layout.ColumnScope
@@ -17,6 +20,7 @@ import com.tencent.kuikly.compose.foundation.layout.PaddingValues
 import com.tencent.kuikly.compose.foundation.layout.fillMaxWidth
 import com.tencent.kuikly.compose.foundation.layout.padding
 import com.tencent.kuikly.compose.ui.Modifier
+import com.tencent.kuikly.compose.ui.graphics.Color
 import com.tencent.kuikly.compose.ui.text.style.TextAlign
 import com.tencent.kuikly.compose.ui.unit.dp
 import com.xiaozhi.admin.contracts.IconToken
@@ -234,4 +238,46 @@ internal fun OpsPrimaryButton(
         disabled = !enabled,
         loading = loading,
     )
+}
+
+/**
+ * 图标动作按钮（非官方 UI 的统一图标按钮构件）。
+ *
+ * 取代文字 [OpsOutlineButton]/[OpsPrimaryButton] 在「能用图标表达」处的用法：跨语言、零文案，
+ * 靠 [tint] 区分语义（删除=红、在线=绿、其余跟随前景色）。
+ *
+ * - [token] 图标（[IconToken]；如 `IconToken.Delete` / `IconToken.Refresh` / `IconToken.Plus`）
+ * - [contentDescription] 跨语言可读标签：同时驱动**无障碍读屏**与**Tooltip 悬浮提示**
+ *   （图标无文字，这是唯一可读出口；点击图标会短暂浮出该标签，1.5s 自动消失）
+ * - [tint] 着色；默认跟随主题前景色，危险/成功请显式传 `Theme.colors.destructive` / `Theme.colors.success`
+ * - [enabled]/[loading] 三态：非激活时置灰且不响应（Tooltip 也不弹）
+ */
+@Composable
+internal fun OpsIconButton(
+    token: IconToken,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    tint: Color? = null,
+    contentDescription: String,
+    enabled: Boolean = true,
+    loading: Boolean = false,
+) {
+    val clickable = enabled && !loading
+    val desc = contentDescription
+    val tooltipState = rememberTooltipState()
+    Tooltip(
+        text = desc,
+        state = tooltipState,
+        placement = TooltipPlacement.BOTTOM,
+    ) { openTooltip ->
+        GearIcon(
+            token = token,
+            modifier = modifier,
+            size = 20.dp,
+            tint = if (clickable) tint else Theme.colors.mutedForeground,
+            onClick = if (clickable) {
+                { openTooltip(); onClick() }
+            } else null,
+        )
+    }
 }

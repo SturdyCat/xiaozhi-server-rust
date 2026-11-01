@@ -237,7 +237,9 @@ tasks.matching { it.name == "check" || it.name.startsWith("packLocalJSBundle") }
 //   ⚠️ 逐文件分布未留档（ui/ 文件未入 git 索引即被删除），数值以本护栏实测回填。
 // EchoMuse 原生终端：删除无消费方的 introSeen/aboutOpen 展示字段；display 快照由 VT frame 等量替换。
 // verifyComposeStateMigration 实测 448→446，列表仍 48，legacy 0；不保留死字段凑数。
-val expectedStateVarCalls = 446
+// EchoMuse 全原生配置：补齐 BLE 扫描/连接与监听灯效三项生产设置草稿，实测 446→449。
+// 设备日志补齐持久读取错误反馈（loadError）一项，449→450。
+val expectedStateVarCalls = 450
 val expectedStateListCalls = 48
 val bridgeWhitelist = emptySet<String>()
 val verifyComposeStateMigration by tasks.registering {

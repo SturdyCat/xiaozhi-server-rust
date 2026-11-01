@@ -55,24 +55,28 @@ fun FilesPage(state: FilesState, toast: ToastState) {
         FilesBreadcrumbs(state) { rel -> state.openPath(ctx, rel) }
 
         actionRow {
-            OpsOutlineButton(
-                text = "刷新",
+            OpsIconButton(
+                token = IconToken.Refresh,
                 onClick = { state.refresh(ctx) },
-                loading = state.loading,
+                contentDescription = "刷新",
                 enabled = !state.loading,
+                loading = state.loading,
             )
-            OpsOutlineButton(
-                text = "新建文件夹",
+            OpsIconButton(
+                token = IconToken.Plus,
                 onClick = {
                     state.mkdirDraft = ""
                     state.mkdirOpen = !state.mkdirOpen
                 },
+                contentDescription = "新建文件夹",
             )
-            OpsPrimaryButton(
-                text = "上传模型或文件",
+            OpsIconButton(
+                token = IconToken.Upload,
                 onClick = { state.upload(ctx) { msg, level -> toast.show(msg, level) } },
-                loading = state.uploading,
+                contentDescription = "上传模型或文件",
+                tint = Theme.colors.primary,
                 enabled = !state.uploading,
+                loading = state.uploading,
             )
         }
 
@@ -166,20 +170,23 @@ private fun FilesMkdirForm(state: FilesState, toast: ToastState) {
             placeholder = "如 oww-models",
         )
         actionRow {
-            OpsPrimaryButton(
-                text = "创建",
+            OpsIconButton(
+                token = IconToken.Check,
                 onClick = {
                     state.mkdir(ctx) { ok, msg -> toast.show(msg, if (ok) "ok" else "error") }
                 },
-                loading = state.actionBusy,
+                contentDescription = "创建",
+                tint = Theme.colors.primary,
                 enabled = !state.actionBusy,
+                loading = state.actionBusy,
             )
-            OpsOutlineButton(
-                text = "取消",
+            OpsIconButton(
+                token = IconToken.Close,
                 onClick = {
                     state.mkdirOpen = false
                     state.mkdirDraft = ""
                 },
+                contentDescription = "取消",
             )
         }
     }

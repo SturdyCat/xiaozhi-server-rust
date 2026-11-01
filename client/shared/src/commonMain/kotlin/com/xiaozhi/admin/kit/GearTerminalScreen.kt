@@ -34,6 +34,13 @@ private fun terminalColor(value: Int, fallback: Color): Color {
     return Color(0xff000000L or rgb.toLong())
 }
 
+/** One shared geometry contract for glyphs, caret and PTY resize (15sp, up from 12sp). */
+internal object GearTerminalMetrics {
+    const val fontSize = 15f
+    const val lineHeight = 20f
+    const val cellWidth = 9.04f
+}
+
 /** Fixed-size cell row; styled native text supports ANSI colors instead of stripping escape data. */
 @Composable
 internal fun GearTerminalScreenLine(line: TerminalLine, cursorCol: Int? = null) {
@@ -49,11 +56,11 @@ internal fun GearTerminalScreenLine(line: TerminalLine, cursorCol: Int? = null) 
                 textDecoration = if (s.underline) TextDecoration.Underline else TextDecoration.None), span.start, span.end)
         }
     }
-    Box(modifier = Modifier.fillMaxWidth().height(16.dp)) {
+    Box(modifier = Modifier.fillMaxWidth().height(GearTerminalMetrics.lineHeight.dp)) {
         BasicText(text = annotated, softWrap = false, maxLines = 1,
-            style = TextStyle(color = GearTerminalPalette.fg, fontSize = 12.sp, lineHeight = 16.sp,
+            style = TextStyle(color = GearTerminalPalette.fg, fontSize = GearTerminalMetrics.fontSize.sp, lineHeight = GearTerminalMetrics.lineHeight.sp,
                 fontFamily = FontFamily.Monospace), modifier = Modifier.fillMaxWidth())
-        if (cursorCol != null) Box(modifier = Modifier.offset(x = (cursorCol * 7.23f).dp)
-            .width(7.23.dp).height(16.dp).background(GearTerminalPalette.accent.copy(alpha = 0.45f)))
+        if (cursorCol != null) Box(modifier = Modifier.offset(x = (cursorCol * GearTerminalMetrics.cellWidth).dp)
+            .width(GearTerminalMetrics.cellWidth.dp).height(GearTerminalMetrics.lineHeight.dp).background(GearTerminalPalette.accent.copy(alpha = 0.45f)))
     }
 }

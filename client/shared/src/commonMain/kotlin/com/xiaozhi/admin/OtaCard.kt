@@ -19,6 +19,7 @@ import com.gearui.components.table.TableAlign
 import com.gearui.components.table.TableColumn
 import com.gearui.foundation.primitives.Text
 import com.gearui.theme.Theme
+import com.xiaozhi.admin.contracts.IconToken
 import com.tencent.kuikly.compose.animation.core.LinearEasing
 import com.tencent.kuikly.compose.animation.core.RepeatMode
 import com.tencent.kuikly.compose.animation.core.animateFloat
@@ -189,14 +190,15 @@ private fun OtaUploadCard(
         }
 
         actionRow {
-            OpsOutlineButton(
-                text = "选择 .bin 文件",
+            OpsIconButton(
+                token = IconToken.Document,
                 onClick = { ota.pick(ctx) },
+                contentDescription = "选择 .bin 文件",
                 enabled = !ota.uploading,
             )
             // 未选包不可点；上传中显示 loading 并禁点（防重复提交把包传两遍）
-            OpsPrimaryButton(
-                text = "上传固件",
+            OpsIconButton(
+                token = IconToken.Upload,
                 onClick = {
                     // 先清掉上一次结果，避免"上一轮的失败原因"在新一轮里闪一下
                     feedback.value = OtaUploadFeedback()
@@ -214,6 +216,8 @@ private fun OtaUploadCard(
                         })
                     }
                 },
+                contentDescription = "上传固件",
+                tint = Theme.colors.primary,
                 enabled = ota.hasPicked && !ota.uploading,
                 loading = ota.uploading,
             )

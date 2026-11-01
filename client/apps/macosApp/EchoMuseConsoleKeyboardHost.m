@@ -2,14 +2,26 @@
 #import <OpenKuiklyIOSRender/KuiklyRenderViewExportProtocol.h>
 
 /** Input-only UIKit view. All screen rendering lives in shared Kuikly Compose. */
-@interface EchoMuseConsoleKeyboardHost : UIView <KuiklyRenderViewExportProtocol, UIKeyInput>
+@interface EchoMuseConsoleKeyboardHost : UIView <KuiklyRenderViewExportProtocol, UIKeyInput, UIGestureRecognizerDelegate>
 @property (nonatomic, copy) KuiklyRenderCallback inputCallback;
 @property (nonatomic) BOOL inputEnabled;
 @property (nonatomic) BOOL disposed;
+@property (nonatomic, strong) UITapGestureRecognizer *outsideObserver;
 @end
 
 @implementation EchoMuseConsoleKeyboardHost
 - (BOOL)canBecomeFirstResponder { return self.inputEnabled && !self.disposed; }
+- (BOOL)becomeFirstResponder {
+    BOOL ok = [super becomeFirstResponder];
+    if (ok && !self.disposed && self.inputCallback) self.inputCallback(@{@"kind": @"focus", @"focused": @YES});
+    return ok;
+}
+- (BOOL)resignFirstResponder {
+    BOOL wasFocused = self.isFirstResponder;
+    BOOL ok = [super resignFirstResponder];
+    if (ok && wasFocused && self.inputCallback) self.inputCallback(@{@"kind": @"focus", @"focused": @NO});
+    return ok;
+}
 - (BOOL)hasText { return YES; }
 - (void)insertText:(NSString *)text {
     [self emit:@{@"kind": @"text", @"data": text ?: @""}];
@@ -35,14 +47,29 @@
         BOOL enabled = [propValue boolValue];
         if (enabled == self.inputEnabled) return;
         self.inputEnabled = enabled;
-        if (enabled && self.window) [self becomeFirstResponder];
-        else if (!enabled) [self resignFirstResponder];
+        if (!enabled) [self resignFirstResponder];
+        // Ready/re-enable is not user intent to focus. Only css focus may acquire it.
     }
 }
 - (void)didMoveToWindow {
     [super didMoveToWindow];
-    if (self.window && self.inputEnabled && !self.disposed) [self becomeFirstResponder];
-    if (!self.window) [self resignFirstResponder];
+    [self.outsideObserver.view removeGestureRecognizer:self.outsideObserver];
+    if (self.window && !self.disposed) {
+        if (!self.outsideObserver) {
+            self.outsideObserver = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(observedOutside:)];
+            self.outsideObserver.delegate = self;
+            self.outsideObserver.cancelsTouchesInView = NO;
+            self.outsideObserver.delaysTouchesBegan = NO;
+            self.outsideObserver.delaysTouchesEnded = NO;
+        }
+        [self.window addGestureRecognizer:self.outsideObserver];
+    } else [self resignFirstResponder];
+}
+- (void)observedOutside:(UITapGestureRecognizer *)recognizer { /* observer never recognizes */ }
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)recognizer shouldReceiveTouch:(UITouch *)touch {
+    if (self.isFirstResponder && self.superview && ![touch.view isDescendantOfView:self.superview])
+        [self resignFirstResponder];
+    return NO; // Do not consume or delay the underlying button/tab/text click.
 }
 - (void)pressesBegan:(NSSet<UIPress *> *)presses withEvent:(UIPressesEvent *)event {
     NSMutableSet *unhandled = [NSMutableSet set];
@@ -89,6 +116,7 @@
 }
 - (void)disposeInput {
     self.disposed = YES; self.inputEnabled = NO;
+    [self.outsideObserver.view removeGestureRecognizer:self.outsideObserver]; self.outsideObserver = nil;
     [self resignFirstResponder]; self.inputCallback = nil;
 }
 - (void)hrv_removeFromSuperview { [self disposeInput]; [self removeFromSuperview]; }

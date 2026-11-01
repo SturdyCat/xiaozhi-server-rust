@@ -109,6 +109,7 @@ class EchoMuseDetailState(private val scope: Pager) {
     private var base = ""
     private var token = ""
     private var generation = 0
+    private var owwRequestId = 0
     /** 更新 tab 的资产状态轮询句柄（离开 tab / 页面销毁即 cancel）。 */
     private var owwPollJob: Job? = null
 
@@ -198,15 +199,23 @@ class EchoMuseDetailState(private val scope: Pager) {
         }
     }
 
-    /** 离开设备详情卡（收起/换页/销毁）：停轮询、关控制台、忘掉当前设备。 */
-    fun leave() {
+    /** 切 Tab 时作废旧读取与确认；不把后台回包写进下一分区。 */
+    fun pauseTab() {
+        generation++
         stopOwwPolling()
         console.close()
-        if (target.isNotEmpty()) {
-            target = ""
-            tab = EM_TAB_STATUS
-            infoOpen = false
-        }
+        busy = ""
+        owwLoading = false
+        confirmReboot = false
+    }
+
+    /** 离开设备卡时清除归属和快照；下次打开不得复用另一设备的数据。 */
+    fun leave() {
+        pauseTab()
+        resetDeviceState()
+        target = ""
+        tab = EM_TAB_STATUS
+        infoOpen = false
     }
 
     // ============================================================
@@ -253,17 +262,23 @@ class EchoMuseDetailState(private val scope: Pager) {
     fun readOwwState(ctx: Pager) {
         if (owwLoading || target.isEmpty()) return
         owwLoading = true
+        val requestId = ++owwRequestId
+        val requestGeneration = generation
         val deviceId = target
         val url = echoMuseAuthenticatedUrl(
             "$base/api/echomuse/devices/${echoMuseUrlComponent(deviceId)}/oww/state",
             token,
         )
-        getJson(ctx, url) { ok, data, _ ->
+        getJson(ctx, url) { ok, data, reason ->
+            if (requestId != owwRequestId) return@getJson
             owwLoading = false
+            if (requestGeneration != generation || deviceId != target) return@getJson
             if (ok && data.text("device_id") == deviceId) {
                 owwState = data
                 owwLoaded = true
-            }
+                error = ""
+            } else error = if (ok) "资产状态的设备标识不匹配，请重新读取"
+                else "资产状态读取失败：${reason.ifEmpty { "请检查设备连接后重试" }}"
         }
     }
 

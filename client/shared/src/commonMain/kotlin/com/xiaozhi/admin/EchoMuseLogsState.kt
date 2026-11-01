@@ -49,6 +49,10 @@ class EchoMuseLogsState(scope: PagerScope, private val detail: EchoMuseDetailSta
     var loaded by stateVar(false)
         private set
 
+    /** 最近一次读取错误；保留完整服务端映射文案。 */
+    var loadError by stateVar("")
+        private set
+
     /** 本次输出对应的来源 id（服务端回包里的 `source`，可能与会话里选的不同）。 */
     var loadedSource by stateVar("")
         private set
@@ -83,6 +87,7 @@ class EchoMuseLogsState(scope: PagerScope, private val detail: EchoMuseDetailSta
         loadedSource = ""
         loadedSession = ""
         loadedDevice = ""
+        loadError = ""
         sourceOpen = false
     }
 
@@ -92,13 +97,30 @@ class EchoMuseLogsState(scope: PagerScope, private val detail: EchoMuseDetailSta
         if (logSources.none { it.first == logSource }) return
         val source = logSource
         val deviceId = detail.target
-        detail.run("system/logs?source=$source", system = true) { data ->
+        loadError = ""
+        detail.run("system/logs?source=$source", system = true, onFail = {
+            loadError = detail.error
+        }) { data ->
             output = data.text("output")
             loadedSource = data.text("source").ifEmpty { source }
             loadedSession = detail.sessionId
             loadedDevice = deviceId
+            loadError = ""
             loaded = true
         }
+    }
+
+    /** 正在读取日志；操作闸门由详情状态统一持有。 */
+    val reading: Boolean
+        get() = detail.busy == "system/logs?source=$logSource"
+
+    /** 清空当前设备的日志快照（不发请求）。 */
+    fun clear() {
+        output = ""
+        loaded = false
+        loadedSource = ""
+        loadedSession = ""
+        loadedDevice = ""
     }
 
     /** 「复制日志」取它（本类不碰平台剪贴板）。 */

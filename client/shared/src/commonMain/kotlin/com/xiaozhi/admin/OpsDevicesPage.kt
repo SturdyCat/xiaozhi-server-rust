@@ -284,14 +284,16 @@ private fun DeviceDetailBody(
         if (row.online && !row.isTest) {
             actionRow {
                 if (devices.injectTarget != row.deviceId) {
-                    OpsOutlineButton(
-                        text = "注入消息",
+                    OpsIconButton(
+                        token = IconToken.Text,
                         onClick = { devices.toggleInject(row.deviceId) },
+                        contentDescription = "注入消息",
                     )
                 } else {
-                    OpsOutlineButton(
-                        text = "收起",
+                    OpsIconButton(
+                        token = IconToken.ChevronUp,
                         onClick = { devices.toggleInject(row.deviceId) },
+                        contentDescription = "收起",
                     )
                 }
             }
@@ -303,9 +305,11 @@ private fun DeviceDetailBody(
                     placeholder = "例如：现在几点了",
                 )
                 actionRow {
-                    OpsPrimaryButton(
-                        text = if (devices.injectBusy) "注入中…" else "发送",
+                    OpsIconButton(
+                        token = IconToken.Intent,
                         onClick = { devices.inject(ctx, row.deviceId) },
+                        contentDescription = if (devices.injectBusy) "注入中…" else "发送",
+                        tint = Theme.colors.primary,
                         enabled = !devices.injectBusy,
                         loading = devices.injectBusy,
                     )

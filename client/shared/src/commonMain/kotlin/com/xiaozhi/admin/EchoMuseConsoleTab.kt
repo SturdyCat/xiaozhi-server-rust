@@ -33,6 +33,7 @@ internal fun EchoMuseConsoleTab(row: EchoMuseDeviceRow, state: EchoMuseState, to
     val density = LocalDensity.current
     var size by remember { mutableStateOf(IntSize.Zero) }
     var blink by remember { mutableStateOf(true) }
+    var focused by remember(keyboard) { mutableStateOf(false) }
     val list = rememberLazyListState()
     val frame = console.frame
     val lines = frame.history + frame.lines
@@ -43,15 +44,15 @@ internal fun EchoMuseConsoleTab(row: EchoMuseDeviceRow, state: EchoMuseState, to
     SideEffect { console.updateDevice(row.online, row.sessionId) }
     LaunchedEffect(size, density) {
         if (size.width > 0 && size.height > 0) with(density) {
-            console.resize((size.width.toDp().value / 7.23f).toInt(), (size.height.toDp().value / 16f).toInt())
+            console.resize((size.width.toDp().value / GearTerminalMetrics.cellWidth).toInt(), (size.height.toDp().value / GearTerminalMetrics.lineHeight).toInt())
         }
     }
     LaunchedEffect(frame, console.autoScroll) {
         if (console.autoScroll && !list.isScrollInProgress && lines.isNotEmpty()) list.scrollToItem(frame.history.size)
     }
-    LaunchedEffect(enabled, frame.cursorRow, frame.cursorCol) {
+    LaunchedEffect(enabled, focused, frame.cursorRow, frame.cursorCol) {
         blink = true
-        while (enabled) { delay(500); blink = !blink }
+        while (enabled && focused) { delay(500); blink = !blink }
     }
     // Card's decorative border/shadow canvas is appended after its children on H5.
     // Keep this interactive surface above it, inside the modal's own stacking context.
@@ -75,12 +76,13 @@ internal fun EchoMuseConsoleTab(row: EchoMuseDeviceRow, state: EchoMuseState, to
             GearLazyColumn(modifier = Modifier.fillMaxSize(), state = list, avoidKeyboard = false) {
                 items(lines.size) { index ->
                     GearTerminalScreenLine(lines[index],
-                        cursorCol = if (enabled && blink && frame.cursorVisible && index == frame.history.size + frame.cursorRow)
+                        cursorCol = if (enabled && focused && blink && frame.cursorVisible && index == frame.history.size + frame.cursorRow)
                             frame.cursorCol else null)
                 }
             }
             EchoMuseConsoleKeyboard(keyboard, enabled, Modifier.size(1.dp)) { event ->
-                if (enabled) when (event.text("kind")) {
+                if (event.text("kind") == "focus") focused = event.optBoolean("focused", false)
+                if (enabled && focused) when (event.text("kind")) {
                     "key" -> console.key(event.text("key"), event.optBoolean("ctrl", false),
                         event.optBoolean("alt", false), event.optBoolean("shift", false), event.optBoolean("meta", false))
                     "paste" -> console.type(event.text("data"), paste = true)

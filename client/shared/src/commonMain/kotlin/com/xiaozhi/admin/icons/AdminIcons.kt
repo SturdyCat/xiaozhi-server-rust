@@ -90,6 +90,16 @@ internal object AdminIconVectors {
 
     /** 文档（文件管理页文件行；折角页 + 两行示意文字） */
     internal val Document = listOf(stroke("M6 3.5h8l4 4v13H6ZM14 3.5v4h4M9 12.5h6M9 16h6"))
+    // 编辑：铅笔（笔尖在左下、笔身向右上）
+    internal val Edit = listOf(stroke("M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"))
+    // 新增：加号
+    internal val Plus = listOf(stroke("M12 5v14M5 12h14"))
+    // 返回：左向箭头（带横杆）
+    internal val Back = listOf(stroke("M19 12H5M12 19l-7-7 7-7"))
+    // 更多：竖排三点（填充圆）
+    internal val More = listOf(fill("M12 5m-1.5 0a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0-3 0ZM12 12m-1.5 0a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0-3 0ZM12 19m-1.5 0a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0-3 0Z"))
+    // 上传：向上的箭头 + 底托横线
+    internal val Upload = listOf(stroke("M12 15V4M8 8l4-4 4 4M5 19h14"))
 }
 
 /** [IconToken] 的图层序列；与枚举的一一对应由 shared 构建护栏 `verifyAdminIcons` 锁定 */
@@ -120,6 +130,11 @@ internal fun IconToken.vectors(): List<IconLayer> = when (this) {
     IconToken.Funnel -> AdminIconVectors.Funnel
     IconToken.Folder -> AdminIconVectors.Folder
     IconToken.Document -> AdminIconVectors.Document
+    IconToken.Edit -> AdminIconVectors.Edit
+    IconToken.Plus -> AdminIconVectors.Plus
+    IconToken.Back -> AdminIconVectors.Back
+    IconToken.More -> AdminIconVectors.More
+    IconToken.Upload -> AdminIconVectors.Upload
 }
 
 /**

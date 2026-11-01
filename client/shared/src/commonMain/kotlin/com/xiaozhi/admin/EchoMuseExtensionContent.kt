@@ -22,12 +22,9 @@ internal fun EchoMuseExtensionContent(
 ) {
     val pager = LocalAdminPagerOrThrow()
     LaunchedEffect(row.deviceId, row.approved, tab) {
-        if (row.approved) {
-            state.detail.enterTab(if (tab == "assets") EM_TAB_UPDATES else tab, row, pager)
-            if (tab == "ble") state.ble.select(row)
-        }
+        if (row.approved && tab == "ble") state.ble.select(row)
     }
-    DisposableEffect(row.deviceId) { onDispose { state.detail.leave() } }
+    // Device/detail lifecycle is owned by the shared management workspace, not an individual extension.
     Column(modifier = Modifier.fillMaxWidth().padding(top = LocalAdminSpacing.current.sm)) {
         when (tab) {
             "music" -> EchoMuseMusicStage(row, state, toast)
