@@ -214,6 +214,34 @@ impl SkillRegistry {
             .map(|inv| (SkillStage::Model, inv))
     }
 
+    /// Strict production hook API: genuine classifier/validation failures are
+    /// errors, not permission to fall through to LLM. Low score/no match is Ok(None).
+    /// `parse_staged` retains its legacy fallback contract for diagnostic callers.
+    pub fn try_parse_staged(&self, text: &str) -> Result<Option<(SkillStage, SkillInvocation)>> {
+        if !self.active() {
+            return Ok(None);
+        }
+        if let Some(hit) = self.rules.parse(text) {
+            return self
+                .resolve(&hit.intent, hit.slots)
+                .map(|inv| Some((SkillStage::Rules, inv)));
+        }
+        if let Some(bert) = &self.bert {
+            let hit = bert.classify_timed(text)?;
+            if hit.confidence >= self.bert_threshold {
+                let name = self.bert_label_map.get(&hit.label).unwrap_or(&hit.label);
+                return self
+                    .resolve(name, HashMap::new())
+                    .map(|inv| Some((SkillStage::Model, inv)));
+            }
+        }
+        let Some(hit) = self.model.parse(text) else {
+            return Ok(None);
+        };
+        self.resolve(&hit.skill, hit.slots)
+            .map(|inv| Some((SkillStage::Model, inv)))
+    }
+
     /// 识别结果统一校验入口：**不信任任何识别源**（尤其 LLM 返回的 JSON）。
     ///
     /// - 技能必须存在于目录且已启用；

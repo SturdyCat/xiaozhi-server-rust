@@ -52,7 +52,7 @@ const device = { device_id:'test-dot2', label:'测试音箱', approved:true, onl
   await page.goto('http://echomuse.test/?page_name=admin');
   await page.getByText('EchoMuse',{exact:true}).first().click({force:true});
   await page.getByText('测试音箱',{exact:true}).first().click({force:true});
-  await page.getByText('读取运行状态',{exact:true}).waitFor();
+  await page.getByText('输出音量',{exact:true}).waitFor();
    assert.equal(await page.locator('iframe').count(),0,'all management tabs are native');
   await shellTab().click({force:true});
   await terminalInput().waitFor({state:'attached'});
@@ -107,7 +107,7 @@ const device = { device_id:'test-dot2', label:'测试音箱', approved:true, onl
   await page.setViewportSize({width:900,height:760});
   await wait(()=>sent.filter(f=>f.type==='resize').at(-1)?.cols!==oldSize.cols);
   // A nested confirmation must suppress command input without closing/reopening the shell.
-  await page.getByText('删除',{exact:true}).click({force:true});
+  await page.getByLabel('删除设备',{exact:true}).click();
   await page.getByText('删除设备记录？',{exact:true}).waitFor();
   await wait(()=>terminalInput().isDisabled());
   const before=sent.filter(f=>f.type==='input').length;
@@ -124,18 +124,18 @@ const device = { device_id:'test-dot2', label:'测试音箱', approved:true, onl
   await page.getByText('重新连接',{exact:true}).waitFor();
   await page.waitForTimeout(300);assert.equal(sessions.length,2,'never auto-reconnect root shell');
   await page.getByText('重新连接',{exact:true}).click({force:true}); await wait(()=>sessions.length===3);
-  await page.getByText('关闭',{exact:true}).last().click({force:true}); await wait(()=>sessions[2].closed);
+  await page.getByLabel('关闭设备详情',{exact:true}).click(); await wait(()=>sessions[2].closed);
   await wait(async()=>(await page.locator('div[style*="z-index: 1000"]').count())===0);
   // Old server / pipe firmware must still accept ordinary commands, never raw/resize frames.
   readyMode='pipe';raw=false;sent.length=0;
   await page.getByText('测试音箱',{exact:true}).first().click({force:true});
-  await page.getByText('读取运行状态',{exact:true}).waitFor();
+  await page.getByText('输出音量',{exact:true}).waitFor();
    assert.equal(await page.locator('iframe').count(),0,'all management tabs are native'); await shellTab().click({force:true});
   await terminalInput().waitFor({state:'attached'}); await page.waitForTimeout(200); await terminalInput().focus();
   await page.keyboard.type('echo legacy');await page.keyboard.press('Enter');
   await wait(()=>sent.some(f=>f.type==='input'&&f.data==='echo legacy'&&!f.raw));
   assert.equal(sent.some(f=>f.raw||f.type==='resize'),false,'pipe must not receive raw/resize');
-  await page.getByText('关闭',{exact:true}).last().click({force:true});
+  await page.getByLabel('关闭设备详情',{exact:true}).click();
   assert.deepEqual(errors,[]);
   console.log(JSON.stringify({result:'PASS',sessions:sessions.length,checks:'native keys/IME/paste/VT/resize/focus-blur/larger-font/modal/dispose/reconnect/pipe',errors}));
  } catch(error) {

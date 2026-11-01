@@ -49,9 +49,11 @@ enum UtteranceDecision {
 mod aiui;
 mod bench;
 mod command;
+mod hooks;
 mod mcp;
 mod media;
 mod observe;
+mod plan;
 mod producer;
 mod reply;
 mod start;
@@ -139,6 +141,8 @@ pub struct Session<'a, T: Transport> {
     eff_config: Arc<Config>,
     /// 固定实际 TTS 实例与身份；NextSession 不在句间读取进程最新引擎。
     tts_lease: crate::runtime::TtsLease,
+    memory: Arc<dyn crate::plugins::memory::MemoryProvider>,
+    memory_completed_through: Option<TurnId>,
     /// 明确结束标记的承载延迟 ASR 到边界，NoSpeech 才能无副作用丢弃。
     bounded_turn: bool,
     pending_segments: Vec<Vec<f32>>,
@@ -169,6 +173,10 @@ pub struct Session<'a, T: Transport> {
     /// 未命中才放行；云 LLM 侧的 `execute_skill` 工具调用也回到这份目录校验执行。
     /// 会话开始时按配置快照构造一次 = 注册表声明的 `next_session` 语义。
     skills: SkillRegistry,
+    command_skills: SkillRegistry,
+    nlu_skills: SkillRegistry,
+    skills_bert: Option<Arc<dyn crate::plugins::nlu::BertClassify>>,
+    workflow: crate::workflow::designer::CompiledWorkflow,
     /// 指令要求断开本次会话（告别语已下发）：主循环收尾时主动关闭承载。
     close_requested: bool,
     /// 设备 hello 是否声明 `features.mcp`（最新固件硬编码 `true`；极老固件为 `false`）。
@@ -516,7 +524,7 @@ impl<'a, T: Transport> Session<'a, T> {
                     "session {session_id} 收到唤醒上报（唤醒词/来源：{:?}）",
                     text.as_deref().filter(|t| !t.is_empty()).unwrap_or("未知")
                 );
-                self.handle_wake_greeting().await;
+                self.run_wake_hooks(text.as_deref()).await?;
             }
             ClientMessage::Listen { state, .. } => {
                 tracing::info!("listen state={state}");

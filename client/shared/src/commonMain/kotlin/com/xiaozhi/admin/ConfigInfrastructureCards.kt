@@ -50,25 +50,27 @@ fun ServerSection(form: ConfigFormState) {
             },
             help = "设备与测试台连接时校验的令牌（hello 帧携带）。留空 = 不校验，仅建议在内网使用。",
         )
-        labeledIntField(
-            label = "工作线程数",
-            value = form.workerThreads,
-            onValueChange = {
-                form.workerThreads = it
-                form.markDirty()
-            },
-            help = "异步运行时的工作线程数；留空/0 = 按 CPU 核数自动决定。CPU 富余时调大能缓解多设备并发。",
-        )
-        labeledField(
-            label = "管理页目录",
-            value = form.adminDir,
-            onValueChange = {
-                form.adminDir = it
-                form.markDirty()
-            },
-            help = "管理台前端静态资源目录（含 index.html 与 assets），由服务端同域托管，" +
-                "因此浏览器打开 / 即为管理台。填错会 404。",
-        )
+        if (form.showAdvanced) {
+            labeledIntField(
+                label = "工作线程数",
+                value = form.workerThreads,
+                onValueChange = {
+                    form.workerThreads = it
+                    form.markDirty()
+                },
+                help = "异步运行时的工作线程数；留空/0 = 按 CPU 核数自动决定。CPU 富余时调大能缓解多设备并发。",
+            )
+            labeledField(
+                label = "管理页目录",
+                value = form.adminDir,
+                onValueChange = {
+                    form.adminDir = it
+                    form.markDirty()
+                },
+                help = "管理台前端静态资源目录（含 index.html 与 assets），由服务端同域托管，" +
+                    "因此浏览器打开 / 即为管理台。填错会 404。",
+            )
+        }
     }
 }
 
@@ -137,7 +139,7 @@ fun AiuiSection(form: ConfigFormState) {
                 help = "讯飞控制台里的「场景」标识：测试环境用 main_box，正式对外用 main。" +
                     "两者计费与配额不同，上线前务必换成 main。",
             )
-            labeledField(
+            if (form.showAdvanced) labeledField(
                 label = "设备 SN 前缀",
                 value = form.aiuiSnPrefix,
                 onValueChange = {
@@ -196,7 +198,7 @@ fun AiuiSection(form: ConfigFormState) {
                 minLines = 3,
                 help = "云端大模型的人设与规则（相当于本地的系统提示词）。本地「人格档案」在此模式下不生效。",
             )
-            labeledIntField(
+            if (form.showAdvanced) labeledIntField(
                 label = "上行分帧间隔",
                 value = form.aiuiPaceMs,
                 onValueChange = {

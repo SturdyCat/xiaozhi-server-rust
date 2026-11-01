@@ -62,19 +62,34 @@ impl<'a, T: Transport> Session<'a, T> {
     /// 应答失败（TTS 构建/网络）**不阻止后续处置**：用户说了「退下」，会话就该结束聆听，
     /// 不能因为合成失败把这次会话卡在"没反应"的状态里。
     pub(super) async fn handle_skill_gate(&mut self, user_text: &str) -> bool {
-        let Some((stage, inv)) = self.skills.parse_staged(user_text) else {
-            return false;
-        };
-        tracing::info!(
-            "session {} 命中技能「{}」（层级 {}，识别文本 {:?}，槽位 {:?}）：跳过 LLM，本地执行",
-            self.session_id,
-            inv.name,
-            stage.as_str(),
-            user_text,
-            inv.slots
-        );
-        self.execute_invocation(&inv, stage.as_str()).await;
-        true
+        for binding in self.text_hook_bindings(user_text) {
+            let hit = match binding.plugin_id.as_str() {
+                "command.gate" => self.command_skills.try_parse_staged(user_text),
+                "nlu.rules" => self.nlu_skills.try_parse_staged(user_text),
+                "skill.gate" => self.skills.try_parse_staged(user_text),
+                _ => Ok(None),
+            };
+            let hit = match hit {
+                Ok(hit) => hit,
+                Err(error) => {
+                    self.note_error(format!(
+                        "workflow {} stopped turn: {error:#}",
+                        binding.plugin_id
+                    ));
+                    return true;
+                }
+            };
+            if let Some((stage, inv)) = hit {
+                let result = self.execute_invocation(&inv, stage.as_str()).await;
+                // A match always consumes the utterance, including failures.
+                // Never fall through to LLM or execute another matching hook.
+                if let Err(error) = super::plan::hook_result(&binding, result) {
+                    self.note_error(format!("{error:#}"));
+                }
+                return true;
+            }
+        }
+        false
     }
 
     /// 技能执行的**唯一**副作用出口（规则 / 轻量模型 / 云 LLM 三级识别源共用）：
@@ -83,19 +98,26 @@ impl<'a, T: Transport> Session<'a, T> {
     /// ⚠️ 清 abort 的原因：`abort` 只在 `stream_response` 入口重置，而技能闸门刻意
     /// 不经过那里；若上一轮以设备打断结束（abort 仍为 true），应答会被逐帧打断轮询
     /// 立刻掐断——用户会听到"没说完整就断线"。LLM 路径入口已清过，这里再清是幂等的。
-    pub(super) async fn execute_invocation(&mut self, inv: &SkillInvocation, source: &str) {
+    pub(super) async fn execute_invocation(
+        &mut self,
+        inv: &SkillInvocation,
+        source: &str,
+    ) -> anyhow::Result<()> {
         self.abort.store(false, Ordering::Relaxed);
         // 命中后要说的话（告别语 / 应答）：非空才下发，否则直接执行副作用。
         // 成品音频由预取/水库链路在完整合成成功时落盘 hot-audio/（内容寻址缓存，
         // 无需会话层另行登记）。
-        if !inv.reply.trim().is_empty() {
-            if let Err(e) = self.speak_canned(&inv.reply).await {
-                tracing::warn!(
-                    "session {} 技能「{}」（{source}）应答下发失败（仍按技能处置）: {e}",
-                    self.session_id,
-                    inv.name
-                );
-            }
+        let reply_result = if !inv.reply.trim().is_empty() {
+            self.speak_canned(&inv.reply).await
+        } else {
+            Ok(())
+        };
+        // The stop action still runs if farewell synthesis failed.
+        // Other side effects require the preceding hook work to succeed.
+        if !matches!(inv.action, SkillAction::EndSession) {
+            reply_result
+                .as_ref()
+                .map_err(|e| anyhow::anyhow!("{e:#}"))?;
         }
         match &inv.action {
             SkillAction::EndSession => {
@@ -118,11 +140,12 @@ impl<'a, T: Transport> Session<'a, T> {
                         self.session_id,
                         inv.name
                     );
-                    return;
+                    anyhow::bail!("invalid skill action: {kind}");
                 };
-                self.dispatch_device_tool(tool, inv).await;
+                self.dispatch_device_tool(tool, inv).await?;
             }
         }
+        reply_result
     }
 
     /// 云 LLM 回提的技能执行（级联末级 → 本地执行出口的回接）。
@@ -138,9 +161,11 @@ impl<'a, T: Transport> Session<'a, T> {
         &mut self,
         calls: &[crate::plugins::llm::ToolCall],
         turn: crate::observability::events::TurnId,
-    ) {
+        user_text: &str,
+    ) -> anyhow::Result<()> {
+        let skills = self.turn_skills(user_text);
         for call in calls {
-            match self.skills.from_tool_call(call) {
+            match skills.from_tool_call(call) {
                 Ok(inv) => {
                     tracing::info!(
                         turn,
@@ -148,7 +173,7 @@ impl<'a, T: Transport> Session<'a, T> {
                         self.session_id,
                         inv.name
                     );
-                    self.execute_invocation(&inv, "llm").await;
+                    self.execute_invocation(&inv, "llm").await?;
                 }
                 Err(e) => {
                     tracing::warn!(
@@ -158,13 +183,19 @@ impl<'a, T: Transport> Session<'a, T> {
                         call.name,
                         call.arguments
                     );
+                    return Err(e);
                 }
             }
         }
+        Ok(())
     }
 
     /// 把技能槽位派发到设备声明的 MCP 工具。失败**不断开**（见模块文档）。
-    async fn dispatch_device_tool(&mut self, tool: &str, inv: &SkillInvocation) {
+    async fn dispatch_device_tool(
+        &mut self,
+        tool: &str,
+        inv: &SkillInvocation,
+    ) -> anyhow::Result<()> {
         if self.engines.mcp.has_tool(&self.device_id, tool) == Some(false) {
             tracing::warn!(
                 "session {} 设备 {} 的工具清单不含 {tool}（会话开始时已发现），技能「{}」跳过派发",
@@ -172,7 +203,7 @@ impl<'a, T: Transport> Session<'a, T> {
                 self.device_id,
                 inv.name
             );
-            return;
+            anyhow::bail!("device tool not advertised: {tool}");
         }
         let arguments: serde_json::Map<String, serde_json::Value> = inv
             .slots
@@ -191,6 +222,7 @@ impl<'a, T: Transport> Session<'a, T> {
                     inv.slots,
                     reply.summary()
                 );
+                Ok(())
             }
             Ok(reply) => {
                 tracing::warn!(
@@ -199,6 +231,7 @@ impl<'a, T: Transport> Session<'a, T> {
                     inv.name,
                     reply.summary()
                 );
+                anyhow::bail!("device rejected tool {tool}: {}", reply.summary())
             }
             Err(e) => {
                 tracing::warn!(
@@ -206,6 +239,7 @@ impl<'a, T: Transport> Session<'a, T> {
                     self.session_id,
                     inv.name
                 );
+                anyhow::bail!("device tool {tool} failed: {e}")
             }
         }
     }

@@ -11,6 +11,7 @@ internal class ConfigFormActions(private val form: ConfigFormState, private val 
     // 基线只在加载全局配置后、套用 overlay 前抓取；保存成功后不能推进。
     private var deviceBaseline: JSONObject? = null
     private var saveResultSeq = 0
+    private var loadEpoch = 0L
 
     /** 拉取配置来源元信息（GET /api/config/meta）→ 展示"配置文件路径 + 是否持久化"。 */
     fun loadConfigMeta(ctx: Pager, baseUrl: String = ""): Unit = with(form) {
@@ -29,13 +30,19 @@ internal class ConfigFormActions(private val form: ConfigFormState, private val 
 
     fun load(ctx: Pager, baseUrl: String = ""): Unit = with(form) {
         invalidateReadOnlyTests()
+        val epoch = ++loadEpoch
+        val access = ctx.adminAccessRevision()
+        val token = ctx.adminRequestToken()
+        saving = false
+        modeDraft.cancel()
         serverBase = baseUrl
         // 设备个性化目标（P1-5）：全局基线 + overlay 套用，与全局加载分道
         if (editDeviceId.isNotEmpty()) {
-            loadDeviceTarget(ctx, baseUrl)
+            loadDeviceTarget(ctx, baseUrl, epoch)
             return@with
         }
         network(ctx).requestGet("${baseUrl}/api/config", JSONObject()) { data, success, errorMsg, _ ->
+            if (epoch != loadEpoch || serverBase != baseUrl || editDeviceId.isNotEmpty() || !ctx.isAdminAccessCurrent(access, token)) return@requestGet
             if (success) {
                 fill(data)
                 refreshNodeTests(ctx)
@@ -43,6 +50,8 @@ internal class ConfigFormActions(private val form: ConfigFormState, private val 
                 loadConfigMeta(ctx, baseUrl)
                 // 字段热生效元数据（用于"这个字段多久生效"提示；失败静默）
                 schema.load(ctx, baseUrl)
+                modeDraft.capture(buildConfigDraft())
+                workflow.loadMetadata(ctx, baseUrl)
                 conflict = false
                 saveImpactNote = ""
                 statusMsg = "已加载配置"
@@ -59,9 +68,12 @@ internal class ConfigFormActions(private val form: ConfigFormState, private val 
      * overlay 套用到表单（只覆盖白名单字段，其余字段保持全局值 → 表单即「设备生效值」）。
      * 保存时按 [deviceBaseline] 求差，只把相对全局改动的白名单字段写回 overlay。
      */
-    private fun loadDeviceTarget(ctx: Pager, baseUrl: String): Unit = with(form) {
+    private fun loadDeviceTarget(ctx: Pager, baseUrl: String, epoch: Long): Unit = with(form) {
         val id = editDeviceId
+        val access = ctx.adminAccessRevision()
+        val token = ctx.adminRequestToken()
         network(ctx).requestGet("${baseUrl}/api/config", JSONObject()) { data, success, errorMsg, _ ->
+            if (epoch != loadEpoch || serverBase != baseUrl || editDeviceId != id || !ctx.isAdminAccessCurrent(access, token)) return@requestGet
             if (!success) {
                 statusMsg = "加载失败: $errorMsg"
                 statusLevel = "error"
@@ -75,6 +87,7 @@ internal class ConfigFormActions(private val form: ConfigFormState, private val 
             // 全局基线快照（必须在套用 overlay 之前抓）
             deviceBaseline = buildOverlayDraft()
             network(ctx).requestGet("${baseUrl}/api/devices/$id/overlay", JSONObject()) { odata, osuccess, oerr, _ ->
+                if (epoch != loadEpoch || serverBase != baseUrl || editDeviceId != id || !ctx.isAdminAccessCurrent(access, token)) return@requestGet
                 if (osuccess) {
                     val overlay = odata?.optJSONObject("overlay")
                     val has = overlay != null && overlay.length() > 0
@@ -82,6 +95,7 @@ internal class ConfigFormActions(private val form: ConfigFormState, private val 
                     conflict = false
                     saveImpactNote = ""
                     dirty = false
+                    modeDraft.capture(buildConfigDraft())
                     statusMsg = if (has) {
                         "已加载设备 $id 的个性化配置（改动保存后仅对该设备生效，其余字段沿用全局）"
                     } else {
@@ -110,8 +124,13 @@ internal class ConfigFormActions(private val form: ConfigFormState, private val 
     fun clearDeviceOverlay(ctx: Pager, onResult: ((String, String) -> Unit)? = null): Unit = with(form) {
         val id = editDeviceId
         if (id.isEmpty()) return@with
-        val headers = JSONObject().apply { put("Content-Type", "application/json") }
-        network(ctx).httpRequest("${serverBase}/api/devices/$id/overlay/delete", true, JSONObject(), headers) { data, success, errorMsg, resp ->
+        val epoch = loadEpoch
+        val baseUrl = serverBase
+        val access = ctx.adminAccessRevision()
+        val token = ctx.adminRequestToken()
+        val headers = ctx.adminRequestHeaders()
+        network(ctx).httpRequest("${baseUrl}/api/devices/$id/overlay/delete", true, JSONObject(), headers) { data, success, errorMsg, resp ->
+            if (epoch != loadEpoch || serverBase != baseUrl || editDeviceId != id || !ctx.isAdminAccessCurrent(access, token)) return@httpRequest
             val code = resp.statusCode
             val serverMsg = data?.optString("message", "") ?: ""
             val ok = success && (code == null || code in 200..299)
@@ -140,24 +159,36 @@ internal class ConfigFormActions(private val form: ConfigFormState, private val 
      *   ⚠️ 不能在调用处紧随 save() 之后取 statusMsg：那时请求还没回来，拿到的是上一条旧消息。
      */
     fun save(ctx: Pager, baseUrl: String = "", onResult: ((String, String) -> Unit)? = null): Unit = with(form) {
+        if (saving) return@with
+        val candidate = buildConfigDraft()
+        val epoch = loadEpoch
+        val access = ctx.adminAccessRevision()
+        val token = ctx.adminRequestToken()
+        val device = editDeviceId
+        if (!modeDraft.allowSave(candidate) {
+            if (epoch == loadEpoch && serverBase == baseUrl && editDeviceId == device && ctx.isAdminAccessCurrent(access, token)) save(ctx, baseUrl, onResult)
+        }) return@with
         saving = true
         // 进入"保存中"：清掉上一次的完成态，并作废旧的回落定时器
         saveResult = ""
         saveResultSeq++
         // 设备个性化目标（P1-5）：白名单差量 → 设备 overlay，不走全局 /api/config
         if (editDeviceId.isNotEmpty()) {
-            saveDeviceOverlay(ctx, baseUrl, onResult)
+            saveDeviceOverlay(ctx, baseUrl, candidate, onResult)
             return@with
         }
-        val body = buildConfigDraft()
+        val body = candidate
+        val workflowSnapshot = workflow.bindings.toList()
+        val workflowChanged = workflow.dirty
         // ⚠️ 必须显式带 Content-Type: application/json：
         // Kuikly 的 requestPost 默认 headers=null，原生 KRHttpRequestTool 在非 JSON
         // Content-Type 下会把 body 编码成 form-urlencoded —— 服务端 Json<Config> 提取器
         // 直接 415（实测报 "Expected request with `Content-Type: application/json`"，
         // macApp 表现为「保存配置」失败）。同时按 HTTP 状态码判定成功：
         // 传输层 success 且 statusCode 非 2xx（如 415/400）时给出明确错误。
-        val headers = JSONObject().apply { put("Content-Type", "application/json") }
+        val headers = ctx.adminRequestHeaders()
         network(ctx).httpRequest("${baseUrl}/api/config", true, body, headers) { data, success, errorMsg, resp ->
+            if (epoch != loadEpoch || serverBase != baseUrl || editDeviceId != device || !ctx.isAdminAccessCurrent(access, token)) return@httpRequest
             saving = false
             val code = resp.statusCode
             // 服务端返回 JSON {ok, message, config_path}：优先透传 message（含**实际写入路径**
@@ -168,7 +199,14 @@ internal class ConfigFormActions(private val form: ConfigFormState, private val 
                 conflict = false
                 lastSavedAt = "已保存"
                 // 服务端回传新指纹：无需再 GET 即可继续保存
+                val stillMatchesRequest = changedConfigPaths(
+                    kotlinx.serialization.json.Json.parseToJsonElement(body.toString()) as kotlinx.serialization.json.JsonObject,
+                    kotlinx.serialization.json.Json.parseToJsonElement(buildConfigDraft().toString()) as kotlinx.serialization.json.JsonObject,
+                ).none { it != "expected_revision" }
                 revision = data?.optString("revision", revision) ?: revision
+                modeDraft.saved(body)
+                if (workflowChanged) workflow.markSaved(workflowSnapshot)
+                dirty = !stillMatchesRequest || workflow.dirty
                 refreshNodeTests(ctx)
                 // 三档生效文案由**服务端**判定（字段级 hot 取最严格，见 docs §5.4-6）：
                 // 客户端只做翻译，避免"说立即生效、其实要重启"这类误导。
@@ -224,19 +262,27 @@ internal class ConfigFormActions(private val form: ConfigFormState, private val 
      * - 基线在保存成功后**不更新**：增量始终相对全局，连续保存不会把上一次的差量
      *   误判为"无改动"而清掉 overlay（基线只在 [loadDeviceTarget] 抓取 / [backToGlobal] 清除）。
      */
-    private fun saveDeviceOverlay(ctx: Pager, baseUrl: String, onResult: ((String, String) -> Unit)?): Unit = with(form) {
+    private fun saveDeviceOverlay(ctx: Pager, baseUrl: String, candidate: JSONObject, onResult: ((String, String) -> Unit)?): Unit = with(form) {
         val id = editDeviceId
+        val epoch = loadEpoch
+        val access = ctx.adminAccessRevision()
+        val token = ctx.adminRequestToken()
         val diff = computeOverlayDraftDiff(deviceBaseline)
         val clear = diff.length() == 0
         val url = "${baseUrl}/api/devices/$id/overlay" + if (clear) "/delete" else ""
         val body = if (clear) JSONObject() else diff
-        val headers = JSONObject().apply { put("Content-Type", "application/json") }
+        val headers = ctx.adminRequestHeaders()
         network(ctx).httpRequest(url, true, body, headers) { data, success, errorMsg, resp ->
+            if (epoch != loadEpoch || serverBase != baseUrl || editDeviceId != id || !ctx.isAdminAccessCurrent(access, token)) return@httpRequest
             saving = false
             val code = resp.statusCode
             val serverMsg = data?.optString("message", "") ?: ""
             if (success && (code == null || code in 200..299)) {
-                dirty = false
+                dirty = changedConfigPaths(
+                    kotlinx.serialization.json.Json.parseToJsonElement(diff.toString()) as kotlinx.serialization.json.JsonObject,
+                    kotlinx.serialization.json.Json.parseToJsonElement(computeOverlayDraftDiff(deviceBaseline).toString()) as kotlinx.serialization.json.JsonObject,
+                ).isNotEmpty()
+                modeDraft.saved(candidate)
                 conflict = false
                 lastSavedAt = "已保存"
                 statusMsg = serverMsg.ifEmpty {

@@ -57,21 +57,17 @@ internal fun EchoMuseDeviceCard(
 @Composable
 internal fun EchoMuseDevicePicture(row: EchoMuseDeviceRow, size: Dp) {
     val color = when {
-        !row.approved -> Theme.colors.primary
-        !row.online -> Theme.colors.warning
-        else -> Theme.colors.mutedForeground
+        !row.approved -> Theme.colors.warning
+        !row.online -> Theme.colors.mutedForeground
+        else -> Theme.colors.success
     }
     GearLedRing(size = size, segColor = color, dotColor = color)
 }
 
 @Composable
 internal fun EchoMuseConnectionText(row: EchoMuseDeviceRow) {
-    Text(text = when {
-        !row.approved -> "待批准 · ${if (row.online) "在线" else "离线"}"
-        row.online -> "在线"
-        else -> "离线"
-    }, style = Theme.typography.bodyMedium,
-        color = if (row.online) Theme.colors.foreground else Theme.colors.warning)
+    Text(text = if (row.online) "在线" else "离线", style = Theme.typography.bodyMedium,
+        color = if (row.online) Theme.colors.success else Theme.colors.mutedForeground)
 }
 
 internal fun echoMuseDeviceAddress(row: EchoMuseDeviceRow): String =

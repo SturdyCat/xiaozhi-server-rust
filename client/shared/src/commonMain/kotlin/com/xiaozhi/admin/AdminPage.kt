@@ -158,6 +158,7 @@ class AdminPage : ComposeContainer(), FieldHelpHost {
      */
     fun refreshAll(base: String) {
         apiBase = base
+        form.loadInterfaceMode(this, base)
         val token = pagerData.params.optString("token", "")
         form.load(this, base)
         form.loadPresets(this, base)

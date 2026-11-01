@@ -10,6 +10,8 @@ import com.gearui.theme.Theme
 import com.tencent.kuikly.compose.foundation.layout.*
 import com.tencent.kuikly.compose.ui.Modifier
 import com.tencent.kuikly.compose.ui.unit.dp
+import com.xiaozhi.admin.contracts.IconToken
+import com.xiaozhi.admin.icons.GearIcon
 import com.xiaozhi.admin.kit.*
 
 /** Official DeviceConfigForm's seven stages, using only the Rust settings contract. */
@@ -19,6 +21,7 @@ internal fun EchoMuseNativeConfigTab(
     state: EchoMuseState,
     toast: ToastState,
     modifier: Modifier = Modifier,
+    compatibilityOnly: Boolean = false,
 ) {
     val pager = LocalAdminPagerOrThrow()
     val d = state.drafts
@@ -44,17 +47,16 @@ internal fun EchoMuseNativeConfigTab(
         ScrollView(modifier = Modifier.weight(1f).fillMaxWidth().padding(16.dp)) {
         if (!row.approved) {
             EmWarn("请先批准设备，再修改配置。")
+        } else if (compatibilityOnly) {
+            EchoMuseCompatibilitySettings(state)
         } else {
-            EmNote("只保存修改过的设备设置；空白数值不提交。保存或排队不代表设备已经应用。")
+            EchoMuseNativeWifi(row, state, toast)
             if (!row.online) EmNote("设备离线：仍可保存，设备下次接入时推送。")
             EmNativePlayback(d, !state.actionBusy)
             EmNativeWake(row, d, !state.actionBusy)
             EmNativeMicrophones(d, !state.actionBusy)
-            EmNativeConfigStage("04", "灯环", "音量提示弧与设备本地私听动画。") {
+            EmNativeConfigStage("04", "灯环", "远程音量变化的灯环提示。") {
                 switchRow("远程调音量时显示灯环", d.remoteVolumeArc, { d.remoteVolumeArc = it }, enabled = !state.actionBusy)
-                labeledTextArea("私听动画", d.listeningAnimDraft, { d.listeningAnimDraft = it },
-                    help = "设备原生动画 JSON 对象或数组；留空不修改。仅支持设备本地动画，不提供控制器场景、颜色和电平动画参数。",
-                    placeholder = "留空不修改", enabled = !state.actionBusy)
                 EmNote("官方控制器灯环场景、颜色与电平动画尚无服务端接口，不提供无效开关。")
             }
             EmNativeAdvanced(d, !state.actionBusy)
@@ -73,7 +75,6 @@ internal fun EchoMuseNativeConfigTab(
                 labeledField("播放器名称", d.sendspinName, { d.sendspinName = it }, enabled = !state.actionBusy)
                 EmNote("配对令牌、分组状态等官方控制器功能暂未提供，不声明已配对或已播放。")
             }
-            EchoMuseNativeWifi(row, state, toast)
         }
         }
         if (row.approved) Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
@@ -84,8 +85,9 @@ internal fun EchoMuseNativeConfigTab(
                     onClick = {
                         reloadRequested = true
                         state.refresh(pager)
-                    })
-                Button(text = "保存配置", loading = state.actionBusy, disabled = state.actionBusy,
+                    },
+                    iconWidget = { color -> GearIcon(token = IconToken.Refresh, size = 16.dp, tint = color) })
+                Button(text = if (compatibilityOnly) "保存兼容设置" else "保存配置", loading = state.actionBusy, disabled = state.actionBusy,
                     onClick = {
                         error = ""
                         result = ""
@@ -100,7 +102,8 @@ internal fun EchoMuseNativeConfigTab(
                                 toast.show(msg, if (ok) "ok" else "error")
                             }
                         }
-                    })
+                    },
+                    iconWidget = { color -> GearIcon(token = IconToken.Save, size = 16.dp, tint = color) })
             }
         }
     }
@@ -109,8 +112,8 @@ internal fun EchoMuseNativeConfigTab(
 @Composable
 internal fun EmNativeConfigStage(number: String, title: String, description: String, content: @Composable ColumnScope.() -> Unit) {
     Card(modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) {
-        Text("$number  $title", style = Theme.typography.titleSmall, color = Theme.colors.foreground)
-        EmNote(description)
+        Text(if (number.isBlank()) title else "$number  $title", style = Theme.typography.titleSmall, color = Theme.colors.foreground)
+        if (description.isNotBlank()) EmNote(description)
         content()
     }
 }

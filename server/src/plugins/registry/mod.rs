@@ -241,6 +241,8 @@ const APP_SECTION_HOT: &[(&str, HotReload)] = &[
     ("server", HotReload::RestartOnly),
     ("audio", HotReload::RestartOnly),
     ("playback", HotReload::NextSession),
+    // Workflow changes are compiled and applied to new sessions only.
+    ("workflow", HotReload::NextSession),
     // `[echomuse]`（EchoMuse 设备入口）：路由挂载与 mDNS 广播由启动值决定，
     // `enabled`/`token` 改动都需重启生效。
     ("echomuse", HotReload::RestartOnly),

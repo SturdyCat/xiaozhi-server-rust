@@ -16,6 +16,8 @@ import com.tencent.kuikly.compose.foundation.layout.padding
 import com.tencent.kuikly.compose.foundation.layout.width
 import com.tencent.kuikly.compose.ui.Modifier
 import com.tencent.kuikly.compose.ui.unit.dp
+import com.xiaozhi.admin.contracts.IconToken
+import com.xiaozhi.admin.icons.GearIcon
 import com.xiaozhi.admin.kit.LocalAdminViewport
 import com.xiaozhi.admin.kit.dividerV
 import com.xiaozhi.admin.kit.pageScroller
@@ -81,12 +83,13 @@ private fun WorkspaceTabs(form: ConfigFormState) {
     val tabs = listOf(
         Tab(id = NodeWorkspaceTab.Configuration.name, label = "配置"),
         Tab(id = NodeWorkspaceTab.Testing.name, label = "测试"),
+        Tab(id = NodeWorkspaceTab.Management.name, label = "管理"),
     )
     Tabs(
         items = tabs,
         selectedId = form.workspaceTab.name,
         onSelect = { id ->
-            val tab = if (id == NodeWorkspaceTab.Testing.name) NodeWorkspaceTab.Testing else NodeWorkspaceTab.Configuration
+            val tab = NodeWorkspaceTab.entries.firstOrNull { it.name == id } ?: NodeWorkspaceTab.Configuration
             form.selectWorkspaceTab(tab)
         },
         modifier = Modifier.fillMaxWidth().height(44.dp).padding(horizontal = Spacing.lg),
@@ -114,6 +117,12 @@ private fun WorkspaceContent(
     val position = form.workflowPosition
     val node = form.selectedFlowNodeId?.let { PipelineFlow.forId(it) }
 
+    if (form.workspaceTab == NodeWorkspaceTab.Management) {
+        WorkflowPluginPanel(form, meta)
+        if (node != null) WorkspaceNodeStatus(form, meta, health, node)
+        return
+    }
+
     if (position != null && position.nodes.isEmpty()) {
         LabeledCard(title = "${position.label} · 连接点") {
             Text(
@@ -121,7 +130,7 @@ private fun WorkspaceContent(
                 style = Theme.typography.bodyMedium,
                 color = Theme.colors.foreground,
             )
-            HintLine("此处保留流程衔接位置，不额外增加必经阶段。尚未挂载扩展，因此没有配置或可执行测试。")
+            HintLine(if (form.showAdvanced) "此处按当前流程继续，可在管理标签中添加兼容插件。" else "按默认流程继续，此处无需配置。高级模式可定制扩展。")
         }
         return
     }
@@ -153,5 +162,21 @@ private fun WorkspaceContent(
             }
         }
     }
-    ConfigSectionHost(form, meta, health, mcp, ota, toast, form.configSection)
+    if (node?.id == "input") {
+        LabeledCard(title = "设备语音入口") {
+            HintLine("ESP 与 EchoMuse 共用完整语音工作流；输入格式由设备协议协商，入口无需重复设置下行参数。")
+            com.gearui.components.button.Button(text = "前往输出适配", onClick = { form.selectFlowNode("output") }, type = com.gearui.components.button.ButtonType.TEXT,
+                iconWidget = { color -> GearIcon(token = IconToken.ChevronRight, size = 16.dp, tint = color) })
+            com.gearui.components.button.Button(text = "EchoMuse 接入配置", onClick = { form.selectFlowNode("echomuse.input") }, type = com.gearui.components.button.ButtonType.TEXT,
+                iconWidget = { color -> GearIcon(token = IconToken.ChevronRight, size = 16.dp, tint = color) })
+        }
+    } else if (node?.id == "memory.recall") {
+        LabeledCard(title = "记忆召回") {
+            HintLine("在调用模型前召回上下文；存储、抽取与召回参数统一在流程结束处管理，使用同一份记忆配置。")
+            com.gearui.components.button.Button(text = "前往记忆管理", onClick = { form.selectFlowNode("memory.writeback") }, type = com.gearui.components.button.ButtonType.TEXT,
+                iconWidget = { color -> GearIcon(token = IconToken.ChevronRight, size = 16.dp, tint = color) })
+        }
+    } else {
+        ConfigSectionHost(form, meta, health, mcp, ota, toast, form.configSection)
+    }
 }

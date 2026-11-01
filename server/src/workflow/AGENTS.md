@@ -19,3 +19,9 @@
 - [协议](<protocol/protocol/AGENTS.md>) `protocol/`（protocol/transport）
 - [下行](<downlink/AGENTS.md>) `downlink/`
 - [MCP](<mcp/AGENTS.md>) `mcp/`
+
+## 可配置插件工作流（当前实现）
+
+`designer` 提供版本 1 的 workflow 编译与投影。SQLite 配置缺少 `workflow` 时使用兼容默认计划；保存前必须通过同一编译器，非法配置不会写入。核心 ASR/VAD/LLM/TTS/AIUI 引擎描述符仅用于只读元数据，不可作为任意 binding；当前可编排项仅为已接线的唤醒、人格、记忆、指令/NLU hooks。
+
+条件只声明真实可执行子集：`always`、`text_contains{text,case_sensitive?}`、`device_kind{value}`；`confidence{min,max?}` 仅保留契约，当前会话没有可信置信度来源时必须 fail closed，禁止伪造默认分数。安全闸门 `command.gate`、`nlu.rules`、`skill.gate` 的 `on_error` 固定为 `stop`；上下文 hook 可使用 `continue`。工作流修改为 `next_session`，会话固定编译快照，不在句间重排。

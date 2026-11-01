@@ -8,6 +8,8 @@ import com.gearui.theme.Theme
 import com.tencent.kuikly.compose.foundation.layout.padding
 import com.tencent.kuikly.compose.ui.Modifier
 import com.tencent.kuikly.compose.ui.unit.dp
+import com.xiaozhi.admin.contracts.IconToken
+import com.xiaozhi.admin.icons.GearIcon
 import com.xiaozhi.admin.kit.fieldLabelRow
 import com.xiaozhi.admin.kit.labeledDecimalField
 import com.xiaozhi.admin.kit.labeledField
@@ -24,7 +26,7 @@ import com.xiaozhi.admin.kit.switchRow
  * - 字段名只用**中文见名知意**的说法（CPU / API / Token 这类通用术语保留英文），配置 key 不上界面；
  * - 需要额外解释的字段：说明进 `help`（名称旁 ⓘ 弹层），行内只留名字，不堆常驻长段落；
  * - 该功能的控制动作（测试凭据 / 探测音色目录 / 获取模型列表）放在名称右侧，与标题两端对齐；
- * - 每张卡内先给基础字段，再给「显示高级选项」开关，其后的高级字段用 `if (form.showAdvanced)` 展开。
+ * - 简洁模式只给日常项，高级字段由壳顶部统一模式控制；切换不重置草稿。
  *
  * ## 与旧 DSL 版的两处结构性差异（都已登记，不是随手改）
  *
@@ -43,25 +45,27 @@ import com.xiaozhi.admin.kit.switchRow
 @Composable
 fun AsrConfigCard(form: ConfigFormState) {
     LabeledCard(title = "ASR · 语音识别") {
-        // 无 backend 选择：ASR 恒为 SenseVoice（sherpa），mock 已移除
-        labeledField(
-            label = "识别模型",
-            value = form.asrModel,
-            onValueChange = {
-                form.asrModel = it
-                form.markDirty()
-            },
-            help = "sherpa-onnx 的 SenseVoice 模型文件路径（容器内绝对路径）。换模型只改这里，保存后新会话生效。",
-        )
-        labeledField(
-            label = "Tokens 词表",
-            value = form.asrTokens,
-            onValueChange = {
-                form.asrTokens = it
-                form.markDirty()
-            },
-            help = "与模型配套的 tokens.txt 路径。必须与模型同批下载——混用会让识别结果变成乱码。",
-        )
+        // Structural model files are never discarded when hidden in simple mode.
+        if (form.showAdvanced) {
+            labeledField(
+                label = "识别模型",
+                value = form.asrModel,
+                onValueChange = {
+                    form.asrModel = it
+                    form.markDirty()
+                },
+                help = "sherpa-onnx 的 SenseVoice 模型文件路径（容器内绝对路径）。换模型只改这里，保存后新会话生效。",
+            )
+            labeledField(
+                label = "Tokens 词表",
+                value = form.asrTokens,
+                onValueChange = {
+                    form.asrTokens = it
+                    form.markDirty()
+                },
+                help = "与模型配套的 tokens.txt 路径。必须与模型同批下载——混用会让识别结果变成乱码。",
+            )
+        }
         labeledField(
             label = "识别语种",
             value = form.asrLanguage,
@@ -72,16 +76,17 @@ fun AsrConfigCard(form: ConfigFormState) {
             placeholder = "auto/zh/en/ja/ko/yue",
             help = "auto = 自动判别；明确指定语种可略提准确率。SenseVoice 支持中英日韩粤。",
         )
-        labeledField(
-            label = "识别引擎",
-            value = form.asrProvider,
-            onValueChange = {
-                form.asrProvider = it
-                form.markDirty()
-            },
-            help = "ASR 提供方，当前固定 SenseVoice：本地 sherpa-onnx 推理，零外网、零按次计费。",
-        )
-        AdvancedToggleRow(form)
+        if (form.showAdvanced) {
+            labeledField(
+                label = "识别引擎",
+                value = form.asrProvider,
+                onValueChange = {
+                    form.asrProvider = it
+                    form.markDirty()
+                },
+                help = "ASR 提供方，当前固定 SenseVoice：本地 sherpa-onnx 推理，零外网、零按次计费。",
+            )
+        }
         if (form.showAdvanced) {
             switchRow(
                 label = "数字规范化（ITN）",
@@ -111,15 +116,17 @@ fun AsrConfigCard(form: ConfigFormState) {
 @Composable
 fun VadConfigCard(form: ConfigFormState) {
     LabeledCard(title = "VAD · 语音分段") {
-        labeledField(
-            label = "VAD 模型",
-            value = form.vadModel,
-            onValueChange = {
-                form.vadModel = it
-                form.markDirty()
-            },
-            help = "sherpa-onnx 的 VAD（人声检测）模型路径，决定「什么时候算一句话说完了」。",
-        )
+        if (form.showAdvanced) {
+            labeledField(
+                label = "VAD 模型",
+                value = form.vadModel,
+                onValueChange = {
+                    form.vadModel = it
+                    form.markDirty()
+                },
+                help = "sherpa-onnx 的 VAD（人声检测）模型路径，决定「什么时候算一句话说完了」。",
+            )
+        }
         labeledDecimalField(
             label = "语音判定阈值",
             value = form.vadThreshold,
@@ -130,7 +137,6 @@ fun VadConfigCard(form: ConfigFormState) {
             help = "人声概率高于该值才判为「有人在说」，取值 0~1，常用 0.5。" +
                 "调高会漏掉轻声细语，调低会把风扇、空调噪声当成说话。",
         )
-        AdvancedToggleRow(form)
         if (form.showAdvanced) {
             labeledDecimalField(
                 label = "最短静音（秒）",
@@ -179,7 +185,6 @@ fun TtsConfigCard(form: ConfigFormState) {
                 "远程服务 = 调用在线合成 API，音色更自然但需网络与服务商账号。",
         )
         // ===== 缓存（本地/远程通用）：按句缓存已编码下行 Opus 帧，命中时零合成延迟 =====
-        AdvancedToggleRow(form)
         if (form.showAdvanced) {
             labeledIntField(
                 label = "结果缓存条目数",
@@ -199,78 +204,80 @@ fun TtsConfigCard(form: ConfigFormState) {
 
         // ===== 第二级：本地引擎 + Kokoro 参数 =====
         if (form.ttsMode != "remote") {
-            labeledSelect(
-                label = "本地引擎",
-                selectedId = form.ttsBackend,
-                options = form.ttsLocalEngines,
-                onSelect = {
-                    form.ttsBackend = it
-                    form.markDirty()
-                },
-            )
-            labeledField(
-                label = "模型文件",
-                value = form.ttsModel,
-                onValueChange = {
-                    form.ttsModel = it
-                    form.markDirty()
-                },
-                help = "Kokoro ONNX 模型路径；INT8 量化版体积小、速度更快，音质略降。",
-            )
-            labeledField(
-                label = "音色文件",
-                value = form.ttsVoices,
-                onValueChange = {
-                    form.ttsVoices = it
-                    form.markDirty()
-                },
-                help = "音色向量表（voices 二进制）路径，必须与模型版本配套，否则合成会报错或串音。",
-            )
-            labeledField(
-                label = "Tokens 词表",
-                value = form.ttsTokens,
-                onValueChange = {
-                    form.ttsTokens = it
-                    form.markDirty()
-                },
-                help = "与模型配套的 tokens.txt 路径，负责把音素映射成模型输入 id。",
-            )
-            labeledField(
-                label = "模型数据目录",
-                value = form.ttsDataDir,
-                onValueChange = {
-                    form.ttsDataDir = it
-                    form.markDirty()
-                },
-                help = "模型自带的 data_dir（配置与字符表）所在目录。",
-            )
-            labeledField(
-                label = "词典目录",
-                value = form.ttsDictDir,
-                onValueChange = {
-                    form.ttsDictDir = it
-                    form.markDirty()
-                },
-                help = "中文分词与多音字词典目录（jieba）。目录缺失会导致多音字读错，不影响启动。",
-            )
-            labeledField(
-                label = "自定义发音词典",
-                value = form.ttsLexicon,
-                onValueChange = {
-                    form.ttsLexicon = it
-                    form.markDirty()
-                },
-                help = "lexicon 文件路径，每行「词 拼音」，用于修正人名的多音字读音；优先级高于内置词典。",
-            )
-            labeledField(
-                label = "合成语种",
-                value = form.ttsLang,
-                onValueChange = {
-                    form.ttsLang = it
-                    form.markDirty()
-                },
-                help = "发音规则所用语种代码（如 zh、en）；需与模型支持的语种一致。",
-            )
+            if (form.showAdvanced) {
+                labeledSelect(
+                    label = "本地引擎",
+                    selectedId = form.ttsBackend,
+                    options = form.ttsLocalEngines,
+                    onSelect = {
+                        form.ttsBackend = it
+                        form.markDirty()
+                    },
+                )
+                labeledField(
+                    label = "模型文件",
+                    value = form.ttsModel,
+                    onValueChange = {
+                        form.ttsModel = it
+                        form.markDirty()
+                    },
+                    help = "Kokoro ONNX 模型路径；INT8 量化版体积小、速度更快，音质略降。",
+                )
+                labeledField(
+                    label = "音色文件",
+                    value = form.ttsVoices,
+                    onValueChange = {
+                        form.ttsVoices = it
+                        form.markDirty()
+                    },
+                    help = "音色向量表（voices 二进制）路径，必须与模型版本配套，否则合成会报错或串音。",
+                )
+                labeledField(
+                    label = "Tokens 词表",
+                    value = form.ttsTokens,
+                    onValueChange = {
+                        form.ttsTokens = it
+                        form.markDirty()
+                    },
+                    help = "与模型配套的 tokens.txt 路径，负责把音素映射成模型输入 id。",
+                )
+                labeledField(
+                    label = "模型数据目录",
+                    value = form.ttsDataDir,
+                    onValueChange = {
+                        form.ttsDataDir = it
+                        form.markDirty()
+                    },
+                    help = "模型自带的 data_dir（配置与字符表）所在目录。",
+                )
+                labeledField(
+                    label = "词典目录",
+                    value = form.ttsDictDir,
+                    onValueChange = {
+                        form.ttsDictDir = it
+                        form.markDirty()
+                    },
+                    help = "中文分词与多音字词典目录（jieba）。目录缺失会导致多音字读错，不影响启动。",
+                )
+                labeledField(
+                    label = "自定义发音词典",
+                    value = form.ttsLexicon,
+                    onValueChange = {
+                        form.ttsLexicon = it
+                        form.markDirty()
+                    },
+                    help = "lexicon 文件路径，每行「词 拼音」，用于修正人名的多音字读音；优先级高于内置词典。",
+                )
+                labeledField(
+                    label = "合成语种",
+                    value = form.ttsLang,
+                    onValueChange = {
+                        form.ttsLang = it
+                        form.markDirty()
+                    },
+                    help = "发音规则所用语种代码（如 zh、en）；需与模型支持的语种一致。",
+                )
+            }
             labeledIntField(
                 label = "说话人编号",
                 value = form.ttsSpeaker,
@@ -289,7 +296,7 @@ fun TtsConfigCard(form: ConfigFormState) {
                 },
                 help = "大于 1 更快、小于 1 更慢。调快能缓解上游出字慢导致的断音，但过快会失真。",
             )
-            labeledIntField(
+            if (form.showAdvanced) labeledIntField(
                 label = "推理线程数",
                 value = form.ttsNumThreads,
                 onValueChange = {
@@ -335,6 +342,7 @@ private fun XfyunRemoteSection(form: ConfigFormState) {
                 text = "测试凭据",
                 onClick = { form.testXfyunCreds(ctx) },
                 type = ButtonType.OUTLINE,
+                iconWidget = { color -> GearIcon(token = IconToken.Check, size = 16.dp, tint = color) },
             )
         },
     )
@@ -383,6 +391,7 @@ private fun XfyunRemoteSection(form: ConfigFormState) {
                     text = "探测音色目录",
                     onClick = { form.refreshVoices(ctx) },
                     type = ButtonType.OUTLINE,
+                    iconWidget = { color -> GearIcon(token = IconToken.Speaker, size = 16.dp, tint = color) },
                 )
             },
         )
@@ -474,6 +483,7 @@ fun LlmConfigCard(form: ConfigFormState) {
                     onClick = { form.fetchLlmModels(ctx) },
                     type = ButtonType.OUTLINE,
                     loading = form.llmModelsBusy,
+                    iconWidget = { color -> GearIcon(token = IconToken.Model, size = 16.dp, tint = color) },
                 )
             },
         )
@@ -510,7 +520,7 @@ fun LlmConfigCard(form: ConfigFormState) {
             help = "每次对话都放在最前面的角色设定（人设、口吻、约束）。" +
                 "启用「人格档案」后由人格字段拼在上面，这里退化为补充说明。",
         )
-        labeledDecimalField(
+        if (form.showAdvanced) labeledDecimalField(
             label = "随机性（temperature）",
             value = form.llmTemperature,
             onValueChange = {
@@ -526,13 +536,12 @@ fun LlmConfigCard(form: ConfigFormState) {
             help = "技能未命中时，把识别文本交给大模型生成回复；关闭后直接念识别原文，" +
                 "省一次调用（调试 ASR/TTS 链路时很有用）。",
         )
-        switchRow(
+        if (form.showAdvanced) switchRow(
             label = "流式输出（SSE）",
             checked = form.llmStream == "true",
             onToggle = { form.toggleStringBool(form::llmStream) },
             help = "边生成边下发：首字延迟更低，长回答听感更顺。上游不支持 SSE 时关闭，否则会等整段生成完才出声。",
         )
-        AdvancedToggleRow(form)
         if (form.showAdvanced) {
             labeledIntField(
                 label = "上下文历史轮数",

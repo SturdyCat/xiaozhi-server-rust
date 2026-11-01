@@ -13,6 +13,14 @@
 - **轮次可归因**：`TurnTrace::new` 分配进程内唯一的 `turn_id`（一个 trace = 一轮），随事件负载与 `tracing` 的 `turn=` 字段流转；`grep turn=N` 能捞出整轮日志行，最后一行是分段摘要。首 token / 首句日志的判据取 `mark_*` 的返回值（是否首次写入），不要另设原子标志——那会与 first-only 语义漂移。`session_id` 在轮次内日志里不能丢：排查通常先按会话过滤再看轮次。
 - **文件规模**：[reply.rs](<reply.rs>)是回复编排层（LLM 工具回接在[command.rs](<command.rs>)、观测在[observe.rs](<observe.rs>)），当前 ~540 行仍有余量，但**观测类代码一律落[observe.rs](<observe.rs>)**（事件出口、轮次日志、id 取值口径都在那里），不要再往 reply.rs 加日志或分支。
 
+## 可编排 hook 执行
+
+- [计划选择](<plan.rs>)消费会话建立时编译的固定快照；空计划关闭全部可选增强，但不关闭 VAD/ASR/LLM/TTS 核心链路。条件使用真实文本和入口 `DeviceKind`（`xiaozhi_esp` / `echomuse`），当前没有可信置信度时 `confidence` 一律不命中。
+- `link.asr.nlu` 执行 command 后再执行 `nlu` 的独立 NLU 目录（跨阶段固定顺序，同位置按计划排序），首个命中或真实错误终止当前轮，禁止重复执行或错误后放行 LLM；LLM 工具目录亦按同一轮条件过滤，仍经技能/槽位/设备工具白名单校验。生产使用 `try_parse_staged`，诊断旧 API 保留原降级语义。
+- [上下文与生命周期](<hooks.rs>)按 `link.nlu.llm` 位置顺序组装人格/召回，`stop` 在真实错误时结束当前轮，`continue` 保留核心 prompt 并继续；唤醒仍仅挂每次 `detect`，不是连接开始或 `listen start`。AIUI 托管云端链路不执行本地人格/记忆。
+- `end` 写回只由正常完成、非取消、非打断的本地回复调用；会话内以单调 `turn_id` 防重入，原文 record 等待结果使错误策略真实生效，抽取/维护仍在后台。此保证不包含进程崩溃 exactly-once，也不代表设备已播放确认；背景任务失败不追溯撤销已完成轮次。
+- [真实会话回归](<plan/tests.rs>)使用无模型依赖、假承载/记忆提供方验证实际副作用，不替代 ESP/EchoMuse 真机与推理联调。
+
 ## 指令、MCP 与唤醒
 
 - [技能级联](<command.rs>)在 ASR→LLM 之间两级本地识别（规则 → 轻量模型），命中即执行不调 LLM；都未命中才放行 LLM，LLM 的 `execute_skill` 工具调用回 `execute_llm_tool_calls` 经同一目录校验执行。AIUI 只能在云端结果回来后丢弃回复。`[command]` 归一化 exact 与 max_chars 两道保险不可互替，空词表不拦截。

@@ -273,3 +273,36 @@ fn validate_blocks_bad_threshold_names_and_kinds() {
     nlu.intents[0].name = "  ".into();
     assert!(validate(&command, &nlu).is_err(), "空技能名必须被拦");
 }
+
+struct FailingClassifier;
+impl BertClassify for FailingClassifier {
+    fn classify_timed(&self, _: &str) -> Result<crate::plugins::nlu::BertHit> {
+        bail!("injected classifier failure")
+    }
+}
+
+#[test]
+fn strict_hook_reports_classifier_failure_while_legacy_api_still_falls_back() {
+    let (command, nlu) = fixture();
+    let r = SkillRegistry::new(&command, &nlu, Some(Arc::new(FailingClassifier)));
+    assert!(r.try_parse_staged("ordinary unrelated sentence").is_err());
+    assert!(r.parse_staged("ordinary unrelated sentence").is_none());
+    assert!(
+        r.try_parse_staged("退下").unwrap().is_some(),
+        "rule hit precedes classifier"
+    );
+}
+
+#[test]
+fn strict_hook_empty_registry_skips_classifier() {
+    let command = CommandConfig {
+        enabled: false,
+        ..Default::default()
+    };
+    let nlu = NluConfig {
+        enabled: false,
+        ..Default::default()
+    };
+    let r = SkillRegistry::new(&command, &nlu, Some(Arc::new(FailingClassifier)));
+    assert!(r.try_parse_staged("anything").unwrap().is_none());
+}

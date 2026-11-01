@@ -219,6 +219,7 @@ private fun FilesEntryRow(entry: FilesEntry, state: FilesState, ctx: Pager) {
                     theme = ButtonTheme.DEFAULT,
                     type = ButtonType.OUTLINE,
                     size = ButtonSize.SMALL,
+                    iconWidget = { color -> GearIcon(token = IconToken.Delete, size = 14.dp, tint = color) },
                 )
             }
         },

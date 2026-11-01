@@ -49,7 +49,7 @@ object PipelineWorkflow {
         fun attached(vararg anchors: PipelineAnchor) = nodes.filter { it.anchor in anchors }
         fun stageLabel(stage: VoiceStageId) = stage.id.uppercase()
         val result = buildList {
-            add(WorkflowPosition("start", "开始", attached(PipelineAnchor.Start, PipelineAnchor.Before(stages.first()))))
+            add(WorkflowPosition("start", "接入", attached(PipelineAnchor.Start, PipelineAnchor.Before(stages.first()))))
             stages.forEachIndexed { index, stage ->
                 val core = nodes.filter { it.coreStage == stage }
                 require(core.size == 1 && core.single().anchor == null) { "Each stage needs one unanchored core node" }

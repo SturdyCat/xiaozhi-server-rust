@@ -131,7 +131,8 @@ class UiContractsTest {
         assertTrue(workflowSections.intersect(globalSections.toSet()).isEmpty())
         // 全局配置菜单只剩没有流程位置的 section：流程阶段与连接点分支都在语音流程里
         assertTrue(VoiceStageId.entries.none { stage -> stage.id in globalSections })
-        assertTrue(globalSections.containsAll(listOf("overview", "presets", "aiui", "server", "echomuse", "mcp", "ota")))
+        assertTrue(globalSections.containsAll(listOf("overview", "presets", "aiui", "server", "ota")))
+        assertTrue(listOf("echomuse", "mcp").none { it in globalSections })
         assertTrue(ConfigSections.isGlobal("server") && !ConfigSections.isGlobal("llm") && !ConfigSections.isGlobal("soul"))
         assertEquals(ConfigSections.global.size, ConfigSections.globalGroups.sumOf { it.second.size })
     }

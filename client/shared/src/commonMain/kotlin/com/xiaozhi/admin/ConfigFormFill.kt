@@ -18,6 +18,8 @@ import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
  */
 internal fun ConfigFormState.fill(obj: JSONObject) {
     revision = obj.optString("revision", revision)
+    // Overlay fills intentionally omit workflow and must preserve the global draft.
+    if (obj.has("revision") || obj.has("workflow")) workflow.acceptConfig(obj.optJSONObject("workflow"))
     obj.optJSONObject("server")?.let { s ->
         port = s.intText("port", port, 8000)
         expectedToken = s.optString("expected_token", expectedToken)

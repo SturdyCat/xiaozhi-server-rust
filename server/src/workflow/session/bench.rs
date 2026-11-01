@@ -450,7 +450,7 @@ impl<'a, T: Transport> Session<'a, T> {
         let llm = build_llm(&llm_cfg);
         // 测试台也走**组装后的 prompt**：这样"人格是否生效"可以在测试台当场看到
         // （soul 文档 P0 的验收项），记忆召回同样按本会话作用域生效。
-        let prompt = self.build_turn_prompt(&text).await;
+        let prompt = self.build_turn_prompt(&text).await?;
         let t0 = std::time::Instant::now();
         let result = llm
             .chat_stream(&[], &text, &prompt, None, Box::new(|_| true))

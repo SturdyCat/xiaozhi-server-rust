@@ -17,36 +17,19 @@ internal fun EmNativePlayback(d: EchoMuseConfigDrafts, enabled: Boolean) {
         EmNativeConfigColumns(left = {
             val bands = try { JSONArray(d.eqBandsDraft.ifBlank { EM_EQ_PRESET_VALUES.getValue("flat") }) } catch (_: Exception) { null }
             if (bands != null && bands.length() in 1..16) {
-                val labels = listOf("125 Hz", "250 Hz", "500 Hz", "1 kHz", "2 kHz", "3.5 kHz", "5.5 kHz", "8 kHz")
-                for (i in 0 until bands.length()) {
-                    val value = (bands.opt(i) as? Number)?.toDouble() ?: continue
-                    fieldLabelRow(if (bands.length() == 8) labels[i] else "频段 ${i + 1}")
-                    EmNote("${emNum(value, 1)} dB")
-                    Slider(value = value.toFloat().coerceIn(-12f, 12f), enabled = enabled,
-                        valueRange = -12f..12f, steps = 23, onValueChange = { next ->
-                            val updated = JSONArray()
-                            for (index in 0 until bands.length()) {
-                                updated.put(if (index == i) next.toDouble() else bands.opt(index))
-                            }
-                            d.eqBandsDraft = updated.toString()
-                        })
-                }
+                EmNativeEqFaders(bands, d, enabled)
             }
             actionRow {
                 for ((id, label) in emEqPresetOptions()) Button(text = label, type = ButtonType.OUTLINE,
                     disabled = !enabled, onClick = { d.eqBandsDraft = EM_EQ_PRESET_VALUES.getValue(id) })
             }
-            EmNote("预设：${d.eqPresetLabel}；上传或保存不等于听感已验证。")
-            labeledTextArea("均衡器频段", d.eqBandsDraft, { d.eqBandsDraft = it }, enabled = enabled,
-                help = "非空数字数组；留空不修改。老设备的不同频段数保留原值；选择预设后使用官方八段。")
+            EmNote("${d.eqPresetLabel} · dB / Hz")
         }, right = {
             labeledSelect("语音播报电平", d.responseLevel, d.responseLevels, { if (enabled) d.responseLevel = it },
                 help = "相对设备音量：正常、增加 6 dB 或增加 12 dB；高音量时提升会减弱。")
             EmNativeSignedNumber("音乐压低深度（dB）", d.duckDbDraft, { d.duckDbDraft = it }, "-60～0", enabled)
             switchRow("音量按键提示音", d.volumeButtonSound, { d.volumeButtonSound = it }, enabled = enabled)
-            EmNote("当前音量在「状态」中调整；开机音量仅作兼容设置，不代表实时音量。")
             EmNativeConfigAdvanced {
-                labeledIntField("开机音量", d.startupVolumeDraft, { d.startupVolumeDraft = it }, placeholder = "0～127；留空不修改", enabled = enabled)
                 switchRow("低音保护", d.bassGuardEnabled, { d.bassGuardEnabled = it }, enabled = enabled)
                 switchRow("响度补偿", d.eqLoudness, { d.eqLoudness = it }, enabled = enabled)
                 EmNativeSignedNumber("低音保护阈值（dB）", d.bassGuardDbDraft, { d.bassGuardDbDraft = it }, "-60～24", enabled)
@@ -112,9 +95,5 @@ internal fun EmNativeAdvanced(d: EchoMuseConfigDrafts, enabled: Boolean) {
                 placeholder = "0～60000；留空不修改", enabled = enabled)
             EmNote("按键自动化事件、USB 控制台密码/超时与控制器地址暂无服务端设置接口。")
         })
-        EmNativeConfigAdvanced("原始设置 JSON") {
-            labeledTextArea("补充设置", d.extraJsonDraft, { d.extraJsonDraft = it }, enabled = enabled,
-                help = "只接受服务端白名单内的键与正确类型；非空对象。补充数值可覆盖上方数值，开关、枚举、播放器名称和非空动画以可见控件为准；请勿重复填写。不支持的键会明确报错。")
-        }
     }
 }

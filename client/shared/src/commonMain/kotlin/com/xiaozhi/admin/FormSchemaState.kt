@@ -46,15 +46,29 @@ class FormSchemaState(private val scope: PagerScope) {
      * **闭包内读到的 observable** 做响应式跟踪，普通 Map 的写入不会触发任何重建。
      */
     var version by stateVar(0)
+    private var loadGeneration = 0L
+    var advancedCoverageComplete = false
+        private set
 
     /** 拉取并展开 schema；失败静默保留旧缓存（服务端不可达时表单仍可用）。 */
     fun load(ctx: Pager, baseUrl: String = "") {
+        val generation = ++loadGeneration
+        val access = ctx.adminAccessRevision()
+        val token = ctx.adminRequestToken()
+        advancedCoverageComplete = false
+        version = 0
+        hots.clear(); sectionHints.clear(); sectionRanks.clear(); advancedKeys.clear()
         network(ctx).requestGet("${baseUrl}/api/config/schema", JSONObject()) { data, success, _, _ ->
-            if (!success) return@requestGet
+            if (generation != loadGeneration || !ctx.isAdminAccessCurrent(access, token) || !success) return@requestGet
+            advancedCoverageComplete = data.has("advanced_fields")
             val nextHots = mutableMapOf<String, String>()
             val nextSections = mutableMapOf<String, String>()
             val nextRanks = mutableMapOf<String, Int>()
             val nextAdvanced = mutableSetOf<String>()
+            // App sections may have no capability field table; same server-owned flag source.
+            data.optJSONArray("advanced_fields")?.let { fields ->
+                for (i in 0 until fields.length()) fields.optString(i)?.takeIf { it.isNotBlank() }?.let { nextAdvanced.add(it) }
+            }
             // ① 非能力段（[server] / [audio]）：服务端 `APP_SECTION_HOT` 的投影，无字段表
             val appSections = data.optJSONArray("app_sections")
             if (appSections != null) {
@@ -114,6 +128,8 @@ class FormSchemaState(private val scope: PagerScope) {
             val key = f.optString("key", "")
             if (key.isEmpty()) continue
             val fullKey = if (prefix.isEmpty()) key else "$prefix.$key"
+            // Advanced metadata is independent of the hot-reload rank, including live fields.
+            if (f.optBoolean("advanced", false)) advanced.add(fullKey)
             val hot = f.optString("hot", "")
             val strict = rank(hot)
             if (strict == 0) continue // live 不标注
@@ -121,9 +137,6 @@ class FormSchemaState(private val scope: PagerScope) {
             if (section.isNotEmpty() && strict > (sectionRanks[section] ?: -1)) {
                 sectionRanks[section] = strict
                 sectionHints[section] = f.optString("hot_hint", hot)
-            }
-            if (f.optBoolean("advanced", false)) {
-                advanced.add(fullKey)
             }
         }
     }

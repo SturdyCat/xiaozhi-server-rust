@@ -17,6 +17,8 @@ import com.tencent.kuikly.compose.ui.Modifier
 import com.xiaozhi.admin.contracts.ActionOutcome
 import com.xiaozhi.admin.contracts.ActionState
 import com.xiaozhi.admin.contracts.Availability
+import com.xiaozhi.admin.contracts.IconToken
+import com.xiaozhi.admin.icons.GearIcon
 import com.xiaozhi.admin.kit.labeledField
 import com.xiaozhi.admin.kit.labeledSelect
 
@@ -125,6 +127,7 @@ private fun NodeTestAction(form: ConfigFormState, descriptor: NodeTestDescriptor
         type = ButtonType.OUTLINE,
         loading = running,
         disabled = availability is Availability.Disabled,
+        iconWidget = { color -> GearIcon(token = IconToken.Play, size = 16.dp, tint = color) },
     )
     if (disabledReason.isNotEmpty()) {
         Text(

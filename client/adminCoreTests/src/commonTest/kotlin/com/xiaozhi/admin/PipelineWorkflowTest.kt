@@ -26,12 +26,12 @@ class PipelineWorkflowTest {
 
     @Test fun allTwelveRealNodesHaveExactlyOneHomeWithoutChangingTheirBindings() {
         val projected = PipelineWorkflow.positions.flatMap { it.nodes }
-        assertEquals(12, projected.size)
+        assertEquals(14, projected.size)
         assertEquals(PipelineFlow.all, projected)
         assertEquals(projected.size, projected.map { it.id }.distinct().size)
-        assertEquals(listOf("input", "wakeup"), PipelineWorkflow.forId("start")?.nodes?.map { it.id })
+        assertEquals(listOf("input", "echomuse.input", "wakeup"), PipelineWorkflow.forId("start")?.nodes?.map { it.id })
         assertEquals(listOf("command"), PipelineWorkflow.forId("link.asr.nlu")?.nodes?.map { it.id })
-        assertEquals(listOf("soul", "memory.recall"), PipelineWorkflow.forId("link.nlu.llm")?.nodes?.map { it.id })
+        assertEquals(listOf("soul", "memory.recall", "mcp.tools"), PipelineWorkflow.forId("link.nlu.llm")?.nodes?.map { it.id })
         assertEquals(listOf("output", "memory.writeback"), PipelineWorkflow.forId("end")?.nodes?.map { it.id })
         for (node in PipelineFlow.all) {
             val position = assertNotNull(PipelineWorkflow.forNode(node.id))
@@ -70,7 +70,7 @@ class PipelineWorkflowTest {
             assertNull(selection.nodeId)
             assertTrue(ConfigSections.all.none { it.id == selection.sectionId })
         }
-        assertEquals(12, PipelineFlow.all.size)
+        assertEquals(14, PipelineFlow.all.size)
     }
 
     @Test fun legacyRoutesAndSharedSectionsKeepTheirDistinctNodeIdentity() {

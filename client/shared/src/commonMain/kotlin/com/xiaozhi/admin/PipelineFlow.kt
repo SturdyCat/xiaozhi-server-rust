@@ -60,6 +60,10 @@ object PipelineFlow {
             tests = listOf(NodeTestDescriptor("input.profile", "输入能力验证")),
         ),
         FlowFeatureDescriptor(
+            "echomuse.input", "EchoMuse 接入", "设备审批、接入凭据与协议入口", PipelineAnchor.Start,
+            "echomuse", IconToken.Wifi, configPaths = listOf("echomuse"), order = 1,
+        ),
+        FlowFeatureDescriptor(
             "wakeup", "唤醒与问候", "唤醒事件旁路；固定问候可直接进入语音输出", PipelineAnchor.Before(VoiceStageId.Vad),
             "wakeup", IconToken.Waveform, "wakeup", listOf("wakeup"),
             listOf(NodeTestDescriptor("wakeup.preview", "问候配置验证")),
@@ -78,6 +82,10 @@ object PipelineFlow {
             "memory.recall", "记忆召回", "只读召回当前作用域的上下文", PipelineAnchor.Before(VoiceStageId.Llm),
             "memory", IconToken.Model, "memory", listOf("memory"),
             listOf(NodeTestDescriptor("memory.recall", "召回验证")), order = 20,
+        ),
+        FlowFeatureDescriptor(
+            "mcp.tools", "设备技能与 MCP", "工具发现与能力白名单；设备动作仍由技能目录校验", PipelineAnchor.Before(VoiceStageId.Llm),
+            "mcp", IconToken.Intent, configPaths = listOf("nlu"), order = 30,
         ),
         FlowFeatureDescriptor(
             "output", "终端输出适配", "编码、分帧、缓冲与播放结束按终端能力适配", PipelineAnchor.After(VoiceStageId.Tts),
@@ -113,7 +121,9 @@ object PipelineFlow {
 
     fun forId(nodeId: String): PipelineFlowNode? = all.firstOrNull { it.id == nodeId }
     fun primaryForSection(sectionId: String): PipelineFlowNode? =
-        all.firstOrNull { it.id == sectionId && it.sectionId == sectionId } ?: all.firstOrNull { it.sectionId == sectionId }
+        if (sectionId == "memory") forId("memory.writeback")
+        else if (sectionId == "audio") forId("output")
+        else all.firstOrNull { it.id == sectionId && it.sectionId == sectionId } ?: all.firstOrNull { it.sectionId == sectionId }
     fun selectionForNode(nodeId: String): ConfigSelection? = forId(nodeId)?.selection
 
     fun tabFor(selection: ConfigSelection): String =

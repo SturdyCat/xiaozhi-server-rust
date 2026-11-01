@@ -83,7 +83,7 @@ fun Button(
     loading: Boolean = false,
     block: Boolean = false,
     icon: IconSource? = null,
-    iconWidget: (@Composable () -> Unit)? = null,
+    iconWidget: (@Composable (contentColor: Color) -> Unit)? = null,
     iconPosition: ButtonIconPosition = ButtonIconPosition.LEFT,
     iconTextSpacing: Dp = Dp.Unspecified,
     contentDescription: String? = null,
@@ -196,7 +196,12 @@ fun Button(
     }
 
     val resolvedIcon: (@Composable () -> Unit)? = when {
-        iconWidget != null -> iconWidget
+        iconWidget != null -> {
+            // Hand the caller the resolved content colour so a custom icon (e.g. a
+            // multi-layer vector) tints with the button's theme/type and its
+            // loading/disabled states exactly like the built-in IconSource path.
+            { iconWidget(contentColor) }
+        }
         icon != null -> {
             {
                 FoundationIcon(

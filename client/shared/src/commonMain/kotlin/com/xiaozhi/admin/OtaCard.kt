@@ -20,6 +20,7 @@ import com.gearui.components.table.TableColumn
 import com.gearui.foundation.primitives.Text
 import com.gearui.theme.Theme
 import com.xiaozhi.admin.contracts.IconToken
+import com.xiaozhi.admin.icons.GearIcon
 import com.tencent.kuikly.compose.animation.core.LinearEasing
 import com.tencent.kuikly.compose.animation.core.RepeatMode
 import com.tencent.kuikly.compose.animation.core.animateFloat
@@ -373,6 +374,7 @@ private fun OtaEntriesTable(ota: OtaState) {
                     theme = ButtonTheme.DEFAULT,
                     type = ButtonType.OUTLINE,
                     size = ButtonSize.SMALL,
+                    iconWidget = { color -> GearIcon(token = IconToken.Delete, size = 14.dp, tint = color) },
                 )
             },
         ),

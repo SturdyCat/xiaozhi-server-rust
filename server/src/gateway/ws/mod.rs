@@ -87,6 +87,7 @@ mod plugins;
 mod registry;
 mod soul;
 mod usage;
+mod workflow;
 use config::device_overlay::{device_overlay_delete, device_overlay_get, device_overlay_put};
 use config::presets::{preset_apply, preset_delete, preset_save, presets_list};
 use config::{config_meta, db_backup, db_query, get_config, put_config};
@@ -104,6 +105,7 @@ use plugins::{config_schema, list_plugins};
 use registry::{conversations, device_detail, device_inject, devices, sessions, stats};
 use soul::{soul_presets, soul_preview};
 use usage::{session_usage, usage};
+use workflow::{get_workflow, validate_workflow};
 
 /// 统一的 JSON 响应（全部 `/api` 端点共用）：
 /// `Content-Type: application/json; charset=utf-8` + 指定状态码。
@@ -164,6 +166,11 @@ pub fn router(engines: Arc<Engines>) -> Router {
         // 能力清单 + 状态（enabled/phase/last_error）与字段元数据（配置页据此校验/提示）
         .route("/api/plugins", get(list_plugins))
         .route("/api/config/schema", get(config_schema))
+        .route("/api/workflow", get(get_workflow))
+        .route(
+            "/api/workflow/validate",
+            axum::routing::post(validate_workflow),
+        )
         // 远程客户端访问 SQLite 配置库：只读 SQL 查询（需 token）+ 一致性备份（VACUUM INTO）
         .route("/api/config/db/query", axum::routing::post(db_query))
         .route("/api/config/db/backup", axum::routing::post(db_backup))

@@ -14,6 +14,8 @@ import com.tencent.kuikly.compose.foundation.layout.padding
 import com.tencent.kuikly.compose.ui.Alignment
 import com.tencent.kuikly.compose.ui.Modifier
 import com.tencent.kuikly.compose.ui.unit.dp
+import com.xiaozhi.admin.contracts.IconToken
+import com.xiaozhi.admin.icons.GearIcon
 import com.xiaozhi.admin.kit.fieldLabelRow
 import com.xiaozhi.admin.kit.labeledDecimalField
 import com.xiaozhi.admin.kit.labeledField
@@ -58,7 +60,7 @@ fun NluConfigCard(form: ConfigFormState) {
         )
 
         if (nlu.enabled == "true") {
-            labeledDecimalField(
+            if (form.showAdvanced) labeledDecimalField(
                 label = "执行阈值",
                 value = nlu.modelThreshold,
                 onValueChange = {
@@ -72,7 +74,7 @@ fun NluConfigCard(form: ConfigFormState) {
             if ((nlu.modelThreshold.trim().toDoubleOrNull() ?: 0.9) >= 1.0) {
                 HintLine("⚠️ 阈值 = 1.0 表示关闭轻量模型级：只有规则模板完全命中的技能会本地执行，其余全部交给大模型。")
             }
-            labeledDecimalField(
+            if (form.showAdvanced) labeledDecimalField(
                 label = "领先余量",
                 value = nlu.modelMargin,
                 onValueChange = {
@@ -83,9 +85,14 @@ fun NluConfigCard(form: ConfigFormState) {
                 help = "第一名必须比第二名高出该差值（0~1）才算「有把握」；调大更保守、误触发更少，" +
                     "但更多请求会落到大模型。",
             )
-            NluBuildModelSection(form, nlu)
-            NluIntentList(form, nlu)
-            NluSlotList(form, nlu)
+            if (form.showAdvanced) {
+                NluBuildModelSection(form, nlu)
+                NluIntentList(form, nlu)
+                NluSlotList(form, nlu)
+            } else {
+                HintLine("保留当前技能目录（${nlu.intents.size} 条自定义技能、${nlu.slots.size} 个槽位）；默认流程会自动匹配，未命中才进入大模型。")
+                if (nlu.buildPhase == "failed" && nlu.buildMsg.isNotEmpty()) HintLine(nlu.buildMsg)
+            }
         } else {
             HintLine("未启用：识别结果照常交给大模型（内置指令闸门不受影响，见「指令」卡）。")
         }
@@ -109,6 +116,7 @@ private fun NluBuildModelSection(form: ConfigFormState, nlu: NluSectionState) {
                 text = if (nlu.buildBusy) "训练中…" else "生成 NLU 模型",
                 onClick = { nlu.startBuildModel(ctx, form.serverBase) },
                 loading = nlu.buildBusy,
+                iconWidget = { color -> GearIcon(token = IconToken.Model, size = 16.dp, tint = color) },
             )
         },
     )
@@ -130,7 +138,7 @@ private fun NluBuildModelSection(form: ConfigFormState, nlu: NluSectionState) {
     }
 }
 
-/** 自定义技能列表：标题行带「＋ 添加意图」，逐条渲染 [NluIntentBlock]。 */
+/** 自定义技能列表：标题行带「添加意图」（Plus 图标），逐条渲染 [NluIntentBlock]。 */
 @Composable
 private fun NluIntentList(form: ConfigFormState, nlu: NluSectionState) {
     fieldLabelRow(
@@ -139,12 +147,13 @@ private fun NluIntentList(form: ConfigFormState, nlu: NluSectionState) {
             "匹配成功就不再调用大模型，直接执行并回一句应答语。",
         trailing = {
             Button(
-                text = "＋ 添加意图",
+                text = "添加意图",
                 onClick = {
                     nlu.addIntent()
                     form.markDirty()
                 },
                 type = ButtonType.OUTLINE,
+                iconWidget = { color -> GearIcon(token = IconToken.Plus, size = 16.dp, tint = color) },
             )
         },
     )
@@ -172,6 +181,7 @@ private fun NluIntentBlock(form: ConfigFormState, nlu: NluSectionState, draft: I
                     form.markDirty()
                 },
                 type = ButtonType.OUTLINE,
+                iconWidget = { color -> GearIcon(token = IconToken.Delete, size = 16.dp, tint = color) },
             )
         }
         labeledField(
@@ -233,7 +243,7 @@ private fun NluIntentBlock(form: ConfigFormState, nlu: NluSectionState, draft: I
     }
 }
 
-/** 槽位定义列表：标题行带「＋ 添加槽位」，逐条渲染 [NluSlotBlock]。 */
+/** 槽位定义列表：标题行带「添加槽位」（Plus 图标），逐条渲染 [NluSlotBlock]。 */
 @Composable
 private fun NluSlotList(form: ConfigFormState, nlu: NluSectionState) {
     fieldLabelRow(
@@ -243,12 +253,13 @@ private fun NluSlotList(form: ConfigFormState, nlu: NluSectionState) {
             "含否定词（别/不要）或出现多个候选值时不会本地执行，交大模型判断。",
         trailing = {
             Button(
-                text = "＋ 添加槽位",
+                text = "添加槽位",
                 onClick = {
                     nlu.addSlot()
                     form.markDirty()
                 },
                 type = ButtonType.OUTLINE,
+                iconWidget = { color -> GearIcon(token = IconToken.Plus, size = 16.dp, tint = color) },
             )
         },
     )
@@ -276,6 +287,7 @@ private fun NluSlotBlock(form: ConfigFormState, nlu: NluSectionState, slot: Slot
                     form.markDirty()
                 },
                 type = ButtonType.OUTLINE,
+                iconWidget = { color -> GearIcon(token = IconToken.Delete, size = 16.dp, tint = color) },
             )
         }
         labeledField(

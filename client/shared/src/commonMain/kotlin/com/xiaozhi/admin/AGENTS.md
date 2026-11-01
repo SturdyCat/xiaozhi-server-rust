@@ -8,10 +8,11 @@
 
 - **组件库是 GearUI（vendored 于 [gearuiKit](<../../../../../../gearuiKit/>)，package `com.gearui.*`）+ 自建零件库 [kit/](<kit/>)**：页面一律先用这两处，再考虑新写。GearUI 提供语义组件（`Table`/`Tabs`/`Alert`/`ConfirmDialog`/`EmptyState`/`SkeletonText`/`Button`/`Input`/`Textarea`/`Switch`/`Select`/`Card`/`Cell`/`CellGroup`/`Timeline`/`Collapse`/`LinearProgress`…，主题走 `Theme.colors`/`Theme.typography`）；`kit/` 收敛跨页面的组合零件与口径，新页面先在 kit 里找同型零件，⛔ 不复制零件实现。⛔ 颜色/字号只取 GearUI 语义 token（`Theme.colors.foreground/mutedForeground/destructive/warning/primary/…`），**完全采用 GearUI 默认浅色主题**（D2 决策：`themeMode = Light`、`theme = null`，组合根不覆写色板）；`AdminColors/AdminType/AdminToken/AdminShape` 已随 `ui/` 退役（T12 步骤 6 删尽前仅剩 `icons/LegacyAppIcon.kt` 一处过渡引用），⛔ 新代码零引用（验收口径：`grep -rlE "AdminColors|AdminType|AdminToken|AdminShape"`）。**唯一色值例外**：深色终端的四个色（bg/fg/dim/accent）收敛在 [kit/GearTerminal.kt](<kit/GearTerminal.kt>) 的 `GearTerminalPalette`（K2 保留项），页面文件里零色值。
 - **kit/ 零件索引**：[GearFields](<kit/GearFields.kt>)（`labeledField/labeledIntField/labeledDecimalField/labeledTextArea/switchRow/actionRow` + `INT_INPUT_FILTER/DECIMAL_INPUT_FILTER`）、[GearSelect](<kit/GearSelect.kt>)（`labeledSelect`）、[GearBadges](<kit/GearBadges.kt>)（`statusBadge/pluginStatusBadge`，**只在偏离时打标**——正常/在线不渲染任何徽标）、[GearLayout](<kit/GearLayout.kt>)（`pageScroller/splitRow/splitColumn/menuPaneRow/cardRow/twoPane/dividerH/hGap/vGap`）、[GearUiSpace](<kit/GearUiSpace.kt>)（间距常量）、[AdminScope](<kit/AdminScope.kt>)（`GearUiBreakpoints`：NARROW 768 / TWO_COLUMN 900 / WORKSPACE_COMPACT 700 / SIDEBAR_WIDTH 240，**一字不改**；`LocalAdminPager`/`LocalAdminViewport` CompositionLocal）、[GearFieldHelp](<kit/GearFieldHelp.kt>)（`LocalFieldHelp` 下发 ⓘ 帮助弹层）、[GearTerminal](<kit/GearTerminal.kt>)（深色终端四件：`GearTerminal/GearTerminalText/GearTerminalInput/GearTerminalKey`）、[GearWaveform](<kit/GearWaveform.kt>) / [GearLedRing](<kit/GearLedRing.kt>)。
-- **状态一律 Compose 快照**：`state/StateVar.kt` 的 `stateVar`/`stateListOf`（读写进快照系统，组合期读到即随写入重组）。计数由护栏 `:shared:verifyComposeStateMigration` 锁定（当前 450/48、legacy=0；删除代码后用 codemod `--check` 实测值回填并在常量注释写明原因，⛔ 禁止为凑数字保留死代码）。⛔ 禁止再用 `com.tencent.kuikly.core.reactive` 的 `observable`/`observableList`——旧原语只在护栏白名单 `LegacyVfor.kt`（T12 随 `ui/` 删除）里允许出现。纯展示态（展开集合、开关、输入草稿的反查）放 `remember`，不进状态层。
+- **状态一律 Compose 快照**：`state/StateVar.kt` 的 `stateVar`/`stateListOf`（读写进快照系统，组合期读到即随写入重组）。计数由护栏 `:shared:verifyComposeStateMigration` 锁定（当前 457/48、legacy=0；删除代码后用 codemod `--check` 实测值回填并在常量注释写明原因，⛔ 禁止为凑数字保留死代码）。⛔ 禁止再用 `com.tencent.kuikly.core.reactive` 的 `observable`/`observableList`——旧原语只在护栏白名单 `LegacyVfor.kt`（T12 随 `ui/` 删除）里允许出现。纯展示态（展开集合、开关、输入草稿的反查）放 `remember`，不进状态层。
+- **组合身份与输入中间态**：[插件面板](<WorkflowPluginPanel.kt>)中可排序挂载行按稳定 binding id 使用 `key`，不能按行号绑定控件状态。数值输入允许 `remember` 缓存 `0.` 等中间文本，但只在对应规范值仍匹配唯一配置草稿时使用；外部更新/重载后以权威草稿为准，不新增第二套配置。卡片标题在 RowScope 内用 `weight` 分配剩余宽度，并与右侧操作保留语义间距。
 - **契约层在 [contracts/](<contracts/>)**（零 Kuikly 依赖）：[UiContracts](<contracts/UiContracts.kt>)（`Availability/CheckState/IconToken` 等纯 UI 契约）、[AdminNav](<contracts/AdminNav.kt>)（一级导航常量表，8 项；`init` 断言 id 唯一 / order 升序 / 同组相邻；2026-10-29 范围削减后 `sessions/conversations/usage/metrics` 四项已移除）、[FieldHelpState](<contracts/FieldHelpState.kt>)（帮助状态实现 + `FieldHelpHost` 接口，页面 `val fieldHelp = FieldHelpState()` 持有，经 `LocalFieldHelp` 下发）。
 - **导航与分区**：一级导航由 [AdminNav](<contracts/AdminNav.kt>) 驱动（web 端经 `visible(macos)` 隐藏 `macOnly` 的测试台）；配置分区由 [ConfigSections](<ConfigSections.kt>) 常量表驱动，id 稳定、order 确定，新增分区 = 表加一行 + [ConfigSectionHost](<ConfigCards.kt>) 的 `when` 加一条分支，section 实现落**各自文件**。
-- **图标一律 `GearIcon(IconToken.X)`**（[icons/AdminIcons.kt](<icons/AdminIcons.kt>)，内嵌 SVG pathData 经 Kuikly `Canvas` 即时绘制，解析器见 [IconVectors.kt](<icons/IconVectors.kt>)）：⛔ 不拿文本字符当图标（粗细/基线/居中随字体漂移），也不在调用处手绘。`IconToken`↔几何一一对应由 `:shared:verifyAdminIcons` 锁定（26 个），新增图标改 [IconVectors.kt](<icons/IconVectors.kt>) 的 pathData，禁止回退资源文件/PNG/UIImage/位图。
+- **图标一律 `GearIcon(IconToken.X)`**（[icons/AdminIcons.kt](<icons/AdminIcons.kt>)，内嵌 SVG pathData 经 Kuikly `Canvas` 即时绘制，解析器见 [IconVectors.kt](<icons/IconVectors.kt>)）：⛔ 不拿文本字符当图标（粗细/基线/居中随字体漂移），也不在调用处手绘。`IconToken`↔几何一一对应由 `:shared:verifyAdminIcons` 锁定（26 个），新增图标改 [IconVectors.kt](<icons/IconVectors.kt>) 的 pathData，禁止回退资源文件/PNG/UIImage/位图。按钮内图标走 GearUI `Button` 的 `iconWidget`——回调签名是 `@Composable (Color) -> Unit`，**入参即按钮当前内容色**（随主题/类型/禁用态解析），`iconWidget = { c -> GearIcon(token, size = 16.dp, tint = c) }` 即可，不要手算 `primaryForeground` 之类的色值。
 - **Compose 运行时事实**（实测，勿踩）：Kuikly Compose **没有** `Modifier.verticalScroll`，页面滚动用 [kit](<kit/GearLayout.kt>) `pageScroller`（GearUI `ScrollView` 基座）；`fillMaxHeight` 在根约束下会退化成 wrap content（需要显式定高或 `weight`）；`Modifier.weight(1f)` 必须在**有 Column/RowScope 的调用处**传（独立 `@Composable` 里写 `.weight(1f)` 会 unresolved）；`Pager` 经 `LocalAdminPagerOrThrow()` 取，不要在 onClick 闭包里现取。GearUI `DecoratedSurface` 的阴影/描边 Canvas 为纯绘制层，必须保持 `setProp("touchEnable", 0)`，不拦截卡片内部按钮、滑杆或输入框的命中。
 - **提交路径唯一**：一次 `POST /api/config`（部分更新）+ 设备 overlay 差量。⛔ 禁止第二套配置草稿/第二份提交实现——Compose 试点的 `AdminConfigDraft`「每段一份草稿各自提交」模式已随 `compose/` 删除，任何"分段独立保存"的需求都走 `ConfigFormState` 的部分更新语义，不恢复旧模式。
 
@@ -41,17 +42,29 @@
 
 管理台是 **Kuikly 多端工程**（`client/`），逻辑在 `client/shared/commonMain` 跨端复用；web 构建产物由 server 在 `/` 静态托管。
 
-默认落地页是 **语音流程**（`@Page("admin")`，侧边栏 id `config`）：该内容区顶部为[横向工作流](<PipelineWorkflowView.kt>)（仅配置区渲染，不跨运维页面），VAD → ASR → NLU → LLM → TTS 为模块，头尾及衔接共六个可点击圆点；独立配置页复用同一组件。轨道宽按 `adminContentWidth` 自适应（桌面 ≥1280 无横向滚动，不设最大上限），窄屏横向滚动，不能退回纵向节点轨道/下拉。点击模块/圆点进入「配置 / 测试」两个标签页（GearUI `Tabs`），各自固定左菜单、右内容；测试左菜单选择单个动作。无配置搜索框，分区只能经工作流或侧边栏到达。工作区小于 700 宽保留 92 宽左菜单，操作行靠右并可换行。布局见 [ConfigTabs](<ConfigTabs.kt>)及[工作区菜单](<ConfigWorkspaceViews.kt>)，位置投影见 [PipelineWorkflow](<PipelineWorkflow.kt>)，功能仍由 [PipelineFlow](<PipelineFlow.kt>)声明。只持有一个 `ConfigSelection(sectionId,nodeId?,workflowPositionId?)`，top/left 选择均由它派生；tab/status/action 是局部展示维度。空圆点只说明暂无扩展，不创建伪配置或测试。**全局配置是侧边栏独立一级菜单**（id `settings`，[GlobalConfigLayout](<ConfigWorkspaceViews.kt>)）：只放没有流程节点的 section（能力总览 / 预设 / AIUI 全链路 / 服务 / EchoMuse 接入 / MCP / OTA），无工作流轨道、无配置/测试 Tab，与「语音流程」共用同一份表单与同一个「保存配置」动作（`ConfigSections.global` + `ConfigFormState.openWorkflowPage/openGlobalPage` 各自记住停留位置）。带流程节点的 section（含人格 / 记忆 / 音频入口与输出）只在「语音流程」里改，**不要**把同一 section 同时挂进两套导航。全局设置、草稿、保存冲突和独立请求凭据保持原契约，不得恢复第二份 active 状态：
+默认落地页是 **语音流程**（`@Page("admin")`，侧边栏 id `config`）：顶部[横向主轴](<PipelineWorkflowView.kt>)为接入 → VAD → ASR → NLU → LLM → TTS → 结束，另有四个可点击衔接点，全部在同一水平线上。宽屏自适应，窄屏只横向滚动，不退回纵向轨道或下拉。`@Page("config")` 单页兜底复用相同组件与工作区。
+
+点击节点进入「配置 / 测试 / 管理」三标签（GearUI `Tabs`）；简洁模式只展示常用参数、一个推荐测试入口和只读插件摘要，高级模式再提供详细参数与编排。只有一份 `ConfigSelection(sectionId,nodeId?,workflowPositionId?)`，顶部/左侧选择均由它派生；小于 700 宽保留 92 宽左菜单。布局见 [ConfigTabs](<ConfigTabs.kt>)及[工作区菜单](<ConfigWorkspaceViews.kt>)，位置来自 [PipelineWorkflow](<PipelineWorkflow.kt>)，功能声明在 [PipelineFlow](<PipelineFlow.kt>)。空衔接点只说明继续当前流程，不创建伪配置或测试。
+
+功能只在主归属处编辑：EchoMuse 接入和唤醒在接入端；指令在 ASR→NLU；NLU 目录在 NLU；人格、记忆召回引用和 MCP 在 NLU→LLM；下行音频参数在 TTS→结束；记忆参数/写回在结束端，召回处只链接其唯一管理入口。**全局配置**（id `settings`，[GlobalConfigLayout](<ConfigWorkspaceViews.kt>)）只保留能力总览、预设、AIUI 托管、服务、OTA；不重复挂载有流程归属的功能。
+
+### 简洁 / 高级与插件编排契约
+
+- [模式模型](<AdminInterfaceMode.kt>)默认简洁，偏好仅通过 SharedPreferences 按服务器作用域保存；不写服务端配置、不标脏、不填默认值、不丢草稿。字段高级分类消费 [FormSchemaState](<FormSchemaState.kt>) 的服务端 `advanced` / `advanced_fields` 元数据；它不是自动布局系统。
+- [隐藏草稿策略](<ConfigModeDraftPolicy.kt>)只比较唯一表单的提交快照，不持有第二套可编辑草稿。简洁模式保存含隐藏高级修改时必须 ConfirmDialog 明确确认；摘要只包含分区/数量，不显示密钥。取消保留所有草稿；确认绑定确切 payload，确认期间再改值必须重新确认。409 保留草稿，在途编辑不会被成功回包吞掉。
+- [插件面板](<WorkflowPluginPanel.kt>)消费 `GET /api/workflow` 清单，挂载、启停、同位置排序、受限条件和异常策略都进入原有 `POST /api/config` 一次提交；设备 overlay 不编辑全局编排。服务端再次编译校验，新会话使用固定快照。核心引擎继续走原 registry，不开放任意跨类型连线、循环或下载执行脚本。
+- 条件配置只使用声明字段，未知条件对象无损保留，损坏条件拒绝编辑；当前没有可信置信度，`confidence` 永不命中并明确提示。AIUI 模式显示云端托管警示，不把本地增强清单称为云端实际执行记录。
+- 维护测试包括 [纯模式测试](<../../../../../../../adminCoreTests/src/commonTest/kotlin/com/xiaozhi/admin/AdminInterfaceModeTest.kt>)、[编排模型测试](<../../../../../../../adminCoreTests/src/commonTest/kotlin/com/xiaozhi/admin/WorkflowEditorModelTest.kt>)及[构建包浏览器回归](<../../../../../../../apps/h5App/tests/workflow-mode.browser.cjs>)；浏览器使用 API 模拟，不代表真实推理、macOS 原生运行或设备播放确认。
 
 | Section（一级导航，8 项） | 数据源 | 回答什么问题 |
 |---|---|---|
 | 概览 | `GET /api/stats` + `/api/plugins` | 设备在线数、活会话、11 个能力健康（degraded/failed 可点击跳配置） |
 | 测试台 | —（仅 macOS 客户端） | 依赖原生麦克风/音频链路，`NavDescriptor.macOnly`：web 不显示该菜单；端到端语音测试用 macOS 客户端 |
 | 设备 | `GET /api/devices` | 连过的设备、协商参数、上次会话为什么断；消息注入、个性化配置入口 |
-| EchoMuse | `GET /api/echomuse/devices` + 管理台 WS `/api/admin/ws` | Kuikly 中文设备卡 → 唯一管理弹窗 → 一条系统 Tabs；状态/活动/配置/控制台/更新/日志及六个扩展均为原生中文内容，审批与 WiFi 扫描/切网同样原生，不嵌入官方网页、不设「官方/原生」二级切换 |
+| EchoMuse | `GET /api/echomuse/devices` + 管理台 WS `/api/admin/ws` | Kuikly 中文设备卡 → 官方六标签管理弹窗；自定义扩展从列表独立入口进入五工具工作区，不混排、不重复官方能力；审批与 WiFi 扫描/切网均原生，不嵌入官方网页 |
 | 控制台 | `GET /api/logs`（WS 日志流） | 实时服务器日志：级别筛选、暂停/复制/清空；深色终端（K2 保留项） |
 | 语音流程 | `/api/config` 等 | 五个核心阶段 + 连接点分支（唤醒 / 指令 / 人格 / 记忆 / 音频入口与输出）的节点参数与节点测试 |
-| 全局配置 | `/api/config` 等 | 没有流程节点的部署级参数：能力总览、预设、AIUI 全链路、服务、EchoMuse 接入、MCP、OTA；与语音流程共用一份表单、一次 `POST /api/config` |
+| 全局配置 | `/api/config` 等 | 没有流程节点的部署级参数：能力总览、预设、AIUI 全链路、服务、OTA；与语音流程共用一份表单、一次 `POST /api/config` |
 | 文件 | `GET /api/files` + POST mkdir/upload/delete | 服务端存储目录浏览与管理：新建文件夹、上传模型/文件（`oww-models/` 即 EchoMuse 自定义唤醒词模型的存放处）、删除（二次确认，受保护文件拒绝） |
 
 > ⚠️ 2026-10-29 范围削减（docs/plans/gearui-kit-scope-reduction.md §二）：`sessions / conversations / usage / metrics` 四个观测页已从产品范围移除，导航、页面、state 与服务端请求一并删除；数据口径仍由 `GET /api/stats` 的摘要（概览页磁贴）承载。
@@ -64,6 +77,7 @@
 |---|---|
 | `GET /api/health` / `GET /api/health/engines` | 存活探针 / 11 capability 健康自检（纯只读投影，幂等无副作用） |
 | `GET / POST(=PUT) /api/config` | 配置读写（部分更新：缺失保持原值、显式 `null` 清除、密钥空串保留、`expected_revision` 乐观并发 409 拦过期写入） |
+| `GET /api/workflow`、`POST /api/workflow/validate` | 插件清单、编译计划与不落盘校验；非法保存态返回422，不默默回退默认；结构变更仍经唯一配置接口保存并对新会话生效 |
 | `GET/PUT/DELETE /api/devices/{id}/overlay` | 每设备白名单增量（POST = PUT、`POST .../overlay/delete` = DELETE 别名，供 Kuikly 客户端使用） |
 | `GET/POST /api/config/presets`、`POST .../{name}/apply`、`DELETE/POST .../{name}/delete` | 预设：列出 / 快照当前 / 应用 / 删除 |
 | `GET /api/test/capabilities`、`POST /api/test/run` | 保存态 SQLite 快照的隔离节点/串联测试，带 revision、输入边界、阶段与真实观测口径；Web/macOS 复用公共面板，不声明硬件播放成功 |
@@ -80,19 +94,19 @@
 | `GET /api/metrics`、`GET /api/usage` | 延迟大盘 / 令牌用量（内存态；2026-10-29 起客户端无独立页面，摘要进概览） |
 | `GET /api/files?path=`、`POST /api/files/{mkdir,upload,delete}` | 服务端存储目录浏览与管理：列目录（服务端目录优先排序）/ 建目录（409=同名文件占用）/ 原始字节上传（409 需显式覆盖、413 超限）/ 删除（目录递归；data.db 等受保护文件 403）；GET token 走查询串、POST 走 Bearer，错误统一 `{"error":"..."}` |
 
-EchoMuse 主路径已全面采用「Kuikly 中文卡片、单一弹窗、系统 Tabs 与原生内容」：
-- [设备列表](<EchoMusePage.kt>)使用[Kuikly 中文设备卡](<EchoMuseDeviceCard.kt>)展示名称/版本/板型/系统、原生 Canvas Dot 2 设备图、在线状态/IP，响应式网格排布；点击整卡打开唯一[管理弹窗](<EchoMuseOfficialEntry.kt>)。选中设备从实时列表反查；删除、切服务器/令牌、离页或关闭立即释放详情轮询与 shell，设备重登记不恢复旧弹窗。
-- 弹窗[唯一标题行](<EchoMuseDeviceHeader.kt>)集中设备图、名称、设备号/版本/IP、在线状态、改名、删除与关闭；删除需 GearUI ConfirmDialog 二次确认，改名复用 approve 端点。未批准设备只呈现[原生审批表单](<EchoMuseApprovalTab.kt>)，其余内容不能越过审批；各 Tab 不重复设备头部与管理操作。
-- 顶部唯一 GearUI `Tabs(scrollable=true)` 保持 12 项和原顺序：状态/活动/配置/控制台/更新/日志，以及 DLNA 音乐/GATT 工具/VAD 资产/模型文件/WiFi 确认/原始诊断。全部为原生中文内容，主路径不创建 iframe/WKWebView、不跳出 Kuikly；禁止恢复「官方/原生」二级切换、重复 Tab 栏或双重控制台入口。独立 `/em/` 仅保留兼容入口，[官方宿主](<../../../../../../../apps/h5App/em/static/host.js>)及 vendor [dashboard.jsx](<../../../../../../../apps/h5App/em/static/dashboard.jsx>)/[dashboard.js](<../../../../../../../apps/h5App/em/static/dashboard.js>)未改动校验，不再承载产品主路径。
-- [状态](<EchoMuseNativeStatusTab.kt>)以设备/资源双栏展示真实 runtime 快照，提供音量下发与二次确认重启；[活动](<EchoMuseNativeActivityTab.kt>)展示聆听、静音及最近设备报告。二者共享快照，缺测显示未知、离线或会话变化标历史，不将最近值当实时监测，不虚构轮次历史、录音、成功率或时延统计。
-- [原生配置](<EchoMuseNativeConfigTab.kt>)按播放/唤醒/麦克风/灯环/高级/蓝牙/Sendspin 分段，复用[设备草稿](<EchoMuseConfigDrafts.kt>)覆盖服务端支持的 40 个设置 key；配置段独立滚动，保存/重新加载与反馈固定底部，避免长表单操作栏被裁切或随反馈漂移；只发送修改过的增量，空白数值不提交，409 保留草稿，显式重新加载才丢弃未保存输入。列表刷新不覆盖同设备当前配置草稿；控制器专属且无服务端接口的功能明确说明，不提供无效开关。真实构建包的审批、五个分区、增量保存/409、WiFi 和日志回归见[原生管理冒烟](<../../../../../../../apps/h5App/em/tests/native-management.browser.cjs>)，仅使用拦截的模拟设备，不代表真机指令生效。
-- [原生 WiFi 面板](<EchoMuseNativeWifi.kt>)补齐配置页网络连接：真实下发 `wifi_scan`、手动读取扫描结果、选择或输入 SSID/密码并确认下发 `wifi`；排队不等于扫描或切网成功。「WiFi 确认」只在当前设备/当前会话、在线 runtime 的 `wifi_result.ok=true` 时允许 `wifi_commit`，历史快照不能确认；超时未确认可能回滚旧网，所有 202 只代表排队，不保证生效。
-- [更新](<EchoMuseNativeUpdatesTab.kt>)展示设备真实版本与 OWW 资产五态，未提供的固件发布/emOS 升级能力明确标为不支持，不引向不存在的官方页面；VAD 安装使用现有「VAD 资产」入口。[日志状态](<EchoMuseLogsState.kt>)复用设备日志白名单与同设备操作闸门，由原生日志页提供来源选择、手动读取及复制，不伪造持续日志流。
+EchoMuse 使用「官方设备管理」与「自定义扩展」两个独立工作区，均由 Kuikly 原生实现；不混排，重叠能力只保留一份：
+- [设备列表](<EchoMusePage.kt>)按官方卡片布局展示设备，默认打开[官方管理弹窗](<EchoMuseOfficialEntry.kt>)；列表级「自定义扩展」入口进入独立工具列表。切区关闭旧详情，选中设备从实时列表反查，删除/换服务器令牌/离页/关闭立即释放轮询与 shell。连接状态是用户明确要求的例外：在线用 `Theme.colors.success` 绿色、离线用 `mutedForeground` 灰色，待批准另用 warning 黄色；保留文字，不只靠颜色。
+- [唯一标题行](<EchoMuseDeviceHeader.kt>)复用[官方按钮封装](<EchoMuseActionButtons.kt>)：关闭/改名/刷新为中性图标按钮，删除为红色危险实心图标按钮且必须 ConfirmDialog 二次确认；使用中文 contentDescription、真实矢量图标，不用文字字符。未批准设备只呈现[审批表单](<EchoMuseApprovalTab.kt>)，不显示管理标签。
+- 官方工作区严格保留原版六标签：状态/活动/配置/控制台/更新/日志。扩展工作区只有 DLNA 音乐/GATT 工具/模型文件/原始诊断/设备兼容，不显示官方六标签；[设备兼容](<EchoMuseCompatibilitySettings.kt>)承载非官方私听动画，复用同一配置草稿与 saveConfig，官方灯环段不再混入原始动画 JSON。删除重复 WiFi 确认与 VAD 资产标签。窗体按官方 `min(900px,95vw)` / `min(700px,90vh)` 固定尺寸，主路径零 iframe/WKWebView；兼容 `/em/` 的 vendor [dashboard.jsx](<../../../../../../../apps/h5App/em/static/dashboard.jsx>)/[dashboard.js](<../../../../../../../apps/h5App/em/static/dashboard.js>)不改校验。
+- [状态](<EchoMuseNativeStatusTab.kt>)按官方设备/资源双栏布局；音量为 GearUI Slider 0..127，空闲值来自设备 `volume_state`，拖动结束只提交一次，拖动中上报不覆盖滑块，queued 不冒充已生效。[详情状态](<EchoMuseDetailState.kt>)状态页每 2 秒复用单链 runtime 读取，离开停止，旧 GET 代际作废；[音量模型](<EchoMuseVolume.kt>)拒绝缺失/小数/越界报告。[活动](<EchoMuseNativeActivityTab.kt>)保留官方语音活动面板，未提供的历史接口明确标不可用，不以自定义原始遥测替代。
+- [配置](<EchoMuseNativeConfigTab.kt>)保持官方网络置顶、播放/唤醒/麦克风/灯环/高级/蓝牙/Sendspin 七段顺序；[均衡器](<EchoMuseNativeEqFaders.kt>)为并列竖向推子，删除重复原始 JSON 和开机音量编辑入口。复用[草稿](<EchoMuseConfigDrafts.kt>)增量提交、空白数值不提交、409 保留草稿、显式重新加载才丢弃；保存区固定底部，列表刷新不覆盖草稿。
+- [网络](<EchoMuseNativeWifi.kt>)对照官方当前连接/可用网络双栏及下方更改网络；真实下发 wifi_scan/wifi，读取结果为刷新图标；当前设备/当前会话在线报告 `wifi_result.ok=true` 才能 wifi_commit，历史不能确认，202 只代表排队。
+- [更新](<EchoMuseNativeUpdatesTab.kt>)按固件/emOS/语音资产顺序，资产状态与 VAD 安装只保留[这一份](<EchoMuseAssetsPanel.kt>)；未开放的 OTA/历史功能必须明确不可用，不伪造与官方完全等价的能力。[日志](<EchoMuseNativeLogsTab.kt>)复用真实日志白名单，失败保留旧原文。构建包[管理回归](<../../../../../../../apps/h5App/em/tests/native-management.browser.cjs>)和[音量回归](<../../../../../../../apps/h5App/em/tests/native-volume.browser.cjs>)使用模拟设备，不代表真机指令生效。
 - [原生终端](<EchoMuseConsoleTab.kt>)使用 [VT 屏幕](<EchoMuseTerminalScreen.kt>)/[流式 ANSI 解析](<EchoMuseTerminalAnsi.kt>)/[渲染零件](<kit/GearTerminalScreen.kt>)，保留深色底、等宽正文与光标；正文 15sp、行高 20dp、单元格宽 9.04dp，绘制与尺寸计算采用同一口径。支持光标/擦除/SGR/备用屏幕/有界历史；resize 裁切补齐，不做 xterm 完整重排，不宣称全量终端兼容。ANSI 调色板只收口在 kit。
 - [键盘桥](<EchoMuseConsoleKeyboard.kt>)只捕获 Web 原生 textarea / Catalyst `UIKeyInput` 的文字、IME、粘贴与特殊键；焦点由真实 focus/blur 事件同步，外部点击只失焦、不关闭 shell。Web 的作用域 `pointerdown` 与 window 观察监听不拦截事件、不吞点击；disabled 不抢焦点，dispose 清除监听。终端正文全由 Kuikly 绘制，Web/macOS 外明确不支持。页面遮挡读取 GearUI `LocalInputBlockedByOverlay`，另合并头部 `onInputBlocked` 上报的改名/删除确认态，禁用键盘但不释放当前租约。
 - [控制台状态](<EchoMuseConsoleState.kt>)复用 JSON WS 和管理鉴权；仅 `ready.raw_input=true` + PTY 才发送原样 `input{data,raw:true}`，仅 `ready.resize=true` 才发送尺寸；旧服务器/pipe 明确回退本地行编辑，缺 capability 不当支持。设备查询响应、Ctrl/Alt/方向键、Tab、bracketed paste 沿同一租约传输，有界粘贴按 UTF-8 完整码点分帧并预留 JSON 转义余量。切 Tab、关闭、换 base/token、设备离线/会话更换立即断开，只手动重连，不自动重开 root shell。生产模型由 `adminCoreTests` 回归，真实 Chrome 输入/释放见[原生终端冒烟](<../../../../../../../apps/h5App/em/tests/native-console.browser.cjs>)；模拟验证不等于真机命令或全屏程序验证。
 - 工作区复用 GearUI 居中 modal overlay，遮罩外点击不关闭，尺寸随视口变化；Pager/viewport/spacing/fieldHelp 显式穿过 overlay 门户。统一 `enterTab` 管懒加载，[详情状态](<EchoMuseDetailState.kt>)的 `pauseTab` 停轮询、关 shell、作废在途读取与确认，`leave` 再清除设备归属及快照；OWW 回包也校验 generation/目标，离开后的旧请求不得回写或清掉新请求加载态。
-- [原生扩展](<EchoMuseExtensionContent.kt>)复用现有状态与 API：DLNA 用[音乐状态](<EchoMuseMusicState.kt>)，GATT 用[蓝牙状态](<EchoMuseBleState.kt>)且扫描/连接开关在原生配置页，VAD 用[资产面板](<EchoMuseAssetsPanel.kt>)，模型文件在同一弹窗内复用 [FilesPage](<FilesPage.kt>)并默认 `oww-models/`（上传不等于安装）。原始诊断只读设备 `system/info` 原文及复制，不重复状态磁贴、重启或日志。
+- [独立扩展](<EchoMuseExtensionContent.kt>)仅保留专有工具：DLNA 用[音乐状态](<EchoMuseMusicState.kt>)，GATT 用[蓝牙状态](<EchoMuseBleState.kt>)；模型文件复用 [FilesPage](<FilesPage.kt>)并默认 `oww-models/`（上传不等于安装）。原始诊断包含 runtime/system-info 读取、复制和二次确认重启；这些自定义操作不再出现在官方状态/活动页。资产与网络确认仅留官方对应位置，不在扩展重复。
 - `configureAccess(token, base)` 在加载前传入，切服务器/令牌使旧请求代际失效；局域网默认免 token，配置 `server.expected_token` 后必须鉴权。凭据从 [AdminAccess](<AdminAccess.kt>)读取，不借用配置草稿、不写日志/诊断；底层状态/API/纯协议契约继续复用，不另造提交链路。
 
 「文件」实现按职责分为 [纯逻辑](<FilesModel.kt>)（相对路径校验与服务端同规则镜像、清单解析安全兜底、尺寸/`yyyy-MM-dd HH:mm` 本地时间格式化——零 Kuikly 依赖，由普通 JVM 测试模块 `:adminCoreTests` 直接回归）、[目录状态](<FilesState.kt>)、[页面](<FilesPage.kt>) 与 [平台选文件桥](<UploadFilePicker.kt>)：

@@ -3,9 +3,9 @@ package com.xiaozhi.admin
 import androidx.compose.runtime.*
 import com.gearui.components.alert.Alert
 import com.gearui.components.alert.AlertStatus
+import com.gearui.components.empty.EmptyState
 import com.gearui.components.button.Button
 import com.gearui.components.button.ButtonType
-import com.gearui.components.empty.EmptyState
 import com.gearui.foundation.primitives.ScrollView
 import com.gearui.foundation.primitives.Text
 import com.gearui.theme.Theme
@@ -17,7 +17,7 @@ import com.xiaozhi.admin.kit.LocalAdminViewport
 import com.xiaozhi.admin.kit.GearUiBreakpoints
 import com.tencent.kuikly.compose.ui.unit.dp
 
-/** 官方设备卡的 Kuikly 中文版；单设备管理进入唯一的混合 Tabs 弹窗。 */
+/** 官方设备卡的 Kuikly 中文版；官方六标签管理与自定义扩展由独立入口进入。 */
 @Composable
 fun EchoMusePage(
     state: EchoMuseState,
@@ -35,6 +35,7 @@ fun EchoMusePage(
         (if (viewport.isNarrow) 0f else GearUiBreakpoints.SIDEBAR_WIDTH + 1f) - spacing.pagePadding.value * 2
     val columns = ((contentWidth + spacing.gutter.value) / (220f + spacing.gutter.value)).toInt().coerceAtLeast(1)
     val cardWidth = ((contentWidth - spacing.gutter.value * (columns - 1)) / columns).coerceAtLeast(1f)
+    var extensions by remember(apiBase, token) { mutableStateOf(false) }
     var selectedId by remember(apiBase, token) { mutableStateOf<String?>(null) }
     val selected = state.devices.firstOrNull { it.deviceId == selectedId }
     DisposableEffect(state, active, apiBase, token) {
@@ -55,12 +56,13 @@ fun EchoMusePage(
             horizontalArrangement = Arrangement.spacedBy(LocalAdminSpacing.current.sm),
         ) {
             Text(
-                text = if (state.loading && !state.loaded) "加载中…" else state.summaryText(),
+                text = if (extensions) "自定义扩展 · 选择设备" else if (state.loading && !state.loaded) "加载中…" else state.summaryText(),
                 modifier = Modifier.weight(1f), style = Theme.typography.titleMedium,
                 color = Theme.colors.foreground,
             )
-            Button(text = "刷新", onClick = { state.refresh(pager) }, type = ButtonType.OUTLINE,
-                loading = state.loading, disabled = state.loading)
+            Button(text = if (extensions) "返回设备管理" else "自定义扩展", type = ButtonType.OUTLINE,
+                onClick = { selectedId = null; state.detail.leave(); extensions = !extensions })
+            EchoMuseRefreshButton(loading = state.loading, onClick = { state.refresh(pager) })
         }
         ScrollView(modifier = Modifier.weight(1f).fillMaxWidth()) {
             Column(modifier = Modifier.fillMaxWidth().padding(horizontal = LocalAdminSpacing.current.pagePadding)) {
@@ -93,6 +95,6 @@ fun EchoMusePage(
     EchoMuseManagementDialog(
         row = selected.takeIf { active && state.enabled }, state = state, toast = toast,
         apiBase = apiBase, token = token, onDismiss = { selectedId = null },
-        modelFiles = modelFiles,
+        modelFiles = modelFiles, extensions = extensions,
     )
 }

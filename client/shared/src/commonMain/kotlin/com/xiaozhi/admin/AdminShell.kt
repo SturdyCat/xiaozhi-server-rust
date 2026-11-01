@@ -107,6 +107,7 @@ fun AdminShell(page: AdminPage) {
 
         // 字段帮助弹层（ⓘ 的唯一实例）：每页根部挂一次，走 Popup.Host（不占布局）
         GearFieldHelpDialog()
+        ConfigModeSaveConfirmation(page.form)
     }
 }
 
@@ -127,10 +128,17 @@ private fun AdminSidebar(page: AdminPage) {
     ) {
         ScrollView(modifier = Modifier.weight(1f).fillMaxWidth()) {
             for ((group, items) in AdminNav.grouped(IS_MACOS)) {
-                // CellGroup 负责：分组标题对齐、卡片圆角、行间分隔线（末行无分隔）
-                CellGroup(items = items, title = group, key = { it.id }, itemContent = { item ->
-                    AdminNavRow(page, item)
-                })
+                // CellGroup 负责：分组标题对齐、卡片圆角、行间分隔线（末行无分隔）；
+                // 组卡之间留一档空隙，分组在视觉上断开（组标题的 top 内距只管标题与卡片之间）
+                CellGroup(
+                    items = items,
+                    title = group,
+                    modifier = Modifier.padding(bottom = Spacing.sm),
+                    key = { it.id },
+                    itemContent = { item ->
+                        AdminNavRow(page, item)
+                    },
+                )
             }
             // macOS「服务器设置」（T12 接线）：切换服务器基址 + 局域网自动发现；
             // 开关状态收口在 [AdminPage.serverSwitchOpen]，web/iOS/Android 不渲染。
@@ -225,9 +233,11 @@ private fun AdminTopBar(page: AdminPage, narrow: Boolean) {
     } else {
         null
     }
-    val rightWidget: (@Composable () -> Unit)? = if (globalTarget) {
-        {
-            Box(modifier = Modifier.padding(end = Spacing.lg)) {
+    val rightWidget: @Composable () -> Unit = {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (!narrow) AdminInterfaceModeControl(page.form)
+            if (globalTarget) {
+                if (!narrow) Spacer(modifier = Modifier.width(Spacing.sm))
                 Button(
                     text = if (page.form.saving) "保存中…" else "保存配置",
                     onClick = {
@@ -236,22 +246,53 @@ private fun AdminTopBar(page: AdminPage, narrow: Boolean) {
                     theme = ButtonTheme.PRIMARY,
                     type = ButtonType.FILL,
                     loading = page.form.saving,
+                    iconWidget = { color -> GearIcon(token = IconToken.Save, size = 16.dp, tint = color) },
                 )
             }
         }
-    } else {
-        null
     }
 
-    NavBar(
-        title = titleOf(page),
-        centerTitle = false,
-        leftWidget = leftWidget,
-        leftWidgetWidth = if (narrow) 44.dp else null,
-        rightWidget = rightWidget,
-        // 两个按钮（保存 / 重新加载）的槽宽由 Button 自身撑开，这里给足 96dp
-        rightWidgetWidth = if (rightWidget != null) 96.dp else null,
-    )
+    Column(modifier = Modifier.fillMaxWidth()) {
+        NavBar(
+            title = titleOf(page),
+            centerTitle = false,
+            leftWidget = leftWidget,
+            leftWidgetWidth = if (narrow) 44.dp else null,
+            rightWidget = if (!narrow || globalTarget) rightWidget else null,
+            rightWidgetWidth = when {
+                narrow && globalTarget -> 136.dp
+                narrow -> null
+                globalTarget -> 312.dp
+                else -> 160.dp
+            },
+        )
+        if (editable && page.form.conflict) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.md, vertical = Spacing.xs),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "草稿已保留。${page.form.statusMsg}",
+                    modifier = Modifier.weight(1f),
+                    style = Theme.typography.caption,
+                    color = Theme.colors.destructive,
+                )
+                Spacer(modifier = Modifier.width(Spacing.sm))
+                Button(
+                    text = "重新加载",
+                    onClick = { page.form.reload(page, page.apiBase) },
+                    type = ButtonType.OUTLINE,
+                    size = com.gearui.components.button.ButtonSize.SMALL,
+                    iconWidget = { color -> GearIcon(token = IconToken.Refresh, size = 14.dp, tint = color) },
+                )
+            }
+        }
+        if (narrow) {
+            Row(modifier = Modifier.align(Alignment.End).padding(end = Spacing.md, bottom = Spacing.xs)) {
+                AdminInterfaceModeControl(page.form)
+            }
+        }
+    }
 }
 
 /** 44×44 触控目标 + 矢量汉堡图标（[IconToken.Menu]，与图标集同一套几何）。 */

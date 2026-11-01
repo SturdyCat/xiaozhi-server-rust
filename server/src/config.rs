@@ -181,6 +181,10 @@ pub struct Config {
     pub esp_home: EspHomeConfig,
     #[serde(default)]
     pub playback: PlaybackConfig,
+    /// Versioned plugin workflow projection. Missing/invalid workflow uses the
+    /// built-in plan so legacy databases retain the original pipeline.
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub workflow: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -468,6 +472,7 @@ impl Default for Config {
             echomuse: EchomuseConfig::default(),
             esp_home: EspHomeConfig::default(),
             playback: PlaybackConfig::default(),
+            workflow: serde_json::Value::Null,
         };
         c.normalize();
         c

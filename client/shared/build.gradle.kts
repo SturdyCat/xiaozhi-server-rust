@@ -239,7 +239,9 @@ tasks.matching { it.name == "check" || it.name.startsWith("packLocalJSBundle") }
 // verifyComposeStateMigration 实测 448→446，列表仍 48，legacy 0；不保留死字段凑数。
 // EchoMuse 全原生配置：补齐 BLE 扫描/连接与监听灯效三项生产设置草稿，实测 446→449。
 // 设备日志补齐持久读取错误反馈（loadError）一项，449→450。
-val expectedStateVarCalls = 450
+// 统一模式等量替换 showAdvanced；WorkflowEditorState 新增5项、保存确认/基线版本新增2项。
+// verifyComposeStateMigration 实测 450→457，列表48与legacy0不变。
+val expectedStateVarCalls = 457
 val expectedStateListCalls = 48
 val bridgeWhitelist = emptySet<String>()
 val verifyComposeStateMigration by tasks.registering {

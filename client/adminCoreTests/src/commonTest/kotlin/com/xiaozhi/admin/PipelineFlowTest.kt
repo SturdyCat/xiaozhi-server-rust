@@ -48,12 +48,13 @@ class PipelineFlowTest {
         for (feature in PipelineFlow.features) {
             assertTrue(ConfigSections.all.any { it.id == feature.sectionId })
             assertTrue(feature.configPaths.isNotEmpty())
-            assertTrue(feature.tests.isNotEmpty())
+            // Device/tool management has no fake inference test; declared tests remain unavailable until server readiness.
+            if (feature.id !in setOf("echomuse.input", "mcp.tools")) assertTrue(feature.tests.isNotEmpty())
             assertTrue(feature.tests.all { it.availability(null) is Availability.Disabled })
         }
         assertEquals("wakeup", PipelineFlow.primaryForSection("wakeup")?.id)
         assertEquals("llm", PipelineFlow.primaryForSection("llm")?.id)
-        assertEquals("memory.recall", PipelineFlow.primaryForSection("memory")?.id)
+        assertEquals("memory.writeback", PipelineFlow.primaryForSection("memory")?.id)
         assertEquals(listOf("audio", "playback"), PipelineFlow.features.single { it.id == "output" }.configPaths)
     }
 

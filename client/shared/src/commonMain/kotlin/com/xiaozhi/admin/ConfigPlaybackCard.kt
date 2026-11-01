@@ -65,7 +65,7 @@ fun PlaybackConfigCard(form: ConfigFormState) {
         )
 
         // 播报场景才有的蓄水参数（交互场景不显示，避免"填了不生效"的困惑）
-        if (form.playbackMode == "announcement") {
+        if (form.showAdvanced && form.playbackMode == "announcement") {
             labeledIntField(
                 label = "播报起播蓄水",
                 value = form.announcementStartMs,

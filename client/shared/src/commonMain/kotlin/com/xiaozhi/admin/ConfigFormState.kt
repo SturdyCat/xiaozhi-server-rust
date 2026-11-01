@@ -13,7 +13,7 @@ import kotlin.reflect.KMutableProperty0
  * 服务商目录见 ConfigFormCatalogue，只读测试请求见 ConfigFormTests。
  * 所有调用与 NetworkModule 回调沿既有 Kuikly context 线程，不自建线程。
  */
-enum class NodeWorkspaceTab { Configuration, Testing }
+enum class NodeWorkspaceTab { Configuration, Testing, Management }
 
 class ConfigFormState(private val scope: PagerScope) {
 
@@ -452,8 +452,24 @@ class ConfigFormState(private val scope: PagerScope) {
         }
     }
 
-    /** 「高级选项」展开开关（P0-1 折叠高级字段；跨 section 共享，同一时刻只看一个 section）。 */
-    var showAdvanced by stateVar(false)
+    /** Presentation only: switching modes never rebuilds or resets the single draft. */
+    var interfaceMode by stateVar(AdminInterfaceMode.Simple)
+        private set
+    val showAdvanced: Boolean get() = interfaceMode == AdminInterfaceMode.Advanced
+    private var interfaceModeKey = interfaceModePreferenceKey("")
+
+    fun setInterfaceMode(ctx: Pager, mode: AdminInterfaceMode) {
+        interfaceMode = mode
+        adminPrefs(ctx).setString(interfaceModeKey, mode.storedValue)
+    }
+
+    fun loadInterfaceMode(ctx: Pager, baseUrl: String = "") {
+        interfaceModeKey = interfaceModePreferenceKey(baseUrl)
+        interfaceMode = AdminInterfaceMode.fromStored(adminPrefs(ctx).getString(interfaceModeKey))
+    }
+
+    val workflow = WorkflowEditorState(this)
+    val modeDraft = ConfigModeDraftPolicy(this)
 
     var testBusyLlm by stateVar(false)
     var testBusyTts by stateVar(false)

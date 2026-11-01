@@ -9,6 +9,9 @@ import com.gearui.theme.Theme
 import com.tencent.kuikly.compose.foundation.layout.fillMaxWidth
 import com.tencent.kuikly.compose.foundation.layout.padding
 import com.tencent.kuikly.compose.ui.Modifier
+import com.tencent.kuikly.compose.ui.unit.dp
+import com.xiaozhi.admin.contracts.IconToken
+import com.xiaozhi.admin.icons.GearIcon
 import com.xiaozhi.admin.kit.actionRow
 import com.xiaozhi.admin.kit.labeledField
 import com.xiaozhi.admin.kit.labeledIntField
@@ -51,7 +54,7 @@ fun SoulConfigCard(form: ConfigFormState) {
         )
 
         if (sm.soulEnabled == "true") {
-            actionRow {
+            if (form.showAdvanced) actionRow {
                 Button(
                     text = "用内置默认人格启用",
                     onClick = {
@@ -60,6 +63,7 @@ fun SoulConfigCard(form: ConfigFormState) {
                         form.markDirty()
                     },
                     type = ButtonType.OUTLINE,
+                    iconWidget = { color -> GearIcon(token = IconToken.Check, size = 16.dp, tint = color) },
                 )
             }
             labeledSelect(
@@ -73,16 +77,24 @@ fun SoulConfigCard(form: ConfigFormState) {
                 help = "选一个预设作为基线：留空的字段由它补，填了的字段覆盖它。" +
                     "「不使用预设」= 完全自定义，此时 name / address_user 必须自己填。",
             )
+            SoulIdentityFields(form)
+            if (!form.showAdvanced) {
+                HintLine("预设与既有人格细节继续保留；高级模式可调整完整档案与预览，不会因模式切换恢复默认。")
+                if (sm.soulPresetMsg.isNotEmpty()) HintLine(sm.soulPresetMsg)
+                return@LabeledCard
+            }
             actionRow {
                 Button(
                     text = "载入预设内容到表单",
                     onClick = { sm.loadDefaultSoul(ctx, form.serverBase) { form.markDirty() } },
                     type = ButtonType.OUTLINE,
+                    iconWidget = { color -> GearIcon(token = IconToken.Edit, size = 16.dp, tint = color) },
                 )
                 Button(
                     text = "清空人格字段",
                     onClick = { sm.clearSoulProfile { form.markDirty() } },
                     type = ButtonType.OUTLINE,
+                    iconWidget = { color -> GearIcon(token = IconToken.Close, size = 16.dp, tint = color) },
                 )
                 Button(
                     text = "预览最终提示词",
@@ -91,6 +103,7 @@ fun SoulConfigCard(form: ConfigFormState) {
                         sm.previewSoul(ctx, form.serverBase)
                     },
                     type = ButtonType.OUTLINE,
+                    iconWidget = { color -> GearIcon(token = IconToken.Text, size = 16.dp, tint = color) },
                 )
             }
             if (sm.soulPresetMsg.isNotEmpty()) HintLine(sm.soulPresetMsg)
@@ -111,14 +124,6 @@ fun SoulConfigCard(form: ConfigFormState) {
                 )
             }
 
-            labeledField(
-                label = "自称",
-                value = sm.soulName,
-                onValueChange = {
-                    sm.soulName = it
-                    form.markDirty()
-                },
-            )
             labeledField(
                 label = "自我定位",
                 value = sm.soulSelfIntro,
@@ -148,14 +153,6 @@ fun SoulConfigCard(form: ConfigFormState) {
                 value = sm.soulTone,
                 onValueChange = {
                     sm.soulTone = it
-                    form.markDirty()
-                },
-            )
-            labeledField(
-                label = "称呼用户",
-                value = sm.soulAddressUser,
-                onValueChange = {
-                    sm.soulAddressUser = it
                     form.markDirty()
                 },
             )
@@ -281,4 +278,11 @@ fun SoulConfigCard(form: ConfigFormState) {
             HintLine("未启用：使用「LLM · 对话生成」里的系统提示词（行为与加人格之前一致）。")
         }
     }
+}
+
+@Composable
+private fun SoulIdentityFields(form: ConfigFormState) {
+    val sm = form.sm
+    labeledField(label = "自称", value = sm.soulName, onValueChange = { sm.soulName = it; form.markDirty() })
+    labeledField(label = "称呼用户", value = sm.soulAddressUser, onValueChange = { sm.soulAddressUser = it; form.markDirty() })
 }

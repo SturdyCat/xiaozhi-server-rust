@@ -23,7 +23,7 @@ internal fun EmNativeWake(row: EchoMuseDeviceRow, d: EchoMuseConfigDrafts, enabl
                 }
             }
             EmNote("当前模型：${EchoMuseWakeWord.displayName(d.owwModel)}")
-            EmWarn("自定义模型从「模型文件」上传；上传到服务器不等于已安装到设备，未安装时可能无法唤醒。")
+            EmNote("自定义模型管理位于独立的「自定义扩展 → 模型文件」。")
         }, right = {
             switchRow("启用唤醒词", d.wakeWordEnabled, { d.wakeWordEnabled = it }, enabled = enabled)
             fieldLabelRow("唤醒灵敏度")

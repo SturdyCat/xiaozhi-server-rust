@@ -1,8 +1,6 @@
 package com.xiaozhi.admin
 
 import androidx.compose.runtime.*
-import com.gearui.components.button.Button
-import com.gearui.components.button.ButtonType
 import com.gearui.components.dialog.ConfirmDialog
 import com.gearui.components.input.Input
 import com.gearui.foundation.primitives.Text
@@ -11,6 +9,7 @@ import com.tencent.kuikly.compose.foundation.layout.*
 import com.tencent.kuikly.compose.ui.Alignment
 import com.tencent.kuikly.compose.ui.Modifier
 import com.tencent.kuikly.compose.ui.unit.dp
+import com.xiaozhi.admin.contracts.IconToken
 import com.xiaozhi.admin.kit.LocalAdminSpacing
 import com.xiaozhi.admin.kit.LocalAdminViewport
 
@@ -48,7 +47,7 @@ internal fun EchoMuseDeviceHeader(
         verticalArrangement = Arrangement.spacedBy(spacing.xs)) {
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(spacing.sm)) {
-            EchoMuseDevicePicture(row, if (compact) 48.dp else 64.dp)
+            EchoMuseDevicePicture(row, if (compact) 48.dp else 72.dp)
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(spacing.xs)) {
                 if (renaming) {
                     Input(value = name, onValueChange = { name = it }, label = "设备名称",
@@ -101,12 +100,12 @@ private fun EchoMuseHeaderActions(
     Row(horizontalArrangement = Arrangement.spacedBy(LocalAdminSpacing.current.xs),
         verticalAlignment = Alignment.CenterVertically) {
         if (renaming) {
-            Button(text = "保存名称", onClick = save, disabled = busy, loading = busy, type = ButtonType.TEXT)
-            Button(text = "取消", onClick = cancel, disabled = busy, type = ButtonType.TEXT)
+            EchoMuseActionButton(IconToken.Check, "保存设备名称", save, disabled = busy, loading = busy)
+            EchoMuseActionButton(IconToken.Close, "取消改名", cancel, disabled = busy)
         } else {
-            if (approved) Button(text = "改名", onClick = rename, disabled = busy, type = ButtonType.TEXT)
-            Button(text = "删除", onClick = delete, disabled = busy, type = ButtonType.TEXT)
+            if (approved) EchoMuseActionButton(IconToken.Edit, "改名", rename, disabled = busy)
+            EchoMuseActionButton(IconToken.Delete, "删除设备", delete, disabled = busy, destructive = true)
         }
-        Button(text = "关闭", onClick = close, type = ButtonType.TEXT)
+        EchoMuseActionButton(IconToken.Close, "关闭设备详情", close)
     }
 }

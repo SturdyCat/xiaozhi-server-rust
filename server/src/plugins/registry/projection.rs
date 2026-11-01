@@ -18,25 +18,113 @@ use super::{
 /// 零改动；漂移由 `tests::advanced_keys_exist_in_registry` 兜底（字段改名/删除必须同步这里）。
 /// 完整 key = `fields_path` + `key` 以 `.` 连接（如 `tts.kokoro.num_threads`）。
 pub static ADVANCED_KEYS: &[&str] = &[
-    // ASR：识别调优
+    // ASR：模型资产与识别调优
+    "asr.model",
+    "asr.tokens",
+    "asr.provider",
     "asr.use_itn",
     "asr.num_threads",
-    // VAD：切句时序微调（threshold 是"灵敏不灵敏"的主旋钮，保留在基础区）
+    // VAD：模型资产与切句时序微调
+    "vad.model",
     "vad.min_speech_duration",
     "vad.min_silence_duration",
-    // TTS：缓存与线程
+    // TTS：缓存、模型资产与线程/语言
     "tts.cache_entries",
+    "tts.kokoro.model",
+    "tts.kokoro.voices",
+    "tts.kokoro.tokens",
+    "tts.kokoro.data_dir",
+    "tts.kokoro.dict_dir",
+    "tts.kokoro.lexicon",
+    "tts.kokoro.lang",
     "tts.kokoro.num_threads",
     // Memory：检索预算与库运维
+    "memory.engine",
+    "memory.db_path",
+    "memory.db_busy_timeout_ms",
+    "memory.recall_enabled",
+    "memory.extraction_enabled",
+    "memory.fresh_turn_count",
     "memory.recall_budget_ms",
     "memory.recall_max_nodes",
     "memory.recall_max_tokens",
+    "memory.recall_enabled",
+    "memory.extraction_enabled",
+    "memory.fresh_turn_count",
+    "memory.inject_position",
     "memory.db_busy_timeout_ms",
     "memory.maintenance_interval",
+    "memory.scope_prefix",
+    "memory.retention.keep",
+    "memory.retention.recent_turns",
     "memory.retention.retention_days",
+    "memory.retention.dry_run",
+    "memory.rag.docs_dir",
+    "memory.rag.chunk_size",
+    "memory.rag.chunk_overlap",
+    "memory.rag.top_k",
+    "memory.extractor.api_base",
+    "memory.extractor.api_key",
+    "memory.extractor.model",
+    "memory.extractor.temperature",
+    "memory.db_path",
+    "memory.scope_prefix",
+    "memory.extractor.temperature",
     "memory.quarantine_max_attempts",
+    // Soul advanced persona controls; simple mode keeps enabled/preset/name/address_user.
+    "soul.self_intro",
+    "soul.form",
+    "soul.age_feel",
+    "soul.worldview",
+    "soul.backstory",
+    "soul.relationship_origin",
+    "soul.traits",
+    "soul.values",
+    "soul.boundaries",
+    "soul.tone",
+    "soul.colloquial",
+    "soul.catchphrases",
+    "soul.emoji",
+    "soul.max_sentences",
+    "soul.max_chars",
+    "soul.scenario",
+    "soul.device_hint",
+    "soul.examples",
+    // LLM generation and flow tuning
+    "llm.max_history",
+    "llm.temperature",
+    "llm.stream",
+    // NLU fuzzy/BERT tuning and model assets
+    "nlu.model_threshold",
+    "nlu.model_margin",
+    "nlu.bert_model",
+    "nlu.bert_vocab",
+    "nlu.bert_labels",
+    "nlu.bert_threshold",
+    "nlu.bert_num_threads",
     // AIUI 全链路：云端合成节奏微调
+    "aiui.sn_prefix",
     "aiui.pace_ms",
+];
+
+/// Advanced application-level fields have no capability descriptor, but are
+/// still real Config paths and must be folded by schema consumers.
+pub static ADVANCED_EXTRA_KEYS: &[&str] = &["nlu.intents", "nlu.slots"];
+
+pub static ADVANCED_APP_KEYS: &[&str] = &[
+    "server.worker_threads",
+    "server.admin_dir",
+    "audio.downlink_sample_rate",
+    "audio.downlink_frame_duration_ms",
+    "audio.binary_protocol_version",
+    "audio.downlink_lead_ms",
+    "audio.downlink_queue_packets",
+    "audio.downlink_buffer_ms",
+    "audio.downlink_buffer_start_ms",
+    "audio.downlink_buffer_start_max_ms",
+    "playback.mode",
+    "playback.announcement_start_ms",
+    "playback.announcement_start_max_ms",
 ];
 
 /// `fields_path` + 字段 key → 全局唯一完整 key（`ADVANCED_KEYS` 的对账口径）。
@@ -118,6 +206,7 @@ pub fn schema_json() -> serde_json::Value {
         "capabilities": capabilities,
         // **非插件**配置段（`[server]` / `[audio]`）的档位：它们不在能力注册表里，
         // 但管理页同样需要"改这段多久生效"的权威答案（此前只能靠卡片文案口口相传）。
+        "advanced_fields": ADVANCED_KEYS.iter().chain(ADVANCED_EXTRA_KEYS.iter()).chain(ADVANCED_APP_KEYS.iter()).copied().collect::<Vec<_>>(),
         "app_sections": APP_SECTION_HOT
             .iter()
             .map(|(section, hot)| serde_json::json!({
