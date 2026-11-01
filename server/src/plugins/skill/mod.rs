@@ -50,7 +50,7 @@ pub const TOOL_NAME: &str = "execute_skill";
 /// 提名来自哪一级识别源（日志/观测用；执行路径完全一致）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SkillStage {
-    /// 规则层：模板锚点确定性命中（零误判）。
+    /// 规则层：模板锚点确定性匹配；不等同于语义零误判。
     Rules,
     /// 轻量模型层：模糊打分达阈值（见 [`LightModel`]）。
     Model,
@@ -196,7 +196,10 @@ impl SkillRegistry {
                         .get(&hit.label)
                         .cloned()
                         .unwrap_or(hit.label.clone());
-                    if let Ok(inv) = self.resolve(&skill, HashMap::new()) {
+                    if hit.label == "other" || skill == "other" {
+                        return None; // 训练器保留的拒识标签，不是未知技能或可重映射动作。
+                    }
+                    if let Ok(Some(inv)) = self.resolve_bert_nomination(&skill) {
                         return Some((SkillStage::Model, inv));
                     }
                 }
@@ -230,9 +233,14 @@ impl SkillRegistry {
             let hit = bert.classify_timed(text)?;
             if hit.confidence >= self.bert_threshold {
                 let name = self.bert_label_map.get(&hit.label).unwrap_or(&hit.label);
-                return self
-                    .resolve(name, HashMap::new())
-                    .map(|inv| Some((SkillStage::Model, inv)));
+                if hit.label == "other" || name == "other" {
+                    return Ok(None);
+                }
+                if let Some(inv) = self.resolve_bert_nomination(name)? {
+                    return Ok(Some((SkillStage::Model, inv)));
+                }
+                // 分类模型不产生槽位。缺少必填参数不是执行授权，也不是引擎故障；
+                // 后续启发式仍须自行提取并校验槽位，否则由 LLM 澄清/提名。
             }
         }
         let Some(hit) = self.model.parse(text) else {
@@ -240,6 +248,24 @@ impl SkillRegistry {
         };
         self.resolve(&hit.skill, hit.slots)
             .map(|inv| Some((SkillStage::Model, inv)))
+    }
+
+    /// ONNX 只有类别输出，不凭空补必填槽位。未知标签仍是严格错误；
+    /// 已知但需要参数的技能交给后续提取/澄清，绝不带空参数执行。
+    fn resolve_bert_nomination(&self, name: &str) -> Result<Option<SkillInvocation>> {
+        let Some(def) = self.definitions.iter().find(|d| d.name == name) else {
+            bail!("未知或未启用的技能：{name}");
+        };
+        let can_run_without_slots = def.templates.is_empty()
+            || def.templates.iter().any(|template| {
+                slot_names(template)
+                    .iter()
+                    .all(|key| self.slots.get(key).is_some_and(|(_, optional)| *optional))
+            });
+        if !can_run_without_slots {
+            return Ok(None);
+        }
+        self.resolve(name, HashMap::new()).map(Some)
     }
 
     /// 识别结果统一校验入口：**不信任任何识别源**（尤其 LLM 返回的 JSON）。
@@ -408,9 +434,9 @@ pub fn validate(command: &CommandConfig, nlu: &NluConfig) -> Result<()> {
         names.insert("end_session".to_string());
     }
     for def in &merged.intents {
-        if def.name.trim().is_empty() || !names.insert(def.name.clone()) {
+        if def.name.trim().is_empty() || def.name == "other" || !names.insert(def.name.clone()) {
             bail!(
-                "[nlu].intents 技能名称为空或重复：{}，请使用唯一名称",
+                "[nlu].intents 技能名称为空、重复或占用保留标签 other：{}，请使用唯一名称",
                 def.name
             );
         }

@@ -274,6 +274,98 @@ fn validate_blocks_bad_threshold_names_and_kinds() {
     assert!(validate(&command, &nlu).is_err(), "空技能名必须被拦");
 }
 
+/// 仅验证目录契约的确定输出提供方，不代替真实 ONNX 模型效果评测。
+struct LabelClassifier(&'static str, f32);
+impl BertClassify for LabelClassifier {
+    fn classify_timed(&self, _: &str) -> Result<crate::plugins::nlu::BertHit> {
+        Ok(crate::plugins::nlu::BertHit {
+            label: self.0.into(),
+            confidence: self.1,
+            tokenize_ms: 0,
+            infer_ms: 0,
+        })
+    }
+}
+
+#[test]
+fn classifier_other_is_normal_abstention_even_if_mapped_to_a_skill() {
+    let (command, mut nlu) = fixture();
+    nlu.bert_label_map
+        .insert("other".into(), "control_light".into());
+    let r = SkillRegistry::new(
+        &command,
+        &nlu,
+        Some(Arc::new(LabelClassifier("other", 0.99))),
+    );
+    // 这个说法本可由启发式提名，但真实模型明确拒识时不让它再次变成动作。
+    let text = "帮我把大客厅的灯打开";
+    assert!(r.try_parse_staged(text).unwrap().is_none());
+    assert!(r.parse_staged(text).is_none());
+}
+
+#[test]
+fn classifier_intent_without_required_slots_does_not_execute_or_fail_turn() {
+    let (command, mut nlu) = fixture();
+    nlu.model_threshold = 1.0;
+    let r = SkillRegistry::new(
+        &command,
+        &nlu,
+        Some(Arc::new(LabelClassifier("control_light", 0.99))),
+    );
+    assert!(r.try_parse_staged("不在模板里的表达").unwrap().is_none());
+    assert!(r.parse_staged("不在模板里的表达").is_none());
+    assert!(r.resolve("control_light", HashMap::new()).is_err());
+}
+
+#[test]
+fn classifier_unknown_label_is_still_a_strict_error() {
+    let (command, nlu) = fixture();
+    let r = SkillRegistry::new(
+        &command,
+        &nlu,
+        Some(Arc::new(LabelClassifier("unregistered", 0.99))),
+    );
+    assert!(r.try_parse_staged("不在模板里的表达").is_err());
+}
+
+#[test]
+fn newly_saved_slotless_skill_is_available_to_rules_model_and_llm_catalog() {
+    let (command, mut nlu) = fixture();
+    let old = SkillRegistry::new(&command, &nlu, None);
+    nlu.intents.push(IntentDef {
+        name: "help_guide_demo".into(),
+        templates: vec!["打开小智使用指南".into()],
+        action: crate::plugins::nlu::ActionDef {
+            kind: "reply".into(),
+            reply: "这是帮助技能".into(),
+        },
+    });
+    let r = SkillRegistry::new(
+        &command,
+        &nlu,
+        Some(Arc::new(LabelClassifier("help_guide_demo", 0.99))),
+    );
+    let (stage, inv) = r.try_parse_staged("打开小智使用指南").unwrap().unwrap();
+    assert_eq!(stage, SkillStage::Rules);
+    assert_eq!(inv.name, "help_guide_demo");
+    let (stage, inv) = r.try_parse_staged("引导我了解功能").unwrap().unwrap();
+    assert_eq!(stage, SkillStage::Model);
+    assert_eq!(inv.reply, "这是帮助技能");
+    assert!(inv.slots.is_empty());
+    assert!(r.tools()[0].description.contains("help_guide_demo"));
+    assert!(
+        old.resolve("help_guide_demo", HashMap::new()).is_err(),
+        "旧会话快照不追溯变化"
+    );
+}
+
+#[test]
+fn reserved_rejection_label_cannot_be_registered_as_skill() {
+    let (command, mut nlu) = fixture();
+    nlu.intents[0].name = "other".into();
+    assert!(validate(&command, &nlu).is_err());
+}
+
 struct FailingClassifier;
 impl BertClassify for FailingClassifier {
     fn classify_timed(&self, _: &str) -> Result<crate::plugins::nlu::BertHit> {

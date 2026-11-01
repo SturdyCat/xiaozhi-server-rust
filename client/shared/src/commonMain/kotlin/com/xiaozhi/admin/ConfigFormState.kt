@@ -496,6 +496,7 @@ class ConfigFormState(private val scope: PagerScope) {
         llmModelsBusy = false
         testRequests.invalidate()
         nodeTests.invalidateScope()
+        nlu.model.invalidate()
     }
     fun refreshNodeTests(ctx: Pager) = nodeTests.refresh(ctx, serverBase, ctx.adminRequestToken(), editDeviceId)
     fun runNodeTest(ctx: Pager, descriptor: NodeTestDescriptor) = nodeTests.run(ctx, descriptor, serverBase, ctx.adminRequestToken(), editDeviceId)

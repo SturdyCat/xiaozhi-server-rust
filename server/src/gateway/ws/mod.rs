@@ -80,6 +80,7 @@ pub(crate) mod log_stream;
 mod mcp;
 mod memory;
 mod nlu_build;
+mod nlu_model;
 // 延迟/事件聚合（P1-1）：只读投影，数据源 observability::metrics（事件总线订阅者）
 mod metrics;
 mod ota;
@@ -225,6 +226,7 @@ pub fn router(engines: Arc<Engines>) -> Router {
         .route("/api/nlu/model/build", get(build_status).post(start_build))
         // 单次训练的聚焦日志流（全局日志流见 /api/logs）：终态帧后服务端主动关闭。
         .route("/api/nlu/model/build/log", get(build_log_ws))
+        .route("/api/nlu/model/test", axum::routing::post(nlu_model::test_model))
         // 服务器全局实时日志流：macApp 连上即可实时看到全部运行日志；
         // AI/脚本客户端也可连它，一边调 /api 测试端点一边读日志观察效果。
         .route("/api/logs", get(log_stream::logs_ws))

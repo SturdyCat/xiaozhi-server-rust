@@ -7,9 +7,10 @@
 #
 # 语料策略（零外部依赖，全部从配置模板机械展开）：
 #   1) 正样本：模板 {slot} 用值表代入（笛卡尔积封顶），开放槽位用少量代词/名词填充；
-#   2) 负样本：①交叉歧义——A 技能模板代入 B 技能的槽位值；②兜底类——闲聊/疑问句
-#      归入 other 标签，让模型学会"不属于任何技能"的拒识；
+#   2) 负样本：明确取消整条请求的句子、闲聊/疑问句归入 other；不把正常槽位展开标成负例。
+#      有界展开候选全局去重、跨意图同句拒绝；负例与候选正句碰撞时保留正句；
 #   3) 标签序 = labels.txt 行序，服务端 [nlu].bert_label_map 把标签映射回技能名。
+from collections import Counter
 import itertools
 import json
 import os
@@ -22,8 +23,8 @@ PER_INTENT = int(os.environ.get("PER_INTENT", "160"))
 EPOCHS = float(os.environ.get("EPOCHS", "6"))
 MAX_LEN = int(os.environ.get("MAX_LEN", "64"))
 SEED = 42
-
-random.seed(SEED)
+TEMPLATE_UNIQUE_CAP = 40
+TEMPLATE_SCAN_LIMIT = 4000
 
 # 开放槽位（无值表）的填充词：保持语义为"某个提醒内容/时间表达"。
 OPEN_FILLERS = {
@@ -56,61 +57,181 @@ def fill_values(slot_name, slots):
     return OPEN_FILLERS.get(slot_name, GENERIC_FILLER)
 
 
-def expand_template(template, slots, cap):
-    """把模板里的 {slot} 全部代入，返回句子列表（笛卡尔积封顶 cap）。"""
+def expand_template(template, slots, cap, *, stats=None):
+    """值表/句子去重后最多输出 cap 条；扫描另限额，不遍历完整笛卡尔积。"""
     import re
 
-    names = re.findall(r"\{(\w+)\}", template)
-    pools = [fill_values(n, slots) for n in names]
-    if not pools:
-        return [template]
-    out = []
-    for combo in itertools.product(*pools):
+    if cap < 1 or TEMPLATE_SCAN_LIMIT < 1:
+        raise ValueError("template output cap and scan limit must be positive")
+    # 同一占位符多次出现仍表示同一个值，不能增加无效的组合维度。
+    names = list(dict.fromkeys(re.findall(r"\{(\w+)\}", template)))
+    pools = []
+    for name in names:
+        values = fill_values(name, slots)
+        unique = list(dict.fromkeys(values))
+        if stats is not None:
+            stats["slot_value_duplicates_removed"] += len(values) - len(unique)
+        pools.append(unique)
+
+    combos = iter(itertools.product(*pools))
+    out, seen = [], set()
+    for combo in itertools.islice(combos, TEMPLATE_SCAN_LIMIT):
+        if stats is not None:
+            stats["expansion_combinations_scanned"] += 1
         sentence = template
         for name, value in zip(names, combo):
             sentence = sentence.replace("{" + name + "}", value)
+        sentence = " ".join(sentence.split())
+        if sentence in seen:
+            if stats is not None:
+                stats["expansion_duplicate_sentences_removed"] += 1
+            continue
+        seen.add(sentence)
         out.append(sentence)
         if len(out) >= cap:
             break
+    # 仅探测有无剩余组合，不继续展开；截断范围之外不承诺冲突检查。
+    sentinel = object()
+    if next(combos, sentinel) is not sentinel and stats is not None:
+        stats["expansion_templates_limited"] += 1
     return out
 
 
-def build_corpus(intents, slots):
-    texts, labels = [], []
-    all_values = {n: {"name": n, "values": fill_values(n, slots)} for n in slots}
+def build_corpus(intents, slots, *, stats=None):
+    """生成无重复、无同句异标的语料；保留原来的 (texts, labels) 返回 API。
+
+    冲突检查仅覆盖每模板有界展开的候选，但先于 PER_INTENT 抽样。
+    取消必须针对整个请求；不能根据 task 中的“不/不要”推断取消意图。
+    """
+    if PER_INTENT < 1:
+        raise ValueError("PER_INTENT must be positive")
+    rng = random.Random(SEED)
+    positives_by_text, positives_by_label = {}, {}
+    counts = Counter()
     for intent in intents:
-        positives = []
-        for tpl in intent.get("templates", []):
-            positives.extend(expand_template(tpl, slots, cap=40))
-        # 交叉歧义负样本：本技能模板代入**其他技能**的槽位值。
-        cross = []
-        for tpl in intent.get("templates", []):
-            cross.extend(expand_template(tpl, all_values, cap=40))
-        random.shuffle(positives)
-        positives = positives[:PER_INTENT]
-        texts.extend(positives)
-        labels.extend([intent["name"]] * len(positives))
-        # 负样本量 ≈ 正样本的一半：与本技能标签对立。
-        random.shuffle(cross)
-        cross = cross[: max(1, len(positives) // 2)]
-        texts.extend(cross)
-        labels.extend(["other"] * len(cross))
-    texts.extend(OTHER_CORPUS)
-    labels.extend(["other"] * len(OTHER_CORPUS))
+        name = intent["name"]
+        if name == "other" or name in positives_by_label:
+            raise ValueError(f"invalid or duplicate intent name: {name!r}")
+        templates = intent.get("templates")
+        if not isinstance(templates, list) or not templates:
+            raise ValueError(f"intent {name!r} requires a non-empty templates list")
+        positives_by_label[name] = []
+        for tpl in templates:
+            if not isinstance(tpl, str):
+                raise ValueError(f"intent {name!r} requires string templates")
+            for sentence in expand_template(tpl, slots, cap=TEMPLATE_UNIQUE_CAP, stats=counts):
+                sentence = " ".join(sentence.split())
+                if not sentence:
+                    raise ValueError(f"empty training sentence for intent {name!r}")
+                counts["positive_candidates"] += 1
+                previous = positives_by_text.get(sentence)
+                if previous is not None:
+                    if previous != name:
+                        raise ValueError(
+                            f"conflicting positive labels {previous!r} / {name!r} "
+                            f"for sentence {sentence!r}"
+                        )
+                    counts["positive_duplicates_removed"] += 1
+                    continue
+                positives_by_text[sentence] = name
+                positives_by_label[name].append(sentence)
+        if not positives_by_label[name]:
+            raise ValueError(f"intent {name!r} has no unique positive examples")
+
+    texts, labels = [], []
+    negative_candidates = list(OTHER_CORPUS)
+    for name, positives in positives_by_label.items():
+        rng.shuffle(positives)
+        selected = positives[:PER_INTENT]
+        texts.extend(selected)
+        labels.extend([name] * len(selected))
+        # 显式撤销整条请求，避免“提醒我不要熬夜”这种合法任务被错标。
+        cancelled = [f"取消这个请求，不要执行：{sentence}" for sentence in selected]
+        rng.shuffle(cancelled)
+        negative_candidates.extend(cancelled[: max(1, len(selected) // 2)])
+
+    seen_negatives = set()
+    for sentence in negative_candidates:
+        sentence = " ".join(sentence.split())
+        counts["negative_candidates"] += 1
+        if sentence in positives_by_text:
+            counts["negative_positive_collisions_skipped"] += 1
+            continue
+        if sentence in seen_negatives:
+            counts["negative_duplicates_removed"] += 1
+            continue
+        seen_negatives.add(sentence)
+        texts.append(sentence)
+        labels.append("other")
+
+    if stats is not None:
+        stats.update({
+            "positive_candidates": counts["positive_candidates"],
+            "positive_duplicates_removed": counts["positive_duplicates_removed"],
+            "positive_unique_before_cap": len(positives_by_text),
+            "positive_selected": len(labels) - len(seen_negatives),
+            "negative_candidates": counts["negative_candidates"],
+            "negative_duplicates_removed": counts["negative_duplicates_removed"],
+            "negative_positive_collisions_skipped": counts["negative_positive_collisions_skipped"],
+            "negative_selected": len(seen_negatives),
+            "label_counts": dict(Counter(labels)),
+            "conflicting_texts": 0,
+            "conflict_check_scope": "bounded_expanded_candidates_before_per_intent_sampling",
+            "template_unique_cap": TEMPLATE_UNIQUE_CAP,
+            "template_scan_limit": TEMPLATE_SCAN_LIMIT,
+            "slot_value_duplicates_removed": counts["slot_value_duplicates_removed"],
+            "expansion_combinations_scanned": counts["expansion_combinations_scanned"],
+            "expansion_duplicate_sentences_removed": counts["expansion_duplicate_sentences_removed"],
+            "expansion_templates_limited": counts["expansion_templates_limited"],
+        })
     return texts, labels
+
+
+def stratified_split_indices(labels, expected_labels, test_fraction=0.1):
+    """每类 train/test 均非空且不重叠；不足两条直接拒绝，不复制样本。"""
+    if not 0 < test_fraction < 1:
+        raise ValueError("test_fraction must be between 0 and 1")
+    by_label = {label: [] for label in expected_labels}
+    if not by_label:
+        raise ValueError("at least one label is required")
+    for index, label in enumerate(labels):
+        if label not in by_label:
+            raise ValueError(f"unexpected corpus label: {label!r}")
+        by_label[label].append(index)
+    rng = random.Random(SEED)
+    train_indices, test_indices = [], []
+    for label, indices in by_label.items():
+        if len(indices) < 2:
+            raise ValueError(
+                f"label {label!r} requires at least 2 unique examples for disjoint "
+                f"train/test splits; got {len(indices)}"
+            )
+        rng.shuffle(indices)
+        n_test = max(1, min(len(indices) - 1, round(len(indices) * test_fraction)))
+        test_indices.extend(indices[:n_test])
+        train_indices.extend(indices[n_test:])
+    rng.shuffle(train_indices)
+    rng.shuffle(test_indices)
+    return train_indices, test_indices
 
 
 def main():
     intents, slots = load_input()
+    if not intents:
+        raise ValueError("at least one intent is required for training")
     intent_names = [i["name"] for i in intents]
     label_list = intent_names + ["other"]
     print(f"[train] intents={intent_names} + other")
 
-    texts, labels = build_corpus(intents, slots)
-    order = list(range(len(texts)))
-    random.shuffle(order)
-    texts = [texts[i] for i in order]
-    labels = [labels[i] for i in order]
+    stats = {}
+    texts, labels = build_corpus(intents, slots, stats=stats)
+    print(f"[train] corpus_stats={json.dumps(stats, ensure_ascii=False, sort_keys=True)}")
+    train_indices, test_indices = stratified_split_indices(labels, label_list)
+    split_stats = {
+        "train": dict(Counter(labels[i] for i in train_indices)),
+        "test": dict(Counter(labels[i] for i in test_indices)),
+    }
+    print(f"[train] split_stats={json.dumps(split_stats, ensure_ascii=False, sort_keys=True)}")
     print(f"[train] corpus={len(texts)} sentences, labels={label_list}")
 
     from datasets import Dataset
@@ -132,7 +253,6 @@ def main():
         return tokenizer(batch["text"], truncation=True, max_length=MAX_LEN)
 
     ds = ds.map(tok, batched=True)
-    split = ds.train_test_split(test_size=0.1, seed=SEED)
     args = TrainingArguments(
         output_dir="/work/ckpt",
         per_device_train_batch_size=32,
@@ -147,8 +267,8 @@ def main():
     trainer = Trainer(
         model=model,
         args=args,
-        train_dataset=split["train"],
-        eval_dataset=split["test"],
+        train_dataset=ds.select(train_indices),
+        eval_dataset=ds.select(test_indices),
         data_collator=DataCollatorWithPadding(tokenizer),
     )
     trainer.train()

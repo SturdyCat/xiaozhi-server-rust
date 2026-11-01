@@ -241,7 +241,8 @@ tasks.matching { it.name == "check" || it.name.startsWith("packLocalJSBundle") }
 // 设备日志补齐持久读取错误反馈（loadError）一项，449→450。
 // 统一模式等量替换 showAdvanced；WorkflowEditorState 新增5项、保存确认/基线版本新增2项。
 // verifyComposeStateMigration 实测 450→457，列表48与legacy0不变。
-val expectedStateVarCalls = 457
+// NLU 候选闭环：4个旧训练字段收敛为1个版本状态，新增1个BERT配置快照；codemod实测457→455。
+val expectedStateVarCalls = 455
 val expectedStateListCalls = 48
 val bridgeWhitelist = emptySet<String>()
 val verifyComposeStateMigration by tasks.registering {

@@ -88,7 +88,7 @@
 #   若重新启用，须先确认其构建机支持 BuildKit，否则在 RUN --mount 处解析报错。
 # 三个阶段：
 #   web    —— Gradle 构建 Kuikly H5 管理页（client 工程：shared 业务包 + h5App 壳）
-#   build  —— 编译 Rust server（--features sherpa,nlu，真实 ASR/TTS 引擎 + TinyBERT NLU）
+#   build  —— 编译 Rust server（--features sherpa,nlu，真实 ASR/TTS 引擎 + BERT NLU）
 #   运行时 —— debian-slim：同源托管 管理页(/) + /api + /api/ws，模型缺失由入口脚本自下载
 #
 # 运行镜像内浏览器访问 `http://<host>:8000/` 即管理页，`/api/config` 读写 SQLite 配置库（data.db），
@@ -249,6 +249,9 @@ COPY server/src ./src
 # 编译期内嵌资源：bench_api 样本经 include_bytes!（src/app/bench_api/../../../test_assets）
 # 在编译期读 /app/test_assets/，缺了 cargo 直接编译失败（ACR 2026-10-21 实测）。
 COPY server/test_assets ./test_assets
+# NLU 训练逻辑随服务版本发布；专用训练镜像只提供 Python/ML 依赖。
+# Cargo 清单在 /app，源码四级相对路径对应 /tools，与本地 server/../tools 同构。
+COPY tools/nlu-trainer/train.py /tools/nlu-trainer/train.py
 
 # ⚠️ 强制重编译本 crate ——「容器零日志 exit 0」事故的根因所在，勿简化这条 RUN。
 #   ① 根因（mtime 陷阱）：COPY 保留构建上下文里文件的 mtime（ACR clone 代码的时刻），它早于

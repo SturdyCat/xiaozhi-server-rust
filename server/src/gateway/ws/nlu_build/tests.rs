@@ -1,4 +1,4 @@
-//! [`super::nlu_build`] 测试：端点纯逻辑部分。
+//! NLU build contracts. Docker training and real model execution are deliberately excluded.
 //!
 //! docker 真训练不在单测范围（同 sherpa 口径：单测桩不冒充可运行服务）；
 //! 这里验证：前置校验拒绝口径、状态端点形状、日志尾部截断（UTF-8 边界安全）、
@@ -33,11 +33,7 @@ fn validate_accepts_builtin_reminders() {
 
 #[tokio::test]
 async fn status_body_shape() {
-    let res = build_status().await;
-    let bytes = axum::body::to_bytes(res.into_body(), 64 * 1024)
-        .await
-        .unwrap();
-    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let body = status_json(&BuildJob::new());
     assert_eq!(body["state"], "idle");
     assert_eq!(body["running"], false);
     assert!(body["expected_config"]["bert_enabled"].as_bool().unwrap());
@@ -144,4 +140,117 @@ fn map_via_mounts_rejects_non_boundary_prefix() {
     // /database 不是 /data 的挂载点，不能只按字符串前缀命中。
     let mounts = vec![("/database".to_string(), "/host/db".to_string())];
     assert_eq!(map_via_mounts("/data/nlu-train", &mounts), None);
+}
+
+#[test]
+fn saved_snapshot_reads_latest_sqlite_not_startup_or_live_cache() {
+    use crate::config::store::{sqlite::SqliteConfigStore, ConfigStore};
+    let store = SqliteConfigStore::open(":memory:").unwrap();
+    let old = Config::default();
+    store.persist(&old).unwrap();
+    let old_revision = super::super::config::config_revision(&store.load().unwrap());
+    let mut saved = old.clone();
+    saved.nlu.intents.push(crate::plugins::nlu::IntentDef {
+        name: "new_saved_skill".into(),
+        templates: vec!["显示帮助".into(), "介绍功能".into()],
+        action: crate::plugins::nlu::ActionDef {
+            kind: "reply".into(),
+            reply: "帮助".into(),
+        },
+    });
+    store.persist(&saved).unwrap();
+    let (actual, revision) = saved_snapshot(store.as_ref(), None).unwrap();
+    assert_eq!(actual.nlu.intents[0].name, "new_saved_skill");
+    assert_ne!(revision, old_revision);
+    assert_eq!(revision, super::super::config::config_revision(&actual));
+    assert!(saved_snapshot(store.as_ref(), Some(&old_revision)).is_err());
+    assert!(saved_snapshot(store.as_ref(), Some(&revision)).is_ok());
+}
+
+fn dev_fixture() -> Arc<Engines> {
+    use crate::config::store::{sqlite::SqliteConfigStore, ConfigStore};
+    let mut cfg = Config::default();
+    cfg.server.expected_token = "admin-test".into();
+    cfg.memory.db_path = std::env::temp_dir()
+        .join(format!("xz-nlu-build-{}", uuid::Uuid::new_v4()))
+        .join("data.db")
+        .display()
+        .to_string();
+    let store = SqliteConfigStore::open(":memory:").unwrap();
+    store.persist(&cfg).unwrap();
+    Engines::new_dev(&cfg, store).unwrap()
+}
+
+#[tokio::test]
+async fn build_handlers_require_admin_token_and_dev_rejects_real_training() {
+    let engines = dev_fixture();
+    assert_eq!(
+        build_status(
+            State(engines.clone()),
+            HeaderMap::new(),
+            Query(HashMap::new())
+        )
+        .await
+        .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        start_build(
+            State(engines.clone()),
+            HeaderMap::new(),
+            Query(HashMap::new()),
+            Bytes::new()
+        )
+        .await
+        .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let mut headers = HeaderMap::new();
+    headers.insert("authorization", "Bearer admin-test".parse().unwrap());
+    assert_eq!(
+        start_build(
+            State(engines.clone()),
+            headers.clone(),
+            Query(HashMap::new()),
+            Bytes::new()
+        )
+        .await
+        .status(),
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    assert_eq!(
+        build_status(State(engines), headers, Query(HashMap::new()))
+            .await
+            .status(),
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn start_build_rejects_stale_revision_before_spawning_docker() {
+    let mut engines = Arc::try_unwrap(dev_fixture()).ok().unwrap();
+    engines.dev_mode = false; // Keep unavailable providers; this path must stop before spawning.
+    let engines = Arc::new(engines);
+    let before = serde_json::to_value(engines.config_store.load().unwrap()).unwrap();
+    let mut headers = HeaderMap::new();
+    headers.insert("authorization", "Bearer admin-test".parse().unwrap());
+    let result = start_build(
+        State(engines.clone()),
+        headers,
+        Query(HashMap::new()),
+        Bytes::from_static(br#"{"expected_revision":"stale"}"#),
+    )
+    .await;
+    assert_eq!(result.status(), StatusCode::CONFLICT);
+    let bytes = axum::body::to_bytes(result.into_body(), 8192)
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&bytes).unwrap()["error_code"],
+        "revision_conflict"
+    );
+    assert_eq!(
+        serde_json::to_value(engines.config_store.load().unwrap()).unwrap(),
+        before
+    );
 }

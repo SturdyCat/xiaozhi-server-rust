@@ -38,6 +38,37 @@ fn duration_formats() {
 }
 
 #[test]
+fn duration_weights_components_from_the_right() {
+    for (input, expected) in [
+        ("1", 1),
+        ("01:00", 60),
+        ("00:01", 1),
+        ("01:00:00", 3600),
+        ("00:01:00", 60),
+        ("00:00:01", 1),
+        ("1:02:03", 3723),
+        ("12:34:56", 45296),
+    ] {
+        assert_eq!(parse_duration(input), expected, "duration={input:?}");
+    }
+}
+
+#[test]
+fn duration_truncates_fractional_seconds_and_trims_input() {
+    for (input, expected) in [
+        ("0:00:59.999", 59),
+        ("1:02:03.999", 3723),
+        ("05:30.5", 330),
+        ("21.875", 21),
+        ("0.999", 0),
+        ("  0:03:21.999\n", 201),
+        (" \t\n", 0),
+    ] {
+        assert_eq!(parse_duration(input), expected, "duration={input:?}");
+    }
+}
+
+#[test]
 fn resolve_url_variants() {
     let base = "http://192.168.1.8:8200/description.xml";
     assert_eq!(
