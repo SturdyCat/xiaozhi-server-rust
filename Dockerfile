@@ -81,7 +81,7 @@
 #     清单不动 → 依赖下载层命中。
 #   L2 内容缓存 —— RUN --mount=type=cache：Gradle 用户主目录（web 三条 RUN 共挂一块）与
 #     cargo registry/git（Rust 两条 cargo RUN 共挂）放命名缓存，层失效（如改了清单）时
-#     依赖/插件/wrapper 发行包不再重新下载。⚠️ 产物 target 仍烙进镜像层（dummy 依赖层
+#     依赖/插件不再重复下载；Gradle 发行版由基础镜像提供。⚠️ 产物 target 仍烙进镜像层（dummy 依赖层
 #     设计不变），挂缓存的只有下载与配置类内容——依赖编译产物进层，源码层才能增量。
 #   首次构建冷建无缓存，第二次起生效。GHA 仓库级缓存配额 10GB（LRU 逐出；超限只是退化
 #   成冷建，不会失败）。cache-mount 需要 BuildKit（顶部 # syntax 已声明）；ACR 自动构建
@@ -97,7 +97,8 @@
 
 # ---- web 阶段：构建 Kuikly H5 管理页静态产物（client Gradle 工程）----
 # `gradle:8.14.5-jdk17-jammy`：与 client/gradle/wrapper 完全同版本（8.14.5）+ JDK17。
-# 用 ./gradlew（wrapper）跑，与本地/ACR 实测路径一致；wrapper 从腾讯镜像下载发行包（国内可直连）。
+# 镜像已经安装同版本 Gradle，Docker 直接调用 gradle，不再经 wrapper 重复下载发行包。
+# 首条任务核对镜像内 Gradle 与 wrapper 版本，版本不一致立即失败；本地仍用 ./gradlew。
 # ⚠️ 无需 Android SDK：shared 声明了 com.android.library，但 publishWeb 链路只走 js 目标，
 #    AGP 仅在配置阶段加载、不真编译 Android（xiaoya-player 同形态，空 ANDROID_HOME 实测通过）。
 FROM gradle:8.14.5-jdk17-jammy AS web
@@ -117,12 +118,20 @@ COPY client/gearuiKit/build.gradle.kts client/gearuiKit/build.gradle.kts
 COPY client/apps/h5App/build.gradle.kts client/apps/h5App/build.gradle.kts
 WORKDIR /src/client
 # Gradle 用户主目录显式钉到挂载路径（官方 gradle 镜像的默认值，写出来防镜像漂移）。
-# 下方三条 RUN 共挂同一块命名缓存（同一路径即同一份内容）：依赖/插件/wrapper 发行包/
+# 下方三条 RUN 共挂同一块命名缓存（同一路径即同一份内容）：依赖/插件/
 # 构建缓存（gradle.properties 已开 org.gradle.caching）跨层失效、跨构建复用。
+# Gradle 发行版本体由基础镜像提供，不依赖挂载缓存里恰好有 wrapper/dists。
 ENV GRADLE_USER_HOME=/home/gradle/.gradle
 # 只做配置/下载依赖，不编译业务代码（保持轻）
 RUN --mount=type=cache,target=/home/gradle/.gradle \
-    ./gradlew :apps:h5App:help --no-daemon
+    set -eu; \
+    wrapper_version="$(sed -nE 's/^distributionUrl=.*gradle-([0-9]+(\.[0-9]+)*)-(all|bin)\.zip$/\1/p' gradle/wrapper/gradle-wrapper.properties)"; \
+    installed_version="$(gradle --version | awk '/^Gradle / { print $2; exit }')"; \
+    if [ -z "$wrapper_version" ] || [ "$installed_version" != "$wrapper_version" ]; then \
+      echo "Gradle version mismatch: image=$installed_version wrapper=$wrapper_version; update the web base image and wrapper together" >&2; \
+      exit 1; \
+    fi; \
+    gradle :apps:h5App:help --no-daemon
 
 # 业务源码：shared（KMP 共享层，@Page 页面 + Kuikly 插件打业务包）+ gearuiKit + h5App 壳
 # ⚠️ 上方 WORKDIR 已切到 /src/client（上面那个 help 任务的需要），COPY 的 dest 相对 WORKDIR 解析：
@@ -172,7 +181,7 @@ ARG GRADLE_MAX_WORKERS=1
 #   --max-workers（ACR 档=1）：强制编译与两个 webpack 串行，避免双 webpack 并行把峰值再叠
 #   一截（cgroup 小规格顶不住）；大内存档可放宽到 2。
 RUN --mount=type=cache,target=/home/gradle/.gradle \
-    ./gradlew :shared:compileKotlinJs :shared:compileProductionExecutableKotlinJs \
+    gradle :shared:compileKotlinJs :shared:compileProductionExecutableKotlinJs \
       :shared:jsBrowserProductionWebpack :apps:h5App:jsBrowserProductionWebpack \
       --no-daemon --max-workers=${GRADLE_MAX_WORKERS} -PwebSourceMap=false \
       -Dorg.gradle.jvmargs="-Xmx${GRADLE_XMX} -Dfile.encoding=UTF-8" \
@@ -187,7 +196,7 @@ RUN --mount=type=cache,target=/home/gradle/.gradle \
 #   大内存档经 build-args 放宽（xiaoya 实测 webpack 峰值 2.8-3.2GB，GHA 档 3072）。
 RUN --mount=type=cache,target=/home/gradle/.gradle \
     NODE_OPTIONS="--max-old-space-size=${NODE_MAX_OLD_SPACE}" \
-    ./gradlew :apps:h5App:publishWeb --no-daemon --max-workers=${GRADLE_MAX_WORKERS} -PwebSourceMap=false \
+    gradle :apps:h5App:publishWeb --no-daemon --max-workers=${GRADLE_MAX_WORKERS} -PwebSourceMap=false \
       -Dorg.gradle.jvmargs="-Xmx${GRADLE_XMX} -Dfile.encoding=UTF-8" \
  && test -f apps/h5App/web/index.html \
  && test -f apps/h5App/web/nativevue2.js \
