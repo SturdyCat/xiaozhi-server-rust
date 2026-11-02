@@ -12,7 +12,8 @@
 
 ## 能力契约
 
-- `tasks.create {text, after|at|interval|hourly|daily|workdays|weekly|monthly|yearly, timezone?}`：九种时间字段必须恰选一种；文本 1..2000 字符。返回真实持久化 `task` 和 `speech`，回读完整本地年月日时分秒、频次与倒计时实际目标；不能保存失败仍应答成功。
+- `tasks.create {text, after|at|interval|hourly|daily|workdays|weekly|monthly|yearly, timezone?, action?}`：九种时间字段必须恰选一种；文本 1..2000 字符。返回真实持久化 `task` 和 `speech`，回读完整本地年月日时分秒、频次与倒计时实际目标；不能保存失败仍应答成功。
+- 可选 `action`（到期动作）：必须是**单个** `devices.call` 步骤（`{api, args:{tool,arguments}}`，tool 静态字面量）。`validate_create_action` 白名单拒绝 `tasks.*`（防"到期再排到期"递归）、`replies.say`/`messages.send`（到期播报已由 text 覆盖）与 `sessions.end`（无会话上下文）。嵌套 args 同样深递归做 `{{slots.*}}` 替换与深度/节点计数。到期时**不进 outbox**：`tick_due` 把它放进 `TickReport.actions` 交还调用方（`runtime/skill_tasks`）经 `workflow::device_cmds` 向在线设备直推一次；离线/忙/失败降级为纯文字提醒（原文经 `enqueue_task_speech` 进 outbox）。背压与普通任务一致：outbox 满时动作任务连调度都不推进。
 - `after`/`interval` 接受明确正时长，如 `五分钟`、`10分钟`、`半小时`、`每隔两小时`；范围 1 秒..366 天，不支持的分数/模糊表达报错。
 - `at` 接受带偏移 RFC3339，或 `今天/明天/后天/大后天`（0..3天）加钟点；明确日期的过去时刻拒绝。无日期钟点按该时区的下一次到达解释：今天未来则今天，否则明天，真实日期必须回读确认。钟点支持 `HH:MM`、`八点`=08:00、`下午八点半`=20:30，以及有明确时段的 `上午10`/`下午3`/`晚上8`。非“中午”的十二点时段表达有歧义，拒绝并要求 `00:00`/`12:00`。
 - `hourly:20` 或 `hourly:"20分"` 表示每个墙钟小时第20分钟（0..59），不是从创建时刻每隔一小时；`daily:"08:00"`；`workdays:"08:00"` 严格周一至周五，不排除法定节假日；`weekly:{weekday:"1",time:"10点"}` 星期1..7对应周一至周日（支持中文/周一/星期日）；`monthly:{day:"31",time:"08:00"}`；`yearly:{month:"2",day:"29",time:"08:00"}`。数值字段可用整数或中文/数字字符串，其他未知对象字段拒绝。
@@ -29,7 +30,7 @@
 - `SkillSystem::new(PathBuf)` 只保存路径，懒打开独立文件；构造不 IO、不启动 worker。不支持 `:memory:`。全部 API 为同步阻塞，由会话、HTTP、后台 worker 用 `spawn_blocking` 调用。dev 可做真实 SQLite 管理，但 root worker 和设备自动投递必须关闭，不伪造模型/音频成功。
 - SQLite WAL、5 秒 busy timeout、`BEGIN IMMEDIATE` 串行化写事务。一次操作中任务/outbox/幂等响应一起提交；进程重启保留未来、离线与已租赁消息。持久幂等键为 `(device_id, request_id)`，相同 key 不同参数拒绝；相同逻辑 step 重试必须用相同 request_id，不得每次重试生成新 UUID。
 - 幂等保留 **7 天**（过窗可复用），全局最多 8192 条；活跃任务全局 1024 / 每设备 128，待投递全局 2048 / 每设备 256；满容量明确报错，永不挤掉离线 pending。终态 outbox 保留最近 2048，已无任何 outbox 引用的终态任务另保留最近 2048。读取不会主动触发投递。
-- `tick_due(now_ms)` 每轮最多处理 256 个可推进到期任务，snapshot 先排除容量阻塞设备；满容量的单次任务保持 active 等待空间，不丢失。循环任务按当前时间推进至下一次，跳过历史频次；同任务最多一个 pending/leased，离线期间合并而非洪泛。
+- `tick_due(now_ms)` 每轮最多处理 256 个可推进到期任务，snapshot 先排除容量阻塞设备；满容量的单次任务保持 active 等待空间，不丢失。循环任务按当前时间推进至下一次，跳过历史频次；同任务最多一个 pending/leased，离线期间合并而非洪泛。返回 `TickReport { materialized, actions }`：普通任务照旧物化 outbox，`action` 非空的任务不物化、由调用方直推（见能力契约的 action 条目）。
 - `claim_delivery(device,session,now)` 用原子租约取本设备消息；同设备同时最多一条有效 lease，5 分钟过期，重启后可重新 claim。`delivery_is_current` 供会话播报前/播报中复查取消和租期；旧 token/其他设备/其他会话不能 ack 新租约。
 - `finish_delivery(claim,true,now)` 仅标 **submitted**（完整音频交给传输），从不证明 **played**；false 释放为 pending，1 秒后可重试。会话必须只在 idle 时 claim，并在租约失效/任务取消/abort 时停音频，不把消息重新当用户输入。
 - tasks API `state`/`schedule_state` 仅表示调度状态；单次到期写入 outbox 后是 completed，但 `delivery_state` 仍可能 pending/leased。`played:null` 表示无实际播放确认。submitted 后取消不能撤销已经交给传输的数据。

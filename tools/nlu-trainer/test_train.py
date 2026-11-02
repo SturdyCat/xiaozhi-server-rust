@@ -1,6 +1,7 @@
 """语料生成回归：只用 Python 标准库，不下载模型、不导入 torch。"""
 import importlib.util
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -246,10 +247,16 @@ class CorpusTests(unittest.TestCase):
             raise StopBeforeTraining()
 
         tokenizer = lambda texts, **kwargs: {"input_ids": [[1]]}
+        tokenizer_calls = []
+
+        def load_tokenizer(name, **kwargs):
+            tokenizer_calls.append((name, kwargs))
+            return tokenizer
+
         modules = {
             "datasets": SimpleNamespace(Dataset=FakeDataset),
             "transformers": SimpleNamespace(
-                AutoTokenizer=SimpleNamespace(from_pretrained=lambda name: tokenizer),
+                AutoTokenizer=SimpleNamespace(from_pretrained=load_tokenizer),
                 AutoModelForSequenceClassification=SimpleNamespace(
                     from_pretrained=lambda name, **kwargs: object()
                 ),
@@ -268,6 +275,10 @@ class CorpusTests(unittest.TestCase):
         for indices in (training, testing):
             self.assertEqual({captured["data"]["label"][i] for i in indices}, {0, 1})
         self.assertEqual(captured["tokenized"], {"input_ids": [[1]]})
+        # 底座 profile 决定 hub 与超参：分词器必须指名 hub，并要求 fast 分词器。
+        self.assertEqual(tokenizer_calls, [(train.HUB_NAME, {"use_fast": True})])
+        self.assertEqual(captured["args"]["learning_rate"], train.LEARNING_RATE)
+        self.assertEqual(captured["args"]["num_train_epochs"], train.EPOCHS)
 
     def test_import_and_corpus_generation_without_ml_dependencies(self):
         # 子进程主动阻断 ML 包，保证环境即使已安装它们也不掩盖导入回归。
@@ -389,6 +400,130 @@ class DefaultSkillCorpusTests(unittest.TestCase):
         self.assertEqual({text for text, label in by_text.items() if label == "end_session"},
                          set(phrases))
         self.assertNotIn("退下", by_text)
+
+
+class BaseModelTests(unittest.TestCase):
+    """底座是**单变量维度**：只允许两臂，名字错就失败，不猜 hub id。"""
+
+    def test_only_two_supported_bases_and_shipped_default(self):
+        self.assertEqual(sorted(train.BASES), ["minirbt-h288", "rbt3"])
+        # 首项即缺省臂：服务端 DEFAULT_BASE_MODEL 与前端 view 初值必须同批对齐，
+        # 顺序本身也是契约（有 Rust 单测从这份源码里读首项）。
+        self.assertEqual(list(train.BASES)[0], "minirbt-h288")
+        if "MODEL_NAME" not in os.environ:
+            # 外部环境显式指定底座时不代表默认臂，跳过默认值断言。
+            self.assertEqual(train.BASE_NAME, "minirbt-h288")
+            self.assertEqual(train.HUB_NAME, "hfl/minirbt-h288")
+        for name, profile in train.BASES.items():
+            with self.subTest(base=name):
+                self.assertEqual(set(profile), {"hub", "lr", "epochs"})
+                self.assertIn("/", profile["hub"], "hub 必须是 org/name 形式")
+                self.assertGreater(profile["lr"], 0.0)
+                self.assertGreater(profile["epochs"], 0.0)
+
+    def test_profiles_keep_distinct_hyperparameters(self):
+        minirbt = train.resolve_base("minirbt-h288")
+        self.assertEqual(minirbt, {"hub": "hfl/minirbt-h288", "lr": 1e-4, "epochs": 10.0})
+        self.assertEqual(
+            train.resolve_base("rbt3"), {"hub": "hfl/rbt3", "lr": 5e-5, "epochs": 6.0}
+        )
+
+    def test_unknown_base_is_rejected_with_allowed_values(self):
+        # 历史语义（直接传 hub id）与将来可能的新底座都不能被静默接受。
+        for name in ("hfl/rbt3", "rbt4-h312", "", " RBT3 "):
+            with self.subTest(base=name), self.assertRaisesRegex(ValueError, "allowed"):
+                train.resolve_base(name)
+        with self.assertRaisesRegex(ValueError, "minirbt-h288"):
+            train.resolve_base("rbt4-h312")
+
+    def test_unknown_base_env_fails_before_any_ml_import(self):
+        # 导入期失败：容器在下载权重之前退出，退出码非零且原因可读。
+        result = subprocess.run(
+            [sys.executable, "-B", "-c", "import train"],
+            cwd=Path(__file__).parent,
+            env=dict(os.environ, MODEL_NAME="rbt4-h312"),
+            capture_output=True, text=True, check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unknown base model", result.stderr)
+        self.assertIn("allowed", result.stderr)
+
+
+class SmokeCaseTests(unittest.TestCase):
+    """冒烟自报：只送**真实展开句**的文本，服务端拿它独立重跑判定。"""
+
+    def corpus(self):
+        intents = [
+            {"name": "reminder_daily", "templates": ["每天{daily_time}提醒我{task}"]},
+            {"name": "help_guide", "templates": ["告诉我怎么使用", "介绍一下功能"]},
+        ]
+        slots = {
+            "daily_time": {"values": ["八点", "晚上九点半"]},
+            "task": {"values": ["喝水", "开会"]},
+        }
+        return train.build_corpus(intents, slots)
+
+    def test_one_case_per_label_plus_exactly_three_negatives_without_braces(self):
+        texts, labels = self.corpus()
+        smoke = train.smoke_cases(texts, labels)
+        self.assertFalse(smoke["truncated"], "正常体量的语料不该触发裁剪")
+        cases = smoke["cases"]
+        by_expected = {}
+        for case in cases:
+            by_expected.setdefault(case["expected"], []).append(case["text"])
+        self.assertEqual(sorted(by_expected), ["help_guide", "other", "reminder_daily"])
+        self.assertEqual(len(by_expected["reminder_daily"]), 1)
+        self.assertEqual(len(by_expected["help_guide"]), 1)
+        # 负例**恒为 3 条**：服务端要求 3/3 全拒识，裁掉就会把"数据不够"报成"模型不好"。
+        self.assertEqual(len(by_expected["other"]), 3)
+        known = set(labels)
+        for case in cases:
+            self.assertIn(case["expected"], known)
+            self.assertNotIn("{", case["text"])
+            self.assertNotIn("}", case["text"])
+            self.assertTrue(case["text"].strip())
+        # 文本必须来自真实语料，不能是模板原文。
+        self.assertIn(cases[0]["text"], set(texts))
+
+    def test_output_is_deterministic_and_bounded_to_the_log_tail_budget(self):
+        texts, labels = self.corpus()
+        first = train.smoke_cases(texts, labels)
+        self.assertEqual(first, train.smoke_cases(texts, labels))
+        # 服务端只保留日志尾 8192 字节：整行必须压在 2KB 以内。
+        line = json.dumps(first, ensure_ascii=False, separators=(",", ":"))
+        self.assertLessEqual(len(line.encode()), 2000)
+
+    def test_oversized_catalog_trims_positives_only_and_flags_truncation(self):
+        intents = [
+            {"name": f"skill_{i:02d}", "templates": [f"请帮我处理第{i}类请求并给出结果"]}
+            for i in range(40)
+        ]
+        texts, labels = train.build_corpus(intents, {})
+        # 故意给一个很小的上限，验证"只裁正例、负例恒 3"的裁剪路径。
+        smoke = train.smoke_cases(texts, labels, limit=600)
+        positives = [c for c in smoke["cases"] if c["expected"] != "other"]
+        negatives = [c for c in smoke["cases"] if c["expected"] == "other"]
+        self.assertGreaterEqual(len(positives), 1)
+        self.assertEqual(len(negatives), 3, "负例永远不裁")
+        self.assertTrue(smoke["truncated"], "裁过正例必须如实标记")
+        line = json.dumps(smoke, ensure_ascii=False, separators=(",", ":"))
+        self.assertLessEqual(len(line.encode()), 600)
+
+    def test_smoke_line_sits_right_after_done_and_before_the_sample_probe(self):
+        # 服务端只在日志尾 8192 字节里**从后向前**找这一行：太早会被 trainer 输出挤出窗口，
+        # 太晚会被 STREAM 缓冲/截断波及。约定位置 = done 之后、sample 探针之前。
+        source = Path(train.__file__).read_text(encoding="utf-8")
+        smoke_at = source.index("[train] smoke=")
+        self.assertGreater(smoke_at, source.index("[train] done"))
+        self.assertLess(smoke_at, source.index("[train] sample argmax="))
+
+    def test_unexpanded_templates_are_never_emitted(self):
+        # 万一语料里混进花括号句（模板没被展开），宁可少一条也不能把它当正例送出去：
+        # 服务端会按 smoke_missing 失败关闭，白跑一次训练。
+        smoke = train.smoke_cases(["提醒我{task}", "介绍功能"], ["x", "x"])
+        self.assertEqual(
+            smoke, {"cases": [{"text": "介绍功能", "expected": "x"}], "truncated": False}
+        )
 
 
 if __name__ == "__main__":

@@ -8,7 +8,7 @@ pub(super) const MAX_ACTIVE_TASKS: i64 = 1024;
 pub(super) const MAX_DEVICE_TASKS: i64 = 128;
 pub(super) const MAX_PENDING: i64 = 2048;
 pub(super) const MAX_DEVICE_PENDING: i64 = 256;
-pub(super) const TASK_COLUMNS: &str = "id,device_id,text,schedule,state,next_due_ms,created_ms,updated_ms,(SELECT o.state FROM skills_outbox o WHERE o.task_id=skills_tasks.id ORDER BY o.created_ms DESC,o.id DESC LIMIT 1)";
+pub(super) const TASK_COLUMNS: &str = "id,device_id,text,schedule,state,next_due_ms,created_ms,updated_ms,(SELECT o.state FROM skills_outbox o WHERE o.task_id=skills_tasks.id ORDER BY o.created_ms DESC,o.id DESC LIMIT 1),action";
 
 impl SkillSystem {
     pub(super) fn connect(&self) -> Result<Connection> {
@@ -43,6 +43,9 @@ impl SkillSystem {
                 response TEXT NOT NULL, created_ms INTEGER NOT NULL,
                 PRIMARY KEY(device_id,request_id)
             );")?;
+        // 到期动作列（可空 JSON SkillStep；见 plan.rs 对 tasks.create `action` 的校验）。
+        // 老库原位迁移：列已存在时 ALTER 报 duplicate column，忽略即可（幂等）。
+        let _ = conn.execute("ALTER TABLE skills_tasks ADD COLUMN action TEXT", []);
         Ok(conn)
     }
 
@@ -82,13 +85,22 @@ pub(super) fn task_row(row: &Row<'_>) -> rusqlite::Result<Value> {
     let schedule: Value = serde_json::from_str(&schedule).map_err(|error| {
         rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(error))
     })?;
+    // 到期动作（可空 JSON）：按 JSON 原样给出；管理页能看出这个任务"到期会动手"。
+    let action: Option<String> = row.get(9)?;
+    let action: Option<Value> = action
+        .map(|text| serde_json::from_str(&text))
+        .transpose()
+        .map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(9, rusqlite::types::Type::Text, Box::new(error))
+        })?;
     Ok(json!({
         "id":row.get::<_,String>(0)?, "device_id":row.get::<_,String>(1)?,
         "text":row.get::<_,String>(2)?, "schedule":schedule,
         "state":row.get::<_,String>(4)?, "schedule_state":row.get::<_,String>(4)?,
         "delivery_state":row.get::<_,Option<String>>(8)?.unwrap_or_else(|| "none".into()),
         "played":Value::Null, "next_due_ms":row.get::<_,i64>(5)?,
-        "created_ms":row.get::<_,i64>(6)?, "updated_ms":row.get::<_,i64>(7)?
+        "created_ms":row.get::<_,i64>(6)?, "updated_ms":row.get::<_,i64>(7)?,
+        "action":action,
     }))
 }
 

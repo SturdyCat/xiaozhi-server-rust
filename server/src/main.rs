@@ -103,9 +103,10 @@ async fn run(config: Config, config_store: Arc<dyn ConfigStore>, dev_mode: bool)
         Engines::new(&config, config_store)?
     };
     // 定时任务只生成持久 outbox；真正音频由设备会话串行投递，不走 ASR/NLU 注入。
+    // 到期动作任务（skills_tasks.action）例外：scheduler 经 device_cmds 向在线设备
+    // 直推一次工具调用，离线/失败降级为文字提醒（见 runtime/skill_tasks 模块注释）。
     // UI 开发模式可检验任务 CRUD，但不启动生产调度或伪造设备播报。
-    let _skill_tasks =
-        (!dev_mode).then(|| crate::runtime::skill_tasks::start(&engines.skill_system));
+    let _skill_tasks = (!dev_mode).then(|| crate::runtime::skill_tasks::start(&engines));
     // 延迟/事件聚合（P1-1）：进程最早的订阅者——spawn 越早，broadcast 环形缓冲越不丢
     // 早期事件（LAGGED 只告警；聚合口径是近似值，见 app/metrics 模块注释）。
     tokio::spawn(crate::observability::metrics::subscriber(
@@ -175,6 +176,19 @@ async fn run(config: Config, config_store: Arc<dyn ConfigStore>, dev_mode: bool)
         Err(e) => return Err(anyhow::anyhow!(e).context(format!("绑定 {addr} 失败"))),
     };
     tracing::info!("xiaozhi-server-rust 监听于 {addr}");
+    // 首启自举：监听**就绪之后**才起（bind 失败就没必要训练），且不 await——
+    // 健康检查必须立刻可响应，训练是几十秒到几十分钟的后台任务。
+    // 只在 production 跑：dev-admin 没有真实引擎。
+    if !dev_mode {
+        // 可观测性：自举会在 30s 后自己开始训练并**可能自动启用**模型。
+        // "全新部署时先关掉语义模型" 与 "从未配置过" 在配置上不可区分
+        //（两者都是 `bert_enabled=false` + 空路径），所以不猜用户意图，只把后果说出来。
+        tracing::info!(
+            "首启自举已挂起：模型产物缺失时将在 30s 后自动训练并尝试启用；\
+             不希望自动启用请设 NLU_BOOTSTRAP=off（或 build-only 只训练不启用）"
+        );
+        crate::gateway::ws::spawn_nlu_bootstrap(engines.clone());
+    }
     // 把用户真正要填的连接地址打出来：macApp/设备需要 IP:port（监听永远 0.0.0.0，
     // 打 bind 地址没意义）。IP 无配置项，动态探测部署机默认出口。
     if dev_mode {

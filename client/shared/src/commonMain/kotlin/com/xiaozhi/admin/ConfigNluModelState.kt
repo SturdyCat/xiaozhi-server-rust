@@ -39,11 +39,54 @@ data class NluBertDraft(
     }
 }
 
+/** 一臂预训练底座：id 是服务端/训练脚本的规范名，label 只用于界面。 */
+data class NluBaseModel(
+    val id: String,
+    val label: String,
+    val isDefault: Boolean = false,
+)
+
+/**
+ * 服务端缺省臂（与 `nlu_build/base.rs` 的 `DEFAULT_BASE_MODEL`、`train.py` 的
+ * `BASE_NAME` 缺省值必须同一提交改动：三处任一处掉了就会出现"界面选 h288、服务端按 rbt3 训"）。
+ */
+internal const val NLU_DEFAULT_BASE_MODEL = "minirbt-h288"
+
+/**
+ * 服务端 `GET /api/nlu/model/build` 的 `bases` 字段是选择器的**唯一数据源**；
+ * 这里是"旧服务端没有该字段"时的本地回落（与服务端当前实现一致的两档）。
+ */
+val nluBaseModels: List<NluBaseModel> = listOf(
+    NluBaseModel("minirbt-h288", "minirbt-h288 · 更小更快（默认）", true),
+    NluBaseModel("rbt3", "rbt3 · 3 层，约 40MB"),
+)
+
+/** 服务端下发的臂表；解析不出来（旧服务端）就返回空，调用方回落 [nluBaseModels]。 */
+private fun parseBases(data: JSONObject?): List<NluBaseModel> {
+    val array = data?.optJSONArray("bases") ?: return emptyList()
+    val out = mutableListOf<NluBaseModel>()
+    for (i in 0 until array.length()) {
+        val item = array.optJSONObject(i) ?: continue
+        val id = item.optString("name", "")
+        if (id.isEmpty() || out.any { it.id == id }) continue
+        val note = item.optString("note", "")
+        val isDefault = item.optBoolean("default", false)
+        val base = if (note.isEmpty()) id else "$id · $note"
+        out += NluBaseModel(id, if (isDefault) "$base（默认）" else base, isDefault)
+    }
+    return out
+}
+
 data class NluCandidate(
     val buildId: String,
     val sourceRevision: String,
     val sha256: String,
     val config: NluBertDraft,
+    /**
+     * 该候选训练时用的底座规范名；与当前选择无关。
+     * **空串 = 历史 manifest 没有记录底座**（不要猜成缺省臂，界面会单独说明）。
+     */
+    val baseModel: String = "",
 )
 
 data class NluModelView(
@@ -51,6 +94,10 @@ data class NluModelView(
     val phase: String = "",
     val message: String = "",
     val log: String = "",
+    /** 下一次构建要用的底座；已生成的候选记录自己训练时的底座，不受此字段影响。 */
+    val baseModel: String = NLU_DEFAULT_BASE_MODEL,
+    /** 可选臂（服务端下发；旧服务端没有该字段时为本地回落）。 */
+    val bases: List<NluBaseModel> = nluBaseModels,
     val candidate: NluCandidate? = null,
     val testText: String = "",
     val expectedIntent: String = "",
@@ -68,10 +115,17 @@ class NluModelState {
     private var requestBase = ""
     private var accessRevision = -1L
     private var requestToken = ""
+    /** 用户是否显式选过底座；没选过才允许用服务端「最近一次构建的底座」回填选择器。 */
+    private var baseModelPicked = false
 
     fun invalidate() {
         generation++
-        view = NluModelView()
+        baseModelPicked = false
+        // 底座是**用户对下一次构建的选择**，不是服务端状态：整份 view 重置时必须保留。
+        // 曾经这里写成 `NluModelView()`，于是 bind() 在首次请求（requestBase 还是 ""）
+        // 触发 invalidate，把用户刚选的臂静默改回 rbt3：界面显示 minirbt-h288、
+        // 构建请求体却是 rbt3。其余字段都是服务端派生值，重置无副作用。
+        view = NluModelView(baseModel = view.baseModel)
     }
 
     private fun bind(ctx: Pager, form: ConfigFormState): Int {
@@ -95,7 +149,11 @@ class NluModelState {
         val ticket = bind(ctx, form)
         view = view.copy(busy = true, phase = "running", message = "正在按已保存配置启动训练…", candidate = null, verified = false, testMessage = "")
         val sourceRevision = form.revision
-        val body = JSONObject().apply { put("expected_revision", sourceRevision) }
+        val body = JSONObject().apply {
+            put("expected_revision", sourceRevision)
+            // 底座是构建维度，不是配置字段：只进这次请求，不写进 [nlu] 保存态。
+            put("base_model", view.baseModel)
+        }
         network(ctx).httpRequest("${form.serverBase}/api/nlu/model/build", true, body, ctx.adminRequestHeaders()) { data, ok, message, resp ->
             if (!current(ctx, form, ticket)) return@httpRequest
             if (!ok || resp.statusCode?.let { it !in 200..299 } == true || data == null ||
@@ -132,9 +190,18 @@ class NluModelState {
             }
             val phase = data.optString("state", "")
             val candidate = parseCandidate(data.optJSONObject("artifact"), form.nlu.bert)
+            // 服务端回的是「最近一次构建的底座」：用户没显式选过就据此回填选择器，
+            // 免得刷新后停在 rbt3 而用户以为下次仍按上次的臂训练。用户选过则以用户为准。
+            val bases = parseBases(data).ifEmpty { view.bases }
+            val servedBase = candidate?.baseModel?.takeIf { it.isNotEmpty() }
+                ?: data.optString("base_model", "")
+            val adoptedBase =
+                if (!baseModelPicked && bases.any { it.id == servedBase }) servedBase else view.baseModel
             view = view.copy(
                 busy = phase == "running", phase = phase, log = data.optString("log_tail", ""),
                 candidate = candidate,
+                bases = bases,
+                baseModel = adoptedBase,
                 verified = view.verified && candidate != null && candidate == view.candidate,
                 message = when (phase) {
                     "running" -> "训练中；使用保存态版本 ${data.optString("source_revision", "未知")}，尚未启用。"
@@ -149,6 +216,26 @@ class NluModelState {
 
     fun editText(value: String) { view = view.copy(testText = value, verified = false) }
     fun editExpected(value: String) { view = view.copy(expectedIntent = value, verified = false) }
+
+    /**
+     * 只切换下一次构建的底座。
+     *
+     * 两条拒绝路径都**必须可见**：静默 return 会让控件展示态与状态层分叉
+     * （用户看到 minirbt-h288，请求体仍是 rbt3），这正是本次事故的形态。
+     */
+    fun editBaseModel(value: String) {
+        if (value == view.baseModel) return
+        if (view.bases.none { it.id == value }) {
+            view = view.copy(message = "不支持的预训练底座：$value。仍使用 ${view.baseModel}。")
+            return
+        }
+        if (view.busy || view.testBusy) {
+            view = view.copy(message = "训练进行中，不能切换底座。下一次构建仍使用 ${view.baseModel}。")
+            return
+        }
+        baseModelPicked = true
+        view = view.copy(baseModel = value)
+    }
 
     fun test(ctx: Pager, form: ConfigFormState) {
         val candidate = view.candidate ?: return
@@ -209,10 +296,14 @@ class NluModelState {
         val revision = artifact.optString("source_revision", "")
         val sha = artifact.optString("model_sha256", "")
         val config = artifact.optJSONObject("expected_config") ?: return null
+        // 底座是**可选读**字段：既有的 8 个 expected_config 键继续做强校验，
+        // base_model 绝不进这份 required 列表——旧产物没有该键，加了就会把一份能用的
+        // 候选判成 null。缺失时**留空**（界面显示"未记录"），不猜成缺省臂。
+        val baseModel = artifact.optString("base_model", "")
         val required = listOf("bert_enabled", "bert_model", "bert_vocab", "bert_labels", "bert_threshold", "bert_num_threads", "bert_max_len", "bert_label_map")
         if (required.any { !config.has(it) } || config.optJSONObject("bert_label_map") == null) return null
         val draft = previous.read(config)
         if (id.isEmpty() || revision.isEmpty() || sha.isEmpty() || draft.enabled != "true" || draft.model.isEmpty() || draft.vocab.isEmpty() || draft.labels.isEmpty()) return null
-        return NluCandidate(id, revision, sha, draft)
+        return NluCandidate(id, revision, sha, draft, baseModel)
     }
 }

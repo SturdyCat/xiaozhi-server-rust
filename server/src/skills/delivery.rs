@@ -5,15 +5,35 @@ use uuid::Uuid;
 
 const LEASE_MS: i64 = 300_000;
 
+/// 到期动作任务：`skills_tasks.action` 非空的任务到期后**不进 outbox**，
+/// 由 scheduler 拿去直推（在线设备）或降级为纯文字提醒（离线/忙/失败）。
+#[derive(Debug, Clone)]
+pub struct DueAction {
+    pub task_id: String,
+    pub device_id: String,
+    /// 任务原文，兼作直推成功后的播报文本与离线降级的提醒文本。
+    pub text: String,
+    /// 落库的原始 action JSON（单个 `devices.call` SkillStep，见 plan.rs 校验）。
+    pub action: String,
+}
+
+/// [`SkillSystem::tick_due`] 的结果：普通任务照旧物化进 outbox（`materialized` 计数），
+/// 动作任务原样交还调用方（`actions`），调度推进（next_due_ms / 完成）在本函数内完成。
+#[derive(Debug, Default)]
+pub struct TickReport {
+    pub materialized: usize,
+    pub actions: Vec<DueAction>,
+}
+
 impl SkillSystem {
     /// Materialize at most 256 due tasks atomically; no actual speech is performed.
-    pub fn tick_due(&self, now_ms: i64) -> Result<usize> {
+    pub fn tick_due(&self, now_ms: i64) -> Result<TickReport> {
         ensure!(now_ms >= 0, "now_ms must be nonnegative");
         let mut conn = self.connect()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         store::prune(&tx, now_ms)?;
         let due = {
-            let mut stmt = tx.prepare("SELECT id,device_id,text,schedule,next_due_ms FROM skills_tasks WHERE state='active' AND next_due_ms<=?1 AND (EXISTS(SELECT 1 FROM skills_outbox own WHERE own.task_id=skills_tasks.id AND own.state IN ('pending','leased')) OR ((SELECT count(*) FROM skills_outbox all_pending WHERE all_pending.state IN ('pending','leased'))<2048 AND (SELECT count(*) FROM skills_outbox device_pending WHERE device_pending.device_id=skills_tasks.device_id AND device_pending.state IN ('pending','leased'))<256)) ORDER BY next_due_ms,id LIMIT 256")?;
+            let mut stmt = tx.prepare("SELECT id,device_id,text,schedule,next_due_ms,action FROM skills_tasks WHERE state='active' AND next_due_ms<=?1 AND (EXISTS(SELECT 1 FROM skills_outbox own WHERE own.task_id=skills_tasks.id AND own.state IN ('pending','leased')) OR ((SELECT count(*) FROM skills_outbox all_pending WHERE all_pending.state IN ('pending','leased'))<2048 AND (SELECT count(*) FROM skills_outbox device_pending WHERE device_pending.device_id=skills_tasks.device_id AND device_pending.state IN ('pending','leased'))<256)) ORDER BY next_due_ms,id LIMIT 256")?;
             let rows = stmt.query_map(params![now_ms], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
@@ -21,21 +41,41 @@ impl SkillSystem {
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
                     row.get::<_, i64>(4)?,
+                    row.get::<_, Option<String>>(5)?,
                 ))
             })?;
             rows.collect::<rusqlite::Result<Vec<_>>>()?
         };
-        let mut materialized = 0;
-        for (id, device_id, text, schedule_json, previous_ms) in due {
-            let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM skills_outbox WHERE task_id=?1 AND state IN ('pending','leased'))", params![id], |row| row.get(0))?;
-            if !exists {
-                let (all, device): (i64,i64) = tx.query_row("SELECT count(*),coalesce(sum(device_id=?1),0) FROM skills_outbox WHERE state IN ('pending','leased')", params![device_id], |row| Ok((row.get(0)?,row.get(1)?)))?;
-                if all >= store::MAX_PENDING || device >= store::MAX_DEVICE_PENDING {
-                    // Backpressure: don't lose a one-shot or advance an undelivered schedule.
-                    continue;
+        let mut report = TickReport::default();
+        for (id, device_id, text, schedule_json, previous_ms, action) in due {
+            let action = action.filter(|a| !a.trim().is_empty());
+            match action {
+                // 动作任务：不进 outbox（直推结果决定播报文本），但沿用同一背压——
+                // outbox 满时连调度也推进不了，否则一次性动作任务会"标记完成却无声无息"。
+                Some(action) => {
+                    let (all, device): (i64, i64) = tx.query_row("SELECT count(*),coalesce(sum(device_id=?1),0) FROM skills_outbox WHERE state IN ('pending','leased')", params![device_id], |row| Ok((row.get(0)?,row.get(1)?)))?;
+                    if all >= store::MAX_PENDING || device >= store::MAX_DEVICE_PENDING {
+                        continue;
+                    }
+                    report.actions.push(DueAction {
+                        task_id: id.clone(),
+                        device_id: device_id.clone(),
+                        text,
+                        action,
+                    });
                 }
-                tx.execute("INSERT INTO skills_outbox(id,task_id,device_id,text,state,available_ms,created_ms,updated_ms) VALUES (?1,?2,?3,?4,'pending',?5,?5,?5)", params![Uuid::new_v4().to_string(),id,device_id,text,now_ms])?;
-                materialized += 1;
+                None => {
+                    let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM skills_outbox WHERE task_id=?1 AND state IN ('pending','leased'))", params![id], |row| row.get(0))?;
+                    if !exists {
+                        let (all, device): (i64,i64) = tx.query_row("SELECT count(*),coalesce(sum(device_id=?1),0) FROM skills_outbox WHERE state IN ('pending','leased')", params![device_id], |row| Ok((row.get(0)?,row.get(1)?)))?;
+                        if all >= store::MAX_PENDING || device >= store::MAX_DEVICE_PENDING {
+                            // Backpressure: don't lose a one-shot or advance an undelivered schedule.
+                            continue;
+                        }
+                        tx.execute("INSERT INTO skills_outbox(id,task_id,device_id,text,state,available_ms,created_ms,updated_ms) VALUES (?1,?2,?3,?4,'pending',?5,?5,?5)", params![Uuid::new_v4().to_string(),id,device_id,text,now_ms])?;
+                        report.materialized += 1;
+                    }
+                }
             }
             let schedule: Schedule = serde_json::from_str(&schedule_json)?;
             match schedule.next_after(previous_ms, now_ms)? {
@@ -54,7 +94,47 @@ impl SkillSystem {
             }
         }
         tx.commit()?;
-        Ok(materialized)
+        Ok(report)
+    }
+
+    /// scheduler 在动作直推后写入的播报（成功原文 / 失败提示 / 离线降级原文）。
+    /// 与 `tick_due` 同一套约束：每任务至多一条未投递（唯一 unsettled 索引）、
+    /// 全局/设备背压。写不进返回 `false`——不丢任务，只是本轮播报让位于
+    /// 上一轮设备还没认领的播报（与循环任务在 `tick_due` 内的跳过语义一致）。
+    pub fn enqueue_task_speech(
+        &self,
+        task_id: &str,
+        device_id: &str,
+        text: &str,
+        now_ms: i64,
+    ) -> Result<bool> {
+        let mut conn = self.connect()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        store::prune(&tx, now_ms)?;
+        let unsettled: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM skills_outbox WHERE task_id=?1 AND state IN ('pending','leased'))",
+            params![task_id],
+            |row| row.get(0),
+        )?;
+        if unsettled {
+            tx.commit()?;
+            return Ok(false);
+        }
+        let (all, device): (i64, i64) = tx.query_row(
+            "SELECT count(*),coalesce(sum(device_id=?1),0) FROM skills_outbox WHERE state IN ('pending','leased')",
+            params![device_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        if all >= store::MAX_PENDING || device >= store::MAX_DEVICE_PENDING {
+            tx.commit()?;
+            return Ok(false);
+        }
+        tx.execute(
+            "INSERT INTO skills_outbox(id,task_id,device_id,text,state,available_ms,created_ms,updated_ms) VALUES (?1,?2,?3,?4,'pending',?5,?5,?5)",
+            params![Uuid::new_v4().to_string(), task_id, device_id, text, now_ms],
+        )?;
+        tx.commit()?;
+        Ok(true)
     }
 
     /// Atomic per-device lease. Expired leases recover after process death; offline rows persist.

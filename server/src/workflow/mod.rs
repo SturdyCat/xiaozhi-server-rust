@@ -2,6 +2,7 @@
 //! + 会话协议与传输抽象 + 下行音频流水线 + MCP 客户端框架。
 
 pub mod designer;
+pub mod device_cmds;
 pub mod downlink;
 pub mod mcp;
 pub mod pipeline;

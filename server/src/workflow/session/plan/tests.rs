@@ -193,6 +193,7 @@ fn session<'a>(wire: &'a mut Wire, cfg: Config, memory: Arc<Memory>) -> Session<
         mcp_enabled: false,
         mcp_next_id: 1,
         inject_rx: None,
+        cmd_rx: None,
     }
 }
 

@@ -63,7 +63,17 @@ pub(super) fn execute(
             let id = Uuid::new_v4().to_string();
             let text = string(&step.args, "text")?;
             let schedule_json = serde_json::to_string(&schedule)?;
-            tx.execute("INSERT INTO skills_tasks(id,device_id,text,schedule,state,next_due_ms,created_ms,updated_ms) VALUES (?1,?2,?3,?4,'active',?5,?6,?6)", params![id,ctx.device_id,text,schedule_json,next_due_ms,ctx.now_ms])?;
+            // 到期动作（可空）：validate_step 已把它锁成单个 devices.call 步骤；这里
+            // 原样序列化落库，到期时由 scheduler 取出直推（在线设备）或降级为提醒。
+            let action_json: Option<String> = match step.args.get("action") {
+                None | Some(Value::Null) => None,
+                Some(action) => {
+                    let parsed: super::SkillStep = serde_json::from_value(action.clone())
+                        .map_err(|_| super::SkillActionError { speech: "到期动作参数无法解析，请提供单个 devices.call 步骤。".into() })?;
+                    Some(serde_json::to_string(&parsed)?)
+                }
+            };
+            tx.execute("INSERT INTO skills_tasks(id,device_id,text,schedule,state,next_due_ms,created_ms,updated_ms,action) VALUES (?1,?2,?3,?4,'active',?5,?6,?6,?7)", params![id,ctx.device_id,text,schedule_json,next_due_ms,ctx.now_ms,action_json])?;
             let task = tx.query_row(
                 &format!(
                     "SELECT {} FROM skills_tasks WHERE id=?1",

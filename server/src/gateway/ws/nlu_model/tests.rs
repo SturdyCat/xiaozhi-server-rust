@@ -29,6 +29,10 @@ fn artifact() -> Artifact {
             .chain(std::iter::once("other".into()))
             .collect(),
         catalog_source: None, // Pre-unified manifest compatibility fixture.
+        // 旧候选来源测试：底座维度缺席时按 None 走"未知"路径，不凭空补 rbt3。
+        base_model: None,
+        base_model_source: None,
+        created_at: None,
         files: vec![],
         nlu,
     }

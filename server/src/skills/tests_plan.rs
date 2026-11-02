@@ -189,3 +189,80 @@ fn capability_registry_is_serializable_and_complete() {
     assert!(names.contains(&"tasks.create") && names.contains(&"devices.call"));
     assert!(serde_json::to_value(capabilities()).is_ok());
 }
+
+// ---------------------------------------------------------------------------
+// tasks.create 的可选 `action`（到期动作，见 plan.rs `validate_create_action`）
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tasks_create_accepts_a_single_devices_call_action() {
+    let p = plan(
+        "tasks.create",
+        json!({"text":"已按时关闭电源","after":"10分钟",
+               "action":{"api":"devices.call","args":{"tool":"power","arguments":{"state":"off"}}}}),
+    );
+    validate_plan(&p).unwrap();
+}
+
+#[test]
+fn tasks_create_action_whitelist_rejects_everything_but_devices_call() {
+    // 递归调度（到期再排到期）明确禁止——语义与容量上界都说不清。
+    let recursive = plan(
+        "tasks.create",
+        json!({"text":"x","after":"1分钟",
+               "action":{"api":"tasks.create","args":{"text":"y","after":"1分钟"}}}),
+    );
+    assert!(validate_plan(&recursive).is_err());
+    // 会话内应答 / 纯文本类与到期播报重复，也不放行。
+    let reply = plan(
+        "tasks.create",
+        json!({"text":"x","after":"1分钟","action":{"api":"replies.say","args":{"text":"y"}}}),
+    );
+    assert!(validate_plan(&reply).is_err());
+    // 形状必须是单步对象（deny_unknown_fields 锁死），不能是字符串或多余字段。
+    let not_object = plan(
+        "tasks.create",
+        json!({"text":"x","after":"1分钟","action":"devices.call"}),
+    );
+    assert!(validate_plan(&not_object).is_err());
+    let extra_field = plan(
+        "tasks.create",
+        json!({"text":"x","after":"1分钟",
+               "action":{"api":"devices.call","args":{"tool":"power","arguments":{}},"extra":1}}),
+    );
+    assert!(validate_plan(&extra_field).is_err());
+    // 缺 tool / arguments 的 devices.call 同样被内层 validate_step 拦下。
+    let missing_tool = plan(
+        "tasks.create",
+        json!({"text":"x","after":"1分钟","action":{"api":"devices.call","args":{"arguments":{}}}}),
+    );
+    assert!(validate_plan(&missing_tool).is_err());
+}
+
+#[test]
+fn slots_resolve_deeply_inside_nested_action_args() {
+    // tool 按设计是静态字面量（不许插值），槽位只进 arguments——
+    // validate_plan 在解析前就会拒绝 "{{slots.tool}}" 当 tool（由上面的
+    // unknown_capabilities 测试族覆盖 devices.call 顶层，这里验嵌套层同样生效）。
+    let nested_tool = plan(
+        "tasks.create",
+        json!({"text":"x","after":"10分钟",
+               "action":{"api":"devices.call","args":{"tool":"{{slots.tool}}","arguments":{}}}}),
+    );
+    assert!(validate_plan(&nested_tool).is_err());
+    let p = plan(
+        "tasks.create",
+        json!({"text":"已按时关闭电源","after":"10分钟",
+               "action":{"api":"devices.call",
+                         "args":{"tool":"power","arguments":{"state":"{{slots.state}}"}}}}),
+    );
+    let slots = HashMap::from([("state".into(), "off".into())]);
+    let resolved = resolve_plan(&p, &slots).unwrap();
+    assert_eq!(resolved.steps[0].args["action"]["args"]["tool"], "power");
+    assert_eq!(
+        resolved.steps[0].args["action"]["args"]["arguments"]["state"],
+        "off"
+    );
+    // 缺槽位照样失败关闭：嵌套里的未解析占位符不允许带进到期执行。
+    assert!(resolve_plan(&p, &HashMap::new()).is_err());
+}

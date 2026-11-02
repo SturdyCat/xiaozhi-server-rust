@@ -7,6 +7,7 @@
 - 协议见[协议说明](<protocol/protocol/AGENTS.md>)：serde 命名、网络序、hello 协商；改动必须跑 `mock_client` 联调——`cargo check` 发现不了 serde 错误。
 - 下行见[下行维护](<downlink/AGENTS.md>)：设备队列与服务端缓冲的区别；缓冲能吸收间歇停顿，不能弥补持续慢于实时的上游。
 - MCP 见[MCP 契约](<mcp/AGENTS.md>)：抽帧 / 清单 / stop 契约；设备工具名只能来自模型已接受技能的保存配置，运行期再核对设备工具清单。聊天 LLM 不提供技能工具，也不接受动作回提。
+- 会话外设备命令见 [device_cmds.rs](<device_cmds.rs>) 模块注释：活跃会话按 `device_id` 注册 `mpsc` 通道（与 inject 同构 + oneshot 回执），scheduler 到期动作任务经它直推一次 MCP 工具调用；transport 独占权在会话主循环，命令只在循环内展开。
 
 ## 上级入口
 

@@ -20,6 +20,10 @@ pub use types::{
     CapabilityMetadata, DeliveryClaim, SkillActionError, SkillCondition, SkillExecutionContext,
     SkillPlan, SkillStep,
 };
+// TickReport 是 `tick_due` 的公开返回类型（外部调用方需要能命名它），本 crate 内
+// 无人按名引用它，属已知的 re-export 形态，不是漏用。
+#[allow(unused_imports)]
+pub use delivery::{DueAction, TickReport};
 
 use anyhow::{bail, Result};
 use serde_json::Value;

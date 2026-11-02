@@ -18,9 +18,44 @@ import random
 
 INPUT = os.environ.get("TRAIN_INPUT", "/work/input.json")
 OUTDIR = os.environ.get("TRAIN_OUTPUT", "/work/output")
-MODEL_NAME = os.environ.get("MODEL_NAME", "hfl/rbt3")  # 3 层中文 RoBERTa，int8 后约 40MB
+
+# 预训练底座：环境变量 MODEL_NAME 承载**规范名**（值语义不是 hub id）。
+# 服务端按同一约定传参（server/src/gateway/ws/nlu_build.rs 的 BASE_MODELS 表），
+# 两侧键集合由该文件的单测锁定，避免加了一边忘了另一边。
+BASE_NAME = os.environ.get("MODEL_NAME", "minirbt-h288").strip()
+# **顺序有意义**：服务端 `DEFAULT_BASE_MODEL` 必须等于这里的首项（有单测锁定），
+# 否则"服务端缺省臂"与"脚本 standalone 缺省臂"会分叉。
+BASES = {
+    # 缺省臂：6 层 miniRBT（h288 词表）。体积/延迟更低，不代表更准。
+    "minirbt-h288": {"hub": "hfl/minirbt-h288", "lr": 1e-4, "epochs": 10.0},
+    # 兼容臂：3 层中文 RoBERTa，int8 后约 40MB，与历史产物同源。
+    "rbt3": {"hub": "hfl/rbt3", "lr": 5e-5, "epochs": 6.0},
+}
+
+
+def resolve_base(name):
+    """规范名 → 底座 profile（hub + 微调超参）。
+
+    未知名**直接拒绝**并列出允许值：绝不把任意字符串当 hub id 去下载，
+    否则一个错拼的 MODEL_NAME 会静默训出另一个底座。
+    """
+    profile = BASES.get(name)
+    if profile is None:
+        raise ValueError(
+            "unknown base model MODEL_NAME=%r; allowed: %s"
+            % (name, ", ".join(sorted(BASES)))
+        )
+    # 返回副本：调用方改动超参不得污染其他臂的 profile。
+    return dict(profile)
+
+
+# 导入期就解析：模型名非法时容器在下载/训练之前失败，日志里只有一句明确原因。
+BASE = resolve_base(BASE_NAME)
+HUB_NAME = BASE["hub"]
+# 超参允许 env 覆盖（服务端每次 build 都显式传）；缺省取底座 profile。
+LEARNING_RATE = float(os.environ.get("LEARNING_RATE", str(BASE["lr"])))
+EPOCHS = float(os.environ.get("EPOCHS", str(BASE["epochs"])))
 PER_INTENT = int(os.environ.get("PER_INTENT", "160"))
-EPOCHS = float(os.environ.get("EPOCHS", "6"))
 MAX_LEN = int(os.environ.get("MAX_LEN", "64"))
 SEED = 42
 TEMPLATE_UNIQUE_CAP = 40
@@ -241,6 +276,51 @@ def stratified_split_indices(labels, expected_labels, test_fraction=0.1):
     return train_indices, test_indices
 
 
+def smoke_cases(texts, labels, *, other_count=3, limit=2000):
+    """冒烟自报：每个技能取 1 条**真实展开句**（不含 {slot} 花括号）+ 3 条 other 负例。
+
+    服务端只用这些**文本**在它那边独立重跑判定，所以这里绝不能送模板原文：
+    未展开的花括号句子等价于训练时没见过的输入，会把好模型判成"门禁失败"。
+
+    **负例恒为 `other_count` 条，永不裁剪**：服务端要求负例正好 3 条且 3/3 全拒识，
+    裁掉负例会让它把"数据不够"误报成"模型把闲聊句判成技能"（理由假的）。
+    超预算只能裁**正例**（最少留 1 条），并在 `truncated` 里如实标记——
+    服务端见到该标记会报 `smoke_truncated`，而不是拿被裁过的集合下判定。
+
+    返回 `{"cases": [...], "truncated": bool}`。
+    """
+    picked, order = {}, []
+    for text, label in zip(texts, labels):
+        if not text.strip() or "{" in text or "}" in text:
+            continue
+        if label not in picked:
+            picked[label] = []
+            order.append(label)
+        cap = other_count if label == "other" else 1
+        if len(picked[label]) < cap and text not in picked[label]:
+            picked[label].append(text)
+    positives = [
+        {"text": text, "expected": label}
+        for label in order
+        if label != "other"
+        for text in picked.get(label, [])
+    ]
+    negatives = [{"text": text, "expected": "other"} for text in picked.get("other", [])]
+
+    def encoded(cases, truncated):
+        doc = {"cases": cases, "truncated": bool(truncated)}
+        return json.dumps(doc, ensure_ascii=False, separators=(",", ":")).encode()
+
+    truncated = False
+    while len(positives) > 1 and len(encoded(positives + negatives, truncated)) > limit:
+        positives.pop()
+        truncated = True
+    # 1 条正例 + 3 条负例仍超预算：不再砍负例（砍了就是"理由假的"），如实标记。
+    if len(encoded(positives + negatives, truncated)) > limit:
+        truncated = True
+    return {"cases": positives + negatives, "truncated": truncated}
+
+
 def main():
     intents, slots = load_input()
     if not intents:
@@ -259,6 +339,9 @@ def main():
     }
     print(f"[train] split_stats={json.dumps(split_stats, ensure_ascii=False, sort_keys=True)}")
     print(f"[train] corpus={len(texts)} sentences, labels={label_list}")
+    # 底座证据必须早于 ML 依赖导入：依赖缺失/权重下载失败时，日志里也要能看出
+    # 这次训练用的是哪个底座、哪组超参（否则失败日志无法归因）。
+    print(f"[train] base={BASE_NAME} hub={HUB_NAME} lr={LEARNING_RATE} epochs={EPOCHS}")
 
     from datasets import Dataset
     from transformers import (
@@ -269,9 +352,13 @@ def main():
         Trainer,
     )
 
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    # hfl/minirbt-h288 仓库只有 vocab.txt，没有 tokenizer.json；必须显式要 fast 分词器，
+    # 让 transformers 走 slow→fast 自动转换产出 tokenizer.json。否则最终
+    # tokenizer.save_pretrained 写不出 tokenizer.json，服务端三件套校验
+    # （artifact.rs 的 FILES 白名单）会 fail closed，整次训练白跑。
+    tokenizer = AutoTokenizer.from_pretrained(HUB_NAME, use_fast=True)
     model = AutoModelForSequenceClassification.from_pretrained(
-        MODEL_NAME, num_labels=len(label_list)
+        HUB_NAME, num_labels=len(label_list)
     )
     ds = Dataset.from_dict({"text": texts, "label": [label_list.index(l) for l in labels]})
 
@@ -282,7 +369,7 @@ def main():
     args = TrainingArguments(
         output_dir="/work/ckpt",
         per_device_train_batch_size=32,
-        learning_rate=5e-5,
+        learning_rate=LEARNING_RATE,
         num_train_epochs=EPOCHS,
         eval_strategy="epoch",
         save_strategy="no",
@@ -328,6 +415,16 @@ def main():
     with open(os.path.join(OUTDIR, "labels.txt"), "w", encoding="utf-8") as f:
         f.write("\n".join(label_list) + "\n")
     print(f"[train] done → {quantized}")
+    # 冒烟自报（S3）：紧跟在 done 之后、sample 探针**之前**打印。
+    # 位置理由：服务端只在日志尾 8192 字节里**从后向前**找这一行，既不能早到被
+    # trainer 输出挤出窗口，也不能晚到被 STREAM 缓冲截断；紧跟 done 两头都稳。
+    smoke = smoke_cases(texts, labels)
+    print(f"[train] smoke={json.dumps(smoke, ensure_ascii=False, separators=(',', ':'))}")
+    if smoke["truncated"]:
+        # 服务端据此报 smoke_truncated（而不是误报"负例没拒识"）：裁剪过就不足以判定。
+        print(
+            f"[train] smoke truncated: {len(smoke['cases'])} cases kept within {2000} bytes"
+        )
     # 快速自检：量化模型在样例句上推理一遍。
     sess = ort.InferenceSession(quantized)
     sample = tokenizer("十分钟之后提醒我喝水", return_tensors="np")

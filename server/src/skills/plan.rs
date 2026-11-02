@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 pub fn capabilities() -> Vec<CapabilityMetadata> {
     [
-        ("tasks.create", "Persist a device-bound reminder", "sqlite", json!({"required":["text"],"one_of":["after","at","interval","hourly","daily","workdays","weekly","monthly","yearly"],"calendar_fields":{"hourly":"0..59 minute integer or string, e.g.20分","workdays":"clock; Monday-Friday only","weekly":{"weekday":"1..7 or weekday string","time":"clock"},"monthly":{"day":"1..31","time":"clock"},"yearly":{"month":"1..12","day":"1..31","time":"clock"}},"invalid_dates":"skip; never clamp","timezone":"UTC or Asia/Shanghai; default UTC","speech":"actual local date, time, frequency; countdown target","optional":["timezone"]})),
+        ("tasks.create", "Persist a device-bound reminder", "sqlite", json!({"required":["text"],"one_of":["after","at","interval","hourly","daily","workdays","weekly","monthly","yearly"],"calendar_fields":{"hourly":"0..59 minute integer or string, e.g.20分","workdays":"clock; Monday-Friday only","weekly":{"weekday":"1..7 or weekday string","time":"clock"},"monthly":{"day":"1..31","time":"clock"},"yearly":{"month":"1..12","day":"1..31","time":"clock"}},"invalid_dates":"skip; never clamp","timezone":"UTC or Asia/Shanghai; default UTC","speech":"actual local date, time, frequency; countdown target","optional":["timezone","action"],"action":"optional single step {api:'devices.call',args:{tool,arguments}}; runs on the device when the task fires (online devices only; offline degrades to the text reminder)"})),
         ("tasks.list", "List this device's tasks", "sqlite", json!({"optional":{"limit":"1..100","offset":"0..10000"}})),
         ("tasks.get", "Read one device-bound task", "sqlite", json!({"required":["task_id"]})),
         ("tasks.cancel", "Cancel exact device-bound task and unsubmitted delivery; ambiguous text is rejected", "sqlite", json!({"one_of":["task_id","text"],"speech":"actual cancellation result or typed clarification error"})),
@@ -66,6 +66,29 @@ fn validate_name(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// `tasks.create` 的可选 `action`（到期动作）：必须是**单个** `devices.call` 步骤。
+///
+/// 白名单只放 `devices.call`，理由：
+/// - 到期播报已由任务 `text` 覆盖（outbox 提醒），`replies.say`/`messages.send` 与之重复；
+/// - `tasks.*` 会造成"到期再排到期"的递归调度链，语义与容量上界都说不清，明确禁止；
+/// - `sessions.end` 依赖会话上下文，到期直推没有会话。
+///
+/// 嵌套形状复用 [`validate_step`]（`deny_unknown_fields` + required/allowed 双向锁死），
+/// 深度/节点上界由 [`validate_tree`] 对整个 args 树统一计数，无需在此另设。
+/// `{{slots.*}}` 槽位替换同样由 `resolve_value` 深递归自动覆盖嵌套 args。
+fn validate_create_action(action: Option<&Value>) -> Result<()> {
+    let Some(action) = action.filter(|v| !v.is_null()) else {
+        return Ok(());
+    };
+    let step: SkillStep = serde_json::from_value(action.clone())
+        .map_err(|e| anyhow::anyhow!("tasks.create action must be a single step object: {e}"))?;
+    ensure!(
+        step.api == "devices.call",
+        "tasks.create action only supports devices.call (the task text already covers the due speech)"
+    );
+    validate_step(&step)
+}
+
 pub fn validate_step(step: &SkillStep) -> Result<()> {
     ensure!(
         serde_json::to_vec(&step.args)?.len() <= 32768,
@@ -80,7 +103,7 @@ pub fn validate_step(step: &SkillStep) -> Result<()> {
             &["text"],
             &[
                 "text", "after", "at", "interval", "hourly", "daily", "workdays", "weekly",
-                "monthly", "yearly", "timezone",
+                "monthly", "yearly", "timezone", "action",
             ],
         ),
         "tasks.list" => (&[], &["limit", "offset"]),
@@ -114,6 +137,7 @@ pub fn validate_step(step: &SkillStep) -> Result<()> {
             "tasks.create requires exactly one schedule mode"
         );
         super::calendar::validate_args(&step.args)?;
+        validate_create_action(args.get("action"))?;
     }
     if step.api == "tasks.cancel" {
         ensure!(

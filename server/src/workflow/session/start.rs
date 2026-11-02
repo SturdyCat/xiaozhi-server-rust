@@ -173,6 +173,16 @@ pub async fn run_session<T: Transport>(
     } else {
         None
     };
+    // 到期任务动作直推通道（见 `app/device_cmds`）：与 inject 同一注册门槛——仅
+    // 设备 + 级联流水线会话。scheduler 到期动作按 `device_id` 查通道，查无即降级
+    // 为纯文字提醒（旧固件零破坏）。guard 与 `_inject_guard` 同一 RAII 模式。
+    let (cmd_tx, cmd_rx) =
+        tokio::sync::mpsc::channel(crate::workflow::device_cmds::CMD_CHANNEL_CAPACITY);
+    let _cmd_guard = if !is_test && aiui.is_none() {
+        Some(engines.device_cmds.register(&device_id, cmd_tx))
+    } else {
+        None
+    };
     let memory = engines.memory();
     let mut session = Session {
         transport,
@@ -208,6 +218,11 @@ pub async fn run_session<T: Transport>(
         wake,
         inject_rx: if _inject_guard.is_some() {
             Some(inject_rx)
+        } else {
+            None
+        },
+        cmd_rx: if _cmd_guard.is_some() {
+            Some(cmd_rx)
         } else {
             None
         },

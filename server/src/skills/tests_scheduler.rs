@@ -18,9 +18,9 @@ fn one_shot_persists_restart_offline_then_submitted_is_not_played() {
         "none"
     );
     let restarted = SkillSystem::new(db.system.path.clone());
-    assert_eq!(restarted.tick_due(NOW + 299_999).unwrap(), 0);
-    assert_eq!(restarted.tick_due(NOW + 300_000).unwrap(), 1);
-    assert_eq!(restarted.tick_due(NOW + 999_999).unwrap(), 0);
+    assert_eq!(restarted.tick_due(NOW + 299_999).unwrap().materialized, 0);
+    assert_eq!(restarted.tick_due(NOW + 300_000).unwrap().materialized, 1);
+    assert_eq!(restarted.tick_due(NOW + 999_999).unwrap().materialized, 0);
     let task = restarted.get_task(&id, Some("a")).unwrap().unwrap();
     assert_eq!(task["schedule_state"], "completed");
     assert_eq!(task["delivery_state"], "pending");
@@ -101,7 +101,7 @@ fn cancellation_before_due_and_during_lease_stops_future_delivery() {
             &json!({"task_id":id})
         )
         .is_err());
-    assert_eq!(db.system.tick_due(NOW + 1000).unwrap(), 1);
+    assert_eq!(db.system.tick_due(NOW + 1000).unwrap().materialized, 1);
     let claim = db
         .system
         .claim_delivery("a", "s", NOW + 1000)
@@ -141,7 +141,7 @@ fn cancellation_before_due_and_during_lease_stops_future_delivery() {
             &json!({"task_id":second}),
         )
         .unwrap();
-    assert_eq!(db.system.tick_due(NOW + 1000).unwrap(), 0);
+    assert_eq!(db.system.tick_due(NOW + 1000).unwrap().materialized, 0);
 }
 
 #[test]
@@ -255,8 +255,8 @@ fn repeating_tasks_coalesce_offline_and_advance_after_submission() {
         &ctx("a", "repeat", NOW),
         json!({"text":"喝水","interval":"1秒"}),
     );
-    assert_eq!(db.system.tick_due(NOW + 1000).unwrap(), 1);
-    assert_eq!(db.system.tick_due(NOW + 10_000_000).unwrap(), 0);
+    assert_eq!(db.system.tick_due(NOW + 1000).unwrap().materialized, 1);
+    assert_eq!(db.system.tick_due(NOW + 10_000_000).unwrap().materialized, 0);
     assert_eq!(pending_count(&db.system), 1);
     let task = db.system.get_task(&id, None).unwrap().unwrap();
     assert!(task["next_due_ms"].as_i64().unwrap() > NOW + 10_000_000);
@@ -269,7 +269,7 @@ fn repeating_tasks_coalesce_offline_and_advance_after_submission() {
         .system
         .finish_delivery(&claim, true, NOW + 10_000_001)
         .unwrap());
-    assert_eq!(db.system.tick_due(NOW + 10_001_000).unwrap(), 1);
+    assert_eq!(db.system.tick_due(NOW + 10_001_000).unwrap().materialized, 1);
     assert_eq!(pending_count(&db.system), 1);
 }
 
@@ -302,7 +302,7 @@ fn capacity_retains_pending_and_does_not_starve_another_device() {
             &json!({"text":"x"})
         )
         .is_err());
-    assert_eq!(db.system.tick_due(NOW + 1000).unwrap(), 1);
+    assert_eq!(db.system.tick_due(NOW + 1000).unwrap().materialized, 1);
     assert_eq!(
         db.system.get_task(&other, None).unwrap().unwrap()["delivery_state"],
         "pending"

@@ -194,7 +194,8 @@ async fn calendar_invalid_dates_are_skipped_not_clamped_and_get_never_claims_pla
         engines
             .skill_system
             .tick_due(at("2028-03-31T08:00:00Z"))
-            .unwrap(),
+            .unwrap()
+            .materialized,
         1
     );
     let advanced = loaded(&client, &base, month_id).await;

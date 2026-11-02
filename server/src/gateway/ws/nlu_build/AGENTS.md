@@ -8,7 +8,7 @@
 - 数据根与文件管理保持一致，由保存配置 `memory.db_path` 的父目录派生。构建、候选测试都不写配置库、不刷新生产引擎。
 - 训练脚本通过 `include_str!` 编译进服务，交给依赖镜像内 `python -c` 执行；不执行数据卷中的脚本，不执行用户输入代码。更新训练逻辑需发布新服务。依赖镜像只在缺失时拉取，然后 inspect 并固定 image id；日志不得打印整个脚本 argv。
 - 训练输入共用 `plugins::skill::effective_catalog(command, nlu)`：保存态技能与启用的 command 词表（`end_session`）统一成唯一目录。默认技能是配置种子，显式清空不隐藏补回；新训练标签就是目录名，新构建清空外部旧模型的 `bert_label_map` 为同名映射。
-- 成功只表示 Docker 退出成功、三件产物齐全、标签顺序严格等于有效目录顺序加 `other`、文件哈希已记录；**不代表模型准确率合格，不自动启用**。新 manifest 记录 `catalog_source=effective_command_nlu_v1`；旧 manifest 缺该字段可正常读取，始终使用原快照与原 labels，不伪造新增 `end_session` 标签。
+- 成功只表示 Docker 退出成功、三件产物齐全、标签顺序严格等于有效目录顺序加 `other`、文件哈希已记录；**不代表模型准确率合格**。手动构建不自动启用；首启自举按 `NLU_BOOTSTRAP` 决定（默认 `adopt`：冒烟自检通过才自动采用；`build-only` 只训不启用；`off` 关闭）。冒烟只证明"没坏"，不构成效果验收，文案禁止出现"验收通过/准确率/可用"。新 manifest 记录 `catalog_source=effective_command_nlu_v1`；旧 manifest 缺该字段可正常读取，始终使用原快照与原 labels，不伪造新增 `end_session` 标签。
 - `manifest.json` 保存 build id、来源 revision、训练输入哈希、依赖镜像 tag/id、可信脚本 SHA-256、标签清单、模型/分词器/标签文件身份和 NLU 推理快照。公开 artifact 不返回整份 NLU 快照。
 - 状态与日志 job 是进程态，重启后回 idle；成功清单持久化，已知 build id 的候选仍可测试。尚未实现历史版本列表/自动清理。
 - 候选测试只接受 `build_id/text/expected_intent?`，不接受任意模型路径或配置补丁；只查受管版本目录，拒绝非规范 UUID、目录或文件符号链接、越界路径、缺清单、哈希变化和标签变化。
@@ -20,6 +20,11 @@
 
 ## 已知边界
 
+- **配置保存没有真正的 CAS**：`save_patch` 是 `read → compare → persist`，`compare` 与 `persist` 之间的亚秒窗口里若有人写入，会被本次保存静默覆盖（last-write-wins）。彻底修需要 store 层支持 put-if-revision。首启自举的 `stale` 只挡得住"训练期间配置被改"，挡不住这个窗口。
+- **首启自举的两类失败方向不能反**：`RevisionConflict`（构建依据的配置已过期）→ 立即 `stale` 终态，**不重试**（用同一个 `expected_revision` 重试永远不可能成功）；`Io`/`Persist`（SQLite busy、磁盘抖动）→ 才重试 200/400/800ms。自举读配置必须走 `save_patch_strict`（读失败即失败），不能用 `current_config()` 的内存回退——否则一次读库抖动会被误判成"配置被别处改过"而永久 `stale`，理由还是假的。
+- **部署是硬顺序：先推训练镜像，再发服务**。服务内嵌的脚本会引用镜像里烘好的权重；镜像没到位时构建必然失败（`image_missing` / `weights_unavailable`），且 `giving_up` 之后必须人工删 `<data>/nlu-bootstrap/state.json` 才会重新自举——不要指望"失败自愈"。来不及推镜像就先设 `NLU_BOOTSTRAP=off`。
+- **冒烟用例全部取自训练语料**（模板展开句 + `OTHER_CORPUS`），它证明的是"训练/导出/量化这条流水线没坏"，不构成效果验收，也不能当准确率对外说。
+- **首启自举会在启动 30s 后自动训练、并可能自动启用模型**。`bert_enabled=false` + 空路径同时是"从未配置过"和"用户主动关掉"的形态，配置上不可区分，所以不猜意图：只把后果写进启动日志，要关闭请设 `NLU_BOOTSTRAP=off`。
 - 模型文件和 manifest 处于管理员可写数据卷。哈希检测意外变化，不是抵抗已获管理员文件写权限者同时重写清单的签名系统，也不保证与并发外部文件修改之间的内核级不可变快照。
 - Docker pull/run 命令最长等待 3600 秒；inspect 等探测未另设独立 deadline。超时会终止 CLI，但宿主容器可能需要管理员后续清理；资源上限仍由 Docker 限制。未提供取消按钮。
 - 第一次缺失镜像、HF 缓存或不兼容的 ML 依赖会使构建失败，保留旧生产模型；本模块不通过运行期 pip 自动修补环境。

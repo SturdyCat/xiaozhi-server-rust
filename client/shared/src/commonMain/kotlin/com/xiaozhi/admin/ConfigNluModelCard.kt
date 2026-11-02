@@ -11,6 +11,7 @@ import com.xiaozhi.admin.icons.GearIcon
 import com.xiaozhi.admin.kit.fieldLabelRow
 import com.xiaozhi.admin.kit.labeledDecimalField
 import com.xiaozhi.admin.kit.labeledField
+import com.xiaozhi.admin.kit.labeledSelect
 import com.xiaozhi.admin.kit.labeledTextArea
 import com.xiaozhi.admin.kit.switchRow
 
@@ -23,7 +24,13 @@ internal fun NluBuildModelSection(form: ConfigFormState, nlu: NluSectionState) {
     val unsaved = form.dirty || form.workflow.dirty
     NluInsetPanel {
         Text("模型：保存 → 构建 → 独立测试 → 明确启用", style = Theme.typography.bodyMedium)
-        HintLine("构建只读取服务器已保存配置，不读取当前输入草稿；成功只生成候选，不自动启用。候选测试不改变全局开关，也不执行设备动作。")
+        HintLine("构建只读取服务器已保存配置，不读取当前输入草稿；手动构建成功只生成候选，不自动启用。候选测试不改变全局开关，也不执行设备动作。")
+        // 首启自举会改配置版本：管理台手里的旧 revision 下次保存必然 409，
+        // 不说清楚会被当成"保存坏了"（自举采用只写 4 个 bert 字段，其余一个字节没动）。
+        HintLine("服务首次启动会在约 30 秒后自动构建模型并可能自动启用，这会更新配置版本；若草稿保存报 409（配置已被其他窗口修改），请重新加载配置后再改。")
+        if (nlu.bert.model.isEmpty()) {
+            HintLine("当前未配置语义模型路径：上述自动构建会生效。不希望自动训练/启用请设环境变量 NLU_BOOTSTRAP=off（=build-only 只训练不启用）。")
+        }
         if (unsaved) HintLine("有未保存改动。请先保存，再构建新模型；当前草稿不会进入训练。")
         fieldLabelRow(
             label = "第一步：保存技能配置",
@@ -38,6 +45,15 @@ internal fun NluBuildModelSection(form: ConfigFormState, nlu: NluSectionState) {
                 )
             },
         )
+        // 可选臂来自服务端 `bases`（旧服务端没有该字段时用本地两档回落）；
+        // 界面不硬编码档位，避免"服务端支持的臂"与"界面能选的臂"两套口径。
+        labeledSelect(
+            label = "预训练底座",
+            selectedId = view.baseModel,
+            options = view.bases.map { it.id to it.label },
+            onSelect = { state.editBaseModel(it) },
+        )
+        HintLine("换底座只改模型体积与推理延迟，不代表更准：换完仍要重新构建并独立测试候选。")
         fieldLabelRow(
             label = "第二步：构建候选模型",
             help = "使用保存态配置版本微调中文分类模型并导出 ONNX。训练可能持续数分钟，旧模型不受构建影响；失败时保留原配置。",
@@ -64,6 +80,11 @@ internal fun NluBuildModelSection(form: ConfigFormState, nlu: NluSectionState) {
         val candidate = view.candidate
         if (candidate != null) {
             HintLine("候选版本：${candidate.buildId}；训练配置版本：${candidate.sourceRevision}")
+            // 历史 manifest 没记底座时如实说明，不猜成缺省臂：那时候固走的还是 hfl/rbt3。
+            HintLine(
+                if (candidate.baseModel.isEmpty()) "训练底座：未记录（历史构建，固走 hfl/rbt3）"
+                else "训练底座：${candidate.baseModel}"
+            )
             HintLine("模型指纹：${candidate.sha256}")
             if (candidate.sourceRevision != form.revision) {
                 HintLine("保存态配置已经变化。此候选仍可独立测试，但不能直接启用；请按最新配置重新构建。")

@@ -43,24 +43,13 @@ fn validate(req: &TestRequest) -> Result<(), &'static str> {
     Ok(())
 }
 
+/// 判定走 `nlu_build::verdict`（与门禁冒烟、批量对比**唯一同一份**口径）：
+/// 其他 → 低于阈值 → 未映射技能 → 接受。这里只保留 `/test` 特有的上报形状与
+/// `expected_match` 请求级语义；JSON 字段一个不增不减（5 条 handler 契约测试钉住）。
 fn prediction(artifact: &Artifact, hit: BertHit, expected: Option<&str>) -> anyhow::Result<Value> {
-    if !hit.confidence.is_finite() || !(0.0..=1.0).contains(&hit.confidence) {
-        anyhow::bail!("invalid model confidence");
-    }
-    if !artifact.labels.contains(&hit.label) {
-        anyhow::bail!("model output is outside verified label list");
-    }
-    let intent = artifact.nlu.bert_map_label(&hit.label);
-    let reason = if hit.label == "other" || intent == "other" {
-        Some("other")
-    } else if hit.confidence < artifact.nlu.bert_threshold {
-        Some("below_threshold")
-    } else if !artifact.nlu.intents.iter().any(|i| i.name == intent) {
-        Some("unmapped_skill")
-    } else {
-        None
-    };
-    let accepted = reason.is_none();
+    let guess = nlu_build::verdict(artifact, &hit)?;
+    let intent = guess.mapped.as_str();
+    let accepted = guess.accepted();
     let expected_match = expected.map(|e| {
         if e == "other" {
             !accepted
@@ -70,10 +59,10 @@ fn prediction(artifact: &Artifact, hit: BertHit, expected: Option<&str>) -> anyh
     });
     Ok(
         json!({"state":"ok","build_id":artifact.build_id,"source_revision":artifact.source_revision,
-        "model_sha256":artifact.model_sha256(),"raw_label":hit.label,"intent":intent,
-        "confidence":hit.confidence,"threshold":artifact.nlu.bert_threshold,"accepted":accepted,
-        "reject_reason":reason,"expected_intent":expected,"expected_match":expected_match,
-        "tokenize_ms":hit.tokenize_ms,"infer_ms":hit.infer_ms,"executed":false,
+        "model_sha256":artifact.model_sha256(),"raw_label":guess.label,"intent":intent,
+        "confidence":guess.confidence,"threshold":artifact.nlu.bert_threshold,"accepted":accepted,
+        "reject_reason":guess.reason.code(),"expected_intent":expected,"expected_match":expected_match,
+        "tokenize_ms":guess.tokenize_ms,"infer_ms":guess.infer_ms,"executed":false,
         "measurement":"real_onnx_inference","note":"Intent classification only; no slot resolution or skill execution"}),
     )
 }
@@ -136,20 +125,11 @@ pub(super) async fn test_model(
                 )
             })?;
             let data = nlu_build::data_dir(&cfg);
+            // 404 只给"根/目录不存在"；目录在但缺文件/坏了是 409（东西在，与记录对不上）。
+            // 映射收敛在 candidate_http_error 一处，与历史列表共用同一套语义。
             let (artifact, dir) = nlu_build::load_candidate(&data, &req.build_id).map_err(|e| {
-                let not_found = e.chain().any(|e| {
-                    e.downcast_ref::<std::io::Error>()
-                        .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound)
-                });
-                (
-                    if not_found {
-                        StatusCode::NOT_FOUND
-                    } else {
-                        StatusCode::CONFLICT
-                    },
-                    "candidate_unavailable",
-                    e.to_string(),
-                )
+                let (status, code, message) = nlu_build::candidate_http_error(&e);
+                (status, code, message)
             })?;
             let isolated = artifact.config(&dir);
             let bert = build_bert_checked(&isolated).map_err(|e| {

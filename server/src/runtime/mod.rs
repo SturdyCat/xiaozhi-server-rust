@@ -96,6 +96,9 @@ pub struct Engines {
     /// 会话注入注册表（P1-2）：活跃会话注册 `mpsc::Sender`，HTTP 端点据此投递文本
     /// （`POST /api/devices/{id}/inject`）；见 `app/inject` 模块注释。
     pub inject: crate::workflow::pipeline::inject::Injector,
+    /// 设备命令通道：活跃会话注册，scheduler 据此向**在线设备**直推到期定时任务的
+    /// 动作（如「10分钟后关电源」）；离线即降级为文字提醒。见 `app/device_cmds` 模块注释。
+    pub device_cmds: crate::workflow::device_cmds::DeviceCmdHub,
     /// 稳定技能能力与持久任务/outbox；识别模型只有提名权，不直接操作系统。
     pub skill_system: Arc<crate::skills::SkillSystem>,
     /// 推理并发闸门（缺口①）：ASR/TTS 各一把 Semaphore，包在全部 `spawn_blocking`
@@ -241,6 +244,7 @@ impl Engines {
             metrics: crate::observability::metrics::Metrics::new(),
             mcp: crate::workflow::mcp::registry::McpRegistry::new(),
             inject: crate::workflow::pipeline::inject::Injector::new(),
+            device_cmds: crate::workflow::device_cmds::DeviceCmdHub::new(),
             skill_system,
             inference: crate::workflow::pipeline::inference::InferenceGates::new(config),
             config: Arc::new(config.clone()),

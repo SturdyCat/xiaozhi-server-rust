@@ -30,10 +30,12 @@ pub(super) mod device_overlay;
 mod impact;
 pub(super) mod meta;
 pub(super) mod presets;
+mod save;
 use impact::{save_impact, SaveImpact};
 pub(crate) use meta::config_is_persistent;
-pub(crate) use meta::{config_meta, db_backup, db_query};
 pub(super) use meta::is_persistent_in;
+pub(crate) use meta::{config_meta, db_backup, db_query};
+pub(crate) use save::{save_patch, save_patch_strict, SaveError, SaveOutcome};
 
 /// 当前生效配置：启动时指定了配置文件则实时读盘，否则为内存内置默认配置。
 ///
@@ -289,7 +291,10 @@ fn fill_array_secrets(base: &Config, patch: &mut serde_json::Value) {
                 .and_then(|b| b.get("api_key"))
                 .and_then(|x| x.as_str())
             {
-                obj.insert("api_key".into(), serde_json::Value::String(orig.to_string()));
+                obj.insert(
+                    "api_key".into(),
+                    serde_json::Value::String(orig.to_string()),
+                );
             }
         }
     }
@@ -443,94 +448,87 @@ pub(super) async fn put_config(
     // 0) 过期写入检查：客户端带回上次 GET 的 `revision`（可放 `expected_revision` 或
     //    原样回传 `revision`），与当前盘上内容不一致 → 409 拒绝（而不是覆盖别人的改动）。
     //    未带 revision 的旧客户端跳过检查（向后兼容）。
-    let current = current_config(&engines);
-    let current_revision = config_revision(&current);
-    if let Some(expected) = raw
+    let expected = raw
         .get("expected_revision")
         .or_else(|| raw.get("revision"))
         .and_then(|v| v.as_str())
-    {
-        if expected != current_revision {
+        .map(str::to_string);
+    let outcome = match save_patch(&engines, &raw, expected.as_deref()) {
+        Ok(outcome) => outcome,
+        Err(SaveError::RevisionConflict { current }) => {
             return (
                 StatusCode::CONFLICT,
                 json_msg_rev(
                     false,
                     "配置已被其他窗口/端修改，本次保存已取消（避免覆盖别人的改动）。请重新加载配置后再改。",
                     None,
-                    Some(&current_revision),
+                    Some(&current),
                 ),
             )
-                .into_response();
+                .into_response()
         }
-    }
-    // 1) 现盘配置做基线 → 未出现的字段保持不动；密钥空串 = 保留原值（见 `sanitize_patch`）。
-    //    结构性修复：以后新增配置段不会被尚未更新的旧表单清空。
-    // 2) 合并结果必须仍是合法 Config：类型/枚举错误在此报 400（带精确原因与字段路径）。
-    let body: Config = match merge_client_patch(&current, &raw) {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::error!("PUT /api/config：客户端配置 JSON 合并/解析失败: {e}");
-            return (StatusCode::BAD_REQUEST, format!("配置 JSON 解析失败: {e}")).into_response();
+        // 合并/解析失败：`HEAD` 上就是纯文本，保持一字不变（千万别顺手包成 JSON）。
+        Err(SaveError::Invalid { detail }) => {
+            return (StatusCode::BAD_REQUEST, detail).into_response()
         }
-    };
-    // Workflow is compiled before persistence: invalid plans can never become active.
-    if let Err(error) = crate::workflow::designer::compile(&body.workflow) {
-        return (
-            StatusCode::BAD_REQUEST,
-            json_msg(false, &format!("workflow 校验失败：{error}"), None),
-        )
-            .into_response();
-    }
-    let path = match engines.config_path() {
-        Some(p) => p.to_string(),
-        None => {
+        // workflow 预编译失败：`HEAD` 上是 `json_msg`，必须还原成 JSON——
+        // 否则客户端取不到 `message`，只显示"保存失败: HTTP 400"。
+        Err(SaveError::WorkflowInvalid { detail }) => {
+            return (StatusCode::BAD_REQUEST, json_msg(false, &detail, None)).into_response()
+        }
+        Err(SaveError::NoPersistence) => {
             return (
                 StatusCode::BAD_REQUEST,
                 json_msg(false, "配置库不可用（无持久化落点），无法保存配置。请检查 data.db 所在目录存在且可写后重启。", None),
             )
                 .into_response()
         }
-    };
-    match engines.config_store.persist(&body) {
-        Ok(()) => {
-            // 保存成功即回报**实际写入路径**——配置"看不到/丢失"类问题可由此一眼定位
-            //（例如容器内路径与宿主机挂载不一致时，Toast 会显示真实路径）。
-            let impact = save_impact(&current, &body);
-            tracing::debug!(
-                "PUT /api/config：本次改动段 [{}]，字段 [{}]，生效档位 {}",
-                impact.sections.join(", "),
-                impact.paths.join(", "),
-                impact.hot.as_str()
-            );
-            let mut msg = format!(
-                "配置已保存到 {path}。TTS/LLM 引擎参数对**新会话**生效，ASR 等需重启 server。"
-            );
-            if !impact.sections.is_empty() {
-                msg.push_str(&format!("本次改动：{}。", impact.sections.join(" / ")));
-            }
-            if !config_is_persistent(&path) {
-                msg.push_str(
-                    " ⚠️ 该路径不在挂载卷上：重建容器会丢失配置。请按 docker-compose.yml 挂载目录卷（如 ./server-data:/data）。",
-                );
-            }
-            // 回传**新** revision：客户端无需再 GET 就能继续保存
-            let new_rev = config_revision(&body);
-            (
-                StatusCode::OK,
-                json_msg_full(true, &msg, Some(&path), Some(&new_rev), Some(&impact)),
-            )
-                .into_response()
-        }
-        // 健壮性：失败原因同时记入服务端日志（客户端 UI 只能看到状态码）
-        Err(e) => {
-            tracing::error!("PUT /api/config：写入 {path} 失败: {e:#}");
-            (
+        Err(SaveError::Persist { path, detail }) => {
+            return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                json_msg(false, &format!("{e:#}"), Some(&path)),
+                json_msg(false, &detail, Some(&path)),
             )
                 .into_response()
         }
+        // `Io`（读当前配置失败）只由自举的 strict 入口产生：PUT 走 `current_config()`
+        // 的回退语义，压根不会到这里。仍然显式处理，避免将来复制粘贴出静默 500。
+        Err(SaveError::Io { detail }) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json_msg(false, &detail, None),
+            )
+                .into_response()
+        }
+    };
+    // 保存成功即回报**实际写入路径**——配置"看不到/丢失"类问题可由此一眼定位
+    //（例如容器内路径与宿主机挂载不一致时，Toast 会显示真实路径）。
+    let mut msg = format!(
+        "配置已保存到 {}。TTS/LLM 引擎参数对**新会话**生效，ASR 等需重启 server。",
+        outcome.path
+    );
+    if !outcome.impact.sections.is_empty() {
+        msg.push_str(&format!(
+            "本次改动：{}。",
+            outcome.impact.sections.join(" / ")
+        ));
     }
+    if !config_is_persistent(&outcome.path) {
+        msg.push_str(
+            " ⚠️ 该路径不在挂载卷上：重建容器会丢失配置。请按 docker-compose.yml 挂载目录卷（如 ./server-data:/data）。",
+        );
+    }
+    // 回传**新** revision：客户端无需再 GET 就能继续保存
+    (
+        StatusCode::OK,
+        json_msg_full(
+            true,
+            &msg,
+            Some(&outcome.path),
+            Some(&outcome.revision),
+            Some(&outcome.impact),
+        ),
+    )
+        .into_response()
 }
 
 /// 统一 JSON 响应体（macApp 读取 `message` 显示到 Toast）。

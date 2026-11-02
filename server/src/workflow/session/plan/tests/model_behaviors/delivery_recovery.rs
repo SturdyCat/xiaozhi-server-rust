@@ -16,7 +16,7 @@ fn create_due(s: &Session<'_, Wire>, index: usize, text: &str) -> String {
             },
         )
         .unwrap();
-    assert_eq!(s.engines.skill_system.tick_due(now_ms()).unwrap(), 1);
+    assert_eq!(s.engines.skill_system.tick_due(now_ms()).unwrap().materialized, 1);
     result["task"]["id"].as_str().unwrap().into()
 }
 fn sentence_texts(s: &Session<'_, Wire>) -> Vec<String> {

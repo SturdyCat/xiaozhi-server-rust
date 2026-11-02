@@ -19,12 +19,26 @@ RUN pip install --no-cache-dir --retries 5 --timeout 60 \
  && rm -f /tmp/requirements.txt
 
 # HF 权重经国内镜像拉取；训练脚本固定路径，工作目录与产物目录由服务端挂载。
+# MODEL_NAME 这里是**规范名**（rbt3 / minirbt-h288），不是 hub id：train.py 的 BASES 表
+# 负责把规范名映射到 hub 与微调超参。服务端每次 build 都用
+# `docker run -e MODEL_NAME=... -e LEARNING_RATE=... -e EPOCHS=...` 覆盖；
+# 此值仅供 `docker run <image>` 这类 standalone 运行的缺省臂，**必须**等于
+# `base.rs` 的 DEFAULT_BASE_MODEL 与 train.py 的 BASE_NAME（有单测用 include_str! 锁住）。
 ENV HF_ENDPOINT=https://hf-mirror.com \
-    MODEL_NAME=hfl/rbt3
+    MODEL_NAME=minirbt-h288
 COPY train.py /opt/train.py
-# 底座权重烘进镜像（hfl/rbt3 约 40MB）：hf-mirror 时有抖动，预热后训练完全离线可跑，
-# 网络失败时 transformers 自动回退本地缓存；主镜像源失败换官方源重试一次。
-RUN sh -c 'python -c "from huggingface_hub import snapshot_download; snapshot_download(\"hfl/rbt3\")"' \
+# 两个底座权重都烘进镜像，训练容器完全离线可跑。allow_patterns 只取权重与
+# 词表/配置：minirbt-h288 仓库还挂着 tf_model.h5 / flax 权重（各约 150MB），
+# 全量 snapshot 会把镜像白撑大且训练用不到。同时收 pytorch_model.bin 与
+# model.safetensors 两种权重格式——只发 safetensors 的仓库否则会静默回落到
+# 运行期下载，离线训练的承诺就破了。
+# rbt3：3 层中文 RoBERTa，约 40MB。
+RUN sh -c 'python -c "from huggingface_hub import snapshot_download; snapshot_download(\"hfl/rbt3\", allow_patterns=[\"*.json\", \"*.txt\", \"pytorch_model.bin\", \"model.safetensors\"])"' \
  || HF_ENDPOINT=https://huggingface.co \
-    python -c "from huggingface_hub import snapshot_download; snapshot_download('hfl/rbt3')"
+    python -c "from huggingface_hub import snapshot_download; snapshot_download('hfl/rbt3', allow_patterns=['*.json', '*.txt', 'pytorch_model.bin', 'model.safetensors'])"
+# minirbt-h288：6 层 miniRBT，仓库只有 vocab.txt（无 tokenizer.json），
+# 训练期靠 transformers 的 slow→fast 自动转换产出 fast 分词器。
+RUN sh -c 'python -c "from huggingface_hub import snapshot_download; snapshot_download(\"hfl/minirbt-h288\", allow_patterns=[\"*.json\", \"*.txt\", \"pytorch_model.bin\", \"model.safetensors\"])"' \
+ || HF_ENDPOINT=https://huggingface.co \
+    python -c "from huggingface_hub import snapshot_download; snapshot_download('hfl/minirbt-h288', allow_patterns=['*.json', '*.txt', 'pytorch_model.bin', 'model.safetensors'])"
 ENTRYPOINT ["python", "/opt/train.py"]

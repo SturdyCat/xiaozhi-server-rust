@@ -166,11 +166,17 @@ fn calendar_persists_restarts_and_coalesces_without_offline_flood() {
     let id = create(&db.system, &ctx("a", "monthly", start), args);
     let restarted = SkillSystem::new(db.system.path.clone());
     assert_eq!(
-        restarted.tick_due(ms("2028-03-31T08:00:00+08:00")).unwrap(),
+        restarted
+            .tick_due(ms("2028-03-31T08:00:00+08:00"))
+            .unwrap()
+            .materialized,
         1
     );
     assert_eq!(
-        restarted.tick_due(ms("2029-06-01T00:00:00+08:00")).unwrap(),
+        restarted
+            .tick_due(ms("2029-06-01T00:00:00+08:00"))
+            .unwrap()
+            .materialized,
         0
     );
     assert_eq!(pending_count(&restarted), 1);

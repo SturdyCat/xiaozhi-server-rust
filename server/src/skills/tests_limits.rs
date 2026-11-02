@@ -75,7 +75,7 @@ fn terminal_history_prunes_but_pending_rows_survive() {
     let conn = db.system.connect().unwrap();
     conn.execute("WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<2050) INSERT INTO skills_outbox(id,device_id,text,state,available_ms,created_ms,updated_ms) SELECT CAST(x AS TEXT),'a','x','submitted',?1,?1,?1 FROM n",params![NOW]).unwrap();
     conn.execute("INSERT INTO skills_outbox(id,device_id,text,state,available_ms,created_ms,updated_ms) VALUES ('pending','a','retain','pending',?1,?1,?1)",params![NOW-1]).unwrap();
-    assert_eq!(db.system.tick_due(NOW).unwrap(), 0);
+    assert_eq!(db.system.tick_due(NOW).unwrap().materialized, 0);
     let terminal: i64 = conn
         .query_row(
             "SELECT count(*) FROM skills_outbox WHERE state='submitted'",

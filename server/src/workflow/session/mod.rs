@@ -196,11 +196,24 @@ pub struct Session<'a, T: Transport> {
     /// 管理台注入通道（P1-2，见 `app/inject`）：`Some` = 本会话可被注入（设备 + 级联流水线），
     /// `None` = 测试台 / AIUI 全链路（不注册，HTTP 侧报"不支持"）。主循环 `select!` 消费。
     inject_rx: Option<tokio::sync::mpsc::Receiver<String>>,
+    /// 到期定时任务的动作直推通道（见 `app/device_cmds`）：`Some` = 本会话可接收
+    /// scheduler 的设备工具调用命令（与 inject 同一注册门槛）。主循环 `select!` 消费。
+    cmd_rx: Option<tokio::sync::mpsc::Receiver<crate::workflow::device_cmds::DeviceCmd>>,
 }
 
 /// [`Session::inject_rx`] 为 `None` 时的 select 分支：永不完成的 future（让该分支纯摆设），
 /// 避免在主循环里为"可注入与否"写两套循环。
 async fn inject_next(rx: &mut Option<tokio::sync::mpsc::Receiver<String>>) -> Option<String> {
+    match rx {
+        Some(r) => r.recv().await,
+        None => std::future::pending().await,
+    }
+}
+
+/// [`Session::cmd_rx`] 为 `None` 时的 select 分支（同 [`inject_next`] 的摆设模式）。
+async fn cmd_next(
+    rx: &mut Option<tokio::sync::mpsc::Receiver<crate::workflow::device_cmds::DeviceCmd>>,
+) -> Option<crate::workflow::device_cmds::DeviceCmd> {
     match rx {
         Some(r) => r.recv().await,
         None => std::future::pending().await,
@@ -250,6 +263,11 @@ impl<'a, T: Transport> Session<'a, T> {
                 injected = inject_next(&mut self.inject_rx) => {
                     if let Some(text) = injected {
                         self.handle_inject(&text).await;
+                    }
+                }
+                cmd = cmd_next(&mut self.cmd_rx) => {
+                    if let Some(cmd) = cmd {
+                        self.handle_device_cmd(cmd).await;
                     }
                 }
             }
@@ -328,6 +346,30 @@ impl<'a, T: Transport> Session<'a, T> {
             IncomingFrame::Closed => return false,
         }
         true
+    }
+
+    /// scheduler 直推的到期任务动作（见 `app/device_cmds`）：在会话循环内执行设备
+    /// 工具调用——transport 独占权在这里，MCP 等回复才能与上行帧复用同一条连接。
+    /// 语义与计划内 `devices.call` 完全一致（含 `has_tool` 已声明能力校验，复用
+    /// [`Self::dispatch_skill_device_tool`]）；结果经 oneshot 回给 scheduler，
+    /// 由它决定 outbox 里播成功原文还是失败提示，本函数不产生任何语音副作用。
+    async fn handle_device_cmd(&mut self, cmd: crate::workflow::device_cmds::DeviceCmd) {
+        match cmd {
+            crate::workflow::device_cmds::DeviceCmd::CallDeviceTool {
+                tool,
+                arguments,
+                reply,
+            } => {
+                let result = self.dispatch_skill_device_tool(&tool, arguments).await;
+                if let Err(e) = &result {
+                    tracing::warn!(
+                        "session {} 到期任务动作直推失败（tool={tool}）: {e}",
+                        self.session_id
+                    );
+                }
+                let _ = reply.send(result);
+            }
+        }
     }
 
     /// 管理台注入的一轮（P1-2）：文本**作为用户话语**走与语音完全相同的管线入口

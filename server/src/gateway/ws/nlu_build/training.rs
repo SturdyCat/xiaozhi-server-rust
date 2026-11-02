@@ -12,16 +12,40 @@ use tokio::{
     process::Command,
 };
 
+/// 逐行转发子进程输出。
+///
+/// **必须带跨 chunk 的半行缓冲**：管道按 4096 字节切，一行（尤其是训练脚本末尾那行
+/// `[train] smoke={...}`）很容易跨边界；以前每块直接 `.lines()` 会把一行劈成两行，
+/// 冒烟 JSON 因此在 `job.log` 里坏掉 → 被误判 `smoke_missing`。
 async fn stream(mut pipe: impl AsyncRead + Unpin) {
     let mut buf = [0u8; 4096];
+    let mut pending: Vec<u8> = Vec::new();
     loop {
         match pipe.read(&mut buf).await {
             Ok(0) | Err(_) => break,
             Ok(n) => {
-                for line in String::from_utf8_lossy(&buf[..n]).lines() {
-                    push_log(line).await;
+                pending.extend_from_slice(&buf[..n]);
+                // 只切到最后一个换行：剩下的半行留到下一块，保证每行完整。
+                let cut = pending.iter().rposition(|b| *b == b'\n').map(|i| i + 1);
+                if let Some(cut) = cut {
+                    let complete: Vec<u8> = pending.drain(..cut).collect();
+                    for line in String::from_utf8_lossy(&complete).lines() {
+                        push_log(line).await;
+                    }
+                }
+                // 防御：单行超过 64KiB（无换行的病态输出）时强制 flush，避免无限吃内存。
+                if pending.len() > 64 * 1024 {
+                    let flushed: Vec<u8> = pending.drain(..).collect();
+                    for line in String::from_utf8_lossy(&flushed).lines() {
+                        push_log(line).await;
+                    }
                 }
             }
+        }
+    }
+    if !pending.is_empty() {
+        for line in String::from_utf8_lossy(&pending).lines() {
+            push_log(line).await;
         }
     }
 }
@@ -59,6 +83,7 @@ pub(super) async fn run_training(
     out: PathBuf,
     input: serde_json::Value,
     mut candidate: Artifact,
+    base: super::BaseModel,
 ) {
     let result: Result<Artifact> = async {
         tokio::fs::create_dir_all(work.parent().context("work parent missing")?).await?;
@@ -68,8 +93,12 @@ pub(super) async fn run_training(
         tokio::fs::create_dir(&out).await?;
         tokio::fs::write(work.join("input.json"), input.to_string()).await?;
         push_log(&format!(
-            "build={} source_revision={} input_sha256={}",
-            candidate.build_id, candidate.source_revision, candidate.source_input_sha256
+            "build={} base_model={} base_hub={} source_revision={} input_sha256={}",
+            candidate.build_id,
+            base.name,
+            base.hub,
+            candidate.source_revision,
+            candidate.source_input_sha256
         ))
         .await;
         // The image supplies dependencies, not the training script. Reuse cached environments
@@ -84,7 +113,8 @@ pub(super) async fn run_training(
             ])
             .kill_on_drop(true)
             .output()
-            .await?;
+            .await
+            .context("cannot start Docker CLI (docker.sock + CLI required)")?;
         if !inspect.status.success() {
             push_log(&format!(
                 "Dependency image missing; pulling {}",
@@ -104,7 +134,8 @@ pub(super) async fn run_training(
                 ])
                 .kill_on_drop(true)
                 .output()
-                .await?;
+                .await
+                .context("cannot start Docker CLI (docker.sock + CLI required)")?;
         }
         if !inspect.status.success() {
             bail!("cannot inspect trainer dependency image");
@@ -120,6 +151,9 @@ pub(super) async fn run_training(
         let host_out = docker_host_path(&out).await;
         let mut run = Command::new("docker");
         run.args(["run", "--rm", "--cpus", &cpus, "--memory", &memory])
+            // 底座与超参只经 env 传给训练脚本；input.json 的字段语义保持不变，
+            // 也不新增第四个训练产物文件（三件套白名单在 artifact.rs 的 FILES）。
+            .args(base.env_args())
             .arg("-v")
             .arg(format!("{host_work}:/work"))
             .arg("-v")
@@ -128,11 +162,18 @@ pub(super) async fn run_training(
             .arg(&candidate.trainer_image_id)
             .arg("-c")
             .arg(super::TRAINER_SOURCE);
-        push_log("开始训练（独立版本目录，不覆盖当前模型）…").await;
+        push_log(&format!(
+            "开始训练（底座 {}，独立版本目录，不覆盖当前模型）…",
+            base.name
+        ))
+        .await;
         run_cmd(run).await?;
         let output = out.clone();
         let artifact = tokio::task::spawn_blocking(move || {
-            let artifact = candidate.collect(&output)?;
+            let mut artifact = candidate.collect(&output)?;
+            // 封版时刻 = 三件套校验全过、manifest 即将落盘。不给构建发起时刻：
+            // 几十分钟训练会让"最新产物"显示成发起时间，正好抵消这个字段的用途。
+            artifact.created_at = Some(super::artifact::now_rfc3339());
             artifact::write_manifest(&output, &artifact)?;
             Ok::<_, anyhow::Error>(artifact)
         })
@@ -162,3 +203,7 @@ pub(super) async fn run_training(
     }
     let _ = log_tx().send(BuildEvent::Done);
 }
+
+#[cfg(test)]
+#[path = "training_tests.rs"]
+mod tests;

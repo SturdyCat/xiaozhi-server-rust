@@ -79,7 +79,8 @@ mod health;
 pub(crate) mod log_stream;
 mod mcp;
 mod memory;
-mod nlu_build;
+pub(crate) mod nlu_build;
+pub(crate) use nlu_build::spawn_nlu_bootstrap;
 mod nlu_model;
 mod skill_api;
 // 延迟/事件聚合（P1-1）：只读投影，数据源 observability::metrics（事件总线订阅者）
@@ -229,6 +230,8 @@ pub fn router(engines: Arc<Engines>) -> Router {
         .route("/api/nlu/model/build", get(build_status).post(start_build))
         // 单次训练的聚焦日志流（全局日志流见 /api/logs）：终态帧后服务端主动关闭。
         .route("/api/nlu/model/build/log", get(build_log_ws))
+        // 构建历史列表：O(1) 窄头部判据（manifest 存在性，不算哈希），带四态完整性与现役标记。
+        .route("/api/nlu/model/builds", get(nlu_build::history::build_history))
         .route(
             "/api/nlu/model/test",
             axum::routing::post(nlu_model::test_model),

@@ -270,7 +270,7 @@ async fn task_delivery_uses_canned_audio_once_not_user_injection_or_model_recogn
         args: json!({"after":"1s","text":"退下"}),
     };
     s.engines.skill_system.execute_step(&ctx, &step).unwrap();
-    assert_eq!(s.engines.skill_system.tick_due(now_ms()).unwrap(), 1);
+    assert_eq!(s.engines.skill_system.tick_due(now_ms()).unwrap().materialized, 1);
     prime_audio(&s, "退下");
     s.deliver_pending_message().await;
     let first_delivery_frames = s.transport.audio_frames;
