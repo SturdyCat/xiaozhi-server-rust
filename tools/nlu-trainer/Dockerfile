@@ -1,7 +1,8 @@
 # NLU 专用训练镜像：Python 依赖在**镜像构建期**全部装好，训练容器启动即跑，
 # 无运行期 pip 引导。阿里云 ACR 自动构建（Dockerfile 路径指向本文件，构建目录 tools/nlu-trainer）：
 #   镜像：registry.cn-hangzhou.aliyuncs.com/notip-com-cn/nlu-trainer:<tag>
-# 服务端（nlu_build.rs）默认按该 tag `docker pull` + `docker run`。
+# 新服务仅在依赖镜像缺失时 pull；固定 image id 后以 python -c 执行服务内嵌脚本。
+# 本镜像自带 /opt/train.py 供 standalone 使用；独立运行该入口需重建镜像才能更新脚本。
 FROM python:3.11-slim
 
 # PyPI 阿里云镜像作主 index（全量包；ACR 云端构建环境访问清华源会拿到空列表，

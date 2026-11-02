@@ -83,7 +83,13 @@ fn nlu(cfg: &Config) -> Option<String> {
     if crate::plugins::skill::validate(&cfg.command, &cfg.nlu).is_err() {
         return Some("Saved command/NLU templates, thresholds or actions are invalid".into());
     }
-    if cfg.nlu.bert_enabled {
+    if !cfg.nlu.bert_enabled {
+        return Some(
+            "Real intent model is disabled; no rule or heuristic recognition fallback is available"
+                .into(),
+        );
+    }
+    {
         if !crate::plugins::nlu::bert_feature_enabled() {
             return Some("Configured TinyBERT requires --features nlu".into());
         }
@@ -113,7 +119,7 @@ fn pipeline_reason(cfg: &Config, audio: bool) -> Option<String> {
         None
     };
     audio_check
-        .or_else(|| nlu(cfg))
+        .or_else(|| if cfg.nlu.bert_enabled { nlu(cfg) } else { None })
         .or_else(|| {
             if cfg.llm.enabled {
                 provider(cfg, Capability::Llm)
@@ -133,7 +139,7 @@ pub(super) fn unavailable_reason(cfg: &Config, action: &str) -> Option<String> {
         "pipeline.text" | "pipeline.audio" => pipeline_reason(cfg, action == "pipeline.audio"),
         "input.profile"|"output.profile"=>None,
         "wakeup.preview"=>cfg.wakeup.validate().err().map(|_|"Invalid saved wakeup greeting configuration".into()),
-        "command.match"=>cfg.command.validate().err().map(|_|"Invalid saved command matching configuration".into()),
+        "command.match"=>nlu(cfg),
         "soul.preview"=>crate::plugins::soul::preview::build(cfg,"<node-test>").err().map(|_|"Invalid saved soul preset or prompt variables".into()),
         "memory.recall"|"memory.writeback.dry_run"=>Some("No snapshot-isolated read-only memory test adapter; existing scoped memory API remains available".into()),
         "tts.playback"=>Some("Native client playback is not an HTTP server capability".into()),

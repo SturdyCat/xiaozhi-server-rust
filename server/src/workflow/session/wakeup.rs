@@ -112,16 +112,16 @@ pub(super) fn resolve_greeting_audio(
 impl<'a, T: Transport> Session<'a, T> {
     /// 唤醒问候：命中内存/磁盘缓存则零合成下发，否则合成一次并落盘。
     ///
-    /// 返回 `()` 而不是 `Result` 是刻意的：问候语是**锦上添花**，它的任何失败都不该被
-    /// 上抛成会话级错误（那会让一次本该正常的对话因为"问候没说出来"而中断）。
-    pub(super) async fn handle_wake_greeting(&mut self) {
+    /// 返回真实下行结果，由计划的 on_error 决定当前 detect 事件继续或停止；
+    /// 默认 continue 保持原有降级行为，不把问候失败提升为连接失败。
+    pub(super) async fn handle_wake_greeting(&mut self) -> anyhow::Result<()> {
         // 不变量 3：未启用（默认）时零开销、零行为变化
         if !self.wake.active() {
-            return;
+            return Ok(());
         }
         // 测试台会话（macApp）不是设备：不问候。它的即时请求不该被一段问候语插队。
         if self.is_test {
-            return;
+            return Ok(());
         }
 
         let text = self.wake.text().to_string();
@@ -159,12 +159,7 @@ impl<'a, T: Transport> Session<'a, T> {
 
         // ③ 走既有下行链路（命中即零合成：预取 worker 直接投递已编码帧）。落盘不需要
         // 会话层参与：完整句合成成功时预取/水库链路已经把引擎原样 PCM 写进 hot-audio/。
-        if let Err(e) = self.speak_canned(&text).await {
-            tracing::warn!(
-                "session {} 唤醒问候下发失败（不影响后续对话）: {e}",
-                self.session_id
-            );
-        }
+        self.speak_canned(&text).await
     }
 }
 

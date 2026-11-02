@@ -8,6 +8,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.key
 import androidx.compose.runtime.Composable
+import com.tencent.kuikly.compose.extension.setProp
 import com.tencent.kuikly.compose.foundation.Canvas
 import com.tencent.kuikly.compose.foundation.layout.Box
 import com.tencent.kuikly.compose.foundation.layout.BoxScope
@@ -305,7 +306,8 @@ fun DecoratedSurface(
     Box(modifier.onSizeChanged { size = it }, propagateMinConstraints = true) {
         key(size, shape, outer) {
         if (outer.isNotEmpty()) Canvas(
-            Modifier.matchParentSize().layout { measurable, constraints ->
+            // Shadow/border nodes are paint-only. Native hit testing must reach content beneath.
+            Modifier.matchParentSize().setProp("touchEnable", 0).layout { measurable, constraints ->
                 val pad = ceil(bleed.toPx()).toInt()
                 // Intrinsic passes (for example a parent using IntrinsicSize.Max) measure
                 // this modifier with unbounded constraints. Constraints.Infinity plus the
@@ -324,7 +326,7 @@ fun DecoratedSurface(
         Box(Modifier.clip(shape), propagateMinConstraints = true, content = content)
         key(size, shape, inner, border) {
         if (inner.isNotEmpty() || border != null) Canvas(
-            Modifier.matchParentSize()
+            Modifier.matchParentSize().setProp("touchEnable", 0)
         ) { paintDecoration(shape, inner, border) }
         }
     }

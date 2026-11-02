@@ -79,7 +79,13 @@ pub(super) async fn run(ctx: &RunContext, req: &TestRequest, revision: String) -
     if nlu.state != "ok" {
         return fail_remaining(req, revision, stages, nlu, t);
     }
-    let reply = if nlu.details["matched"] == true {
+    let reply = if nlu.details["next"] == "clarify" {
+        stages.push(StageResult::skipped(
+            "llm",
+            "Accepted model intent lacks slots; clarification only, no skill execution",
+        ));
+        nlu.text.unwrap_or_default()
+    } else if nlu.details["matched"] == true {
         stages.push(StageResult::skipped(
             "llm",
             "Skill matched; device action suppressed (dry run)",

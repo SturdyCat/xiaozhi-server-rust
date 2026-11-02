@@ -12,7 +12,7 @@ DOCS_RS=1 ~/.cargo/bin/cargo check --manifest-path server/Cargo.toml --features 
 ```
 
 - cargo 不在 PATH 时用上述路径；USTC 镜像报 404 时追加 `--config 'source.ustc.registry="sparse+https://mirrors.ustc.edu.cn/crates.io-index/"'`，不要假定每台机器都需要镜像覆盖。
-- 默认 feature 仅用于编译/单测；完整服务运行需要 `sherpa`、原生库与模型，不能把单测桩称为可运行 mock 服务。
+- 默认 feature 支持编译/单测及显式 `--dev` 管理台开发模式（根目录 `./dev-server.sh`）；开发模式运行真实 SQLite/管理 API，独立 `.dev/` 数据、回环监听，推理/语音/训练明确 503，不伪造输出，不做模型下载/发现广播。开发开关仅进程态，不写入配置；保存配置和懒加载不得解除禁用。入口与保护在 [dev.rs](<src/dev.rs>)，运行期由 [Engines::new_dev](<src/runtime/mod.rs>) 装配。完整语音服务仍需要 `sherpa`、原生库与模型，不能把单测桩称为可运行 mock 服务。
 - `DOCS_RS=1` 只证明 feature 代码可类型检查，不代表链接成功或真实推理可用。真实环境另跑 `cargo test --features sherpa` 和协议联调。
 - macOS 编译真实 feature：安装 Homebrew `opus`，设置 `PATH="/opt/homebrew/bin:$PATH"` 与 `PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:$PKG_CONFIG_PATH"`。找不到系统 libopus 会回退 autotools，缺 automake/aclocal 时编译失败；本地动态链接产物不是 Docker 部署产物。
 - Rust 测试外置；子模块可访问父模块私有项，父模块调用子模块函数仅按需用 `pub(super)`，不因拆文件扩大为 `pub`。
@@ -24,6 +24,7 @@ DOCS_RS=1 ~/.cargo/bin/cargo check --manifest-path server/Cargo.toml --features 
 - [配置](<src/config/AGENTS.md>)：来源、兼容迁移、ConfigStore。
 - [运行期装配](<src/runtime/mod.rs>)（原 `engine.rs`）：共享实例、VAD 池、CPU 预算与热刷新。
 - [工作流](<src/workflow/AGENTS.md>)：会话 / 流水线 / 协议 / 下行 / MCP 的编排与边界。
+- [技能系统](<src/skills/AGENTS.md>)：稳定能力白名单、声明式 plan、真实 SQLite 任务/outbox；[模型唯一识别与默认技能清单](<../docs/model-only-skills.md>)说明配置、迁移与发布边界。
 - [设备](<src/device/AGENTS.md>)：EchoMuse 直连、固件 OTA、音色、发现、设备注册表。
 - [网关](<src/gateway/AGENTS.md>)：WS 网关、配置 / 观测 HTTP、文件托管、SSE。
 - [评测](<src/benchmark/AGENTS.md>)：节点测试服务与样本目录（原 `app/bench_api`）。

@@ -176,23 +176,10 @@ pub(super) fn validate_wake(cfg: &Config) -> Result<()> {
     Ok(())
 }
 
-/// NLU 的硬条件：启用且声明了意图时，意图必须有模板（否则永远命中不了 = 静默失效）；
-/// 其余（技能名唯一性、action.kind、模型阈值范围）统一在 [`crate::plugins::skill::validate`]。
+/// 统一目录/计划校验与模型依赖前置检查；不执行任何动作或自动启用模型。
 pub(super) fn validate_nlu(cfg: &Config) -> Result<()> {
     crate::plugins::skill::validate(&cfg.command, &cfg.nlu)?;
-    if cfg.nlu.enabled {
-        for it in &cfg.nlu.intents {
-            if it.templates.is_empty() {
-                anyhow::bail!(
-                    "[nlu] 意图「{}」已声明但 templates 为空：请至少填一个模板（如 [\"把{{room}}的灯{{action}}\"]），\
-                     或暂时把 [nlu].enabled 改回 false。",
-                    it.name
-                );
-            }
-        }
-    }
-    // TinyBERT 语义分类（可选第二级）：开关打开时三路径必填且文件必须存在，阈值在 0~1。
-    // 构建失败只会在会话启动时 warn 回落，这里前置拦截配置错误。
+    // 唯一模型开关打开时三路径必填且文件必须存在。失败不得降级为规则或LLM。
     if cfg.nlu.bert_enabled {
         for (key, path) in [
             ("bert_model", &cfg.nlu.bert_model),

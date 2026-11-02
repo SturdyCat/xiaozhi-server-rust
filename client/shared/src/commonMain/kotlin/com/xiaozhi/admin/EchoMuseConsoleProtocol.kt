@@ -56,6 +56,8 @@ internal object ConsoleWire {
     const val CODE_BUSY = "busy"
     const val CODE_INPUT_TOO_LONG = "input-too-long"
     const val CODE_RATE_LIMITED = "rate-limited"
+    const val CODE_UNSUPPORTED_MODE = "unsupported-mode"
+    const val CODE_INVALID_RESIZE = "invalid-resize"
     const val CODE_DEVICE_OFFLINE = "device-offline"
     const val CODE_INTERNAL = "internal"
 

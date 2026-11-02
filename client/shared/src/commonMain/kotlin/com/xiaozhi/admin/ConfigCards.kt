@@ -18,8 +18,9 @@ import com.tencent.kuikly.compose.foundation.layout.padding
 import com.tencent.kuikly.compose.ui.Alignment
 import com.tencent.kuikly.compose.ui.Modifier
 import com.tencent.kuikly.compose.ui.unit.dp
+import com.xiaozhi.admin.contracts.IconToken
+import com.xiaozhi.admin.icons.GearIcon
 import com.xiaozhi.admin.kit.actionRow
-import com.xiaozhi.admin.kit.switchRow
 
 /**
  * 配置 section 的**分发入口** + 每个 section 共用的头部横幅。
@@ -77,6 +78,8 @@ fun ConfigSectionHost(
         // 就绪度徽标：对应能力 phase 偏离（degraded/failed）时显示状态 + 原因
         SectionReadinessBanner(meta, id)
 
+        ConfigModeHiddenDraftNotice(form)
+
         // ===== 分发：每个分支一行 =====
         when (id) {
             "vad" -> VadConfigCard(form)
@@ -132,21 +135,6 @@ private fun SectionReadinessBanner(meta: PluginMetaState, sectionId: String) {
 }
 
 /**
- * 「高级选项」开关行（P0-1）：放在卡片基础字段之后，其后的高级字段区由各卡片自己
- * `if (form.showAdvanced) { … }` 展开。开关状态全局共享（同一时刻只看一个 section，无歧义）。
- */
-@Composable
-fun AdvancedToggleRow(form: ConfigFormState) {
-    switchRow(
-        label = "显示高级选项",
-        checked = form.showAdvanced,
-        onToggle = { form.showAdvanced = it },
-        help = "高级字段是调优项（缓存容量、切句时序、检索预算、上下文长度等），" +
-            "默认折叠以免淹没常用配置；展开状态全局共享，不影响保存内容。",
-    )
-}
-
-/**
  * 密钥输入框的占位提示。
  *
  * 服务端 `GET /api/config` 已打码（只回 `has_<field>` presence 标记），因此：
@@ -180,6 +168,7 @@ private fun EditTargetBanner(form: ConfigFormState, toast: ToastState) {
                 text = "返回全局",
                 onClick = { form.backToGlobal(pager) },
                 type = ButtonType.OUTLINE,
+                iconWidget = { color -> GearIcon(token = IconToken.Back, size = 16.dp, tint = color) },
             )
             Button(
                 text = "恢复全局配置",
@@ -187,6 +176,7 @@ private fun EditTargetBanner(form: ConfigFormState, toast: ToastState) {
                     form.clearDeviceOverlay(pager) { msg, level -> toast.show(msg, level) }
                 },
                 type = ButtonType.OUTLINE,
+                iconWidget = { color -> GearIcon(token = IconToken.Refresh, size = 16.dp, tint = color) },
             )
         }
     }
@@ -218,16 +208,19 @@ fun LabeledCard(
     Card(modifier = modifier.fillMaxWidth().padding(bottom = Spacing.lg)) {
         Column(modifier = Modifier.fillMaxWidth().padding(Spacing.lg)) {
             Row(
-                modifier = Modifier.fillMaxWidth().padding(bottom = Spacing.sm),
+                // 标题行与正文之间留 md（12dp）：卡片标题是"区块名"，与首行内容要有一档
+                // 可感知的呼吸感；sm（8dp）在标题+长正文时视觉上贴在一起。
+                modifier = Modifier.fillMaxWidth().padding(bottom = Spacing.md),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Text(
                     text = title,
+                    modifier = Modifier.weight(1f),
                     style = Theme.typography.titleSmall,
                     color = Theme.colors.foreground,
                 )
-                Box { if (trailing != null) trailing() }
+                if (trailing != null) Box(Modifier.padding(start = Spacing.sm)) { trailing() }
             }
             content()
         }

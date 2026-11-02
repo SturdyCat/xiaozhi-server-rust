@@ -121,14 +121,16 @@ pub async fn run_session<T: Transport>(
         None
     };
     // 技能目录快照：会话开始时取一次（= 注册表声明的 next_session 语义）。
-    // `[command]` + `[nlu]` 统一编译（规则 + 轻量模型两级，配置了 `[nlu].bert_*` 时
-    // 第二级为 TinyBERT 语义分类、跨会话共享引擎）；全关时空目录，零开销。
+    // `[command]` + `[nlu]` 统一编译为模型标签目录；共享真实分类器，
+    // 没有模板规则/启发式/LLM技能回提，关闭模型仅纯聊天。
     // 数据源用每设备生效配置。
+    let workflow =
+        crate::workflow::designer::compile(&eff_config.workflow).map_err(anyhow::Error::msg)?;
     let bert = engines.bert_engine(&eff_config.nlu);
-    let skills = SkillRegistry::new(&eff_config.command, &eff_config.nlu, bert);
+    let skills = SkillRegistry::new(&eff_config.command, &eff_config.nlu, bert.clone());
     if skills.active() {
         tracing::info!(
-            "session {session_id} 技能级联已启用：规则 + 轻量模型两级本地识别先于 LLM（设备 {device_id}）"
+            "session {session_id} model-only skill authorization enabled (device {device_id})"
         );
     }
     // 唤醒问候语快照：同上（next_session 语义）。数据源用每设备生效配置。
@@ -171,6 +173,7 @@ pub async fn run_session<T: Transport>(
     } else {
         None
     };
+    let memory = engines.memory();
     let mut session = Session {
         transport,
         engines,
@@ -179,6 +182,8 @@ pub async fn run_session<T: Transport>(
         device_id,
         eff_config,
         tts_lease,
+        memory,
+        memory_completed_through: None,
         bounded_turn,
         pending_segments: Vec::new(),
         history: Vec::new(),
@@ -194,6 +199,9 @@ pub async fn run_session<T: Transport>(
         aiui,
         pacer: DownlinkPacer::new(params.downlink_lead_ms as u64),
         skills,
+        skill_turn_id: 0,
+        delivery_idle: true,
+        workflow,
         close_requested: false,
         mcp_enabled: mcp,
         mcp_next_id: 1,

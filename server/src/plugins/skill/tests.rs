@@ -1,42 +1,54 @@
-//! `server/src/plugins/skill` 的单元测试。
-//!
-//! 覆盖三级级联的**目录契约**（识别源只提名、副作用统一校验）：
-//! ① 规则层命中（`[command]` end_session + `[nlu]` 精确模板）；
-//! ② 轻量模型层：规则未命中的口语化说法达阈值执行；否定/歧义/阈值关闭不放行；
-//! ③ `resolve` 是唯一安全边界：未知技能、多余槽位、坏槽位值一律拒绝；
-//! ④ LLM 侧 `execute_skill` 工具：目录形状、白名单外工具与坏 JSON 拒绝；
-//! ⑤ `validate`：坏阈值 / 重名 / 未知 action.kind 在保存期被拦下。
-
-use std::collections::HashMap;
-
-use serde_json::json;
-
+//! 模型门禁与目录安全契约。注入分类器只验证接线，不代表真实ONNX质量验收。
 use super::*;
-use crate::plugins::command::CommandConfig;
-use crate::plugins::llm::ToolCall;
-use crate::plugins::nlu::{IntentDef, NluConfig, SlotList};
+use crate::plugins::nlu::{ActionDef, BertHit, IntentDef, SlotList};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// 两技能一槽位表的标准夹具：control_light（开/关灯）+ control_ac（空调，用于歧义竞争）。
+struct Classifier {
+    label: &'static str,
+    score: f32,
+    calls: Arc<AtomicUsize>,
+    fail: bool,
+}
+impl BertClassify for Classifier {
+    fn classify_timed(&self, _: &str) -> Result<BertHit> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        if self.fail {
+            bail!("injected inference failure");
+        }
+        Ok(BertHit {
+            label: self.label.into(),
+            confidence: self.score,
+            tokenize_ms: 0,
+            infer_ms: 0,
+        })
+    }
+}
 fn fixture() -> (CommandConfig, NluConfig) {
-    let command = CommandConfig {
-        enabled: true,
-        ..CommandConfig::default()
-    };
     let nlu = NluConfig {
-        enabled: true,
+        bert_enabled: true,
         intents: vec![
             IntentDef {
                 name: "control_light".into(),
                 templates: vec!["把{room}的灯{action}".into()],
-                action: crate::plugins::nlu::ActionDef {
-                    kind: "mcp:mcp_light_control".into(),
+                action: ActionDef {
+                    kind: "mcp:light.set".into(),
                     reply: "好的".into(),
+                    ..Default::default()
                 },
             },
             IntentDef {
                 name: "control_ac".into(),
                 templates: vec!["把{room}的空调{action}".into()],
                 action: Default::default(),
+            },
+            IntentDef {
+                name: "help".into(),
+                templates: vec!["打开使用指南".into()],
+                action: ActionDef {
+                    kind: "reply".into(),
+                    reply: "这里是指南".into(),
+                    ..Default::default()
+                },
             },
         ],
         slots: vec![
@@ -51,225 +63,265 @@ fn fixture() -> (CommandConfig, NluConfig) {
                 optional: false,
             },
         ],
-        ..NluConfig::default()
+        ..Default::default()
     };
-    (command, nlu)
+    (CommandConfig::default(), nlu)
 }
-
-fn registry() -> SkillRegistry {
+fn make_registry(label: &'static str, score: f32) -> (SkillRegistry, Arc<AtomicUsize>) {
     let (command, nlu) = fixture();
-    SkillRegistry::new(&command, &nlu, None)
+    registry_with(&command, &nlu, label, score, false)
 }
-
+fn registry_with(
+    command: &CommandConfig,
+    nlu: &NluConfig,
+    label: &'static str,
+    score: f32,
+    fail: bool,
+) -> (SkillRegistry, Arc<AtomicUsize>) {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let classifier = Classifier {
+        label,
+        score,
+        calls: calls.clone(),
+        fail,
+    };
+    (
+        SkillRegistry::new(command, nlu, Some(Arc::new(classifier))),
+        calls,
+    )
+}
 fn slots(pairs: &[(&str, &str)]) -> HashMap<String, String> {
     pairs
         .iter()
-        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .map(|(key, value)| (key.to_string(), value.to_string()))
         .collect()
 }
 
-/// ① 规则层：end_session（`[command]`）与精确模板（`[nlu]`）都走 Rules 且动作编译正确。
 #[test]
-fn rules_hit_end_session_and_exact_template() {
-    let r = registry();
-    // end_session 来自 `[command]`（exact、短词）。
-    let hit = r.parse_staged("退下。").expect("end_session 应命中").1;
-    assert_eq!(hit.name, "end_session");
-    assert_eq!(hit.action, SkillAction::EndSession);
-    // 精确模板：槽位取值 + 规范化为配置原文 + mcp 动作。
-    let hit = r
-        .parse_staged("把客厅的灯关闭")
-        .expect("精确模板应命中（规则层）")
-        .1;
-    assert_eq!(hit.name, "control_light");
-    assert_eq!(
-        hit.action,
-        SkillAction::LocalCommand {
-            kind: "mcp:mcp_light_control".into()
-        }
-    );
-    assert_eq!(hit.slots.get("room").map(String::as_str), Some("客厅"));
-    assert_eq!(hit.slots.get("action").map(String::as_str), Some("关闭"));
+fn model_is_called_once_even_when_command_or_template_looks_exact() {
+    let (registry, calls) = make_registry("end_session", 0.99);
+    let Recognition::Accepted { inv, .. } = registry.recognize("退下") else {
+        panic!("expected model acceptance");
+    };
+    assert_eq!(inv.action, SkillAction::EndSession);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    let (registry, calls) = make_registry("control_light", 0.99);
+    let Recognition::Accepted { inv, .. } = registry.recognize("把客厅的灯打开") else {
+        panic!("expected same-skill extraction");
+    };
+    assert_eq!(inv.slots, slots(&[("room", "客厅"), ("action", "打开")]));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
 
-/// ② 模型层：规则拒绝的口语化说法达阈值执行（中间槽位"大客厅"含表内"客厅"），
-/// 槽位取值表规范值——这是模型层相对规则层（中间槽位仅精确匹配）的真实增量。
 #[test]
-fn model_hits_colloquial_fillers_rules_missed() {
-    let r = registry();
-    let (stage, hit) = r
-        .parse_staged("帮我把大客厅的灯打开")
-        .expect("口语化说法应由模型层命中");
-    assert_eq!(stage, SkillStage::Model);
-    assert_eq!(hit.name, "control_light");
-    assert_eq!(hit.slots.get("room").map(String::as_str), Some("客厅"));
-    assert_eq!(hit.slots.get("action").map(String::as_str), Some("打开"));
-}
-
-/// ② 模型层安全边界：否定词、多值歧义、锚点缺失都不得提名（宁可漏给 LLM）。
-/// 规则层的尾随槽位包含同样带否定/歧义闸（见 `matcher`），两层层层设防。
-#[test]
-fn model_abstains_on_negation_ambiguity_and_missing_anchor() {
-    let r = registry();
-    // 否定：「别打开」含否定词 → 不执行（规则层先行拒绝，模型层同样拒绝）。
-    assert!(r.parse_staged("把客厅的灯别打开").is_none());
-    assert!(r.parse_staged("把大客厅的灯不要打开").is_none());
-    // 多值歧义：间隙同时含「打开/关闭」→ 不执行。
-    assert!(r.parse_staged("把客厅的灯打开还是关闭").is_none());
-    // 锚点缺失（说的不是"灯"也不是"空调"）→ 两技能都弃权。
-    assert!(r.parse_staged("把客厅的电视打开").is_none());
-}
-
-/// ② 阈值封顶（1.0）= 关闭模型层：模型层独有的中间槽位模糊也不再本地执行（放行 LLM）。
-#[test]
-fn threshold_one_disables_model_stage() {
+fn disabled_model_never_uses_injected_classifier_or_keyword_rules() {
     let (command, mut nlu) = fixture();
-    nlu.model_threshold = 1.0;
-    let r = SkillRegistry::new(&command, &nlu, None);
-    assert!(r.parse_staged("帮我把大客厅的灯打开").is_none());
+    nlu.bert_enabled = false;
+    let (registry, calls) = registry_with(&command, &nlu, "end_session", 1.0, false);
+    assert_eq!(registry.recognize("退下"), Recognition::Disabled);
+    assert_eq!(registry.recognize("把客厅的灯打开"), Recognition::Disabled);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert!(registry.tools().is_empty());
 }
 
-/// ③ `resolve` 安全边界：未知技能 / 多余槽位 / 坏槽位值 / 超长开放槽位都拒绝。
 #[test]
-fn resolve_rejects_unknown_skill_bad_slots_and_values() {
-    let r = registry();
+fn enabled_missing_or_broken_model_fails_closed_instead_of_rules() {
+    let (command, nlu) = fixture();
+    let missing = SkillRegistry::new(&command, &nlu, None);
+    assert!(matches!(
+        missing.recognize("退下"),
+        Recognition::Unavailable { .. }
+    ));
+    assert!(missing.try_parse_staged("退下").is_err());
+    let (broken, calls) = registry_with(&command, &nlu, "end_session", 1.0, true);
+    assert!(matches!(
+        broken.recognize("退下"),
+        Recognition::Unavailable { .. }
+    ));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn other_and_low_score_cannot_be_overridden_by_templates_or_keywords() {
+    for (label, score) in [
+        ("other", 0.99),
+        ("control_light", 0.5),
+        ("end_session", 0.5),
+    ] {
+        let (registry, _) = make_registry(label, score);
+        for text in ["退下", "把客厅的灯打开", "帮我把大客厅的灯打开"] {
+            assert_eq!(registry.recognize(text), Recognition::Rejected);
+        }
+    }
+}
+
+#[test]
+fn classifier_selects_intent_and_template_cannot_switch_to_another() {
+    let (registry, _) = make_registry("control_ac", 0.99);
     assert!(
-        r.resolve("nope", HashMap::new()).is_err(),
-        "未知技能必须拒绝"
+        matches!(registry.recognize("把客厅的灯打开"), Recognition::NeedsSlots { name, .. } if name == "control_ac")
     );
-    // 必填槽位缺失。
-    assert!(r.resolve("control_light", HashMap::new()).is_err());
-    // 多余字段（LLM 增造槽位）。
-    let mut extra = slots(&[("room", "客厅"), ("action", "打开")]);
-    extra.insert("extra".into(), "x".into());
-    assert!(r.resolve("control_light", extra).is_err());
-    // 封闭槽位值不在表内。
-    assert!(r
+    let (registry, _) = make_registry("help", 0.99);
+    let Recognition::Accepted { inv, .. } = registry.recognize("与指南训练模板完全不同的表达")
+    else {
+        panic!("slotless needs no literal gate");
+    };
+    assert_eq!(inv.name, "help");
+}
+
+#[test]
+fn missing_ambiguous_or_invalid_slots_only_request_clarification() {
+    let (registry, _) = make_registry("control_light", 0.99);
+    for text in [
+        "帮我把大客厅的灯打开",
+        "把厨房的灯打开",
+        "把客厅的灯别打开",
+        "把客厅的灯打开还是关闭",
+        "打开灯",
+    ] {
+        assert!(
+            matches!(registry.recognize(text), Recognition::NeedsSlots { name, missing, .. } if name == "control_light" && missing == ["action", "room"])
+        );
+    }
+}
+
+#[test]
+fn unknown_labels_and_nonfinite_scores_are_strict_errors() {
+    let (registry, _) = make_registry("not_registered", 0.99);
+    assert!(matches!(
+        registry.recognize("退下"),
+        Recognition::Unavailable { .. }
+    ));
+    for score in [f32::NAN, f32::INFINITY, -0.1, 1.1] {
+        let (registry, _) = make_registry("end_session", score);
+        assert!(matches!(
+            registry.recognize("退下"),
+            Recognition::Unavailable { .. }
+        ));
+    }
+}
+
+#[test]
+fn known_disabled_labels_reject_instead_of_failing_or_executing() {
+    let (mut command, mut nlu) = fixture();
+    nlu.enabled = false;
+    let (registry, _) = registry_with(&command, &nlu, "control_light", 0.99, false);
+    assert_eq!(registry.recognize("把客厅的灯打开"), Recognition::Rejected);
+    nlu.enabled = true;
+    command.enabled = false;
+    let (registry, _) = registry_with(&command, &nlu, "end_session", 0.99, false);
+    assert_eq!(registry.recognize("退下"), Recognition::Rejected);
+}
+
+#[test]
+fn all_catalogs_disabled_skip_classifier_entirely() {
+    let (mut command, mut nlu) = fixture();
+    command.enabled = false;
+    nlu.enabled = false;
+    let (registry, calls) = registry_with(&command, &nlu, "end_session", 1.0, true);
+    assert_eq!(registry.recognize("退下"), Recognition::Disabled);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn llm_has_no_skill_catalog_or_action_backchannel() {
+    let (registry, _) = make_registry("other", 1.0);
+    assert!(registry.tools().is_empty());
+    let call = ToolCall {
+        id: "1".into(),
+        name: TOOL_NAME.into(),
+        arguments: serde_json::json!({"skill":"end_session","slots":{}}).to_string(),
+    };
+    assert!(registry.from_tool_call(&call).is_err());
+}
+
+#[test]
+fn deprecated_thresholds_cannot_enable_heuristic_fallback() {
+    let (command, mut nlu) = fixture();
+    nlu.model_threshold = 0.0;
+    nlu.model_margin = 0.0;
+    let (registry, _) = registry_with(&command, &nlu, "other", 0.99, false);
+    assert_eq!(registry.recognize("把客厅的灯打开"), Recognition::Rejected);
+}
+
+#[test]
+#[allow(deprecated)] // Deliberately exercise the diagnostic-only compatibility wrapper.
+fn legacy_parser_wrapper_is_still_model_only() {
+    let (registry, _) = make_registry("control_light", 0.99);
+    let (stage, inv) = registry
+        .try_parse_staged("把客厅的灯打开")
+        .unwrap()
+        .unwrap();
+    assert_eq!(stage, SkillStage::Model);
+    assert_eq!(inv.name, "control_light");
+    let (registry, _) = make_registry("other", 0.99);
+    assert!(registry.parse_staged("退下").is_none());
+}
+
+#[test]
+fn resolve_enforces_same_skill_schema_values_and_size() {
+    let (registry, _) = make_registry("control_light", 0.99);
+    assert!(registry.resolve("nope", HashMap::new()).is_err());
+    assert!(registry.resolve("control_light", HashMap::new()).is_err());
+    assert!(registry
         .resolve(
             "control_light",
             slots(&[("room", "厨房"), ("action", "打开")])
         )
         .is_err());
-}
-
-/// ③ 槽位值规范化回写：模型/LLM 提供归一化值时，resolve 改写为配置原文（canonical）。
-#[test]
-fn resolve_rewrites_slot_to_canonical_value() {
-    let r = registry();
-    let inv = r
+    assert!(registry
         .resolve(
             "control_light",
-            slots(&[("room", "客 厅"), ("action", "关 闭")]),
+            slots(&[("room", "客厅"), ("action", "打开"), ("extra", "x")])
         )
-        .expect("归一化等值的槽位应被接受");
-    assert_eq!(inv.slots.get("room").map(String::as_str), Some("客厅"));
-    assert_eq!(inv.slots.get("action").map(String::as_str), Some("关闭"));
+        .is_err());
+    let inv = registry
+        .resolve(
+            "control_light",
+            slots(&[("room", "客 厅"), ("action", "打 开")]),
+        )
+        .unwrap();
+    assert_eq!(inv.slots["room"], "客厅");
 }
 
-/// ④ LLM 工具目录：只有一个 `execute_skill`，技能枚举与槽位表齐全；目录为空时不暴露工具。
 #[test]
-fn tools_expose_single_execute_skill_spec() {
-    let r = registry();
-    let tools = r.tools();
-    assert_eq!(tools.len(), 1);
-    assert_eq!(tools[0].name, TOOL_NAME);
-    let params = &tools[0].parameters;
-    let skill_enum: Vec<&str> = params["properties"]["skill"]["enum"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(|v| v.as_str())
-        .collect();
-    assert!(skill_enum.contains(&"control_light"), "{skill_enum:?}");
-    assert!(skill_enum.contains(&"end_session"), "{skill_enum:?}");
-    assert!(
-        tools[0].description.contains("control_ac"),
-        "目录须包含全部技能名"
-    );
-    // 全关目录：无工具（会话层不传 tools，LLM 纯聊天）。
-    // command/nlu 默认均已改为启用（标准行为），这里显式构造关闭态验证「无技能 → 无工具」。
-    let empty = SkillRegistry::new(
-        &CommandConfig {
-            enabled: false,
-            ..CommandConfig::default()
-        },
-        &NluConfig {
-            enabled: false,
-            ..NluConfig::default()
-        },
-        None,
-    );
-    assert!(empty.tools().is_empty());
+fn accepted_default_plan_keeps_raw_slot_time_and_uses_real_task_api() {
+    let command = CommandConfig::default();
+    let nlu = NluConfig {
+        bert_enabled: true,
+        ..Default::default()
+    };
+    let (registry, _) = registry_with(&command, &nlu, "reminder_daily", 0.99, false);
+    let Recognition::Accepted { inv, .. } = registry.recognize("每天08:30提醒我喝水") else {
+        panic!("expected daily slots");
+    };
+    assert_eq!(inv.slots["daily_time"], "08:30");
+    let SkillAction::Plan { plan } = inv.action else {
+        panic!("initial reminder must be a real plan");
+    };
+    assert_eq!(plan.steps[0].api, "tasks.create");
+    let resolved = crate::skills::resolve_plan(&plan, &inv.slots).unwrap();
+    assert_eq!(resolved.steps[0].args["daily"], "08:30");
 }
 
-/// ④ `from_tool_call`：合法调用走同一 resolve；白名单外工具 / 坏 JSON / 超长参数拒绝。
 #[test]
-fn from_tool_call_enforces_whitelist_and_shape() {
-    let r = registry();
-    let ok = r
-        .from_tool_call(&ToolCall {
-            id: "call_1".into(),
-            name: TOOL_NAME.into(),
-            arguments:
-                json!({"skill": "control_light", "slots": {"room": "卧室", "action": "打开"}})
-                    .to_string(),
-        })
-        .expect("合法工具调用应被接受");
-    assert_eq!(ok.name, "control_light");
-    // 白名单外工具名。
-    assert!(r
-        .from_tool_call(&ToolCall {
-            id: "call_2".into(),
-            name: "rm_rf".into(),
-            arguments: "{}".into(),
-        })
-        .is_err());
-    // 坏 JSON / 多余字段。
-    assert!(r
-        .from_tool_call(&ToolCall {
-            id: "call_3".into(),
-            name: TOOL_NAME.into(),
-            arguments: "not json".into()
-        })
-        .is_err());
-    assert!(r
-        .from_tool_call(&ToolCall {
-            id: "call_4".into(),
-            name: TOOL_NAME.into(),
-            arguments: json!({"skill": "control_light", "slots": {}, "extra": 1}).to_string(),
-        })
-        .is_err());
-    // 参数体超限。
-    let big = "x".repeat(17 * 1024);
-    assert!(r
-        .from_tool_call(&ToolCall {
-            id: "call_5".into(),
-            name: TOOL_NAME.into(),
-            arguments: big
-        })
-        .is_err());
-}
-
-/// ⑤ `validate`：坏阈值 / 重名 / 未知 action.kind / 空名在保存期被拦，文案可行动。
-#[test]
-fn validate_blocks_bad_threshold_names_and_kinds() {
+fn registry_snapshot_does_not_gain_new_saved_definitions() {
     let (command, mut nlu) = fixture();
-    nlu.model_threshold = 1.5;
-    assert!(validate(&command, &nlu).is_err(), "阈值超出 [0,1] 必须被拦");
-    let (command, mut nlu) = fixture();
+    let old = SkillRegistry::new(&command, &nlu, None);
     nlu.intents.push(IntentDef {
-        name: "control_light".into(),
-        templates: vec!["开灯".into()],
-        action: Default::default(),
+        name: "new_help".into(),
+        templates: vec!["新指南".into()],
+        ..Default::default()
     });
-    assert!(validate(&command, &nlu).is_err(), "重名技能必须被拦");
-    let (command, mut nlu) = fixture();
-    nlu.intents[0].action.kind = "shutdown -h".into();
-    assert!(
-        validate(&command, &nlu).is_err(),
-        "未知 action.kind 必须被拦"
-    );
-    let (command, mut nlu) = fixture();
-    nlu.intents[0].name = "  ".into();
-    assert!(validate(&command, &nlu).is_err(), "空技能名必须被拦");
+    let (new, _) = registry_with(&command, &nlu, "new_help", 0.99, false);
+    assert!(matches!(
+        new.recognize("新的表达"),
+        Recognition::Accepted { .. }
+    ));
+    assert!(old.resolve("new_help", HashMap::new()).is_err());
 }
+
+#[path = "catalog_tests.rs"]
+mod catalog_tests;
+#[path = "clock_tests.rs"]
+mod clock_tests;

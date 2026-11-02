@@ -4,6 +4,7 @@ import androidx.compose.runtime.Composable
 import com.gearui.foundation.primitives.ScrollView
 import com.gearui.foundation.primitives.Text
 import com.gearui.theme.Theme
+import com.xiaozhi.admin.contracts.IconToken
 import com.tencent.kuikly.compose.foundation.layout.Column
 import com.tencent.kuikly.compose.foundation.layout.Row
 import com.tencent.kuikly.compose.foundation.layout.fillMaxSize
@@ -16,7 +17,7 @@ import com.tencent.kuikly.compose.ui.unit.dp
 import com.xiaozhi.admin.kit.GearTerminal
 import com.xiaozhi.admin.kit.GearTerminalText
 import com.xiaozhi.admin.kit.GearTerminalTone
-import com.xiaozhi.admin.kit.GearUiSpace
+import com.xiaozhi.admin.kit.LocalAdminSpacing
 import com.xiaozhi.admin.kit.actionRow
 import com.xiaozhi.admin.kit.labeledSelect
 import com.xiaozhi.admin.kit.pageScroller
@@ -67,9 +68,10 @@ fun ConsolePage(console: ConsoleState, toast: ToastState) {
                     color = if (console.connected) Theme.colors.success else Theme.colors.mutedForeground,
                 )
             }
-            OpsOutlineButton(
-                text = "重连",
+            OpsIconButton(
+                token = IconToken.Refresh,
                 onClick = { console.connect(console.apiBase, console.apiToken) },
+                contentDescription = "重连",
                 enabled = !console.connected,
             )
         }
@@ -86,13 +88,14 @@ fun ConsolePage(console: ConsoleState, toast: ToastState) {
                 onSelect = { console.setLevel(it) },
             )
             actionRow {
-                OpsOutlineButton(
-                    text = if (console.paused) "继续" else "暂停",
+                OpsIconButton(
+                    token = if (console.paused) IconToken.Play else IconToken.Stop,
                     onClick = { console.togglePause() },
+                    contentDescription = if (console.paused) "继续" else "暂停",
                     enabled = console.connected,
                 )
-                OpsOutlineButton(
-                    text = "复制",
+                OpsIconButton(
+                    token = IconToken.Copy,
                     onClick = {
                         if (copyToClipboard(console.display)) {
                             toast.show("日志已复制到剪贴板", "ok")
@@ -100,11 +103,13 @@ fun ConsolePage(console: ConsoleState, toast: ToastState) {
                             toast.show("复制失败：当前平台剪贴板不可用", "error")
                         }
                     },
+                    contentDescription = "复制",
                     enabled = console.display.isNotEmpty(),
                 )
-                OpsOutlineButton(
-                    text = "清空",
+                OpsIconButton(
+                    token = IconToken.Delete,
                     onClick = { console.clear() },
+                    contentDescription = "清空",
                     enabled = console.display.isNotEmpty(),
                 )
             }
@@ -116,7 +121,7 @@ fun ConsolePage(console: ConsoleState, toast: ToastState) {
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(CONSOLE_TERMINAL_HEIGHT)
-                    .padding(top = GearUiSpace.sm),
+                    .padding(top = LocalAdminSpacing.current.sm),
             ) {
                 ScrollView(modifier = Modifier.fillMaxSize()) {
                     GearTerminalText(

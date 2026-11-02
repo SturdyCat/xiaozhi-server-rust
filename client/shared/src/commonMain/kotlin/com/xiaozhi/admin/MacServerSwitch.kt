@@ -21,7 +21,7 @@ import com.tencent.kuikly.core.module.SharedPreferencesModule
 import com.tencent.kuikly.core.nvi.serialization.json.JSONArray
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.tencent.kuikly.core.pager.Pager
-import com.xiaozhi.admin.kit.GearUiSpace
+import com.xiaozhi.admin.kit.LocalAdminSpacing
 import com.xiaozhi.admin.kit.actionRow
 import com.xiaozhi.admin.kit.dividerH
 import com.xiaozhi.admin.kit.labeledField
@@ -141,7 +141,7 @@ internal fun ServerSwitchEntry(page: AdminPage) {
             text = "当前：${state.current}",
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = Spacing.lg, end = Spacing.lg, bottom = GearUiSpace.xs),
+                .padding(start = Spacing.lg, end = Spacing.lg, bottom = LocalAdminSpacing.current.xs),
             style = Theme.typography.caption,
             color = Theme.colors.mutedForeground,
         )
@@ -151,7 +151,7 @@ internal fun ServerSwitchEntry(page: AdminPage) {
                 text = "当前地址连不通，正在搜索局域网内的服务器…",
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = Spacing.lg, end = Spacing.lg, bottom = GearUiSpace.xs),
+                    .padding(start = Spacing.lg, end = Spacing.lg, bottom = LocalAdminSpacing.current.xs),
                 style = Theme.typography.caption,
                 color = Theme.colors.destructive,
             )
@@ -168,11 +168,11 @@ private fun ServerSwitchPanel(page: AdminPage, pager: Pager, state: ServerSwitch
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = GearUiSpace.sm, end = GearUiSpace.sm, bottom = GearUiSpace.sm),
+            .padding(start = LocalAdminSpacing.current.sm, end = LocalAdminSpacing.current.sm, bottom = LocalAdminSpacing.current.sm),
     ) {
         Text(
             text = "局域网自动发现",
-            modifier = Modifier.padding(top = GearUiSpace.xs),
+            modifier = Modifier.padding(top = LocalAdminSpacing.current.xs),
             style = Theme.typography.label,
             color = Theme.colors.foreground,
         )
@@ -199,7 +199,7 @@ private fun ServerSwitchPanel(page: AdminPage, pager: Pager, state: ServerSwitch
                             requestToken = tokenForTarget(state, server.base),
                         )
                     }
-                    .padding(top = GearUiSpace.xs, bottom = GearUiSpace.xs),
+                    .padding(top = LocalAdminSpacing.current.xs, bottom = LocalAdminSpacing.current.xs),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(

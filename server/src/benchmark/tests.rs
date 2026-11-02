@@ -5,6 +5,7 @@ use serde_json::json;
 mod fakes;
 mod http;
 mod limits;
+mod model_only;
 mod profiles;
 
 #[tokio::test]
@@ -129,14 +130,21 @@ async fn all_standard_actions_reach_real_service_paths_with_fake_providers() {
 }
 
 #[tokio::test]
-async fn nlu_uses_actual_skill_registry_nomination_with_no_device_execution() {
+async fn nlu_uses_shared_model_recognition_with_no_device_execution_or_fake_native_claim() {
     let mut cfg = Config::default();
     cfg.command.enabled = true;
-    let (service, store) = service(&cfg, Arc::new(FakeProviders::default()));
+    let (service, store) = service(
+        &cfg,
+        Arc::new(FakeProviders {
+            model_label: Some("end_session".into()),
+            ..Default::default()
+        }),
+    );
     let out = service.run(request("nlu.classify", Some("退下。"))).await;
     assert_eq!(out.result.state, "ok");
     assert_eq!(out.result.details["matched"], true);
-    assert_eq!(out.result.details["recognition_stage"], "rules");
+    assert_eq!(out.result.details["recognition_stage"], "model");
+    assert_eq!(out.result.measurement, "test_double_inference");
     assert_eq!(out.result.details["skill"], "end_session");
     assert_eq!(out.result.details["executed"], false);
     assert_eq!(out.result.details["dry_run"], true);
@@ -144,18 +152,30 @@ async fn nlu_uses_actual_skill_registry_nomination_with_no_device_execution() {
 }
 
 #[tokio::test]
-async fn nlu_cascade_reuses_actual_light_model_not_a_parallel_fake_classifier() {
+async fn nlu_templates_only_extract_slots_after_model_accepts_the_same_skill() {
     let mut cfg = Config::default();
     cfg.nlu=serde_json::from_value(json!({"enabled":true,"intents":[{"name":"control_light","templates":["把{room}的灯{action}"],"action":{"kind":"mcp:light","reply":"好的"}}],"slots":[{"name":"room","values":["客厅","卧室"]},{"name":"action","values":["打开","关闭"]}]})).unwrap();
-    let (service, _) = service(&cfg, Arc::new(FakeProviders::default()));
-    let out = service
-        .run(request("nlu.classify", Some("帮我把大客厅的灯打开")))
+    let (accepting, _) = service(
+        &cfg,
+        Arc::new(FakeProviders {
+            model_label: Some("control_light".into()),
+            ..Default::default()
+        }),
+    );
+    let out = accepting
+        .run(request("nlu.classify", Some("把客厅的灯打开")))
         .await;
     assert_eq!(out.result.state, "ok");
     assert_eq!(out.result.details["matched"], true);
     assert_eq!(out.result.details["recognition_stage"], "model");
     assert_eq!(out.result.details["slots"]["room"], "客厅");
     assert_eq!(out.result.details["executed"], false);
+    let (rejecting, _) = service(&cfg, Arc::new(FakeProviders::default()));
+    let rejected = rejecting
+        .run(request("nlu.classify", Some("把客厅的灯打开")))
+        .await;
+    assert_eq!(rejected.result.details["matched"], false);
+    assert_eq!(rejected.result.details["reject_reason"], "model_rejected");
 }
 
 #[tokio::test]

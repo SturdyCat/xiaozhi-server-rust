@@ -4,6 +4,7 @@ mod impact;
 mod legacy;
 mod presets;
 mod secrets;
+mod workflow;
 
 // 预设管线（P1-5 R3-8）测试依赖的纯函数（handler 委托给它们，避免单测里构造会加载模型的完整 `Engines`）。
 use crate::config::store::sqlite::SqliteConfigStore;

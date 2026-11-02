@@ -1,4 +1,5 @@
 package com.xiaozhi.admin.kit
+import com.xiaozhi.admin.kit.LocalAdminSpacing
 
 import androidx.compose.runtime.Composable
 import com.gearui.components.input.Input
@@ -66,7 +67,7 @@ internal val DECIMAL_INPUT_FILTER: (String) -> String = { raw ->
 /**
  * 标签行：左「中文名 + 可选 ⓘ」，右可选控制动作（如「获取模型列表」）。
  *
- * 与旧 `fieldLabel` 同一节奏：上留 [GearUiSpace.fieldGap]、下留 [GearUiSpace.xs]。
+ * 与旧 `fieldLabel` 同一节奏：上留 [LocalAdminSpacing.current.fieldGap]、下留 [LocalAdminSpacing.current.xs]。
  */
 @Composable
 fun fieldLabelRow(
@@ -77,7 +78,7 @@ fun fieldLabelRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(top = GearUiSpace.fieldGap, bottom = GearUiSpace.xs),
+            .padding(top = LocalAdminSpacing.current.fieldGap, bottom = LocalAdminSpacing.current.xs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
@@ -263,7 +264,7 @@ fun switchRow(
         modifier = modifier
             .fillMaxWidth()
             .heightIn(min = 52.dp)
-            .padding(top = GearUiSpace.fieldGap),
+            .padding(top = LocalAdminSpacing.current.fieldGap),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
@@ -293,7 +294,7 @@ fun switchRow(
 }
 
 /**
- * 卡片内动作行：按钮/徽标靠右且垂直居中，顶部留 [GearUiSpace.sm]。
+ * 卡片内动作行：按钮/徽标靠右且垂直居中，顶部留 [LocalAdminSpacing.current.sm]。
  *
  * ⚠️ 与旧实现的差异（登记为 A 类版式差异）：旧版是 `flexWrap`，窄屏会换行；
  * Compose 的 `Row` 不换行。管理台的 actionRow 通常只有 1–3 个按钮，实际不会溢出；
@@ -307,8 +308,8 @@ fun actionRow(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .padding(top = GearUiSpace.sm),
-        horizontalArrangement = Arrangement.spacedBy(GearUiSpace.xs, Alignment.End),
+            .padding(top = LocalAdminSpacing.current.sm),
+        horizontalArrangement = Arrangement.spacedBy(LocalAdminSpacing.current.xs, Alignment.End),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         content()

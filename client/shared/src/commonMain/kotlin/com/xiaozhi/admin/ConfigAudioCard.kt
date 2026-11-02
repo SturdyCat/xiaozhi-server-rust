@@ -28,40 +28,40 @@ fun AudioConfigCard(form: ConfigFormState) {
         val note = form.schema.sectionNote("audio")
         if (note.isNotEmpty()) HintLine(note)
         HintLine("下行参数与 hello/OTA 协商强绑定，改动均需重启 server 生效；设备侧需固件同步调整。")
-        labeledIntField(
-            label = "下行采样率",
-            value = form.downlinkSampleRate,
-            onValueChange = {
-                form.downlinkSampleRate = it
-                form.markDirty()
-            },
-        )
-        labeledIntField(
-            label = "下行帧长",
-            value = form.downlinkFrameMs,
-            onValueChange = {
-                form.downlinkFrameMs = it
-                form.markDirty()
-            },
-        )
-        labeledIntField(
-            label = "声道数",
-            value = form.channels,
-            onValueChange = {
-                form.channels = it
-                form.markDirty()
-            },
-        )
-        labeledIntField(
-            label = "二进制协议版本",
-            value = form.binaryProtocolVersion,
-            onValueChange = {
-                form.binaryProtocolVersion = it
-                form.markDirty()
-            },
-        )
-        AdvancedToggleRow(form)
+        if (!form.showAdvanced) HintLine("日常使用请在下方选择播放场景；协议与缓冲调优在高级模式查看。")
         if (form.showAdvanced) {
+            labeledIntField(
+                label = "下行采样率",
+                value = form.downlinkSampleRate,
+                onValueChange = {
+                    form.downlinkSampleRate = it
+                    form.markDirty()
+                },
+            )
+            labeledIntField(
+                label = "下行帧长",
+                value = form.downlinkFrameMs,
+                onValueChange = {
+                    form.downlinkFrameMs = it
+                    form.markDirty()
+                },
+            )
+            labeledIntField(
+                label = "声道数",
+                value = form.channels,
+                onValueChange = {
+                    form.channels = it
+                    form.markDirty()
+                },
+            )
+            labeledIntField(
+                label = "二进制协议版本",
+                value = form.binaryProtocolVersion,
+                onValueChange = {
+                    form.binaryProtocolVersion = it
+                    form.markDirty()
+                },
+            )
             labeledIntField(
                 label = "下行提前量",
                 value = form.downlinkLeadMs,

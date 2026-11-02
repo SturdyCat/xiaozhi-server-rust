@@ -23,7 +23,7 @@ import com.tencent.kuikly.compose.ui.Modifier
 import com.tencent.kuikly.compose.ui.unit.dp
 import com.xiaozhi.admin.contracts.IconToken
 import com.xiaozhi.admin.icons.GearIcon
-import com.xiaozhi.admin.kit.GearUiSpace
+import com.xiaozhi.admin.kit.LocalAdminSpacing
 import com.xiaozhi.admin.kit.actionRow
 import com.xiaozhi.admin.kit.labeledField
 import com.xiaozhi.admin.kit.statusBadge
@@ -111,7 +111,7 @@ fun OpsDevicesPage(
                         val target = opened.getOrNull(index)
                         if (target != null) expanded.value = expanded.value - target.deviceId
                     },
-                    modifier = Modifier.fillMaxWidth().padding(bottom = GearUiSpace.lg),
+                    modifier = Modifier.fillMaxWidth().padding(bottom = LocalAdminSpacing.current.lg),
                 )
             }
         }
@@ -213,7 +213,7 @@ private fun DeviceDetailHeader(row: DeviceRow) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(GearUiSpace.xs),
+        horizontalArrangement = Arrangement.spacedBy(LocalAdminSpacing.current.xs),
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
@@ -284,14 +284,16 @@ private fun DeviceDetailBody(
         if (row.online && !row.isTest) {
             actionRow {
                 if (devices.injectTarget != row.deviceId) {
-                    OpsOutlineButton(
-                        text = "注入消息",
+                    OpsIconButton(
+                        token = IconToken.Text,
                         onClick = { devices.toggleInject(row.deviceId) },
+                        contentDescription = "注入消息",
                     )
                 } else {
-                    OpsOutlineButton(
-                        text = "收起",
+                    OpsIconButton(
+                        token = IconToken.ChevronUp,
                         onClick = { devices.toggleInject(row.deviceId) },
+                        contentDescription = "收起",
                     )
                 }
             }
@@ -303,9 +305,11 @@ private fun DeviceDetailBody(
                     placeholder = "例如：现在几点了",
                 )
                 actionRow {
-                    OpsPrimaryButton(
-                        text = if (devices.injectBusy) "注入中…" else "发送",
+                    OpsIconButton(
+                        token = IconToken.Intent,
                         onClick = { devices.inject(ctx, row.deviceId) },
+                        contentDescription = if (devices.injectBusy) "注入中…" else "发送",
+                        tint = Theme.colors.primary,
                         enabled = !devices.injectBusy,
                         loading = devices.injectBusy,
                     )

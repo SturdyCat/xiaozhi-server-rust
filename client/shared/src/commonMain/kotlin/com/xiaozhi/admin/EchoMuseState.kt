@@ -239,10 +239,11 @@ class EchoMuseState(scope: Pager) {
      * 批准一台设备。成功后回调 `onDone(true, msg)` 并由调用方刷新列表（approved 状态以
      * 服务端为准）；404 = 设备不存在（列表过期，刷新即可）。
      */
-    fun approve(ctx: Pager, deviceId: String, onDone: (ok: Boolean, msg: String) -> Unit) {
+    fun approve(ctx: Pager, deviceId: String, label: String = approveDraft, onDone: (ok: Boolean, msg: String) -> Unit) {
         if (actionBusy) return
         actionBusy = true
-        val body = JSONObject().apply { put("label", approveDraft.trim()) }
+        // 官方改名与首次审批共用 approve 端点；标题栏草稿不借用全局审批草稿。
+        val body = JSONObject().apply { put("label", label.trim()) }
         post(ctx, "/api/echomuse/devices/${echoMuseUrlComponent(deviceId)}/approve", body) { ok, code, reason, _ ->
             actionBusy = false
             if (ok) {
@@ -357,6 +358,8 @@ class EchoMuseState(scope: Pager) {
     fun saveConfig(ctx: Pager, deviceId: String, onDone: (ok: Boolean, msg: String) -> Unit) {
         if (actionBusy) return
         val body = drafts.buildConfigBody(onError = { onDone(false, it) }) ?: return
+        if (body.length() == 0) { onDone(true, "没有需要保存的修改"); return }
+        val draftVersion = drafts.fillVersion
         actionBusy = true
         post(ctx, "/api/echomuse/devices/${echoMuseUrlComponent(deviceId)}/settings", body) { ok, code, reason, data ->
             actionBusy = false
@@ -368,12 +371,14 @@ class EchoMuseState(scope: Pager) {
                 } else {
                     "配置已保存，设备下次接入时自动推送"
                 }
-                // 模式切到/离开 shadow 后选项集合随当前值变化，按新值重建（官方同规则）。
-                drafts.rebuildModeOptions()
+                // A late save may not advance the baseline of another device's newer draft.
+                drafts.markSaved(body, draftVersion)
+                if (draftVersion == drafts.fillVersion) drafts.rebuildModeOptions()
                 onDone(true, msg)
             } else {
                 onDone(false, when (code) {
                     400 -> "配置未保存：${reason.ifEmpty { "字段不合法（不在白名单或形状不对）" }}"
+                    409 -> "配置冲突，未保存的输入已保留；请核对后重新加载设备设置：$reason"
                     404 -> "设备不存在（列表可能已过期，请刷新后重试）"
                     else -> "配置保存失败：${reason.ifEmpty { "HTTP $code" }}"
                 })

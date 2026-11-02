@@ -110,7 +110,34 @@ data class Typography(
 
     /** Label - label / badge */
     val label: TextStyle,
-)
+) {
+    /** Return a copy with every style scaled by [factor] (fontScale). Spacing tokens untouched. */
+    fun scale(factor: Float): Typography = Typography(
+        displayLarge = displayLarge.scale(factor),
+        displayMedium = displayMedium.scale(factor),
+        headlineLarge = headlineLarge.scale(factor),
+        headlineMedium = headlineMedium.scale(factor),
+        headlineSmall = headlineSmall.scale(factor),
+        titleExtraLarge = titleExtraLarge.scale(factor),
+        titleLarge = titleLarge.scale(factor),
+        titleMedium = titleMedium.scale(factor),
+        titleSmall = titleSmall.scale(factor),
+        bodyExtraLarge = bodyExtraLarge.scale(factor),
+        bodyLarge = bodyLarge.scale(factor),
+        bodyMedium = bodyMedium.scale(factor),
+        bodySmall = bodySmall.scale(factor),
+        bodyExtraSmall = bodyExtraSmall.scale(factor),
+        markLarge = markLarge.scale(factor),
+        markMedium = markMedium.scale(factor),
+        markSmall = markSmall.scale(factor),
+        markExtraSmall = markExtraSmall.scale(factor),
+        linkLarge = linkLarge.scale(factor),
+        linkMedium = linkMedium.scale(factor),
+        linkSmall = linkSmall.scale(factor),
+        caption = caption.scale(factor),
+        label = label.scale(factor),
+    )
+}
 
 /* --------------------------------------------------------- */
 /* --------------------------------------------------------- */
@@ -133,16 +160,14 @@ object Typographies {
     val Reference: Typography = TypographyProfiles.Reference
 
     /**
-     * The platform scale GearUI used before: iOS metrics, 17 body over a 20 title, with
-     * emphasis at 600. Pick it for an app that has to sit beside the system's own
-     * controls, or to keep a shipped layout from reflowing after upgrading.
-     *
-     * ```kotlin
-     * GearUITheme(typography = Typographies.Platform) { App() }
-     * ```
+     * 历史平台档位（iOS 17/20 量度，emphasis 600）。自 rem 排版体系落地后，平台差异
+     * 统一由 `fontScale` 体现，单套 canonical ramp（[Reference]）即覆盖全端。保留别名以兼容
+     * 旧调用点，新代码请用 [Reference] / [Default]。
      */
-    val Platform: Typography = TypographyProfiles.Native
+    @Deprecated("平台差异现由 fontScale 体现；统一使用 Reference")
+    val Platform: Typography = TypographyProfiles.Reference
 
-    /** The denser web scale (15 body), for the web renderer. */
-    val Web: Typography = TypographyProfiles.Web
+    /** 历史 web 档位（15 body）。同上，已并入 [Reference]，由 fontScale 体现密度差异。 */
+    @Deprecated("平台差异现由 fontScale 体现；统一使用 Reference")
+    val Web: Typography = TypographyProfiles.Reference
 }

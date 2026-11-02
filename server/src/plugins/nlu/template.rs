@@ -9,7 +9,7 @@ pub enum Tok {
     Slot(String),
 }
 
-/// 已解析模板：token 序列（字面与槽位交替，且无相邻 Slot）。
+/// 已解析模板；相邻 Slot 只有前槽为必填封闭枚举且边界唯一时才允许抽取。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Template {
     pub tokens: Vec<Tok>,

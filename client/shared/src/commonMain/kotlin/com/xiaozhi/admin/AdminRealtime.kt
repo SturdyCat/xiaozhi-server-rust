@@ -37,25 +37,31 @@ expect val PLATFORM_WS_SUPPORTED: Boolean
 expect fun adminRealtimeUrl(base: String, token: String, path: String = "/api/admin/ws"): String
 
 /**
- * 平台 WebSocket 原语：各平台 actual 直连系统 API（web=浏览器 WebSocket、
- * mac/iOS=NSURLSessionWebSocketTask、Android 短路），**不经 XiaoZhiModule 原生桥**
- * （那是 macOS 测试台专用通道，管理台实时通道自持）。
+ * 平台 WebSocket 原语（共享接口）：各平台 actual 工厂 [platformWsSocket] 直连系统 API
+ * （web=浏览器 WebSocket、mac/iOS=NSURLSessionWebSocketTask/原生桥、Android 短路），
+ * **不经 XiaoZhiModule 原生桥**（那是 macOS 测试台专用通道，管理台实时通道自持）。
  *
  * 契约：`onOpen`/`onText`/`onClosed` 必须投递到平台主线程（Kuikly 线程）回调；
  * `onClosed` 至多回调一次（正常关闭/错误/底层断开都算），之后共享层自行管理重连。
+ *
+ * 形态说明：Kotlin 2.x 将 expect/actual 类标为 Beta（KT-61573），故收敛为
+ * 「共享接口 + expect 工厂函数」，各平台 actual 普通类实现本接口。
  */
-expect class PlatformWsSocket(
-    url: String,
-    onOpen: () -> Unit,
-    onText: (String) -> Unit,
-    onClosed: () -> Unit,
-) {
+interface PlatformWsSocket {
     /** 发一帧文本（心跳用）。未连接时由平台实现静默丢弃。 */
     fun send(text: String)
 
     /** 主动关闭。重连与否由共享层（[AdminRealtime]）管理，实现方不做重连语义。 */
     fun close()
 }
+
+/** 各平台 actual 工厂：构造并连接一个 [PlatformWsSocket]（语义同原 expect 类构造器）。 */
+expect fun platformWsSocket(
+    url: String,
+    onOpen: () -> Unit,
+    onText: (String) -> Unit,
+    onClosed: () -> Unit,
+): PlatformWsSocket
 
 /**
  * 管理台**实时通道**共享层：把各平台 WebSocket actual 收敛成「订阅制」事件分发，
@@ -163,7 +169,7 @@ class AdminRealtime {
         fun ensureConnected() {
             if (socket != null) return
             val gen = generation
-            socket = PlatformWsSocket(
+            socket = platformWsSocket(
                 adminRealtimeUrl(base, token),
                 onOpen = {
                     if (gen == generation) {

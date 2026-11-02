@@ -92,6 +92,8 @@ internal fun ConfigFormState.buildConfigDraft(): JSONObject {
         nlu.putJson(this)
         // [echomuse]：设备入口（enabled/token）——同样整段回传，否则保存一次就把它关掉。
         em.putJson(this)
+        // Workflow writes use the same config patch and revision, never a second submit route.
+        workflow.putPatch(this)
         // [aiui]：此前管理页**完全没有这个段**，保存一次就把它静默关掉（后端已改为部分更新
         // 兜底；这里补齐前端，使全链路模式可在 UI 里配置与保留）。
         put("aiui", JSONObject().apply {

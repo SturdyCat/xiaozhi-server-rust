@@ -16,8 +16,13 @@
 .idea
 .vscode
 docs
-tools
+# 仅训练器受信脚本参与 Rust include_str!；训练依赖与其他工具不进服务构建上下文。
+tools/*
+!tools/nlu-trainer/
+tools/nlu-trainer/*
+!tools/nlu-trainer/train.py
 scripts
+.dev
 tests
 skills-lock.json
 *.md

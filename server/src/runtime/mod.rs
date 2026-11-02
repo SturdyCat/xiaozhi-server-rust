@@ -27,14 +27,18 @@ use crate::config::store::ConfigStore;
 use crate::config::Config;
 use crate::plugins::asr::AsrEngine;
 use crate::plugins::host::{Phase, PluginHost};
-use crate::plugins::llm::{build_llm, Llm};
+use crate::plugins::llm::{build_llm, Llm, LlmEvent, LlmProvider, LlmTurnResult, ToolSpec};
 use crate::plugins::memory::MemoryProvider;
 use crate::plugins::nlu::{bert_signature, build_bert_checked, BertClassify, NluConfig};
+use crate::plugins::prompt::TurnPrompt;
 use crate::plugins::registry::{self, Capability};
+use crate::plugins::tts::{TtsChunkCallback, TtsEngine};
 #[cfg(not(feature = "sherpa"))]
 use crate::plugins::vad::MockVad;
 use crate::plugins::vad::VadEngine;
 use anyhow::Result;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex, RwLock};
 #[cfg(feature = "sherpa")]
 use {crate::plugins::vad::SherpaVad, anyhow::Context};
@@ -92,6 +96,8 @@ pub struct Engines {
     /// 会话注入注册表（P1-2）：活跃会话注册 `mpsc::Sender`，HTTP 端点据此投递文本
     /// （`POST /api/devices/{id}/inject`）；见 `app/inject` 模块注释。
     pub inject: crate::workflow::pipeline::inject::Injector,
+    /// 稳定技能能力与持久任务/outbox；识别模型只有提名权，不直接操作系统。
+    pub skill_system: Arc<crate::skills::SkillSystem>,
     /// 推理并发闸门（缺口①）：ASR/TTS 各一把 Semaphore，包在全部 `spawn_blocking`
     /// 推理调用点外（会话 / 预取 worker / 测试台共用）；见 `app/inference` 模块注释。
     pub inference: crate::workflow::pipeline::inference::InferenceGates,
@@ -99,6 +105,8 @@ pub struct Engines {
     /// 配置存储后端（读、写、落点三件事的唯一入口，见 [`crate::config::store`]）。
     /// 读取/写回配置**一律**经它——不要直接 `Config::load(路径)`，否则换成 SQLite 后端时会被绕过。
     pub config_store: Arc<dyn ConfigStore>,
+    /// true 时严禁任何路径加载本地/远端模型，仅用于开发 UI 验证。
+    pub dev_mode: bool,
     /// TinyBERT 分类器跨会话缓存（`[nlu].bert_*`）：键 = 配置签名（[`bert_signature`]），
     /// 变了即重建；构建失败缓存 `None`（每会话不重试加载大文件，测试台 `nlu_test`
     /// 直调 [`build_bert_checked`] 以拿到完整错误）。加载是同步 IO（会话开始路径），
@@ -107,9 +115,50 @@ pub struct Engines {
 }
 
 mod refresh;
+pub(crate) mod skill_tasks;
 mod tts;
 use refresh::decide_refresh;
 pub use tts::TtsLease;
+
+const DEV_UNAVAILABLE: &str = "开发模式未启用模型推理";
+
+struct UnavailableAsr;
+impl AsrEngine for UnavailableAsr {
+    fn recognize(&self, _samples: &[f32], _sample_rate: u32) -> Result<String> {
+        anyhow::bail!(DEV_UNAVAILABLE)
+    }
+}
+
+struct UnavailableTts;
+impl TtsEngine for UnavailableTts {
+    fn synthesize_stream(
+        &self,
+        _text: &str,
+        _speed: f32,
+        _speaker: i32,
+        _chunk_cb: TtsChunkCallback,
+    ) -> Result<()> {
+        anyhow::bail!(DEV_UNAVAILABLE)
+    }
+
+    fn name(&self) -> &'static str {
+        "dev-unavailable"
+    }
+}
+
+struct UnavailableLlm;
+impl LlmProvider for UnavailableLlm {
+    fn chat_stream<'a>(
+        &'a self,
+        _history: &'a [(String, String)],
+        _user_text: &'a str,
+        _prompt: &'a TurnPrompt,
+        _tools: Option<&'a [ToolSpec]>,
+        _on_event: Box<dyn FnMut(LlmEvent) -> bool + Send + 'a>,
+    ) -> Pin<Box<dyn Future<Output = Result<LlmTurnResult>> + Send + 'a>> {
+        Box::pin(async { anyhow::bail!(DEV_UNAVAILABLE) })
+    }
+}
 
 impl Engines {
     /// 依据配置构造引擎（无 mock：ASR/TTS 恒为真实实现，缺模型/缺 feature 直接报错）。
@@ -119,6 +168,38 @@ impl Engines {
     /// `plugins/registry/`（`impls.rs` 的 `validate_*`）声明，并支持**一次汇总多个问题**）。
     pub fn new(config: &Config, config_store: Arc<dyn ConfigStore>) -> Result<Arc<Self>> {
         let (host, booted) = PluginHost::boot(config)?;
+        Ok(Self::assemble(config, config_store, host, booted, false))
+    }
+
+    /// 构造仅用于本地 UI/协议验证的无模型运行期。生产构造器保持严格加载模型。
+    pub fn new_dev(config: &Config, config_store: Arc<dyn ConfigStore>) -> Result<Arc<Self>> {
+        let host = PluginHost::plan(config);
+        let reason = Some(DEV_UNAVAILABLE.to_string());
+        for cap in [
+            Capability::Asr,
+            Capability::Vad,
+            Capability::Tts,
+            Capability::Llm,
+            Capability::Memory,
+        ] {
+            host.mark_capability(cap, Phase::Degraded, reason.clone());
+        }
+        let booted = crate::plugins::host::Booted {
+            asr: Arc::new(UnavailableAsr),
+            tts: Arc::new(UnavailableTts),
+            llm: Arc::new(UnavailableLlm),
+            memory: Arc::new(crate::plugins::memory::NoopMemory),
+        };
+        Ok(Self::assemble(config, config_store, host, booted, true))
+    }
+
+    fn assemble(
+        config: &Config,
+        config_store: Arc<dyn ConfigStore>,
+        host: Arc<PluginHost>,
+        booted: crate::plugins::host::Booted,
+        dev_mode: bool,
+    ) -> Arc<Self> {
         let llm_sig = capability_signature(config, Capability::Llm);
         let memory_sig = capability_signature(config, Capability::Memory);
         // 跟随配置来源的持久卷；无来源时复用 memory.db_path 的父目录，
@@ -132,7 +213,17 @@ impl Engines {
             config.tts.cache_entries,
             hot_audio.clone(),
         ));
-        Ok(Arc::new(Self {
+        // 跟随 SQLite 配置库所在卷；测试/内置存储没有 location 时再使用 memory 落点。
+        // SkillSystem 懒开库，装配不写盘、不因可选技能库故障阻断核心语音服务。
+        let skill_dir = config_store
+            .location()
+            .and_then(|p| std::path::Path::new(p).parent())
+            .filter(|p| !p.as_os_str().is_empty())
+            .or_else(|| std::path::Path::new(&config.memory.db_path).parent())
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| std::path::Path::new("."));
+        let skill_system = Arc::new(crate::skills::SkillSystem::new(skill_dir.join("skills.db")));
+        Arc::new(Self {
             asr: booted.asr,
             tts: tts::TtsSlot::new(config, booted.tts),
             refresh_lock: Mutex::new(()),
@@ -150,11 +241,13 @@ impl Engines {
             metrics: crate::observability::metrics::Metrics::new(),
             mcp: crate::workflow::mcp::registry::McpRegistry::new(),
             inject: crate::workflow::pipeline::inject::Injector::new(),
+            skill_system,
             inference: crate::workflow::pipeline::inference::InferenceGates::new(config),
             config: Arc::new(config.clone()),
             config_store,
             bert: Mutex::new(None),
-        }))
+            dev_mode,
+        })
     }
 
     /// 配置持久化落点（今天的 TOML 路径；将来 SQLite 后端为 DB 路径）。
@@ -168,7 +261,7 @@ impl Engines {
     /// 取（或按需构建）跨会话共享的 TinyBERT 分类器；未配置 / 构建失败返回 `None`
     /// （失败只 warn 一次并缓存，避免每会话重复加载大文件的延迟与日志噪音）。
     pub fn bert_engine(&self, nlu: &NluConfig) -> Option<Arc<dyn BertClassify>> {
-        if !nlu.bert_configured() {
+        if self.dev_mode || !nlu.bert_configured() {
             return None;
         }
         let sig = bert_signature(nlu);
@@ -182,7 +275,7 @@ impl Engines {
             Ok(engine) => Some(engine),
             Err(e) => {
                 tracing::warn!(
-                    "TinyBERT 引擎构建失败（技能级联回落启发式打分；测试台 nlu_test 可见完整错误）: {e:#}"
+                    "NLU 模型构建失败（技能识别不可用，不回落规则/启发式；测试台 nlu_test 可见完整错误）: {e:#}"
                 );
                 None
             }
@@ -258,6 +351,9 @@ impl Engines {
     /// 从 VAD 池借出实例（P0-3）：空闲复用 / 池满等待 / `[vad]` 配置变更自动失效。
     /// [`plugins/vad/pool`] 的 `VadGuard` Drop 时归还（RAII，含提前返回与 panic 展开）。
     pub async fn acquire_vad(&self) -> Result<crate::plugins::vad::pool::VadGuard> {
+        if self.dev_mode {
+            anyhow::bail!(DEV_UNAVAILABLE)
+        }
         let cfg = self.live_config();
         // 配置签名：参与 `SherpaVad::new` 的全部字段（变了即池内旧实例失效）。
         let sig = format!(

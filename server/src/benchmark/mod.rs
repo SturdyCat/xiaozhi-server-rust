@@ -268,10 +268,13 @@ async fn dispatch(ctx: &RunContext, req: &TestRequest, revision: String) -> Benc
                 }
             }
         }
-        "nlu.classify" | "llm.chat" | "tts.synthesis" if text.trim().is_empty() => {
+        "nlu.classify" | "command.match" | "llm.chat" | "tts.synthesis"
+            if text.trim().is_empty() =>
+        {
             StageResult::error(action, "invalid_input", "text is required")
         }
-        "nlu.classify" => providers::nlu(ctx, text).await,
+        // Legacy action id retained, but keywords are training examples, never a rule gate.
+        "nlu.classify" | "command.match" => providers::nlu(ctx, text).await,
         "llm.chat" => {
             providers::llm(
                 ctx,

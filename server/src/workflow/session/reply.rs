@@ -11,7 +11,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::observability::events::{TurnId, TurnTrace};
-use crate::plugins::prompt::TurnPrompt;
 use crate::workflow::downlink::{
     drain_reservoir, new_reservoir, send_tts_state, spawn_reservoir_filler,
 };
@@ -34,99 +33,7 @@ struct DownlinkOutcome {
 }
 
 impl<'a, T: Transport> Session<'a, T> {
-    /// 组装本轮 prompt：人格（`[soul]`）+ 记忆召回（`[memory]`，关键路径**硬预算**）。
-    ///
-    /// - 配置来自**会话级最新快照**（会话开始时热刷新），因此语义与 TTS/LLM 一致：
-    ///   "保存后新会话生效"；
-    /// - 人格组装失败（例如旧配置里写了未知变量）**不打断对话**：记日志并退回
-    ///   `[llm].system_prompt`（保存期/启动期已校验，这是兜底）；
-    /// - 记忆召回自带预算与超时降级，返回 `None` 就是"本轮无记忆"，绝不会抛出来。
-    pub(super) async fn build_turn_prompt(&mut self, user_text: &str) -> TurnPrompt {
-        let cfg = self.eff_config.clone();
-        let instructions = match crate::plugins::soul::instructions(&cfg, &self.device_id) {
-            Ok(t) => t,
-            Err(e) => {
-                tracing::warn!(
-                    "session {} 人格组装失败（退回 [llm].system_prompt）: {e:#}",
-                    self.session_id
-                );
-                cfg.llm.system_prompt.clone()
-            }
-        };
-        let mut memory = None;
-        if cfg.memory.recall_enabled {
-            let scope = cfg.memory.scope_for(&self.device_id);
-            let r = self.engines.memory().recall(Some(&scope), user_text).await;
-            if let Some(err) = &r.error {
-                tracing::warn!("session {} 记忆召回降级: {err}", self.session_id);
-            }
-            if r.block.is_some() {
-                tracing::info!(
-                    "session {} 记忆召回命中 {} 条（{} 词项匹配，耗时 {}ms）",
-                    self.session_id,
-                    r.hits,
-                    r.matched_terms,
-                    r.elapsed_ms
-                );
-            }
-            memory = r.block;
-        }
-        TurnPrompt {
-            instructions,
-            memory,
-            position: cfg.memory.inject_position(),
-        }
-    }
-
-    /// 把本轮对话交给记忆插件（**后台任务**：写入原文 + 抽取 + 周期维护）。
-    ///
-    /// 为什么放在后台：抽取是一次真实 LLM 调用，放在关键路径会拖长 TTFA 并占用远端额度。
-    /// 写原文本身很快，但同样没必要让用户等——两者一起 `spawn`，失败只记日志
-    ///（记忆坏了不能让对话坏）。
-    pub(super) fn spawn_memory_write(&self, user_text: &str, assistant_text: &str) {
-        let cfg = self.eff_config.clone();
-        if !cfg.memory.active() {
-            return;
-        }
-        let memory = self.engines.memory();
-        let turn = crate::plugins::memory::CompletedTurn {
-            scope: cfg.memory.scope_for(&self.device_id),
-            session_id: self.session_id.clone(),
-            user_text: user_text.to_string(),
-            assistant_text: assistant_text.to_string(),
-        };
-        let sid = self.session_id.clone();
-        tokio::spawn(async move {
-            if let Err(e) = memory.record(turn).await {
-                tracing::warn!("session {sid} 记忆写入失败（不影响对话）: {e:#}");
-                return;
-            }
-            let o = memory.extract_pending(1).await;
-            if o.attempted > 0 {
-                tracing::info!(
-                    "session {sid} 记忆抽取：尝试 {} / 成功 {} / 失败 {}",
-                    o.attempted,
-                    o.succeeded,
-                    o.failed
-                );
-            }
-            match memory
-                .maintain(crate::plugins::memory::MaintainOpts::periodic())
-                .await
-            {
-                Ok(m) if m.ran => tracing::info!(
-                    "session {sid} 记忆维护：隔离释放 {} / 保留策略处理 {}（dry_run={}）",
-                    m.released,
-                    m.deleted,
-                    m.dry_run
-                ),
-                Ok(_) => {}
-                Err(e) => tracing::warn!("session {sid} 记忆维护异常: {e}"),
-            }
-        });
-    }
-
-    /// 一条用户话语在技能级联未命中后的**统一响应入口**（注入轮与语音轮共用）。
+    /// 一条用户话语在模型未授权动作后的**统一响应入口**（注入轮与语音轮共用）。
     ///
     /// - `[llm].enabled = true`（默认）：照常 `stream_response`（LLM→TTS→下行）；
     /// - `false`：**回声模式**——不调 LLM，把 ASR 文本原样 TTS 下发（见
@@ -226,14 +133,14 @@ impl<'a, T: Transport> Session<'a, T> {
 
         let t0 = std::time::Instant::now();
         // 本轮上下文：人格 + 记忆召回（**在 LLM 之前**，且召回失败不影响继续）
-        let prompt = self.build_turn_prompt(user_text).await;
+        let prompt = self.build_turn_prompt(user_text).await?;
         // 定时 flush 等待（缺口③）：每轮从生效配置现读（0 = 关闭）。
         // ⚠️ 仅**全局**生效：`llm.sentence_flush_ms` 不在设备 overlay 白名单
         // （`config/overlay.rs` 的 llm 段只放行 system_prompt/max_history）。
         let flush_wait = Duration::from_millis(self.eff_config.llm.sentence_flush_ms as u64);
         // 生产者：读 LLM 流 → 按句切分（+ watchdog）→ channel。
-        // 技能目录非空才声明 `execute_skill` 工具（纯聊天不传 tools：省 token、收误触发面）。
-        let tools = self.skills.tools();
+        // Intent authorization belongs exclusively to the one local model decision.
+        // Chat never gets a tool with which to reselect or execute a skill.
         let LlmProducer {
             sentences: rx,
             result: producer,
@@ -246,7 +153,7 @@ impl<'a, T: Transport> Session<'a, T> {
             super::producer::ProducerTurn {
                 trace: trace.clone(),
                 session_id: session_id.clone(),
-                tools: (!tools.is_empty()).then_some(tools),
+                tools: None,
             },
             flush_wait,
         );
@@ -312,9 +219,8 @@ impl<'a, T: Transport> Session<'a, T> {
         // 令牌计量：回答"成本多少 / 记忆与灵魂让上下文长了多少"。
         // ⚠️ 取消轮（`cancelled`）**照常计量**：上游已收款，统计不能因打断而丢。
         self.engines.usage.record(&session_id, llm_out.usage);
-        // 技能回接（级联末级 → 本地执行）：实现与本地闸门共用同一执行出口，见
-        // `command.rs::execute_llm_tool_calls`。取消轮 `tool_calls` 恒为空（取消契约）。
-        self.execute_llm_tool_calls(&llm_out.tool_calls, turn).await;
+        // Even a provider returning unsolicited tool calls has no execution authority.
+        // Cancellation, rejected intent and disabled models never gain a side-effect path.
         // 观测：这一轮"问了什么、答了什么、整轮多久"（管理页「对话记录」）。
         // 刻意**不**受 `interrupted` 影响：被打断的这轮同样是发生过的一轮，
         // 记录里丢掉它会让界面上的对话与用户记忆对不上。
@@ -368,7 +274,7 @@ impl<'a, T: Transport> Session<'a, T> {
                 format!("：{reply}")
             }
         );
-        if !interrupted && !llm_out.text.trim().is_empty() {
+        if !interrupted && !llm_out.cancelled && !llm_out.text.trim().is_empty() {
             self.history
                 .push(("user".to_string(), user_text.to_string()));
             self.history
@@ -379,7 +285,8 @@ impl<'a, T: Transport> Session<'a, T> {
                 self.history.remove(0);
             }
             // 记忆写入：**仅未被打断且回复非空**（打断的半句没有记忆价值，且会污染事实源）
-            self.spawn_memory_write(user_text, &llm_out.text);
+            self.complete_memory_write(turn, user_text, &llm_out.text)
+                .await?;
         }
         Ok(())
     }
@@ -452,13 +359,15 @@ impl<'a, T: Transport> Session<'a, T> {
     /// 分段延迟（缺口②）：自建 trace（anchor=`canned`），只采 `first_audio_ms`
     /// ——预制话术没有 LLM/分句阶段；与正常回复各自成事件，靠 anchor 区分。
     pub(super) async fn speak_canned(&mut self, text: &str) -> anyhow::Result<()> {
-        // 一句独立的话 = 一次独立回复：节拍器时间表重置（指令闸门路径不会经过
-        // `stream_response` 的 reset，不重置会沿用上一轮的时间锚点）。
-        self.pacer.reset();
-        // 自包含：清掉上一轮遗留的打断标志。否则预取 worker 在入口即退出，
-        // `tts start`/`stop` 都不发 —— 客户端/测试台会卡在"合成中"，用户则听到静音。
-        // 指令闸门路径本来就会清（见 `command.rs`），这里给兜底路径补上同一语义。
         self.abort.store(false, Ordering::Relaxed);
+        self.speak_canned_in_turn(text).await
+    }
+
+    /// Receipts/clarification/outbox must not erase a cancellation from this turn.
+    pub(super) async fn speak_canned_in_turn(&mut self, text: &str) -> anyhow::Result<()> {
+        anyhow::ensure!(!self.skill_cancelled(), "canned response cancelled");
+        // One reply retains the existing prefetch/backpressure/pacing pipeline.
+        self.pacer.reset();
         let trace = TurnTrace::new(crate::observability::events::ANCHOR_CANNED);
         let turn = trace.turn_id();
         tracing::info!(
@@ -471,20 +380,18 @@ impl<'a, T: Transport> Session<'a, T> {
         drop(tx); // 只有一句 → 关掉句子流，预取 worker 处理完即退出
         let (prepared, download) = self.spawn_prefetch(rx, &trace);
         let t0 = Instant::now();
-        match self.drain_prepared(prepared, download, t0, &trace).await {
-            Ok(o) if o.sentences == 0 => {
-                tracing::warn!(
-                    turn,
-                    "session {} 话术未下发任何音频: {text}",
-                    self.session_id
-                );
-            }
-            Ok(_) => {}
-            Err(e) => tracing::warn!(turn, "session {} 话术下发失败: {e}", self.session_id),
+        let outcome = self.drain_prepared(prepared, download, t0, &trace).await;
+        let interrupted = outcome.as_ref().is_ok_and(|o| o.interrupted);
+        self.emit_turn_latency(&trace, interrupted);
+        self.log_turn_end(&trace, interrupted);
+        let outcome = outcome?;
+        if outcome.interrupted {
+            // Native AudioWrite::Cancelled need not itself set the abort flag.
+            // Make it sticky before any following receipt or MCP action.
+            self.abort.store(true, Ordering::Relaxed);
         }
-        // 分段延迟：canned 轮 emit（anchor=canned，first_audio 之外的阶段为 None）
-        self.emit_turn_latency(&trace, false);
-        self.log_turn_end(&trace, false);
+        anyhow::ensure!(!outcome.interrupted, "canned response interrupted");
+        anyhow::ensure!(outcome.frames > 0, "canned response produced no audio");
         Ok(())
     }
 
@@ -498,10 +405,22 @@ impl<'a, T: Transport> Session<'a, T> {
     ///
     /// 缺口①：TTS 闸门取自 `engines.inference`（进程级，与生产/测试台共用）。
     /// 缺口②：`trace` → first-only 的 `tts_first_pcm` 回调闭包（原子读，无锁）。
-    fn spawn_prefetch(
+    pub(super) fn spawn_prefetch(
         &self,
         sentences: tokio::sync::mpsc::UnboundedReceiver<String>,
         trace: &Arc<TurnTrace>,
+    ) -> (
+        tokio::sync::mpsc::Receiver<PreparedSentence>,
+        Arc<crate::workflow::pipeline::prefetch::DownloadBudget>,
+    ) {
+        self.spawn_prefetch_with_abort(sentences, trace, self.abort.clone())
+    }
+
+    pub(super) fn spawn_prefetch_with_abort(
+        &self,
+        sentences: tokio::sync::mpsc::UnboundedReceiver<String>,
+        trace: &Arc<TurnTrace>,
+        abort: Arc<AtomicBool>,
     ) -> (
         tokio::sync::mpsc::Receiver<PreparedSentence>,
         Arc<crate::workflow::pipeline::prefetch::DownloadBudget>,
@@ -522,7 +441,7 @@ impl<'a, T: Transport> Session<'a, T> {
             }
         });
         let prepared = crate::workflow::pipeline::prefetch::spawn_sentence_prefetch(
-            self.abort.clone(),
+            abort,
             self.engines.tts_cache.clone(),
             download.clone(),
             self.engines.inference.tts(),

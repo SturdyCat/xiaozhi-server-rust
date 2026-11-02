@@ -9,4 +9,10 @@
 - `HotAudioKey::from_lease` 统一欢迎语、问候、固定应答与普通句子身份。旧会话/旧身份仍有效，无须热切换时全清内存缓存；新 fingerprint 自然隔离。Kokoro 注册表签名覆盖全部构造输入。
 - 外置测试 [tts/tests.rs](<tts/tests.rs>) 使用 fake 引擎，覆盖失败身份保留、成功/旧会话固定、并发刷新、全构建签名和磁盘缓存；测试不证明真实模型可用。
 
+## 技能任务生命周期
+
+- `Engines.skill_system` 共享[技能系统](<../skills/AGENTS.md>)；独立持久库放配置库旁，构造懒打开且不启动任务。配置库无文件路径时以 memory.db_path 所在目录回退；不要用模型路径决定任务数据库位置。
+- [skill_tasks](<skill_tasks.rs>)每秒只将到期任务转成 outbox，阻塞 SQLite 在 `spawn_blocking`，重复错误限频；Guard 随生产服务生命周期终止 worker。设备投递由会话串行执行，不把消息发回用户 ASR 注入器。
+- main 只在非 dev 启动调度；开发模式可以鉴权真实任务 CRUD，但既不自动推进任务也不伪造设备音频。模型构建失败不回落规则/启发式，模型启用但不可用必须由识别入口明确报告。
+
 返回[服务端指引](<../../AGENTS.md>)。

@@ -89,6 +89,8 @@ pub(super) struct FakeProviders {
     pub empty_asr: bool,
     pub cancelled_llm: bool,
     pub mutate_on_nlu: Option<Arc<CountingStore>>,
+    pub model_label: Option<String>,
+    pub model_unavailable: bool,
     pub blocker: Option<Arc<Blocker>>,
 }
 impl providers::ProviderFactory for FakeProviders {
@@ -131,7 +133,29 @@ impl providers::ProviderFactory for FakeProviders {
             new.llm.model = "new-after-snapshot".into();
             store.db.persist(&new).unwrap();
         }
-        providers::NativeProviders.skills(cfg)
+        let mut nlu = cfg.nlu.clone();
+        nlu.bert_enabled = true;
+        let bert = if self.model_unavailable {
+            None
+        } else {
+            Some(Arc::new(FakeBert {
+                label: self.model_label.clone().unwrap_or_else(|| "other".into()),
+            }) as Arc<dyn crate::plugins::nlu::BertClassify>)
+        };
+        Ok(SkillRegistry::new(&cfg.command, &nlu, bert))
+    }
+}
+struct FakeBert {
+    label: String,
+}
+impl crate::plugins::nlu::BertClassify for FakeBert {
+    fn classify_timed(&self, _: &str) -> anyhow::Result<crate::plugins::nlu::BertHit> {
+        Ok(crate::plugins::nlu::BertHit {
+            label: self.label.clone(),
+            confidence: 0.99,
+            tokenize_ms: 0,
+            infer_ms: 0,
+        })
     }
 }
 struct FakeAsr {

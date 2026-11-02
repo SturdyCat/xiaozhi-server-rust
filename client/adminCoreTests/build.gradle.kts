@@ -33,6 +33,10 @@ kotlin {
             kotlin.include("com/xiaozhi/admin/PipelinePanels.kt")
             kotlin.include("com/xiaozhi/admin/PipelineFlow.kt")
             kotlin.include("com/xiaozhi/admin/PipelineWorkflow.kt")
+            kotlin.include("com/xiaozhi/admin/AdminInterfaceMode.kt")
+            kotlin.include("com/xiaozhi/admin/WorkflowEditorModel.kt")
+            kotlin.include("com/xiaozhi/admin/ConfigDraftChanges.kt")
+            kotlin.include("com/xiaozhi/admin/ConfigNluPlanJson.kt")
             kotlin.include("com/xiaozhi/admin/NodeTestModels.kt")
             kotlin.include("com/xiaozhi/admin/ConfigSections.kt")
             // 控制台纯文本管线（ANSI 剥离 / \r 覆盖 / 双上限）：无 Kuikly 依赖，
@@ -42,6 +46,11 @@ kotlin {
             // 依赖，被 EchoMuseConsoleClosedTest 直驱。`EchoMuseConsoleState`（要 Pager）**不在**
             // 这里——所以 D1 的修复点被搬到纯函数里测，状态机本身没被拆散。
             kotlin.include("com/xiaozhi/admin/EchoMuseConsoleProtocol.kt")
+            // Production native terminal and key codec, without Kuikly/native test doubles.
+            kotlin.include("com/xiaozhi/admin/EchoMuseTerminalScreen.kt")
+            kotlin.include("com/xiaozhi/admin/EchoMuseTerminalAnsi.kt")
+            kotlin.include("com/xiaozhi/admin/EchoMuseConsoleKeys.kt")
+            kotlin.include("com/xiaozhi/admin/EchoMuseVolume.kt")
         }
         val commonTest by getting {
             dependencies { implementation(kotlin("test")) }

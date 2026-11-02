@@ -87,17 +87,17 @@ pub enum Capability {
     Memory,
     /// 灵魂/人格档案（规划中）。
     Soul,
-    /// 语音指令闸门（`[command]`）：ASR → LLM 之间拦截「退下/闭嘴/关闭」，命中即说告别语
-    /// 并用 MCP 让设备结束聆听（设备不支持 MCP 时断开本次会话）。
-    /// 不是引擎（不产出共享实例、无 `engine` 选择器），只按 `[command].enabled` 开关。
+    /// 指令训练词表（`[command]`）：例句组成统一模型目录的 end_session 类，
+    /// 只有模型接受才执行告别与 MCP 退下，不再通过关键词拦截。
+    /// 不是引擎；enabled 控制该类的目录准入，不绕过模型开关或置信度。
     Command,
     /// 唤醒问候语（`[wakeup]`）：设备唤醒（固件上报 `listen state=detect`）时立刻说一句
     /// 预制话术（默认「我在」），跳过 LLM 与正常回复；成品音频按音色持久化复用。
     /// 同样不是引擎，只按 `[wakeup].enabled` 开关。
     Wake,
-    /// 规则 NLU（`[nlu]`）：ASR → LLM **之间**的本地意图识别层，是 `[command]` 的超集。
-    /// 命中已知意图即本地执行（不再送 LLM），未知意图才放行给 LLM；无共享实例，
-    /// 每会话按配置快照构造 `NluEngine`（与 `[command]`/`[wakeup]` 同为"每会话有状态对象"模式）。
+    /// 模型意图识别（`[nlu]`）：共享训练模型选择唯一意图，
+    /// 每会话固定统一技能目录；模板仅为已接受的同一技能抽槽。
+    /// 关闭/拒识可聊天，模型故障与缺槽明确停止，不提供规则或 LLM 动作回退。
     Nlu,
 }
 
@@ -147,9 +147,9 @@ impl Capability {
             Capability::Firmware => "固件托管",
             Capability::Memory => "记忆",
             Capability::Soul => "灵魂（人格档案）",
-            Capability::Command => "指令闸门（ASR→LLM）",
+            Capability::Command => "命令词表（模型训练样例）",
             Capability::Wake => "唤醒问候语",
-            Capability::Nlu => "规则 NLU（意图+槽位）",
+            Capability::Nlu => "NLU 模型（意图识别）",
         }
     }
 
@@ -241,6 +241,8 @@ const APP_SECTION_HOT: &[(&str, HotReload)] = &[
     ("server", HotReload::RestartOnly),
     ("audio", HotReload::RestartOnly),
     ("playback", HotReload::NextSession),
+    // Workflow changes are compiled and applied to new sessions only.
+    ("workflow", HotReload::NextSession),
     // `[echomuse]`（EchoMuse 设备入口）：路由挂载与 mDNS 广播由启动值决定，
     // `enabled`/`token` 改动都需重启生效。
     ("echomuse", HotReload::RestartOnly),
@@ -465,9 +467,10 @@ pub static REGISTRY: &[PluginDescriptor] = &[
     NLU_RULES,
 ];
 
-/// 按 id 查描述符。
+/// 按 id 查描述符；旧 nlu.rules 仅为配置/观测兼容别名，不再提供规则实现。
 pub fn find(id: &str) -> Option<&'static PluginDescriptor> {
-    REGISTRY.iter().find(|d| d.id == id)
+    let canonical = if id == "nlu.rules" { "nlu.model" } else { id };
+    REGISTRY.iter().find(|d| d.id == canonical)
 }
 
 /// 某能力下的全部实现。

@@ -29,12 +29,12 @@ actual fun adminRealtimeUrl(base: String, token: String, path: String): String {
  * 契约：`onOpen`/`onText`/`onClosed` 回调到达时已在 Kuikly context 线程；
  * `onClosed` 至多回调一次（正常关闭/错误/底层断开都算），之后共享层自行管理重连。
  */
-actual class PlatformWsSocket actual constructor(
+class MacAdminWsSocket(
     url: String,
     onOpen: () -> Unit,
     onText: (String) -> Unit,
     onClosed: () -> Unit,
-) {
+) : PlatformWsSocket {
     private val onOpenCb = onOpen
     private val onTextCb = onText
     private val onClosedCb = onClosed
@@ -47,7 +47,7 @@ actual class PlatformWsSocket actual constructor(
 
     init {
         if (module == null) {
-            // 桥不在（理论不可达：本 actual 只在 mac App 编译，模块随壳注册）。
+            // 桥不在（理论不可达：本实现只在 mac App 编译，模块随壳注册）。
             // 按构造失败处理：立即 onClosed 一次，共享层走重连退避或停订。
             reportClosed()
         } else {
@@ -61,11 +61,11 @@ actual class PlatformWsSocket actual constructor(
         }
     }
 
-    actual fun send(text: String) {
+    override fun send(text: String) {
         module?.adminWsSend(key, text)
     }
 
-    actual fun close() {
+    override fun close() {
         module?.adminWsClose(key)
     }
 
@@ -79,6 +79,14 @@ actual class PlatformWsSocket actual constructor(
         private var nextId = 0
     }
 }
+
+/** mac 平台工厂：经 XiaoZhiModule 原生桥的 WS 实现。 */
+actual fun platformWsSocket(
+    url: String,
+    onOpen: () -> Unit,
+    onText: (String) -> Unit,
+    onClosed: () -> Unit,
+): PlatformWsSocket = MacAdminWsSocket(url, onOpen, onText, onClosed)
 
 /**
  * 取 XiaoZhiModule 桥：PlatformWsSocket 构造时没有 Pager（expect 契约固定），

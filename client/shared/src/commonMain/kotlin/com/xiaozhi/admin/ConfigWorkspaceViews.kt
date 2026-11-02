@@ -55,7 +55,8 @@ internal data class WorkspaceTestEntry(val node: PipelineFlowNode, val descripto
 
 private fun workspaceTests(form: ConfigFormState): List<WorkspaceTestEntry> =
     form.workflowPosition?.nodes.orEmpty().flatMap { node ->
-        nodeVisibleTests(node).map { WorkspaceTestEntry(node, it) }
+        val tests = nodeVisibleTests(node)
+        (if (form.showAdvanced) tests else tests.take(1)).map { WorkspaceTestEntry(node, it) }
     }
 
 internal fun selectedWorkspaceTest(form: ConfigFormState): WorkspaceTestEntry? {
@@ -81,12 +82,22 @@ fun WorkspaceMenu(form: ConfigFormState, meta: PluginMetaState) {
     val testing = form.workspaceTab == NodeWorkspaceTab.Testing
     Column(modifier = Modifier.fillMaxHeight().padding(vertical = Spacing.xs)) {
         Text(
-            text = if (testing) "测试项目" else "配置项目",
+            text = when (form.workspaceTab) {
+                NodeWorkspaceTab.Testing -> "测试项目"
+                NodeWorkspaceTab.Management -> "节点管理"
+                NodeWorkspaceTab.Configuration -> "常用配置"
+            },
             modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.xs),
             style = Theme.typography.caption,
             color = Theme.colors.mutedForeground,
         )
-        if (testing) {
+        if (form.workspaceTab == NodeWorkspaceTab.Management) {
+            MenuNote(if (form.showAdvanced) "插件挂载与执行策略" else "运行状态与必要维护")
+            for (binding in form.workflow.rows(position?.id.orEmpty())) {
+                val label = form.workflow.metadata?.plugins?.firstOrNull { it.id == binding.pluginId }?.label ?: "扩展插件"
+                MenuNote(label)
+            }
+        } else if (testing) {
             val entries = workspaceTests(form)
             if (entries.isEmpty()) {
                 MenuNote("暂无测试")
@@ -118,6 +129,7 @@ fun WorkspaceMenu(form: ConfigFormState, meta: PluginMetaState) {
             if (position.nodes.isEmpty()) MenuNote("暂无扩展")
             CellGroup(
                 items = position.nodes,
+                modifier = Modifier.padding(bottom = Spacing.xs),
                 key = { it.id },
                 itemContent = { node ->
                     WorkspaceRow(
@@ -132,7 +144,7 @@ fun WorkspaceMenu(form: ConfigFormState, meta: PluginMetaState) {
             if (position.nodes.isNotEmpty()) {
                 Cell(
                     title = "运行状态",
-                    onClick = { form.showNodeStatus() },
+                    onClick = { form.selectWorkspaceTab(NodeWorkspaceTab.Management) },
                     titleColor = if (form.showingNodeStatus) Theme.colors.primary else null,
                     leading = {
                         GearIcon(
@@ -243,6 +255,8 @@ private fun GlobalConfigMenu(form: ConfigFormState, meta: PluginMetaState) {
         )
         CellGroup(
             items = sections,
+            // 组卡之间留一档空隙，与侧栏同一节奏（分组在视觉上断开）
+            modifier = Modifier.padding(bottom = Spacing.sm),
             key = { it.id },
             itemContent = { section ->
                 WorkspaceRow(
@@ -292,6 +306,7 @@ fun WorkspaceNodeStatus(
                 },
                 type = ButtonType.OUTLINE,
                 loading = meta.loading || health.loading,
+                iconWidget = { color -> GearIcon(token = IconToken.Refresh, size = 16.dp, tint = color) },
             )
         },
     ) {

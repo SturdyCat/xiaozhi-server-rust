@@ -18,37 +18,52 @@ import com.xiaozhi.admin.state.stateListOf
  *   语义可以逐条对账，不被 HTTP 回调打散；
  * - 真正的 POST 仍在 [EchoMuseState.saveConfig]（传输层与其它写动作同一处，不复制 URL/错误映射）。
  *
- * **部分更新语义（与固件"指针类型区分未设置 / 设为零"一致）**：数值与 JSON 字段留空 =
- * 不发该键（不把设备默认值写死成显式设置）；开关与枚举恒发（有明确视觉状态）。
+ * **增量更新语义**：数值与 JSON 留空不发；开关、枚举与文本也仅发送相对 fill / 成功保存基线
+ * 已改变的值，不把显示用默认值写成显式设置。成功请求只确认捕获的键；跨设备 fill 后旧确认无效。
  */
 
 /** Stage 01 EQ 预设（官方在 EQ 卡上给的就是这几个档，这里按"写进 JSON 文本域"的方式生效）。 */
 private val EM_EQ_PRESETS = listOf(
-    "flat" to "平直 [0,0,0,0,0]",
-    "vocal" to "人声 [2,0,-1,0,2]",
-    "warm" to "暖 [3,1,0,-1,-2]",
-    "bright" to "亮 [-2,-1,0,2,3]",
+    "flat" to "平直",
+    "warm" to "温暖",
+    "clear" to "清晰",
 )
 
 /** Stage 01 预设 → `eqBands` 文本（与 `EchoMuseConfigTab` 的下拉共用，避免两处各写一份）。 */
 internal val EM_EQ_PRESET_VALUES: Map<String, String> = mapOf(
-    "flat" to "[0,0,0,0,0]",
-    "vocal" to "[2,0,-1,0,2]",
-    "warm" to "[3,1,0,-1,-2]",
-    "bright" to "[-2,-1,0,2,3]",
+    "flat" to "[0,0,0,0,0,0,0,0]",
+    "warm" to "[0,4,0,0,-3,-1,2,-6]",
+    "clear" to "[0,-2,-3,1,4,-1,0,4]",
 )
 
 /** Stage 01 预设的可选清单（id ↔ 文案）。 */
 internal fun emEqPresetOptions(): List<Pair<String, String>> = EM_EQ_PRESETS
 
 class EchoMuseConfigDrafts(scope: PagerScope) {
+    // Transport-free baseline: only changed keys are sent; absent numeric drafts stay absent.
+    private var baseline = JSONObject()
+    var fillVersion: Int = 0
+        private set
+    var bleProxyEnabled by stateVar(false)
+    var bleProxyConnections by stateVar(false)
+    var listeningAnimDraft by stateVar("")
+
+    /** Acknowledge only the captured request, not edits made while it was in flight. */
+    fun markSaved(body: JSONObject, expectedFillVersion: Int = fillVersion) {
+        if (expectedFillVersion != fillVersion) return
+        val keys = body.keys()
+        while (keys.hasNext()) {
+            val key = keys.next()
+            baseline.put(key, body.opt(key))
+        }
+    }
 
     // ============================================================
     // Stage 02 唤醒词
     // ============================================================
 
     var wakeWordEnabled by stateVar(true)
-    var owwOnDevice by stateVar("on")
+    var owwOnDevice by stateVar("off")
     var owwModeOpen by stateVar(false)
     val owwModes: MutableList<Pair<String, String>> = stateListOf()
     var wakeLevelOpen by stateVar(false)
@@ -66,7 +81,7 @@ class EchoMuseConfigDrafts(scope: PagerScope) {
 
     /** 唤醒灵敏度阈值（读数保真：轨外历史值原样保留，滑杆端点钉扎见官方 wakeTrackFor）。 */
     var owwThreshold by stateVar(EchoMuseWakeWord.DEFAULT_THRESHOLD)
-    var wakeSound by stateVar(true)
+    var wakeSound by stateVar(false)
 
     /** 固件提示音档位（不是输出音量 0～127）。 */
     var wakeSoundLevel by stateVar("medium")
@@ -178,6 +193,7 @@ class EchoMuseConfigDrafts(scope: PagerScope) {
      * 拉取，失败保持空）。
      */
     fun fill(settings: JSONObject, uploadedModels: List<String>) {
+        fillVersion++
         fillWake(settings, uploadedModels)
         fillAudio(settings)
         sendspinEnabled = settings.optBoolean("sendspinEnabled", false)
@@ -185,6 +201,10 @@ class EchoMuseConfigDrafts(scope: PagerScope) {
         sendspinUnpaired = settings.optBoolean("sendspinUnpaired", false)
         extraJsonDraft = ""
         eqPresetOpen = false
+        bleProxyEnabled = settings.optBoolean("bleProxyEnabled", false)
+        bleProxyConnections = settings.optBoolean("bleProxyConnections", false)
+        listeningAnimDraft = listeningAnimStored
+        baseline = buildFullConfigBody { } ?: JSONObject()
     }
 
     private fun fillWake(s: JSONObject, uploadedModels: List<String>) {
@@ -193,7 +213,7 @@ class EchoMuseConfigDrafts(scope: PagerScope) {
             true -> "on"
             false -> "off"
             "off", "shadow", "on" -> raw.toString()
-            else -> "on"
+            else -> "off" // server config_push_with baseline, not a claimed private-listening mode
         }
         rebuildModeOptions()
         owwModeOpen = false
@@ -212,7 +232,7 @@ class EchoMuseConfigDrafts(scope: PagerScope) {
             is Number -> raw.toDouble().takeIf { it.isFinite() } ?: EchoMuseWakeWord.DEFAULT_THRESHOLD
             else -> EchoMuseWakeWord.DEFAULT_THRESHOLD
         }
-        wakeSound = s.optBoolean("wakeSound", true)
+        wakeSound = s.optBoolean("wakeSound", false)
         wakeSoundLevel = when (val raw = s.opt("wakeSoundLevel")) {
             "quiet", "medium", "loud" -> raw.toString()
             is Number -> "medium" // 旧数字从未被固件接受，不能猜测有效档位
@@ -254,7 +274,7 @@ class EchoMuseConfigDrafts(scope: PagerScope) {
         limiterReleaseDraft = num("limiterRelease")
         duckDbDraft = num("duckDb")
         eqBandsDraft = s.optJSONArray("eqBands")?.toString().orEmpty()
-        listeningAnimStored = s.optJSONObject("listeningAnim")?.toString().orEmpty()
+        listeningAnimStored = (s.opt("listeningAnim")?.takeIf { it is JSONObject || it is JSONArray })?.toString().orEmpty()
     }
 
     /**
@@ -263,6 +283,17 @@ class EchoMuseConfigDrafts(scope: PagerScope) {
      * 数值/JSON 留空 = 不发该键；开关与枚举恒发。
      */
     fun buildConfigBody(onError: (String) -> Unit): JSONObject? {
+        val full = buildFullConfigBody(onError) ?: return null
+        val delta = JSONObject()
+        val keys = full.keys()
+        while (keys.hasNext()) {
+            val key = keys.next()
+            if (full.opt(key)?.toString() != baseline.opt(key)?.toString()) delta.put(key, full.opt(key))
+        }
+        return delta
+    }
+
+    private fun buildFullConfigBody(onError: (String) -> Unit): JSONObject? {
         if (owwOnDevice !in setOf("off", "shadow", "on") ||
             wakeSoundLevel !in setOf("quiet", "medium", "loud")
         ) {
@@ -301,7 +332,10 @@ class EchoMuseConfigDrafts(scope: PagerScope) {
             body.put(key, v)
         }
         // 语音结束判定（Stage 05）
-        dec("vadThreshold", vadThresholdDraft, 0.0001, 1.0, "VAD 门限")
+        dec("vadThreshold", vadThresholdDraft, 0.0, 1.0, "VAD 门限")
+        if (vadThresholdDraft.isNotBlank() && vadThresholdDraft.trim().toDoubleOrNull() == 0.0) {
+            failed = "VAD 门限必须大于 0 且不超过 1"
+        }
         int("vadSpeechMs", vadSpeechMsDraft, 0..60000, "开口判定时长")
         int("vadSilenceMs", vadSilenceMsDraft, 0..60000, "收尾静音时长")
         // 采集增益（Stage 03）
@@ -356,6 +390,23 @@ class EchoMuseConfigDrafts(scope: PagerScope) {
         body.put("wakeSoundLevel", wakeSoundLevel)
         body.put("wakeMic", mic)
         // 音频开关/枚举（Stage 01/03/04）：恒发，写回现值无害
+        if (aecRefSource !in setOf("auto", "hw", "sw") || responseLevel !in setOf("low", "medium", "high")) {
+            onError("请选择有效的回声参考源和播报电平")
+            return null
+        }
+        val animation = listeningAnimDraft.trim()
+        if (animation.isNotEmpty()) {
+            val value = try {
+                if (animation.startsWith("[")) JSONArray(animation) else JSONObject(animation)
+            } catch (_: Exception) {
+                onError("私听动画需要是 JSON 对象或数组")
+                return null
+            }
+            body.put("listeningAnim", value)
+        }
+        body.put("bleProxyEnabled", bleProxyEnabled)
+        body.put("bleProxyConnections", bleProxyConnections)
+        body.put("aecRefSource", aecRefSource)
         body.put("aecEnabled", aecEnabled)
         body.put("agcEnabled", agcEnabled)
         body.put("beamformingEnabled", beamformingEnabled)

@@ -1,4 +1,5 @@
 package com.xiaozhi.admin.kit
+import com.xiaozhi.admin.kit.LocalAdminSpacing
 
 import androidx.compose.runtime.Composable
 import com.gearui.foundation.primitives.ScrollView
@@ -45,7 +46,7 @@ import com.tencent.kuikly.compose.ui.unit.dp
 
 /** 卡片内 1dp 横向分隔线（行间分隔）。[trailingGap] 为线下方留白，0 时不占额外空间。 */
 @Composable
-fun dividerH(trailingGap: Dp = GearUiSpace.sm) {
+fun dividerH(trailingGap: Dp = LocalAdminSpacing.current.sm) {
     Box(
         Modifier
             .fillMaxWidth()
@@ -82,13 +83,13 @@ fun dividerV() {
  * 这里仍是占位元素。
  */
 @Composable
-fun hGap(width: Dp = GearUiSpace.sm) {
+fun hGap(width: Dp = LocalAdminSpacing.current.sm) {
     Spacer(Modifier.width(width))
 }
 
 /** 纵向间隔。语义同 [hGap]。 */
 @Composable
-fun vGap(height: Dp = GearUiSpace.sm) {
+fun vGap(height: Dp = LocalAdminSpacing.current.sm) {
     Spacer(Modifier.height(height))
 }
 
@@ -228,7 +229,7 @@ fun splitRow(
 fun splitColumn(
     fillHeight: Boolean = false,
     divider: Boolean = true,
-    trailingGap: Dp = GearUiSpace.sm,
+    trailingGap: Dp = LocalAdminSpacing.current.sm,
     spacing: Dp = 0.dp,
     alignCenter: Boolean = false,
     body: SplitScope.() -> Unit,
@@ -307,12 +308,12 @@ fun menuPaneRow(
     }
 }
 
-/** 卡片行：一行最多两列、等宽，列间距 [GearUiSpace.gutter]（无分隔线）；right 为 null 时左卡独占整行。 */
+/** 卡片行：一行最多两列、等宽，列间距 [LocalAdminSpacing.current.gutter]（无分隔线）；right 为 null 时左卡独占整行。 */
 @Composable
 fun cardRow(left: @Composable () -> Unit, right: (@Composable () -> Unit)? = null) {
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(GearUiSpace.gutter),
+        horizontalArrangement = Arrangement.spacedBy(LocalAdminSpacing.current.gutter),
     ) {
         Box(Modifier.weight(1f)) { left() }
         if (right != null) Box(Modifier.weight(1f)) { right() }
@@ -350,9 +351,9 @@ fun twoPane(wide: () -> Boolean, left: @Composable () -> Unit, right: @Composabl
  */
 @Composable
 fun pageScroller(
-    horizontalPadding: Dp = GearUiSpace.xl,
-    paddingTop: Dp = GearUiSpace.xxl,
-    paddingBottom: Dp = GearUiSpace.xxxl,
+    horizontalPadding: Dp = LocalAdminSpacing.current.xl,
+    paddingTop: Dp = LocalAdminSpacing.current.xxl,
+    paddingBottom: Dp = LocalAdminSpacing.current.xxxl,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     ScrollView(

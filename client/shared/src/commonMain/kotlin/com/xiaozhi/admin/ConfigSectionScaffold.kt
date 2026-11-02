@@ -11,6 +11,9 @@ import com.tencent.kuikly.compose.foundation.layout.fillMaxWidth
 import com.tencent.kuikly.compose.foundation.layout.padding
 import com.tencent.kuikly.compose.ui.Alignment
 import com.tencent.kuikly.compose.ui.Modifier
+import com.tencent.kuikly.compose.ui.unit.dp
+import com.xiaozhi.admin.contracts.IconToken
+import com.xiaozhi.admin.icons.GearIcon
 
 /**
  * 「全局配置」各 section 共用的**三块小零件**（不是表单层，只是文案/摘要行）：
@@ -26,12 +29,12 @@ import com.tencent.kuikly.compose.ui.Modifier
  * 颜色只取 GearUI 语义色（`mutedForeground` / `warning` / `destructive`），**不引入自研色值**。
  */
 
-/** 只读说明行：次要文字色、`caption` 字号。 */
+/** 只读说明行：次要文字色、`caption` 字号。与上一个元素留 sm（8dp），说明行不再贴着正文。 */
 @Composable
 internal fun HintLine(text: String) {
     Text(
         text = text,
-        modifier = Modifier.padding(top = Spacing.xs),
+        modifier = Modifier.padding(top = Spacing.sm),
         style = Theme.typography.caption,
         color = Theme.colors.mutedForeground,
     )
@@ -47,7 +50,7 @@ internal fun HintLine(text: String) {
 internal fun WarnLine(text: String, error: Boolean = false) {
     Text(
         text = text,
-        modifier = Modifier.padding(top = Spacing.xs),
+        modifier = Modifier.padding(top = Spacing.sm),
         style = Theme.typography.caption,
         color = if (error) Theme.colors.destructive else Theme.colors.warning,
     )
@@ -84,6 +87,7 @@ internal fun SectionSummaryRow(
             loading = busy,
             // 加载中禁点：刷新是幂等只读请求，但仍要防连点造成列表来回闪
             disabled = busy,
+            iconWidget = { color -> GearIcon(token = IconToken.Refresh, size = 16.dp, tint = color) },
         )
     }
 }

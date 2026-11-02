@@ -169,6 +169,9 @@ impl Engines {
     }
     /// 按实际构建代际隔离语言池；构建失败返回默认实际租约，不伪造请求语言身份。
     pub fn tts_lease_for(&self, lang: &str) -> TtsLease {
+        if self.dev_mode {
+            return self.tts_lease();
+        }
         if !cfg!(feature = "sherpa") {
             return self.tts_lease();
         }

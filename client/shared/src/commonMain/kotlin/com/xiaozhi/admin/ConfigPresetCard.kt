@@ -13,6 +13,9 @@ import com.tencent.kuikly.compose.foundation.layout.fillMaxWidth
 import com.tencent.kuikly.compose.foundation.layout.padding
 import com.tencent.kuikly.compose.ui.Alignment
 import com.tencent.kuikly.compose.ui.Modifier
+import com.tencent.kuikly.compose.ui.unit.dp
+import com.xiaozhi.admin.contracts.IconToken
+import com.xiaozhi.admin.icons.GearIcon
 import com.xiaozhi.admin.kit.actionRow
 import com.xiaozhi.admin.kit.dividerH
 import com.xiaozhi.admin.kit.labeledField
@@ -66,6 +69,7 @@ fun PresetSection(form: ConfigFormState) {
                 type = ButtonType.OUTLINE,
                 loading = form.presetBusy,
                 disabled = form.presetBusy,
+                iconWidget = { color -> GearIcon(token = IconToken.Save, size = 16.dp, tint = color) },
             )
         }
         // 结果就地显示：失败要留住原因（toast 只说"操作已完成"，会把原因冲掉）
@@ -101,6 +105,7 @@ private fun PresetRow(form: ConfigFormState, name: String, pager: com.tencent.ku
             onClick = { form.applyPreset(pager, form.serverBase, name) },
             type = ButtonType.OUTLINE,
             disabled = form.presetBusy,
+            iconWidget = { color -> GearIcon(token = IconToken.Check, size = 16.dp, tint = color) },
         )
         Button(
             text = "删除",
@@ -108,6 +113,7 @@ private fun PresetRow(form: ConfigFormState, name: String, pager: com.tencent.ku
             type = ButtonType.OUTLINE,
             theme = ButtonTheme.DANGER,
             disabled = form.presetBusy,
+            iconWidget = { color -> GearIcon(token = IconToken.Delete, size = 16.dp, tint = color) },
         )
     }
 }

@@ -8,6 +8,9 @@ import com.gearui.foundation.layout.Spacing
 import com.gearui.theme.Theme
 import com.tencent.kuikly.compose.foundation.layout.padding
 import com.tencent.kuikly.compose.ui.Modifier
+import com.tencent.kuikly.compose.ui.unit.dp
+import com.xiaozhi.admin.contracts.IconToken
+import com.xiaozhi.admin.icons.GearIcon
 import com.xiaozhi.admin.kit.actionRow
 import com.xiaozhi.admin.kit.labeledDecimalField
 import com.xiaozhi.admin.kit.labeledField
@@ -48,21 +51,34 @@ fun MemoryConfigCard(form: ConfigFormState) {
         )
 
         if (sm.memoryEnabled == "true") {
+            if (!form.showAdvanced) {
+                val engine = sm.memoryBackendOptions.firstOrNull { it.first == sm.memoryBackend }?.second ?: "当前引擎"
+                HintLine("当前引擎：$engine；沿用已保存的召回与写入策略。详细设置和维护操作在高级模式查看。")
+                Button(
+                    text = "刷新状态", onClick = { sm.refreshStatus(ctx, form.serverBase) }, type = ButtonType.TEXT,
+                    iconWidget = { color -> GearIcon(token = IconToken.Refresh, size = 16.dp, tint = color) },
+                )
+                if (sm.memoryStatusMsg.isNotEmpty()) HintLine(sm.memoryStatusMsg)
+                return@LabeledCard
+            }
             actionRow {
                 Button(
                     text = "刷新状态",
                     onClick = { sm.refreshStatus(ctx, form.serverBase) },
                     type = ButtonType.OUTLINE,
+                    iconWidget = { color -> GearIcon(token = IconToken.Refresh, size = 16.dp, tint = color) },
                 )
                 Button(
                     text = "立即维护",
                     onClick = { sm.maintain(ctx, form.serverBase, dryRun = false) },
                     type = ButtonType.OUTLINE,
+                    iconWidget = { color -> GearIcon(token = IconToken.Settings, size = 16.dp, tint = color) },
                 )
                 Button(
                     text = "演练保留策略",
                     onClick = { sm.maintain(ctx, form.serverBase, dryRun = true) },
                     type = ButtonType.OUTLINE,
+                    iconWidget = { color -> GearIcon(token = IconToken.Funnel, size = 16.dp, tint = color) },
                 )
             }
             if (sm.memoryStatusMsg.isNotEmpty()) HintLine(sm.memoryStatusMsg)
@@ -79,23 +95,25 @@ fun MemoryConfigCard(form: ConfigFormState) {
                 help = "内置图记忆 = 本地 SQLite 图谱；纯存储 = 只存原文；本地文档 RAG = 扫描目录建索引；" +
                     "不生效 = 保留配置但不启用。",
             )
-            labeledField(
-                label = "库文件路径",
-                value = sm.memoryDbPath,
-                onValueChange = {
-                    sm.memoryDbPath = it
-                    form.markDirty()
-                },
-            )
-            labeledField(
-                label = "作用域前缀",
-                value = sm.memoryScopePrefix,
-                onValueChange = {
-                    sm.memoryScopePrefix = it
-                    form.markDirty()
-                },
-                help = "设备/用户维度的作用域前缀，用于把不同设备的记忆隔开。",
-            )
+            if (form.showAdvanced) {
+                labeledField(
+                    label = "库文件路径",
+                    value = sm.memoryDbPath,
+                    onValueChange = {
+                        sm.memoryDbPath = it
+                        form.markDirty()
+                    },
+                )
+                labeledField(
+                    label = "作用域前缀",
+                    value = sm.memoryScopePrefix,
+                    onValueChange = {
+                        sm.memoryScopePrefix = it
+                        form.markDirty()
+                    },
+                    help = "设备/用户维度的作用域前缀，用于把不同设备的记忆隔开。",
+                )
+            }
             switchRow(
                 label = "启用召回",
                 checked = sm.memoryRecallEnabled == "true",
@@ -108,7 +126,6 @@ fun MemoryConfigCard(form: ConfigFormState) {
                 help = "关闭后只记原文、不抽取结构化记忆（先积累再决定时用）。",
             )
 
-            AdvancedToggleRow(form)
             if (form.showAdvanced) {
                 labeledIntField(
                     label = "近况轮数",
@@ -173,6 +190,7 @@ fun MemoryConfigCard(form: ConfigFormState) {
                             text = "重建索引",
                             onClick = { sm.reindexRag(ctx, form.serverBase) },
                             type = ButtonType.OUTLINE,
+                            iconWidget = { color -> GearIcon(token = IconToken.Refresh, size = 16.dp, tint = color) },
                         )
                     },
                 )
@@ -213,7 +231,7 @@ fun MemoryConfigCard(form: ConfigFormState) {
                 }
             }
 
-            labeledSelect(
+            if (form.showAdvanced) labeledSelect(
                 label = "注入位置",
                 selectedId = sm.memoryInjectPosition,
                 options = sm.memoryInjectPositionOptions,
@@ -253,7 +271,7 @@ fun MemoryConfigCard(form: ConfigFormState) {
                     form.markDirty()
                 },
             )
-            labeledDecimalField(
+            if (form.showAdvanced) labeledDecimalField(
                 label = "随机性（temperature）",
                 value = sm.memoryExtractorTemperature,
                 onValueChange = {
@@ -308,6 +326,7 @@ fun MemoryConfigCard(form: ConfigFormState) {
                         text = "测试召回",
                         onClick = { sm.testRecall(ctx, form.serverBase) },
                         type = ButtonType.OUTLINE,
+                        iconWidget = { color -> GearIcon(token = IconToken.Play, size = 16.dp, tint = color) },
                     )
                 },
             )
@@ -346,6 +365,7 @@ fun MemoryConfigCard(form: ConfigFormState) {
                     onClick = { sm.clear(ctx, form.serverBase) },
                     type = ButtonType.FILL,
                     theme = ButtonTheme.DANGER,
+                    iconWidget = { color -> GearIcon(token = IconToken.Delete, size = 16.dp, tint = color) },
                 )
             }
             if (sm.memoryClearMsg.isNotEmpty()) {

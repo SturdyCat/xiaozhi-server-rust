@@ -4,6 +4,9 @@ import androidx.compose.runtime.Composable
 import com.xiaozhi.admin.contracts.*
 import com.xiaozhi.admin.kit.AdminScopeHost
 import com.xiaozhi.admin.kit.GearFieldHelpDialog
+import com.xiaozhi.admin.kit.adminScale
+import com.xiaozhi.admin.kit.provideAdminSpacing
+import com.xiaozhi.admin.kit.systemDarkModeState
 
 import com.gearui.App
 import com.gearui.components.button.Button
@@ -22,7 +25,14 @@ import com.tencent.kuikly.compose.foundation.layout.padding
 import com.tencent.kuikly.compose.setContent
 import com.tencent.kuikly.compose.ui.Alignment
 import com.tencent.kuikly.compose.ui.Modifier
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
+import com.tencent.kuikly.compose.ui.layout.onSizeChanged
+import com.tencent.kuikly.compose.ui.platform.LocalDensity
 import com.tencent.kuikly.compose.ui.unit.dp
+import com.xiaozhi.admin.icons.GearIcon
 import com.tencent.kuikly.core.annotations.Page
 
 /**
@@ -42,9 +52,8 @@ import com.tencent.kuikly.core.annotations.Page
  *                                                    └─ section 主体
  * ```
  *
- * **当前主体是"迁移中"占位**：配置表单（语音流程 / 全局配置两套视图）由 T07 / T08
- * 迁到 GearUI 表单组件，复用同一份 [ConfigFormState]。占位阶段保留完整的数据加载链路
- * （[pageDidAppear] 里的 5 个 loader 一行未删），所以迁移只换渲染、不改接口口径。
+ * 主体复用管理台的横向流程、三标签工作区与全局布局，以及唯一 [ConfigFormState]。
+ * 不维护独立字段渲染或提交实现；无侧栏时也可从顶部在流程与全局之间导航。
  *
  * ## 为什么手写 `App(...)` 而不是继承 `com.gearui.View`
  *
@@ -85,6 +94,7 @@ class ConfigPage : ComposeContainer(), FieldHelpHost {
         form.editDeviceId = pagerData.params.optString("edit_device", "")
         // 基址一律留空：web 由 server 同域托管走相对路径；macOS 单页模式同样以页面
         // 自身来源为基址（与旧实现逐字一致，T06 不改网络口径）。
+        form.loadInterfaceMode(this)
         form.load(this)
         form.loadPresets(this)
         plugins.load(this)
@@ -97,20 +107,46 @@ class ConfigPage : ComposeContainer(), FieldHelpHost {
     /**
      * 组合根：`setContent` 只在这里调用一次（与 [AdminPage] 同一生命周期点 `Pager.didInit`）。
      *
-     * `themeMode = Light` + `theme = null`：完全采用 GearUI 默认主题（不覆写色板）；
+     * 根容器先量视口（`onSizeChanged` → `viewportWidthDp`），再经 [adminScale] 算出
+     * `fontScale` / `spacingScale` 双轴同源缩放：Mac 两轴 1.2；web 按视口断点
+     * （<900→1.0 / ≥900→1.0625 / ≥1200→1.125 / ≥1440→1.1875）；iOS/Android 1.0。
+     * 二者分别注入 `Theme`（字号 ramp 同倍放大）与 `LocalAdminSpacing`（间距同倍放大）。
+     *
+     * `themeMode = ThemeMode.System` + 传 `isSystemDark = systemDarkModeState().value`：
+     * 跟随系统暗色（基础设施 `ProvideSystemDarkMode` / `Themes.Dark` 已就绪）；
+     * `theme = null` 表示不覆写 GearUI 默认色板；
      * `languageTag / fallbackLanguageTag = "zh-Hans"`：命中内置 `Strings.zh_Hans`。
      */
     override fun didInit() {
         super.didInit()
         val page = this
         setContent {
-            App(
-                themeMode = ThemeMode.Light,
-                theme = null,
-                languageTag = "zh-Hans",
-                fallbackLanguageTag = "zh-Hans",
+            val systemDark = systemDarkModeState()
+            // 视口宽度（dp）随窗口 resize 实时更新，驱动字号 fontScale 与间距 spacingScale 双轴同源缩放。
+            var viewportWidthDp by remember { mutableStateOf(0) }
+            // `LocalDensity.current` 是 Composable 读取，必须放在 onSizeChanged 之外（回调本身非 Composable）；
+            // 用普通 val 承接后在回调里以 with(density) 换算，与 AdminScopeHost 同一写法。
+            val density = LocalDensity.current
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .onSizeChanged { size ->
+                        viewportWidthDp = with(density) { size.width.toDp() }.value.toInt()
+                    },
             ) {
-                ConfigShell(page)
+                val (fontScale, spacingScale) = adminScale(IS_MACOS, viewportWidthDp)
+                provideAdminSpacing(spacingScale) {
+                    App(
+                        themeMode = ThemeMode.System,
+                        isSystemDark = systemDark.value,
+                        fontScale = fontScale,
+                        theme = null,
+                        languageTag = "zh-Hans",
+                        fallbackLanguageTag = "zh-Hans",
+                    ) {
+                        ConfigShell(page)
+                    }
+                }
             }
         }
     }
@@ -126,19 +162,24 @@ class ConfigPage : ComposeContainer(), FieldHelpHost {
 private fun ConfigShell(page: ConfigPage) {
     AdminScopeHost(pager = page, fieldHelp = page.fieldHelp) { viewport ->
         Column(modifier = Modifier.fillMaxSize()) {
-            ConfigTopBar(page)
-            // 主体：T06 阶段统一渲染迁移占位（12 个 section 的真实内容由 T07–T11 接管）
+            ConfigTopBar(page, viewport.isNarrow)
+            if (page.form.workflowPosition != null) {
+                PipelineWorkflowHeader(page.form)
+            } else {
+                Button(text = "返回语音流程", onClick = { page.form.openWorkflowPage() }, type = ButtonType.TEXT,
+                    iconWidget = { color -> GearIcon(token = IconToken.Back, size = 16.dp, tint = color) })
+            }
             Box(modifier = Modifier.weight(1f).fillMaxSize()) {
-                SectionPlaceholder(
-                    title = configPageTitle(page.form),
-                    detail = "配置表单（语音流程节点 / 全局配置）由 T07 / T08 迁到 GearUI 表单组件；" +
-                        "两套视图共用同一份 ConfigFormState，不建第二条提交路径。",
-                    viewport = viewport,
-                )
+                if (page.form.workflowPosition != null) {
+                    WorkflowWorkspaceLayout(page.form, page.plugins, page.engineHealth, page.mcpTools, page.ota, page.toast)
+                } else {
+                    GlobalConfigLayout(page.form, page.plugins, page.engineHealth, page.mcpTools, page.ota, page.toast)
+                }
             }
         }
         // 字段帮助弹层（ⓘ 的唯一实例）：每页根部挂一次，走 Popup.Host（不占布局）
         GearFieldHelpDialog()
+        ConfigModeSaveConfirmation(page.form)
     }
 }
 
@@ -148,15 +189,32 @@ private fun ConfigShell(page: ConfigPage) {
  * 窄屏不做抽屉——单页模式本来就没有侧栏，抽屉没有可装的东西。
  */
 @Composable
-private fun ConfigTopBar(page: ConfigPage) {
+private fun ConfigTopBar(page: ConfigPage, narrow: Boolean) {
     val form = page.form
-    NavBar(
-        title = configPageTitle(form),
-        centerTitle = false,
-        rightWidget = { SaveControls(page) },
-        // 冲突态两个按钮并排（重新加载 + 保存），否则只占一个文字按钮槽
-        rightWidgetWidth = if (form.conflict) 184.dp else 104.dp,
-    )
+    Column {
+        NavBar(
+            title = configPageTitle(form),
+            centerTitle = false,
+            rightWidget = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (!narrow) AdminInterfaceModeControl(form)
+                    SaveControls(page, showReload = !narrow)
+                }
+            },
+            rightWidgetWidth = when {
+                narrow -> 144.dp
+                form.conflict -> 440.dp
+                else -> 324.dp
+            },
+        )
+        if (narrow) {
+            Row(modifier = Modifier.align(Alignment.End).padding(end = Spacing.md, bottom = Spacing.xs)) {
+                if (form.conflict) Button(text = "重新加载", onClick = { form.reload(page) }, type = ButtonType.OUTLINE,
+                    iconWidget = { color -> GearIcon(token = IconToken.Refresh, size = 16.dp, tint = color) })
+                AdminInterfaceModeControl(form)
+            }
+        }
+    }
 }
 
 /**
@@ -170,19 +228,20 @@ private fun ConfigTopBar(page: ConfigPage) {
  * 所以直接读 `editDeviceId` 求值（Compose 里读取快照状态即会重组，不需要旧 DSL 的 vif 双份按钮）。
  */
 @Composable
-private fun SaveControls(page: ConfigPage) {
+private fun SaveControls(page: ConfigPage, showReload: Boolean = true) {
     val form = page.form
     Row(
         modifier = Modifier.padding(end = Spacing.md),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
     ) {
-        if (form.conflict) {
+        if (showReload && form.conflict) {
             // 过期写入（409）后：草稿仍在本地，给一个「重新加载」出口（对齐 DSH 的冲突文案口径）
             Button(
                 text = "重新加载",
                 onClick = { form.reload(page) },
                 type = ButtonType.OUTLINE,
+                iconWidget = { color -> GearIcon(token = IconToken.Refresh, size = 16.dp, tint = color) },
             )
         }
         Button(
@@ -200,6 +259,7 @@ private fun SaveControls(page: ConfigPage) {
             type = ButtonType.FILL,
             // loading 期间 Button 自身拦截点击，等价旧实现「保存中…灰底不可点」
             loading = form.saving,
+            iconWidget = { color -> GearIcon(token = IconToken.Save, size = 16.dp, tint = color) },
         )
     }
 }

@@ -6,7 +6,7 @@ use crate::workflow::session::SessionParams;
 use serde_json::{json, Value};
 use std::time::Instant;
 
-pub(super) fn preview(cfg: &Config, action: &str, text: &str) -> StageResult {
+pub(super) fn preview(cfg: &Config, action: &str, _text: &str) -> StageResult {
     let t = Instant::now();
     let mut r = StageResult::ok(action, 0, "configuration_preview");
     r.details = match action {
@@ -18,12 +18,6 @@ pub(super) fn preview(cfg: &Config, action: &str, text: &str) -> StageResult {
         "wakeup.preview" => {
             if cfg.wakeup.validate().is_err() { return StageResult::error(action,"invalid_config","Invalid saved wakeup greeting configuration"); }
             json!({"enabled":cfg.wakeup.enabled,"active":cfg.wakeup.active(),"greetings":cfg.wakeup.pool(),"persist":cfg.wakeup.persist,"synthesis_tested":false})
-        }
-        "command.match" => {
-            if text.trim().is_empty() { return StageResult::error(action,"invalid_input","text is required"); }
-            if cfg.command.validate().is_err() { return StageResult::error(action,"invalid_config","Invalid saved command matching configuration"); }
-            let hit = crate::plugins::command::CommandGate::new(&cfg.command).hit(text);
-            json!({"enabled":cfg.command.enabled,"matched":hit.is_some(),"keyword":hit.as_ref().map(|h|&h.keyword),"reply":hit.as_ref().map(|h|&h.reply),"dry_run":true,"executed":false})
         }
         "soul.preview" => match crate::plugins::soul::preview::build(cfg,"<node-test>") {
             Ok(p) => { r.text = Some(p.instructions.clone()); p.to_json() }

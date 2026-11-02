@@ -530,6 +530,31 @@
     }
     .em-tabs::-webkit-scrollbar { display: none; }
     .em-tabs > button { flex-shrink: 0; }
+
+    /* Embedded host only: the Kuikly modal owns device identity, actions and
+       navigation. Render only the official body, never a second device header,
+       status/LED image, rename/delete toolbar, tab strip or floating dialog.
+       Direct-child selectors deliberately leave dialogs inside the body alone. */
+    #root.em-embedded, .em-embedded-detail { height: 100%; min-height: 0; }
+    .em-embedded-detail > div {
+      position: static !important; inset: auto !important;
+      height: 100%; min-height: 0; background: transparent !important;
+      align-items: stretch !important; justify-content: flex-start !important;
+      z-index: auto !important; backdrop-filter: none !important;
+    }
+    .em-embedded-detail > div > .em-modal {
+      width: 100% !important; height: 100% !important; min-width: 0; min-height: 0;
+      border: 0 !important; border-radius: 0 !important;
+      box-shadow: none !important; animation: none !important;
+    }
+    .em-embedded-detail > div > .em-modal > .em-modal-head { display: none !important; }
+    /* Pending approval lives in the body and must remain available even when
+       the redundant header/banner above it is hidden. Do not hide body controls
+       or nested headings: updates, shell and approval own real actions there. */
+    .em-embedded-detail > div > .em-modal > .em-modal-body { min-height: 0; }
+    /* The parent owns navigation; this is added by the host only after the
+       requested official tab has been selected. */
+    .em-embedded-detail .em-embedded-tabbar-hidden { display: none !important; }
   </style>
   <script>
     // Theme is forced to light here: this page is hosted by the xiaozhi-server

@@ -105,7 +105,10 @@ async fn expired_and_replaced_control_cannot_claim_and_old_cleanup_spares_new() 
     drop(op);
     let (op, _) = Operation::reserve(id, ctl.clone(), &live, OP_TIMEOUT).unwrap();
     let (new_ctl, mut new_rx) = online(id, localhost(), true);
-    assert!(matches!(claim(id, localhost(), false), Err(ShellError::Offline)));
+    assert!(matches!(
+        claim(id, localhost(), false),
+        Err(ShellError::Offline)
+    ));
     em::hub_remove_session(id, &ctl);
     assert!(em::hub_ctl(id).unwrap().same_channel(&new_ctl));
     drop(op);
@@ -183,7 +186,15 @@ async fn handler(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     State(state): State<TestState>,
 ) -> Response {
-    admit(ws, &headers, &id, peer.ip(), &state.reg, state.device_token, false)
+    admit(
+        ws,
+        &headers,
+        &id,
+        peer.ip(),
+        &state.reg,
+        state.device_token,
+        false,
+    )
 }
 
 async fn server(

@@ -1,6 +1,5 @@
 package com.xiaozhi.admin
 
-
 import com.tencent.kuikly.core.coroutines.Job
 import com.tencent.kuikly.core.coroutines.delay
 import com.tencent.kuikly.core.coroutines.launch
@@ -16,8 +15,8 @@ import com.xiaozhi.admin.state.stateVar
  * 分区塞在一个对象里，日志与诊断混在一起、进入即抓取、离开不停轮询。本类按设计
  * §6.4/§7-T03 拆开：
  * - **懒加载**：进哪个 tab 才抓哪个，抓过一次不重复抓（`runtimeLoaded`/`infoLoaded`）；
- * - **进 tab 开、离 tab 停**：控制台会话与 `oww/state` 的 30 s 轮询都在 [enterTab] 里
- *   起、在离开时停（[leave] / 切走 tab），页面离开后不留后台请求；
+ * - **进 tab 开、离 tab 停**：状态页 runtime 的 2 s 轮询、更新页 OWW 的 30 s 轮询
+ *   与控制台会话由 [enterTab] 开启，[pauseTab] / [leave] 停止；
  * - **日志独立**：[EchoMuseLogsState] 只管来源白名单与输出，设备事实与单操作闸门
  *   仍在这里（同一台设备只有一把槽，见 §8.4）。
  *
@@ -100,8 +99,13 @@ class EchoMuseDetailState(private val scope: Pager) {
 
     var confirmReboot by stateVar(false)
 
-    /** 输出音量草稿（0～127；读取运行状态不覆盖它）。 */
-    var volumeDraft by stateVar("")
+    /** 已排队、尚未由设备报告确认的目标值；绝不拿它冒充实际上报值。 */
+    var volumePending by stateVar<Int?>(null)
+        private set
+    val volumeReported: Int? get() = EchoMuseVolume.reported(runtime?.optJSONObject("volume_state")?.opt("level"))
+    private var volumeChecksRemaining = 0
+    private var runtimePollJob: Job? = null
+    private var runtimeReadFailed = false
 
     /** 控制台会话（T05 的 tab 视图直接读它渲染输出区）。 */
     val console = EchoMuseConsoleState(scope)
@@ -109,6 +113,7 @@ class EchoMuseDetailState(private val scope: Pager) {
     private var base = ""
     private var token = ""
     private var generation = 0
+    private var owwRequestId = 0
     /** 更新 tab 的资产状态轮询句柄（离开 tab / 页面销毁即 cancel）。 */
     private var owwPollJob: Job? = null
 
@@ -153,6 +158,7 @@ class EchoMuseDetailState(private val scope: Pager) {
             runtimeCurrent = false
             infoHistorical = infoLoaded
             confirmReboot = false
+            volumePending = null
             result = ""
         }
         approved = nextApproved
@@ -174,7 +180,7 @@ class EchoMuseDetailState(private val scope: Pager) {
      * 切到某个 tab（**幂等**：同设备同 tab 重复调用不重复抓取、不重开会话）。
      *
      * 每个需要设备数据的 tab 在这里决定自己的第一件事：
-     * - 状态/活动：`runtime` 抓一次（两个 tab 共用同一份快照）；
+     * - 状态：`runtime` 初读 + 2 s 轮询；活动只懒加载，共用同一快照；
      * - 更新：`oww/state` 抓一次 + 起 30 s 轮询；
      * - 控制台：开会话（离线则直接 `offline` 态，不发 WS）；
      * - 配置/日志：不预取（配置读的是列表里的 `settings`，日志要用户点"读取"）。
@@ -185,10 +191,15 @@ class EchoMuseDetailState(private val scope: Pager) {
         if (target != row.deviceId) bind(row)
         if (tab != label) tab = label
         if (label != EM_TAB_UPDATES) stopOwwPolling()
+        if (label != EM_TAB_STATUS) stopRuntimePolling()
         if (label != EM_TAB_CONSOLE) console.close()
 
         when (label) {
-            EM_TAB_STATUS, EM_TAB_ACTIVITY -> if (!runtimeLoaded) readRuntime(ctx)
+            EM_TAB_STATUS -> {
+                if (!runtimeLoaded || !runtimeCurrent) readRuntime(ctx)
+                armRuntimePolling(ctx)
+            }
+            EM_TAB_ACTIVITY -> if (!runtimeLoaded) readRuntime(ctx)
             EM_TAB_UPDATES -> {
                 readOwwState(ctx)
                 armOwwPolling(ctx)
@@ -198,30 +209,44 @@ class EchoMuseDetailState(private val scope: Pager) {
         }
     }
 
-    /** 离开设备详情卡（收起/换页/销毁）：停轮询、关控制台、忘掉当前设备。 */
-    fun leave() {
+    /** 切 Tab 时作废旧读取与确认；不把后台回包写进下一分区。 */
+    fun pauseTab() {
+        generation++
         stopOwwPolling()
+        stopRuntimePolling()
+        volumePending = null
         console.close()
-        if (target.isNotEmpty()) {
-            target = ""
-            tab = EM_TAB_STATUS
-            infoOpen = false
-        }
+        busy = ""
+        owwLoading = false
+        confirmReboot = false
+    }
+
+    /** 离开设备卡时清除归属和快照；下次打开不得复用另一设备的数据。 */
+    fun leave() {
+        pauseTab()
+        resetDeviceState()
+        target = ""
+        tab = EM_TAB_STATUS
+        infoOpen = false
     }
 
     // ============================================================
     // 读取与下发
     // ============================================================
 
-    /** 读一次运行状态快照（不自动刷新；在线才代表当前值）。 */
-    fun readRuntime(ctx: Pager) {
+    /** 状态页轮询、手动刷新与音量确认共用同一请求闸门；后台读取不擦除操作反馈。 */
+    fun readRuntime(ctx: Pager, automatic: Boolean = false) {
         if (!approved || !idle) return
-        run("runtime", system = false) { data ->
+        run("runtime", system = false, quiet = automatic) { data ->
             if (data.text("device_id") != target) {
+                runtimeReadFailed = true
                 runtimeCurrent = false
+                volumePending = null
                 error = "运行状态的设备标识不匹配，请刷新列表后重试"
                 return@run
             }
+            if (runtimeReadFailed) error = ""
+            runtimeReadFailed = false
             runtime = data
             runtimeLoaded = true
             val sameSession = data.text("session_id") == sessionId
@@ -230,10 +255,21 @@ class EchoMuseDetailState(private val scope: Pager) {
                 infoHistorical = infoLoaded
             }
             runtimeCurrent = online && data.optBoolean("online", false) && sameSession
-            result = when {
-                runtimeCurrent -> "运行状态快照已读取；不会自动刷新"
-                !sameSession -> "控制会话已变化：此快照不代表当前状态，请刷新设备列表后重新读取"
-                else -> "设备离线：仅展示历史上报，不代表当前状态"
+            if (!runtimeCurrent) volumePending = null
+            val pending = volumePending
+            if (pending != null && runtimeCurrent) {
+                if (volumeReported == pending) {
+                    volumePending = null
+                    result = "音量已同步：${EchoMuseVolume.percent(pending)}"
+                } else if (--volumeChecksRemaining <= 0) {
+                    volumePending = null
+                    result = "尚未确认目标音量，当前显示设备实际上报"
+                }
+            }
+            if (!automatic) result = when {
+                runtimeCurrent -> "运行状态已刷新"
+                !sameSession -> "控制会话已变化，请刷新设备列表"
+                else -> "设备离线，显示历史上报"
             }
         }
     }
@@ -253,34 +289,39 @@ class EchoMuseDetailState(private val scope: Pager) {
     fun readOwwState(ctx: Pager) {
         if (owwLoading || target.isEmpty()) return
         owwLoading = true
+        val requestId = ++owwRequestId
+        val requestGeneration = generation
         val deviceId = target
         val url = echoMuseAuthenticatedUrl(
             "$base/api/echomuse/devices/${echoMuseUrlComponent(deviceId)}/oww/state",
             token,
         )
-        getJson(ctx, url) { ok, data, _ ->
+        getJson(ctx, url) { ok, data, reason ->
+            if (requestId != owwRequestId) return@getJson
             owwLoading = false
+            if (requestGeneration != generation || deviceId != target) return@getJson
             if (ok && data.text("device_id") == deviceId) {
                 owwState = data
                 owwLoaded = true
-            }
+                error = ""
+            } else error = if (ok) "资产状态的设备标识不匹配，请重新读取"
+                else "资产状态读取失败：${reason.ifEmpty { "请检查设备连接后重试" }}"
         }
     }
 
-    /** 下发输出音量（0～127；202 只代表排队，不代表已生效）。 */
-    fun setVolume(ctx: Pager) {
-        if (!canVolume || !idle) return
-        val level = volumeDraft.trim().toIntOrNull()
-        if (level == null || level !in 0..127) {
-            error = "音量必须是 0～127 的整数（0 为静音）"
-            return
-        }
-        run("volume", system = false, body = JSONObject().apply { put("level", level) }) { data ->
-            result = if (data.optBoolean("queued", false)) {
-                "音量 $level 已排队下发，尚未确认生效；请点击“读取运行状态”核对实际上报"
-            } else {
-                "接口已响应，但未确认排队；请读取运行状态核对"
-            }
+    /** 仅滑动结束下发一次。可抢占旧 runtime GET，但不能抢占其他设备操作。 */
+    fun setVolume(ctx: Pager, level: Int) {
+        if (!canVolume || (!idle && busy != "runtime") || !runtimeCurrent || level !in 0..127) return
+        if (level == volumeReported && volumePending == null) return
+        volumePending = level
+        volumeChecksRemaining = 6
+        run("volume", system = false, body = JSONObject().apply { put("level", level) },
+            onFail = { volumePending = null }) { data ->
+            if (!data.optBoolean("queued", false)) volumePending = null
+            result = if (volumePending != null) "音量指令已排队，等待设备上报"
+                else "接口未确认排队，当前显示设备实际上报"
+            // run() 的代际已作废提交前的 GET；此读取只能由 POST 响应之后发起。
+            if (tab == EM_TAB_STATUS) readRuntime(ctx, automatic = true)
         }
     }
 
@@ -342,13 +383,16 @@ class EchoMuseDetailState(private val scope: Pager) {
         system: Boolean,
         body: JSONObject? = null,
         onFail: () -> Unit = {},
+        quiet: Boolean = false,
         onSuccess: (JSONObject) -> Unit,
     ) {
         val requestGeneration = ++generation
         val deviceId = target
         busy = operation
-        error = ""
-        result = ""
+        if (!quiet) {
+            error = ""
+            result = ""
+        }
         val headers = echoMuseHeaders(token)
         val url = "$base/api/echomuse/devices/${echoMuseUrlComponent(deviceId)}/$operation"
         // 一次性操作沿用 40 s 超时（与设备端 shell 期限兼容）；GET 无请求体。
@@ -373,7 +417,11 @@ class EchoMuseDetailState(private val scope: Pager) {
                     502 -> "设备命令执行失败：$reason"
                     else -> "操作失败：$reason"
                 } + detail
-                if (operation == "runtime") runtimeCurrent = false
+                if (operation == "runtime") {
+                    runtimeCurrent = false
+                    volumePending = null
+                    runtimeReadFailed = true
+                }
                 onFail()
                 return@httpRequest
             }
@@ -473,6 +521,7 @@ class EchoMuseDetailState(private val scope: Pager) {
     }
 
     private fun resetDeviceState() {
+        runtimeReadFailed = false
         runtime = null
         runtimeLoaded = false
         runtimeCurrent = false
@@ -486,8 +535,27 @@ class EchoMuseDetailState(private val scope: Pager) {
         error = ""
         result = ""
         confirmReboot = false
-        volumeDraft = ""
+        volumePending = null
+        stopRuntimePolling()
         stopOwwPolling()
+    }
+
+    /** 状态页 2 s 读取同一 runtime 快照；空闲时才发，离页、切设备立即取消。 */
+    private fun armRuntimePolling(ctx: Pager) {
+        if (runtimePollJob != null) return
+        val deviceId = target
+        runtimePollJob = ctx.lifecycleScope.launch {
+            while (tab == EM_TAB_STATUS && target == deviceId) {
+                delay(2_000)
+                if (tab != EM_TAB_STATUS || target != deviceId) return@launch
+                if (online && approved) readRuntime(ctx, automatic = true)
+            }
+        }
+    }
+
+    private fun stopRuntimePolling() {
+        runtimePollJob?.cancel()
+        runtimePollJob = null
     }
 
     /** 30 s 轮询资产状态（更新 tab 在屏时才有意义，离开即停）。 */

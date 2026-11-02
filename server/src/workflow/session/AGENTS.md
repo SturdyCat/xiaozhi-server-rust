@@ -11,12 +11,22 @@
 - [LLM producer](<producer.rs>)与[分句器](<../pipeline/splitter.rs>)旁挂 watchdog，LLM 静默时也能 flush 残句；不能把定时逻辑移回只在 token 到达时执行的回调。退出前先查 done/abort/通道关闭。
 - 阶段延迟由[事件记录器](<../../observability/events.rs>) first-only 标记，使用单调钟；[观测出口](<observe.rs>)统一发事件，[metrics](<../../observability/metrics.rs>)独立聚合，接口只增不改。
 - **轮次可归因**：`TurnTrace::new` 分配进程内唯一的 `turn_id`（一个 trace = 一轮），随事件负载与 `tracing` 的 `turn=` 字段流转；`grep turn=N` 能捞出整轮日志行，最后一行是分段摘要。首 token / 首句日志的判据取 `mark_*` 的返回值（是否首次写入），不要另设原子标志——那会与 first-only 语义漂移。`session_id` 在轮次内日志里不能丢：排查通常先按会话过滤再看轮次。
-- **文件规模**：[reply.rs](<reply.rs>)是回复编排层（LLM 工具回接在[command.rs](<command.rs>)、观测在[observe.rs](<observe.rs>)），当前 ~540 行仍有余量，但**观测类代码一律落[observe.rs](<observe.rs>)**（事件出口、轮次日志、id 取值口径都在那里），不要再往 reply.rs 加日志或分支。
+- **文件规模**：[reply.rs](<reply.rs>)是回复编排层（模型授权与动作出口在[command.rs](<command.rs>)、观测在[observe.rs](<observe.rs>)），当前 ~540 行仍有余量，但**观测类代码一律落[observe.rs](<observe.rs>)**（事件出口、轮次日志、id 取值口径都在那里），不要再往 reply.rs 加日志或分支。
+
+## 可编排 hook 执行
+
+- [计划选择](<plan.rs>)消费会话建立时编译的固定快照；空计划关闭全部可选增强，但不关闭 VAD/ASR/LLM/TTS 核心链路。条件使用真实文本和入口 `DeviceKind`（`xiaozhi_esp` / `echomuse`），普通上下文没有可信置信度时 `confidence` 一律不命中；模型门控在唯一分类后使用真实分数。
+- `nlu.model` 是唯一模型授权节点；`command.gate` / `nlu.rules` / `skill.gate` 仅兼容别名，共存也只调用一次 `SkillRegistry::recognize`、执行一次。旧 command 绑定只授权 end_session，旧 NLU 绑定只授权 NLU 配置中的意图；条件不扩大目录权限。`confidence` 仅在该次真实分类后评估，非有限值拒绝。模型关闭/拒识可纯聊天，但不提供任何技能工具；模型故障消费本轮并明确记错，缺槽位明确澄清且不动作。
+- [上下文与生命周期](<hooks.rs>)按 `link.nlu.llm` 位置顺序组装人格/召回，`stop` 在真实错误时结束当前轮，`continue` 保留核心 prompt 并继续；唤醒仍仅挂每次 `detect`，不是连接开始或 `listen start`。AIUI 托管云端链路不执行本地人格/记忆。
+- `end` 写回只由正常完成、非取消、非打断的本地回复调用；会话内以单调 `turn_id` 防重入，原文 record 等待结果使错误策略真实生效，抽取/维护仍在后台。此保证不包含进程崩溃 exactly-once，也不代表设备已播放确认；背景任务失败不追溯撤销已完成轮次。
+- [真实会话回归](<plan/tests.rs>)使用无模型依赖、假承载/记忆提供方验证实际副作用，不替代 ESP/EchoMuse 真机与推理联调。
 
 ## 指令、MCP 与唤醒
 
-- [技能级联](<command.rs>)在 ASR→LLM 之间两级本地识别（规则 → 轻量模型），命中即执行不调 LLM；都未命中才放行 LLM，LLM 的 `execute_skill` 工具调用回 `execute_llm_tool_calls` 经同一目录校验执行。AIUI 只能在云端结果回来后丢弃回复。`[command]` 归一化 exact 与 max_chars 两道保险不可互替，空词表不拦截。
-- 告别语前清 stale abort；顺序是告别音频 → `tts stop` → MCP stop-listening。失败降级置 close_requested，由主循环跳过 VAD flush、排空后 close；不要分支直接 drop socket。
+- [模型门控](<command.rs>)只让真实模型选择意图；模板仅为已命中的同一意图抽槽，不再做关键词、规则或启发式识别。聊天 LLM `tools=None`，即使上游擅自返回 tool_calls 也不执行，不保留 `execute_skill` 回提。新用户轮才重置 stale abort；同轮澄清/receipt 使用不清 abort 的 `speak_canned_in_turn`，任务投递走同样不清 abort 的严格音频链；原生 `AudioWrite::Cancelled` 也须转为 sticky abort，防告别中断后继续 MCP。
+- [声明式技能执行](<skill_plan.rs>)先验证条件并解析全部步骤参数，再对全计划调用纯 `preflight_step_args` 检查时区枚举、时长语法/范围、at 语法和日历合法性，首 effect 前全部通过才按顺序调用 [SkillSystem](<../../skills/AGENTS.md>) 稳定白名单能力；`device_id/session_id` 固定取会话，所有 SQLite/model 阻塞工作隔离且轮询 abort，每个 step 幂等键为 `session:turn:index`。设备工具名必须是保存配置的静态字面量；一般 devices.call/legacy MCP 动作必须有本设备明确声明（has_tool=Some(true)），未知/发现失败/明确不存在都不调用、不报成功。仅 end_session 的既有 stop 兼容路径保留未知清单试探及四种降级。设备动作先成功再说 receipt；`replies.say` 延后所有步骤成功后播报。仅其 `text` 允许 `{{steps.N.speech}}` 引用已成功的前序 tasks.create/list/cancel 返回值，执行前验证索引/来源，运行时一次替换且拒绝二次注入；不允许结果控制 API、MCP、设备或动作参数。查询/创建/取消的文案来自真实服务结果，不从意图名拼造；同名取消的 typed `SkillActionError.speech` 作为错误澄清播报且终止计划，不播整体成功。`sessions.end` 仅允许末步，未执行完不得成功；计划多步骤不是跨设备/SQLite原子事务，提交过的步骤不声称可撤销，取消后不再启动新动作。
+- [在线消息投递](<delivery.rs>)由主循环每秒 idle tick 拉取本设备 outbox，原子 claim → 再查取消/租约 → [严格投递音频](<delivery_audio.rs>) → finish_delivery；不调用 `handle_inject`/NLU。task_id 存在时先放[本地720ms短旋律](<alarm.rs>)再说文案，普通 messages.send 不带铃。铃声是确定性淡入淡出 PCM（不下载、不借TTS文本伪音效），与文案复用同一个 TTS start/stop、节拍器、水库、既有设备分帧/Opus或PCM下行；不能句间 reset。每个音源都必须完成合成/编码并产生帧，铃成功而文案失败仍不 submitted；完整句缓存遵守既有身份与字节/帧上限。仅本地链路真实设备可投递，测试台/AIUI 不 claim；监听/累积音频期不打断投递。投递中每200ms复查取消/租约，watcher 只置本次 delivery_abort，独立传给预取/填充/下行，不污染用户 sticky abort；SQL 取消 A 后同连接 idle tick 仍可送 B。真实 Abort/Closed 与独立原生 Cancelled 仍置用户 sticky abort，已知局部取消竞态返回的 Cancelled 不再误标用户取消，不做临时 swap/clear。薄承载包装保留实际 native send_audio/terminal_profile；所有异常路径停止并 join filler，已 start 或 drain Err 时 best-effort tts stop，清理失败不得掩盖原错或变成提交成功。成功只记 `submitted`（音频完整交给承载），绝不宣称 `played`；离线、失败保留待投递，崩溃恢复是租约重试而非 exactly-once。
+- 新用户轮入口清 stale abort；同轮 abort 后不执行 MCP 或新动作。告别顺序是告别音频 → `tts stop` → MCP stop-listening。失败降级置 close_requested，由主循环跳过 VAD flush、排空后 close；不要分支直接 drop socket。
 - MCP 主循环内调用必须同任务抽帧，否则等自己投递响应会死锁。能力发现保留上行音频，退下等待则丢弃残留音频；其他文本帧按序补派发。详细契约见[MCP 说明](<../mcp/AGENTS.md>)。
 - [唤醒问候](<wakeup.rs>)挂 `listen detect`，不是 listen start 或 ASR；每次 detect 均问候，不能设“每会话一次”。复用 `speak_canned` 和原下行路径，跳过 LLM。
 - TTS **实际租约**在会话建立时固定（`engine::TtsLease`），实例/构建配置/签名/代际原子发布；设备 overlay 仅覆写 speaker/speed。欢迎语、问候、固定应答和正常分句统一由 `HotAudioKey::from_lease` 取缓存身份（实际引擎/音色/语速/文本入磁盘身份，内存键再并入会话下行格式），重建失败继续用旧实例身份，不把请求配置当作已生效构建；别的会话热刷新不会令旧会话句间换引擎。

@@ -110,6 +110,7 @@ impl<T: Transport> Session<'_, T> {
                 }
             }
         }
+        self.delivery_idle = true;
         if self.real_audio && !self.close_requested && !self.is_test && !segments.is_empty() {
             self.recognize_segments(segments).await;
         }
@@ -145,6 +146,7 @@ impl<T: Transport> Session<'_, T> {
     }
 
     async fn handle_pcm(&mut self, pcm: &[f32]) {
+        self.delivery_idle = false;
         if self.test_recording {
             self.test_buf.extend_from_slice(pcm);
             return;

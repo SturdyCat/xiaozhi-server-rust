@@ -1,4 +1,5 @@
 package com.xiaozhi.admin.kit
+import com.xiaozhi.admin.kit.LocalAdminSpacing
 
 import androidx.compose.runtime.Composable
 import com.gearui.components.popover.Popover
@@ -68,11 +69,11 @@ private fun GearHelpCard(title: String, text: String, onDismiss: () -> Unit) {
             .widthIn(max = HelpCardMaxWidth)
             .clip(RoundedCornerShape(12.dp))
             .background(Theme.colors.popover)
-            .padding(GearUiSpace.cardPadding),
+            .padding(LocalAdminSpacing.current.cardPadding),
     ) {
         Text(
             text = title,
-            modifier = Modifier.padding(bottom = GearUiSpace.sm),
+            modifier = Modifier.padding(bottom = LocalAdminSpacing.current.sm),
             style = Theme.typography.titleSmall,
             color = Theme.colors.popoverForeground,
         )
@@ -92,7 +93,7 @@ private fun GearHelpCard(title: String, text: String, onDismiss: () -> Unit) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = GearUiSpace.sm),
+                .padding(top = LocalAdminSpacing.current.sm),
             horizontalArrangement = Arrangement.End,
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -101,7 +102,7 @@ private fun GearHelpCard(title: String, text: String, onDismiss: () -> Unit) {
                 modifier = Modifier
                     .clip(RoundedCornerShape(8.dp))
                     .clickable { onDismiss() }
-                    .padding(horizontal = GearUiSpace.sm, vertical = GearUiSpace.xs),
+                    .padding(horizontal = LocalAdminSpacing.current.sm, vertical = LocalAdminSpacing.current.xs),
                 style = Theme.typography.label,
                 color = Theme.colors.primary,
             )

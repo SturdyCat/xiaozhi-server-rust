@@ -47,6 +47,13 @@
 #   本地能编、ACR 必败，差异就在这里（本机 `:sharedCompose:compileKotlinJs` 有产物 195 KiB）。
 #   修法：COPY 清单层与源码层都要带上 sharedCompose（见下方两处 COPY 与源码断言）。
 #
+# 🚨 2026-10-31 第五次复现：报错形态回到第三次（COPY `"/client/sharedCompose": not found`），
+#   但根因**反转**：`638849b`（GearUI 全量迁移）已删除整个 :sharedCompose 模块——
+#   Kuikly 升 2.30.0 上游补齐了 material3 缺失 API，补丁按预案删除（settings/build 脚本
+#   同步清理，本地三端编译全绿可证），但本文件的 COPY 与源码断言**没有同步删除**，
+#   COPY 一个仓库里已不存在的目录 → buildx 直接失败。修法：删除全部 sharedCompose
+#   COPY/断言/注释（本轮），后续若再引入新模块，COPY 清单与构建脚本必须同一提交内同步。
+#
 # 🚨 2026-10-27 第四次复现：编译全绿后死在业务包 webpack（cgroup OOM 第二形态）。
 #   断点：`:shared:jsBrowserProductionWebpack` 刚打印 webpack patch 已加载即 EOF。
 #   此时配置阶段已过（sharedCompose 修复生效）、:shared 两个 Kotlin/JS 编译全部完成、
@@ -74,14 +81,14 @@
 #     清单不动 → 依赖下载层命中。
 #   L2 内容缓存 —— RUN --mount=type=cache：Gradle 用户主目录（web 三条 RUN 共挂一块）与
 #     cargo registry/git（Rust 两条 cargo RUN 共挂）放命名缓存，层失效（如改了清单）时
-#     依赖/插件/wrapper 发行包不再重新下载。⚠️ 产物 target 仍烙进镜像层（dummy 依赖层
+#     依赖/插件不再重复下载；Gradle 发行版由基础镜像提供。⚠️ 产物 target 仍烙进镜像层（dummy 依赖层
 #     设计不变），挂缓存的只有下载与配置类内容——依赖编译产物进层，源码层才能增量。
 #   首次构建冷建无缓存，第二次起生效。GHA 仓库级缓存配额 10GB（LRU 逐出；超限只是退化
 #   成冷建，不会失败）。cache-mount 需要 BuildKit（顶部 # syntax 已声明）；ACR 自动构建
 #   若重新启用，须先确认其构建机支持 BuildKit，否则在 RUN --mount 处解析报错。
 # 三个阶段：
 #   web    —— Gradle 构建 Kuikly H5 管理页（client 工程：shared 业务包 + h5App 壳）
-#   build  —— 编译 Rust server（--features sherpa,nlu，真实 ASR/TTS 引擎 + TinyBERT NLU）
+#   build  —— 编译 Rust server（--features sherpa,nlu，真实 ASR/TTS 引擎 + BERT NLU）
 #   运行时 —— debian-slim：同源托管 管理页(/) + /api + /api/ws，模型缺失由入口脚本自下载
 #
 # 运行镜像内浏览器访问 `http://<host>:8000/` 即管理页，`/api/config` 读写 SQLite 配置库（data.db），
@@ -90,7 +97,8 @@
 
 # ---- web 阶段：构建 Kuikly H5 管理页静态产物（client Gradle 工程）----
 # `gradle:8.14.5-jdk17-jammy`：与 client/gradle/wrapper 完全同版本（8.14.5）+ JDK17。
-# 用 ./gradlew（wrapper）跑，与本地/ACR 实测路径一致；wrapper 从腾讯镜像下载发行包（国内可直连）。
+# 镜像已经安装同版本 Gradle，Docker 直接调用 gradle，不再经 wrapper 重复下载发行包。
+# 首条任务核对镜像内 Gradle 与 wrapper 版本，版本不一致立即失败；本地仍用 ./gradlew。
 # ⚠️ 无需 Android SDK：shared 声明了 com.android.library，但 publishWeb 链路只走 js 目标，
 #    AGP 仅在配置阶段加载、不真编译 Android（xiaoya-player 同形态，空 ANDROID_HOME 实测通过）。
 FROM gradle:8.14.5-jdk17-jammy AS web
@@ -106,34 +114,35 @@ COPY client/gradlew client/gradlew.bat client/gradle.properties client/build.gra
 COPY client/gradle ./client/gradle
 COPY client/kotlin-js-store ./client/kotlin-js-store
 COPY client/shared/build.gradle.kts client/shared/build.gradle.kts
-# 🚨 settings.gradle.kts 里 include(":sharedCompose")，且 shared/build.gradle.kts 通过
-#   implementation(project(":sharedCompose")) 依赖它。这个模块的构建脚本必须进依赖缓存层，
-#   否则配置 :shared 时 `:sharedCompose` 是空 project（无脚本、无 js 产物），
-#   publishWeb 解析依赖阶段必失败——见文件头 2026-10-27 第三次复现记录。
-COPY client/sharedCompose/build.gradle.kts client/sharedCompose/build.gradle.kts
+COPY client/gearuiKit/build.gradle.kts client/gearuiKit/build.gradle.kts
 COPY client/apps/h5App/build.gradle.kts client/apps/h5App/build.gradle.kts
 WORKDIR /src/client
 # Gradle 用户主目录显式钉到挂载路径（官方 gradle 镜像的默认值，写出来防镜像漂移）。
-# 下方三条 RUN 共挂同一块命名缓存（同一路径即同一份内容）：依赖/插件/wrapper 发行包/
+# 下方三条 RUN 共挂同一块命名缓存（同一路径即同一份内容）：依赖/插件/
 # 构建缓存（gradle.properties 已开 org.gradle.caching）跨层失效、跨构建复用。
+# Gradle 发行版本体由基础镜像提供，不依赖挂载缓存里恰好有 wrapper/dists。
 ENV GRADLE_USER_HOME=/home/gradle/.gradle
 # 只做配置/下载依赖，不编译业务代码（保持轻）
 RUN --mount=type=cache,target=/home/gradle/.gradle \
-    ./gradlew :apps:h5App:help --no-daemon
+    set -eu; \
+    wrapper_version="$(sed -nE 's/^distributionUrl=.*gradle-([0-9]+(\.[0-9]+)*)-(all|bin)\.zip$/\1/p' gradle/wrapper/gradle-wrapper.properties)"; \
+    installed_version="$(gradle --version | awk '/^Gradle / { print $2; exit }')"; \
+    if [ -z "$wrapper_version" ] || [ "$installed_version" != "$wrapper_version" ]; then \
+      echo "Gradle version mismatch: image=$installed_version wrapper=$wrapper_version; update the web base image and wrapper together" >&2; \
+      exit 1; \
+    fi; \
+    gradle :apps:h5App:help --no-daemon
 
-# 业务源码：shared（KMP 共享层，@Page 页面 + Kuikly 插件打业务包）+ sharedCompose + h5App 壳
+# 业务源码：shared（KMP 共享层，@Page 页面 + Kuikly 插件打业务包）+ gearuiKit + h5App 壳
 # ⚠️ 上方 WORKDIR 已切到 /src/client（上面那个 help 任务的需要），COPY 的 dest 相对 WORKDIR 解析：
-#    必须写 ./shared、./sharedCompose、./apps/h5App（= Gradle 根 /src/client 下的模块目录，
-#    对应 settings 的 :shared、:sharedCompose、:apps:h5App）。曾误写 ./client/shared，源码实际
+#    必须写 ./shared、./gearuiKit、./apps/h5App（= Gradle 根 /src/client 下的模块目录，
+#    对应 settings 的 :shared、:gearuiKit、:apps:h5App）。曾误写 ./client/shared，源码实际
 #    落盘 /src/client/client/shared（双层嵌套）：COPY 静默成功，Gradle 侧 shared/ 只有
 #    build.gradle.kts 没有 src → js 源集 NO-SOURCE → KSP 不生成 KuiklyCoreEntry.kt →
 #    打包任务深处 FileNotFoundException。
 COPY client/shared ./shared
-# sharedCompose：:shared 的依赖模块（Kuikly Compose 组件层 + 上游 compose-settings 补丁）。
-# ⚠️ 漏掉这一步就是「本地能编、ACR 必败」：settings 里 include 了它，缺源码则 :shared 的
-#    js 依赖链断在这里，日志停在配置阶段末尾（典型末行 `Configuration 'jsNpmAggregated'
-#    was resolved during configuration time.`），既无 OOM 也无编译错误。
-COPY client/sharedCompose ./sharedCompose
+# gearuiKit：:shared 的依赖模块（GearUI 组件库，settings include :gearuiKit）。
+COPY client/gearuiKit ./gearuiKit
 COPY client/apps/h5App ./apps/h5App
 
 # 🚨 源码断言：验证业务源码真的落在了 Gradle 工程期望的位置（而非嵌套错位或上下文缺目录）。
@@ -142,9 +151,9 @@ COPY client/apps/h5App ./apps/h5App
 #   Gradle 前快速失败，错误信息直指根因。
 RUN if ! (test -d shared/src/commonMain/kotlin \
           && test -f shared/src/commonMain/kotlin/com/xiaozhi/admin/ConfigPage.kt \
-          && test -f sharedCompose/src/commonMain/kotlin/com/alorma/compose/settings/ui/SettingsGroup.kt \
+          && test -d gearuiKit/src/commonMain/kotlin \
           && test -f apps/h5App/src/jsMain/kotlin/com/xiaozhi/admin/Main.kt); then \
-      echo "❌ web 构建缺业务源码：/src/client/{shared,sharedCompose,apps/h5App}/src 未就位（COPY 目标路径错位或上下文不完整）" >&2; \
+      echo "❌ web 构建缺业务源码：/src/client/{shared,gearuiKit,apps/h5App}/src 未就位（COPY 目标路径错位或上下文不完整）" >&2; \
       exit 1; \
     fi
 
@@ -172,7 +181,7 @@ ARG GRADLE_MAX_WORKERS=1
 #   --max-workers（ACR 档=1）：强制编译与两个 webpack 串行，避免双 webpack 并行把峰值再叠
 #   一截（cgroup 小规格顶不住）；大内存档可放宽到 2。
 RUN --mount=type=cache,target=/home/gradle/.gradle \
-    ./gradlew :shared:compileKotlinJs :shared:compileProductionExecutableKotlinJs \
+    gradle :shared:compileKotlinJs :shared:compileProductionExecutableKotlinJs \
       :shared:jsBrowserProductionWebpack :apps:h5App:jsBrowserProductionWebpack \
       --no-daemon --max-workers=${GRADLE_MAX_WORKERS} -PwebSourceMap=false \
       -Dorg.gradle.jvmargs="-Xmx${GRADLE_XMX} -Dfile.encoding=UTF-8" \
@@ -187,7 +196,7 @@ RUN --mount=type=cache,target=/home/gradle/.gradle \
 #   大内存档经 build-args 放宽（xiaoya 实测 webpack 峰值 2.8-3.2GB，GHA 档 3072）。
 RUN --mount=type=cache,target=/home/gradle/.gradle \
     NODE_OPTIONS="--max-old-space-size=${NODE_MAX_OLD_SPACE}" \
-    ./gradlew :apps:h5App:publishWeb --no-daemon --max-workers=${GRADLE_MAX_WORKERS} -PwebSourceMap=false \
+    gradle :apps:h5App:publishWeb --no-daemon --max-workers=${GRADLE_MAX_WORKERS} -PwebSourceMap=false \
       -Dorg.gradle.jvmargs="-Xmx${GRADLE_XMX} -Dfile.encoding=UTF-8" \
  && test -f apps/h5App/web/index.html \
  && test -f apps/h5App/web/nativevue2.js \
@@ -249,6 +258,9 @@ COPY server/src ./src
 # 编译期内嵌资源：bench_api 样本经 include_bytes!（src/app/bench_api/../../../test_assets）
 # 在编译期读 /app/test_assets/，缺了 cargo 直接编译失败（ACR 2026-10-21 实测）。
 COPY server/test_assets ./test_assets
+# NLU 训练逻辑随服务版本发布；专用训练镜像只提供 Python/ML 依赖。
+# Cargo 清单在 /app，源码四级相对路径对应 /tools，与本地 server/../tools 同构。
+COPY tools/nlu-trainer/train.py /tools/nlu-trainer/train.py
 
 # ⚠️ 强制重编译本 crate ——「容器零日志 exit 0」事故的根因所在，勿简化这条 RUN。
 #   ① 根因（mtime 陷阱）：COPY 保留构建上下文里文件的 mtime（ACR clone 代码的时刻），它早于

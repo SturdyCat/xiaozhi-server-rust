@@ -58,7 +58,7 @@ impl<'a, T: Transport> Session<'a, T> {
                 turn_res.reply.chars().count(),
                 turn_res.audio.len()
             );
-            // 文本侧优先级管线（P0-4）：与级联流水线共用统一入口（记录 + 规则 NLU）。
+            // 文本侧优先级管线（P0-4）：与级联流水线共用统一入口（记录 + 单次模型授权）。
             // 识别文本要等云端闭环回来才可见（本地没有 ASR 可拦），因此命中意图时只能
             // "丢弃本轮云端回复"—但会话照样按意图处置（语义与级联流水线一致）。
             match self.decide_user_text(&turn_res.stt, turn).await {

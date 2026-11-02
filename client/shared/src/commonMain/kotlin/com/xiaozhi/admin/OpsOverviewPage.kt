@@ -2,7 +2,7 @@ package com.xiaozhi.admin
 
 import androidx.compose.runtime.Composable
 import com.gearui.components.grid.Grid
-import com.xiaozhi.admin.kit.GearUiSpace
+import com.xiaozhi.admin.kit.LocalAdminSpacing
 import com.xiaozhi.admin.kit.LocalAdminViewport
 
 /**
@@ -51,8 +51,8 @@ fun OpsOverviewPage(
         LabeledCard(title = "实时") {
             Grid(
                 columns = columns,
-                horizontalSpacing = GearUiSpace.sm,
-                verticalSpacing = GearUiSpace.sm,
+                horizontalSpacing = LocalAdminSpacing.current.sm,
+                verticalSpacing = LocalAdminSpacing.current.sm,
             ) {
                 item {
                     OpsTile(

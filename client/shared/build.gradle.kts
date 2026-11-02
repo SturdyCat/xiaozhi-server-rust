@@ -235,8 +235,16 @@ tasks.matching { it.name == "check" || it.name.startsWith("packLocalJSBundle") }
 //   组件**（ui/Tabs.kt 的 TabUiState——tab 选中/展开态，随目录一并退役）带走了 3 处
 //   `stateVar(` 调用；stateListOf 48 不变（ui/ 无 stateListOf 调用），legacy 0 不变。
 //   ⚠️ 逐文件分布未留档（ui/ 文件未入 git 索引即被删除），数值以本护栏实测回填。
-val expectedStateVarCalls = 448
-val expectedStateListCalls = 48
+// EchoMuse 原生终端：删除无消费方的 introSeen/aboutOpen 展示字段；display 快照由 VT frame 等量替换。
+// verifyComposeStateMigration 实测 448→446，列表仍 48，legacy 0；不保留死字段凑数。
+// EchoMuse 全原生配置：补齐 BLE 扫描/连接与监听灯效三项生产设置草稿，实测 446→449。
+// 设备日志补齐持久读取错误反馈（loadError）一项，449→450。
+// 统一模式等量替换 showAdvanced；WorkflowEditorState 新增5项、保存确认/基线版本新增2项。
+// verifyComposeStateMigration 实测 450→457，列表48与legacy0不变。
+// NLU 候选闭环：4个旧训练字段收敛为1个版本状态，新增1个BERT配置快照；codemod实测457→455。
+// 模型唯一路径：删除4个启发式/旧关键词状态与1个死选项列表，新增1个只读技能目录快照。
+val expectedStateVarCalls = 452
+val expectedStateListCalls = 47
 val bridgeWhitelist = emptySet<String>()
 val verifyComposeStateMigration by tasks.registering {
     group = "verification"

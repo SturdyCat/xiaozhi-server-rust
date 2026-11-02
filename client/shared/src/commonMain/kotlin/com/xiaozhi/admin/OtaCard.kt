@@ -19,6 +19,8 @@ import com.gearui.components.table.TableAlign
 import com.gearui.components.table.TableColumn
 import com.gearui.foundation.primitives.Text
 import com.gearui.theme.Theme
+import com.xiaozhi.admin.contracts.IconToken
+import com.xiaozhi.admin.icons.GearIcon
 import com.tencent.kuikly.compose.animation.core.LinearEasing
 import com.tencent.kuikly.compose.animation.core.RepeatMode
 import com.tencent.kuikly.compose.animation.core.animateFloat
@@ -31,7 +33,7 @@ import com.tencent.kuikly.compose.foundation.layout.padding
 import com.tencent.kuikly.compose.ui.Modifier
 import com.tencent.kuikly.compose.ui.unit.dp
 import com.tencent.kuikly.core.pager.Pager
-import com.xiaozhi.admin.kit.GearUiSpace
+import com.xiaozhi.admin.kit.LocalAdminSpacing
 import com.xiaozhi.admin.kit.actionRow
 import com.xiaozhi.admin.kit.labeledField
 import com.xiaozhi.admin.kit.switchRow
@@ -162,7 +164,7 @@ private fun OtaUploadCard(
         if (ota.hasPicked) {
             Text(
                 text = "已选：${ota.pickedName}（${formatBytes(ota.pickedSize)}）",
-                modifier = Modifier.fillMaxWidth().padding(top = GearUiSpace.xs),
+                modifier = Modifier.fillMaxWidth().padding(top = LocalAdminSpacing.current.xs),
                 style = Theme.typography.bodyMedium,
                 color = Theme.colors.primary,
             )
@@ -184,19 +186,20 @@ private fun OtaUploadCard(
                 title = "上传失败",
                 description = current.message,
                 status = AlertStatus.DANGER,
-                modifier = Modifier.padding(top = GearUiSpace.sm),
+                modifier = Modifier.padding(top = LocalAdminSpacing.current.sm),
             )
         }
 
         actionRow {
-            OpsOutlineButton(
-                text = "选择 .bin 文件",
+            OpsIconButton(
+                token = IconToken.Document,
                 onClick = { ota.pick(ctx) },
+                contentDescription = "选择 .bin 文件",
                 enabled = !ota.uploading,
             )
             // 未选包不可点；上传中显示 loading 并禁点（防重复提交把包传两遍）
-            OpsPrimaryButton(
-                text = "上传固件",
+            OpsIconButton(
+                token = IconToken.Upload,
                 onClick = {
                     // 先清掉上一次结果，避免"上一轮的失败原因"在新一轮里闪一下
                     feedback.value = OtaUploadFeedback()
@@ -214,6 +217,8 @@ private fun OtaUploadCard(
                         })
                     }
                 },
+                contentDescription = "上传固件",
+                tint = Theme.colors.primary,
                 enabled = ota.hasPicked && !ota.uploading,
                 loading = ota.uploading,
             )
@@ -276,7 +281,7 @@ private fun OtaUncertainProgress(hint: String) {
             repeatMode = RepeatMode.Reverse,
         ),
     )
-    Column(modifier = Modifier.fillMaxWidth().padding(top = GearUiSpace.sm)) {
+    Column(modifier = Modifier.fillMaxWidth().padding(top = LocalAdminSpacing.current.sm)) {
         LinearProgress(
             progress = sweep,
             modifier = Modifier.fillMaxWidth(),
@@ -285,7 +290,7 @@ private fun OtaUncertainProgress(hint: String) {
         )
         Text(
             text = hint,
-            modifier = Modifier.fillMaxWidth().padding(top = GearUiSpace.xs),
+            modifier = Modifier.fillMaxWidth().padding(top = LocalAdminSpacing.current.xs),
             style = Theme.typography.caption,
             color = Theme.colors.mutedForeground,
         )
@@ -369,6 +374,7 @@ private fun OtaEntriesTable(ota: OtaState) {
                     theme = ButtonTheme.DEFAULT,
                     type = ButtonType.OUTLINE,
                     size = ButtonSize.SMALL,
+                    iconWidget = { color -> GearIcon(token = IconToken.Delete, size = 14.dp, tint = color) },
                 )
             },
         ),

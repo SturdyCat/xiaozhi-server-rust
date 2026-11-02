@@ -1,6 +1,7 @@
 package com.xiaozhi.admin
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import com.gearui.components.button.Button
 import com.gearui.components.button.ButtonTheme
 import com.gearui.components.button.ButtonType
@@ -8,6 +9,7 @@ import com.gearui.components.cell.Cell
 import com.gearui.components.cellgroup.CellGroup
 import com.gearui.components.drawer.Drawer
 import com.gearui.components.drawer.DrawerPlacement
+import com.gearui.components.empty.EmptyState
 import com.gearui.components.navbar.NavBar
 import com.gearui.foundation.layout.Spacing
 import com.gearui.foundation.primitives.ScrollView
@@ -105,6 +107,7 @@ fun AdminShell(page: AdminPage) {
 
         // 字段帮助弹层（ⓘ 的唯一实例）：每页根部挂一次，走 Popup.Host（不占布局）
         GearFieldHelpDialog()
+        ConfigModeSaveConfirmation(page.form)
     }
 }
 
@@ -125,10 +128,17 @@ private fun AdminSidebar(page: AdminPage) {
     ) {
         ScrollView(modifier = Modifier.weight(1f).fillMaxWidth()) {
             for ((group, items) in AdminNav.grouped(IS_MACOS)) {
-                // CellGroup 负责：分组标题对齐、卡片圆角、行间分隔线（末行无分隔）
-                CellGroup(items = items, title = group, key = { it.id }, itemContent = { item ->
-                    AdminNavRow(page, item)
-                })
+                // CellGroup 负责：分组标题对齐、卡片圆角、行间分隔线（末行无分隔）；
+                // 组卡之间留一档空隙，分组在视觉上断开（组标题的 top 内距只管标题与卡片之间）
+                CellGroup(
+                    items = items,
+                    title = group,
+                    modifier = Modifier.padding(bottom = Spacing.sm),
+                    key = { it.id },
+                    itemContent = { item ->
+                        AdminNavRow(page, item)
+                    },
+                )
             }
             // macOS「服务器设置」（T12 接线）：切换服务器基址 + 局域网自动发现；
             // 开关状态收口在 [AdminPage.serverSwitchOpen]，web/iOS/Android 不渲染。
@@ -223,9 +233,11 @@ private fun AdminTopBar(page: AdminPage, narrow: Boolean) {
     } else {
         null
     }
-    val rightWidget: (@Composable () -> Unit)? = if (globalTarget) {
-        {
-            Box(modifier = Modifier.padding(end = Spacing.lg)) {
+    val rightWidget: @Composable () -> Unit = {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (!narrow) AdminInterfaceModeControl(page.form)
+            if (globalTarget) {
+                if (!narrow) Spacer(modifier = Modifier.width(Spacing.sm))
                 Button(
                     text = if (page.form.saving) "保存中…" else "保存配置",
                     onClick = {
@@ -234,22 +246,53 @@ private fun AdminTopBar(page: AdminPage, narrow: Boolean) {
                     theme = ButtonTheme.PRIMARY,
                     type = ButtonType.FILL,
                     loading = page.form.saving,
+                    iconWidget = { color -> GearIcon(token = IconToken.Save, size = 16.dp, tint = color) },
                 )
             }
         }
-    } else {
-        null
     }
 
-    NavBar(
-        title = titleOf(page),
-        centerTitle = false,
-        leftWidget = leftWidget,
-        leftWidgetWidth = if (narrow) 44.dp else null,
-        rightWidget = rightWidget,
-        // 两个按钮（保存 / 重新加载）的槽宽由 Button 自身撑开，这里给足 96dp
-        rightWidgetWidth = if (rightWidget != null) 96.dp else null,
-    )
+    Column(modifier = Modifier.fillMaxWidth()) {
+        NavBar(
+            title = titleOf(page),
+            centerTitle = false,
+            leftWidget = leftWidget,
+            leftWidgetWidth = if (narrow) 44.dp else null,
+            rightWidget = if (!narrow || globalTarget) rightWidget else null,
+            rightWidgetWidth = when {
+                narrow && globalTarget -> 136.dp
+                narrow -> null
+                globalTarget -> 312.dp
+                else -> 160.dp
+            },
+        )
+        if (editable && page.form.conflict) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.md, vertical = Spacing.xs),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "草稿已保留。${page.form.statusMsg}",
+                    modifier = Modifier.weight(1f),
+                    style = Theme.typography.caption,
+                    color = Theme.colors.destructive,
+                )
+                Spacer(modifier = Modifier.width(Spacing.sm))
+                Button(
+                    text = "重新加载",
+                    onClick = { page.form.reload(page, page.apiBase) },
+                    type = ButtonType.OUTLINE,
+                    size = com.gearui.components.button.ButtonSize.SMALL,
+                    iconWidget = { color -> GearIcon(token = IconToken.Refresh, size = 14.dp, tint = color) },
+                )
+            }
+        }
+        if (narrow) {
+            Row(modifier = Modifier.align(Alignment.End).padding(end = Spacing.md, bottom = Spacing.xs)) {
+                AdminInterfaceModeControl(page.form)
+            }
+        }
+    }
 }
 
 /** 44×44 触控目标 + 矢量汉堡图标（[IconToken.Menu]，与图标集同一套几何）。 */
@@ -327,18 +370,17 @@ private fun AdminSectionHost(page: AdminPage, viewport: AdminViewport) {
         "console" -> ConsolePage(console = page.console, toast = page.toast)
         // 文件（存储面）：面包屑 + 上传 + 新建目录 + 删除二次确认
         "files" -> FilesPage(state = page.files, toast = page.toast)
-        // EchoMuse 设备（T10）：顶部「官方设备管理页（/em/）」入口卡 + 原有六 tab 详情卡。
-        // 官方页是按 EchoMuse 官方 dashboard 源码 vendor 的独立文档（web-only），
-        // 旧六 tab 保留专有能力（DLNA 音乐 / BLE GATT / 唤醒词资产 / WiFi 闭环）。
+        // EchoMuse：Kuikly 设备卡 + 双 Tab 管理弹窗，官方详情原样嵌入，不再另开页面。
         "echomuse" -> EchoMusePage(
             state = page.echomuse,
             toast = page.toast,
             isActive = { page.selectedSection == "echomuse" },
-            onOpenModelFiles = {
-                page.selectSection("files")
-                page.files.openPath(page, OWW_MODELS_DIR)
+            modelFiles = {
+                LaunchedEffect(Unit) { page.files.openPath(page, OWW_MODELS_DIR) }
+                FilesPage(state = page.files, toast = page.toast)
             },
-            officialEntry = { EmOfficialEntryCard(page) },
+            apiBase = page.apiBase,
+            token = page.adminRequestToken(),
         )
         // 测试台（T12，mac-only）：五 tab 工作区（连接 / ASR 识别 / TTS 合成 / LLM 对话 / NLU 意图），
         // 播放控制下沉 XiaoZhiModule（Audio DSL 视图无法进 Compose 树，见 TestBenchPage.kt）

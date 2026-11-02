@@ -288,7 +288,7 @@ fn protocol_mime(pi: &str) -> String {
     pi.split(':').nth(2).unwrap_or("").to_string()
 }
 
-/// 时长字符串 `H:MM:SS.mmm` 或 `MM:SS` → 秒。
+/// 时长字符串 `H:MM:SS(.fraction)`、`MM:SS` 或秒数 → 整秒（舍去小数）。
 fn parse_duration(s: &str) -> u64 {
     let s = s.trim();
     if s.is_empty() {
@@ -296,8 +296,8 @@ fn parse_duration(s: &str) -> u64 {
     }
     let parts: Vec<&str> = s.split(':').collect();
     let mut secs: f64 = 0.0;
-    // 最右是秒，向左逐级 ×60（DLNA `H:MM:SS(.fraction)` / `M:SS` / `S`）。
-    for (i, p) in parts.iter().enumerate().rev() {
+    // 先反转再编号：最右的秒从 60^0 起算，向左依次是分、时。
+    for (i, p) in parts.iter().rev().enumerate() {
         let val: f64 = p.parse().unwrap_or(0.0);
         secs += val * 60f64.powi(i as i32);
     }

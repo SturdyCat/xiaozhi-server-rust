@@ -34,6 +34,9 @@ val LocalThemeShapes = staticCompositionLocalOf { ShapesDefault.Default }
 val LocalThemeElevation = staticCompositionLocalOf { Elevations.Default }
 val LocalThemeMotion = staticCompositionLocalOf { Motions.Default }
 
+/** Font scale (rem multiplier): 1f default; admin raises it per platform / viewport. */
+val LocalFontScale = staticCompositionLocalOf { 1f }
+
 /** System dark mode state, supplied by the platform layer */
 val LocalSystemDarkMode = staticCompositionLocalOf { false }
 
@@ -89,6 +92,7 @@ fun Theme(
     shapes: Shapes = ShapesDefault.Default,
     elevation: Elevation = Elevations.Default,
     motion: Motion = Motions.Default,
+    fontScale: Float = 1f,
     content: @Composable () -> Unit
 ) {
     // Resolve the final theme
@@ -98,10 +102,11 @@ fun Theme(
         LocalThemeColors provides resolved.colors,
         LocalButtonColors provides (resolved.buttonColors ?: DefaultButtonColors.from(resolved.colors)),
         LocalInputColors provides (resolved.inputColors ?: DefaultInputColors.from(resolved.colors)),
-        LocalThemeTypography provides typography,
+        LocalThemeTypography provides remember(typography, fontScale) { typography.scale(fontScale) },
         LocalThemeShapes provides shapes,
         LocalThemeElevation provides elevation,
         LocalThemeMotion provides motion,
+        LocalFontScale provides fontScale,
         content = content
     )
 }
@@ -130,7 +135,7 @@ object Theme {
     val colors: Colors
         @Composable get() = LocalThemeColors.current
 
-    /** current type scale */
+    /** current type scale (already scaled by [LocalFontScale] via [Theme]) */
     val typography: Typography
         @Composable get() = LocalThemeTypography.current
 
@@ -145,4 +150,8 @@ object Theme {
     /** current motion scale */
     val motion: Motion
         @Composable get() = LocalThemeMotion.current
+
+    /** current font scale (rem multiplier): 1f default; admin raises per platform / viewport. */
+    val fontScale: Float
+        @Composable get() = LocalFontScale.current
 }
