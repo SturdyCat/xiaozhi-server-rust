@@ -136,21 +136,36 @@ fn base_model_defaults_to_the_shipped_arm_and_never_silently_falls_back() {
 #[test]
 fn base_model_env_matches_trainer_contract() {
     // env 是本维度唯一的传递通道（input.json 语义不动、产物白名单不扩）。
+    // 参数必须是成对的 `-e KEY=VALUE`：`docker run` 会把裸 `KEY=VALUE` 解析成镜像
+    // 引用（2026-11-02 NAS 实测 exit 125：library/MODEL_NAME=minirbt-h288 must be
+    // lowercase），所以这里锁定含 `-e` 的完整 docker 参数，只锁值挡不住这次回归。
     let (base, _) = resolve_base(None).unwrap();
     assert_eq!(
         base.env_args(),
         [
+            "-e".to_string(),
             "MODEL_NAME=minirbt-h288".to_string(),
+            "-e".to_string(),
             "LEARNING_RATE=0.0001".to_string(),
+            "-e".to_string(),
             "EPOCHS=10".to_string()
         ]
     );
+    // 结构断言独立于具体臂：每个 env 值都必须紧跟 `-e`，防止以后把旗标拆到调用方
+    // 或加第四个 env 时漏掉旗标。
+    for pair in base.env_args().chunks(2) {
+        assert_eq!(pair[0], "-e", "env 值 {:?} 缺少 -e 旗标", pair[1]);
+        assert!(pair[1].contains('='), "{:?} 不是 KEY=VALUE 形式", pair[1]);
+    }
     let (base, _) = resolve_base(Some("rbt3")).unwrap();
     assert_eq!(
         base.env_args(),
         [
+            "-e".to_string(),
             "MODEL_NAME=rbt3".to_string(),
+            "-e".to_string(),
             "LEARNING_RATE=0.00005".to_string(),
+            "-e".to_string(),
             "EPOCHS=6".to_string()
         ]
     );

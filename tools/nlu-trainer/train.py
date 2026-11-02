@@ -18,6 +18,10 @@ import random
 
 INPUT = os.environ.get("TRAIN_INPUT", "/work/input.json")
 OUTDIR = os.environ.get("TRAIN_OUTPUT", "/work/output")
+# 中间目录（checkpoint / fp32 导出）。容器内缺省不变；standalone（如 macOS 本机）
+# 经 env 覆盖，避免要求根目录 /work。不影响语料、产物三件套与标签顺序契约。
+CKPT_DIR = os.environ.get("TRAIN_CKPT", "/work/ckpt")
+FP32_DIR = os.environ.get("TRAIN_FP32", "/work/onnx-fp32")
 
 # 预训练底座：环境变量 MODEL_NAME 承载**规范名**（值语义不是 hub id）。
 # 服务端按同一约定传参（server/src/gateway/ws/nlu_build.rs 的 BASE_MODELS 表），
@@ -367,7 +371,7 @@ def main():
 
     ds = ds.map(tok, batched=True)
     args = TrainingArguments(
-        output_dir="/work/ckpt",
+        output_dir=CKPT_DIR,
         per_device_train_batch_size=32,
         learning_rate=LEARNING_RATE,
         num_train_epochs=EPOCHS,
@@ -394,10 +398,10 @@ def main():
     from onnxruntime.quantization import quantize_dynamic, QuantType
 
     os.makedirs(OUTDIR, exist_ok=True)
-    export_dir = "/work/onnx-fp32"
+    export_dir = FP32_DIR
     # optimum 的 from_pretrained 只接受路径（传内存对象会在 model_id.split 崩），
     # 训练完的模型先落盘再导出。
-    final_dir = "/work/ckpt/final"
+    final_dir = os.path.join(CKPT_DIR, "final")
     # 新版 transformers/safetensors 保存时拒绝非连续张量，先统一转连续内存。
     for p in model.parameters():
         p.data = p.data.contiguous()

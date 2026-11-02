@@ -59,12 +59,21 @@ pub(crate) const BASE_SOURCE_REQUEST: &str = "request";
 pub(crate) const BASE_SOURCE_DEFAULT: &str = "default";
 
 impl BaseModel {
-    /// 传给训练容器的三个 env。数值走 f64 Display（0.0001 / 0.00005 / 10 / 6），
-    /// 十进制、无指数记法，Python 侧 `float()` 直读，日志里也可直接比对。
-    pub(crate) fn env_args(self) -> [String; 3] {
+    /// 传给训练容器的三个 env，`-e KEY=VALUE` **成对**。数值走 f64 Display
+    /// （0.0001 / 0.00005 / 10 / 6），十进制、无指数记法，Python 侧 `float()` 直读，
+    /// 日志里也可直接比对。
+    ///
+    /// `-e` 旗标必须由本函数携带：`docker run` 会把裸 `KEY=VALUE` 当成**镜像引用**——
+    /// 2026-11-02 NAS 实测 `invalid reference format: repository name
+    /// (library/MODEL_NAME=minirbt-h288) must be lowercase`，exit 125，构建秒败。
+    /// 回归锁的是含 `-e` 的完整 docker 参数，不是裸值（见 tests.rs 同名契约）。
+    pub(crate) fn env_args(self) -> [String; 6] {
         [
+            "-e".into(),
             format!("MODEL_NAME={}", self.name),
+            "-e".into(),
             format!("LEARNING_RATE={}", self.learning_rate),
+            "-e".into(),
             format!("EPOCHS={}", self.epochs),
         ]
     }
