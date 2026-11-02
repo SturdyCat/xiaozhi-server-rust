@@ -329,9 +329,11 @@ VOLUME ["/data"]
 #   （模型统一从 HuggingFace 直连下载，无需代理；SENSEVOICE_URL/KOKORO_URL/SILERO_VAD_URL 可覆盖为内网镜像地址）
 #   OWW_VAD_URL 只被 server 进程读取：下发到 EchoMuse 设备的语音门模型（Silero v5，
 #   官方来源 openWakeWord v0.5.1 release），且仅在 [echomuse].enabled=true 时下载。
-# 注意：不得内置 RUST_LOG 默认值——RUST_LOG 显式存在时 main.rs 的日志过滤兜底
-#   （info + ort::logging 压 warn，见 default_log_filter）永不生效，ort 明细会刷屏。
-#   需要调级别时在 compose 的 environment 里按需设置 RUST_LOG。
+# 注意：镜像不内置 RUST_LOG 默认值（保持代码单一默认源）：
+#   main.rs 无论 RUST_LOG 是否设置都会保证 ort::logging=warn 降噪底座
+#   （resolved_log_filter），只有显式写 ort 目标指令（如 debug,ort::logging=debug）
+#   才见 ONNX Runtime 会话初始化明细。需要调业务级别时在 compose 的
+#   environment 里按需设置 RUST_LOG。
 ENV XIAOZHI_CONFIG_DB=/data/data.db \
     XIAOZHI_ADMIN_DIR=/app/web \
     XIAOZHI_AUTO_DOWNLOAD_MODELS=missing \

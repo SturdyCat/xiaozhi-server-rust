@@ -69,10 +69,10 @@ async fn run(config: Config, config_store: Arc<dyn ConfigStore>, dev_mode: bool)
     // SubscriberBuilder 的 `.with` 只接受格式层，无法直接挂自定义 Layer。
     // 默认 info，但压掉 ort::logging（ONNX Runtime C 库转发的会话初始化明细，
     // 每次加载模型上百行 INFO）；ort 本体的 dylib 加载提示保留 INFO。
-    // RUST_LOG 显式设置时完全尊重用户配置——所以镜像/compose 不能内置 RUST_LOG，
-    // 否则这个兜底永不生效（2026-10 ort::logging 刷屏事故根因，见 default_log_filter）。
-    let filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_log_filter()));
+    // 降噪底座不再依赖"RUST_LOG 未设置"：RUST_LOG 已设置但没写 ort 目标指令时，
+    // 自动追加 ort::logging=warn——部署模板/compose 残留 `RUST_LOG=info` 不再重新
+    // 打开明细刷屏（2026-10 事故根因：镜像内置 RUST_LOG 使当时兜底永不生效）。
+    let filter = build_log_filter();
     let subscriber = tracing_subscriber::registry()
         .with(filter) // 全局日志采集层：每条 INFO+ 事件进入环形缓冲 + 广播，
         // 供 `GET /api/logs` WS 客户端（macApp / AI 调试）实时读取。
@@ -248,15 +248,54 @@ async fn run(config: Config, config_store: Arc<dyn ConfigStore>, dev_mode: bool)
     Ok(())
 }
 
-/// 默认日志过滤（`RUST_LOG` 未设置时生效）。
+/// 默认日志过滤表达式（`RUST_LOG` 未设置时的基线）。
 ///
 /// `ort::logging` 是 ONNX Runtime C 库经 ort crate 转发的内部日志：会话初始化时的
 /// Session Options / GraphTransformer / 内存分配明细，每次加载模型刷上百行 INFO。
-/// 压到 WARN 等效于"明细改成 DEBUG"：默认不刷屏，排障时 `RUST_LOG=debug` 全量可见；
-/// `ort` 本体（dylib 加载一行）与业务日志保持默认 info 档。
-/// 部署文件不得内置 `RUST_LOG=info` 之类的默认值，否则本兜底永不生效。
+/// 压到 WARN 等效于"明细改成 DEBUG"：默认不刷屏；`ort` 本体（dylib 加载一行）与
+/// 业务日志保持默认 info 档。
 fn default_log_filter() -> String {
     "info,ort::logging=warn".to_string()
+}
+
+/// 解析最终生效的日志过滤表达式（唯一入口 [`build_log_filter`]）。
+///
+/// `RUST_LOG` 未设置或空白 → 基线；已设置但没有任何 `ort` 目标指令 → 追加
+/// `ort::logging=warn` 降噪底座（部署模板残留 `RUST_LOG=info` 不再刷屏）；显式写
+/// 了 `ort` 目标指令（`ort=…`、`ort::logging=…`、`ort[…]=…`）→ 完全尊重用户，要
+/// ort 全量明细用 `RUST_LOG=debug,ort::logging=debug`。非法表达式原样返回，由
+/// [`build_log_filter`] 解析失败后回退基线（与未设置同等降噪）。
+fn resolved_log_filter(spec: Option<&str>) -> String {
+    match spec.map(str::trim).filter(|s| !s.is_empty()) {
+        None => default_log_filter(),
+        Some(spec) => {
+            let spec = spec.trim_matches(',');
+            if spec.is_empty() {
+                default_log_filter()
+            } else if spec_directs_ort(spec) {
+                spec.to_string()
+            } else {
+                format!("{spec},ort::logging=warn")
+            }
+        }
+    }
+}
+
+/// `RUST_LOG` 表达式是否显式指定了 `ort` 目标指令（EnvFilter 目标按路径前缀匹配，
+/// 写 `ort` 即覆盖全部 ort 子树）。按逗号切分的近似解析：ort 指令不会携带含逗号的
+/// 字段值，此口径够用；裸级别 token（info/warn/…）不视为目标指令。
+fn spec_directs_ort(spec: &str) -> bool {
+    spec.split(',').any(|token| {
+        let target = token.split('=').next().unwrap_or("").trim();
+        target == "ort" || target.starts_with("ort::") || target.starts_with("ort[")
+    })
+}
+
+/// 组装全局 EnvFilter 的进程唯一入口：无论 `RUST_LOG` 是否设置/合法，ort 会话
+/// 初始化明细都默认压到 WARN（见 [`resolved_log_filter`]）。
+fn build_log_filter() -> EnvFilter {
+    let resolved = resolved_log_filter(std::env::var("RUST_LOG").ok().as_deref());
+    EnvFilter::try_new(resolved).unwrap_or_else(|_| EnvFilter::new(default_log_filter()))
 }
 
 /// 配置加载（SQLite 配置库为**唯一**真源，无外置文件配置）：
