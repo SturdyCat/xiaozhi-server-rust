@@ -58,8 +58,8 @@ class FormSchemaState(private val scope: PagerScope) {
         advancedCoverageComplete = false
         version = 0
         hots.clear(); sectionHints.clear(); sectionRanks.clear(); advancedKeys.clear()
-        network(ctx).requestGet("${baseUrl}/api/config/schema", JSONObject()) { data, success, _, _ ->
-            if (generation != loadGeneration || !ctx.isAdminAccessCurrent(access, token) || !success) return@requestGet
+        rpcCall(ctx, "${baseUrl}/api/config/schema", "GET", null) { ok, data, _, _ ->
+            if (generation != loadGeneration || !ctx.isAdminAccessCurrent(access, token) || !ok) return@rpcCall
             advancedCoverageComplete = data.has("advanced_fields")
             val nextHots = mutableMapOf<String, String>()
             val nextSections = mutableMapOf<String, String>()

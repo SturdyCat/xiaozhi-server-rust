@@ -393,15 +393,17 @@ class EchoMuseDetailState(private val scope: Pager) {
             error = ""
             result = ""
         }
-        val headers = echoMuseHeaders(token)
         val url = "$base/api/echomuse/devices/${echoMuseUrlComponent(deviceId)}/$operation"
-        // 一次性操作沿用 40 s 超时（与设备端 shell 期限兼容）；GET 无请求体。
-        network(scope).httpRequest(url, body != null, body ?: JSONObject(), headers, timeout = 40) {
-                data, success, errorMsg, response ->
-            if (generation != requestGeneration || target != deviceId) return@httpRequest
+        // 一次性操作沿用 40 s 超时（与设备端 shell 期限兼容；rpc 帧自动带 42s 服务端执行超时）。
+        rpcCall(
+            ctx = scope,
+            url = url,
+            method = if (body != null) "POST" else "GET",
+            body = body,
+            timeoutMs = 40_000,
+        ) { ok, data, code, errorMsg ->
+            if (generation != requestGeneration || target != deviceId) return@rpcCall
             busy = ""
-            val code = response.statusCode
-            val ok = success && (code == null || code in 200..299)
             val exitCode = (data.opt("exit_code") as? Number)?.toInt()
             if (!ok || (system && body == null && exitCode != 0)) {
                 val reason = data.text("error").ifEmpty { errorMsg }.ifEmpty { "HTTP $code" }
@@ -423,7 +425,7 @@ class EchoMuseDetailState(private val scope: Pager) {
                     runtimeReadFailed = true
                 }
                 onFail()
-                return@httpRequest
+                return@rpcCall
             }
             onSuccess(data)
         }

@@ -159,23 +159,22 @@ class ContextSectionState(private val scope: PagerScope) {
         soulPresetMsg = "生成预览…"
         soulPreviewText = ""
         val body = JSONObject().apply { put("soul", soulJson()) }
-        network(ctx).httpRequest("${baseUrl}/api/soul/preview", true, body, jsonHeaders()) { data, success, errorMsg, resp ->
-            val code = resp.statusCode
-            if (!success || (code != null && code !in 200..299)) {
+        rpcCall(ctx, "${baseUrl}/api/soul/preview", "POST", body) { ok, data, code, errorMsg ->
+            if (!ok) {
                 soulPresetMsg = "预览失败: ${serverMessage(data, errorMsg, code)}"
-                return@httpRequest
+                return@rpcCall
             }
-            val text = data?.optString("instructions", "") ?: ""
+            val text = data.optString("instructions", "")
             val sb = StringBuilder()
-            val source = data?.optString("source", "") ?: ""
+            val source = data.optString("source", "")
             sb.append(if (source == "soul") "来源：人格档案" else "来源：[llm].system_prompt（人格未启用）")
-            val presetName = data?.optString("preset_name", "") ?: ""
+            val presetName = data.optString("preset_name", "")
             if (presetName.isNotEmpty()) sb.append(" · 预设：").append(presetName)
-            sb.append("\n").append(data?.optInt("chars", 0) ?: 0).append(" 字符 · 约 ")
-            sb.append(data?.optLong("approx_tokens", 0L) ?: 0L).append(" tokens")
-            val from = joinNames(data?.optJSONArray("from_preset"))
+            sb.append("\n").append(data.optInt("chars", 0)).append(" 字符 · 约 ")
+            sb.append(data.optLong("approx_tokens", 0L)).append(" tokens")
+            val from = joinNames(data.optJSONArray("from_preset"))
             if (from.isNotEmpty()) sb.append("\n来自预设（你留空的字段）：").append(from)
-            val over = joinNames(data?.optJSONArray("overridden"))
+            val over = joinNames(data.optJSONArray("overridden"))
             if (over.isNotEmpty()) sb.append("\n你已覆盖的字段：").append(over)
             soulPresetMsg = sb.toString()
             soulPreviewText = if (text.length > 2000) text.substring(0, 2000) + "\n…（已截断）" else text
@@ -197,16 +196,15 @@ class ContextSectionState(private val scope: PagerScope) {
         }
         soulPresetMsg = "载入中…"
         val body = JSONObject().apply { put("soul", soulJson()) }
-        network(ctx).httpRequest("${baseUrl}/api/soul/preview", true, body, jsonHeaders()) { data, success, errorMsg, resp ->
-            val code = resp.statusCode
-            if (!success || (code != null && code !in 200..299)) {
+        rpcCall(ctx, "${baseUrl}/api/soul/preview", "POST", body) { ok, data, code, errorMsg ->
+            if (!ok) {
                 soulPresetMsg = "载入失败: ${serverMessage(data, errorMsg, code)}"
-                return@httpRequest
+                return@rpcCall
             }
-            val eff = data?.optJSONObject("effective")
+            val eff = data.optJSONObject("effective")
             if (eff == null) {
                 soulPresetMsg = "载入失败：服务端未返回 effective 档案（版本不匹配？）"
-                return@httpRequest
+                return@rpcCall
             }
             // ⚠️ 必须整段喂 `fill`：它按"服务端回包"语义映射（数组键按数组处理），
             // 手写部分字段会在缺失的数组键上把用户原文冲成空。
@@ -252,9 +250,9 @@ class ContextSectionState(private val scope: PagerScope) {
 
     /** `GET /api/soul/presets`：把服务端预设补进下拉（新增服务端预设时客户端无需发版）。 */
     fun syncSoulPresets(ctx: Pager, baseUrl: String) {
-        network(ctx).requestGet("${baseUrl}/api/soul/presets", JSONObject()) { data, success, _, _ ->
-            if (!success) return@requestGet
-            val arr = data.optJSONArray("presets") ?: return@requestGet
+        rpcCall(ctx, "${baseUrl}/api/soul/presets", "GET", null) { ok, data, _, _ ->
+            if (!ok) return@rpcCall
+            val arr = data.optJSONArray("presets") ?: return@rpcCall
             for (i in 0 until arr.length()) {
                 val p = arr.optJSONObject(i) ?: continue
                 val id = p.optString("id", "")
@@ -273,10 +271,10 @@ class ContextSectionState(private val scope: PagerScope) {
     /** `GET /api/memory/status`：把状态拼成一段可读文本（状态卡直接展示）。 */
     fun refreshStatus(ctx: Pager, baseUrl: String) {
         memoryStatusMsg = "查询中…"
-        network(ctx).requestGet("${baseUrl}/api/memory/status", JSONObject()) { data, success, errorMsg, _ ->
-            if (!success) {
+        rpcCall(ctx, "${baseUrl}/api/memory/status", "GET", null) { ok, data, _, errorMsg ->
+            if (!ok) {
                 memoryStatusMsg = "状态查询失败: $errorMsg"
-                return@requestGet
+                return@rpcCall
             }
             val sb = StringBuilder()
             val kb = data.optLong("db_bytes", 0L) / 1024
@@ -323,12 +321,11 @@ class ContextSectionState(private val scope: PagerScope) {
             put("text", text)
             if (memoryTestScope.isNotEmpty()) put("scope", memoryTestScope.trim())
         }
-        network(ctx).httpRequest("${baseUrl}/api/memory/recall", true, body, jsonHeaders()) { data, success, errorMsg, resp ->
-            val code = resp.statusCode
-            if (!success || (code != null && code !in 200..299)) {
+        rpcCall(ctx, "${baseUrl}/api/memory/recall", "POST", body) { ok, data, code, errorMsg ->
+            if (!ok) {
                 memoryTestOk = false
                 memoryTestMsg = "召回失败: ${if (errorMsg.isNotEmpty()) errorMsg else "HTTP $code"}"
-                return@httpRequest
+                return@rpcCall
             }
             val hits = data.optInt("hits", 0)
             val ms = data.optLong("elapsed_ms", 0L)
@@ -356,29 +353,27 @@ class ContextSectionState(private val scope: PagerScope) {
             put("force", true)
             put("dry_run", dryRun)
         }
-        network(ctx).httpRequest("${baseUrl}/api/memory/maintain", true, body, jsonHeaders()) { data, success, errorMsg, resp ->
-            val code = resp.statusCode
-            if (!success || (code != null && code !in 200..299)) {
+        rpcCall(ctx, "${baseUrl}/api/memory/maintain", "POST", body) { ok, data, code, errorMsg ->
+            if (!ok) {
                 memoryMaintainMsg = "维护失败: ${if (errorMsg.isNotEmpty()) errorMsg else "HTTP $code"}"
-                return@httpRequest
+                return@rpcCall
             }
-            val verb = if (data?.optBoolean("dry_run", false) == true) "演练（未删除）" else "已处理"
-            memoryMaintainMsg = "$verb：隔离释放 ${data?.optInt("released", 0) ?: 0} 条，保留策略处理 ${data?.optInt("deleted", 0) ?: 0} 条"
+            val verb = if (data.optBoolean("dry_run", false)) "演练（未删除）" else "已处理"
+            memoryMaintainMsg = "$verb：隔离释放 ${data.optInt("released", 0)} 条，保留策略处理 ${data.optInt("deleted", 0)} 条"
         }
     }
 
     /** `POST /api/memory/rag/reindex`：触发后台重建文档索引（P1-9，仅 engine=rag 有效）。 */
     fun reindexRag(ctx: Pager, baseUrl: String) {
         memoryRagReindexMsg = "重建中…"
-        network(ctx).httpRequest("${baseUrl}/api/memory/rag/reindex", true, JSONObject(), jsonHeaders()) { data, success, errorMsg, resp ->
-            val code = resp.statusCode
-            if (!success || (code != null && code !in 200..299)) {
+        rpcCall(ctx, "${baseUrl}/api/memory/rag/reindex", "POST", JSONObject()) { ok, data, code, errorMsg ->
+            if (!ok) {
                 memoryRagReindexMsg =
-                    "重建触发失败: ${data?.optString("message", "")?.ifEmpty { null } ?: if (errorMsg.isNotEmpty()) errorMsg else "HTTP $code"}"
-                return@httpRequest
+                    "重建触发失败: ${data.optString("message", "").ifEmpty { null } ?: if (errorMsg.isNotEmpty()) errorMsg else "HTTP $code"}"
+                return@rpcCall
             }
             memoryRagReindexMsg =
-                data?.optString("message", "")?.ifEmpty { null } ?: "已开始后台重建（结果查状态卡）"
+                data.optString("message", "").ifEmpty { null } ?: "已开始后台重建（结果查状态卡）"
         }
     }
 
@@ -402,14 +397,13 @@ class ContextSectionState(private val scope: PagerScope) {
             }
         }
         memoryClearMsg = "清空中…"
-        network(ctx).httpRequest("${baseUrl}/api/memory/clear", true, body, jsonHeaders()) { data, success, errorMsg, resp ->
-            val code = resp.statusCode
-            if (!success || (code != null && code !in 200..299)) {
-                val serverMsg = data?.optString("message", "") ?: ""
+        rpcCall(ctx, "${baseUrl}/api/memory/clear", "POST", body) { ok, data, code, errorMsg ->
+            if (!ok) {
+                val serverMsg = data.optString("message", "")
                 memoryClearMsg = "清空失败: " + serverMsg.ifEmpty { errorMsg.ifEmpty { "HTTP $code" } }
-                return@httpRequest
+                return@rpcCall
             }
-            memoryClearMsg = data?.optString("message", "已清空") ?: "已清空"
+            memoryClearMsg = data.optString("message", "已清空")
         }
     }
 }

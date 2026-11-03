@@ -2,6 +2,8 @@ package com.xiaozhi.admin
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.key
+import com.gearui.components.alert.Alert
+import com.gearui.components.alert.AlertStatus
 import com.gearui.components.button.Button
 import com.gearui.components.button.ButtonType
 import com.gearui.foundation.layout.Spacing
@@ -48,7 +50,7 @@ fun NluConfigCard(form: ConfigFormState) {
 private fun NluIntentList(form: ConfigFormState, nlu: NluSectionState) {
     fieldLabelRow(
         label = "自定义技能（${nlu.intents.size} 条）",
-        help = "每个技能由名称、训练例句与配置动作组成。新技能可组合现有 Rust 能力，设置条件与参数，不需要改写服务器代码；新增模型标签后仍须重新训练与验收。",
+        help = "每个技能由名称、控制域、训练例句与配置动作组成。控制域按执行者分：设备=固件工具执行（含断开对话），服务器=服务端能力组合，IoT=第三方设备（tuya）。新技能可组合现有 Rust 能力或直调设备已声明工具，不需要改写服务器代码；新增或改名模型标签后仍须重新训练与验收。",
         trailing = {
             Button(
                 text = "添加技能",
@@ -62,7 +64,17 @@ private fun NluIntentList(form: ConfigFormState, nlu: NluSectionState) {
         },
     )
     if (nlu.intents.isEmpty()) {
-        HintLine("点「添加技能」填写名称、训练例句与动作，然后保存配置。无槽位技能无需添加槽位；每类训练至少需要两条不同句子。")
+        HintLine("点「添加技能」填写名称、控制域、训练例句与动作，然后保存配置。无槽位技能无需添加槽位；每类训练至少需要两条不同句子。")
+    }
+    // P0-4 强提示：技能名 = 训练标签，改名（相对保存态）会使旧模型标签失效。
+    // 只提示不拦截：沿用"保存 → 提交训练"既有链路。
+    val renamedNote = nlu.renamedSkillsNote()
+    if (renamedNote.isNotEmpty()) {
+        Alert(
+            title = "技能改名会使旧模型标签失效",
+            description = "已改名：$renamedNote。技能名即模型训练标签，保存后必须重新训练并验收新模型，旧模型无法识别新名称；取消保存可保留旧标签。",
+            status = AlertStatus.WARNING,
+        )
     }
     for (draft in nlu.intents) key(draft) { NluIntentBlock(form, nlu, draft) }
 }
@@ -96,7 +108,17 @@ private fun NluIntentBlock(form: ConfigFormState, nlu: NluSectionState, draft: I
                 form.markDirty()
             },
             placeholder = "light_control",
-            help = "技能唯一标识，用于模型标签和技能白名单（可用英文下划线）；同名技能会被服务端拒绝，不能使用保留标签 other。",
+            help = "技能唯一标识 = 模型训练标签（可用英文下划线）；改名会使旧模型标签失效、需重新训练。同名技能会被服务端拒绝，不能使用保留标签 other/end_session。",
+        )
+        labeledSelect(
+            label = "控制域",
+            selectedId = draft.domain,
+            options = nlu.domainOptions,
+            onSelect = {
+                draft.domain = it
+                form.markDirty()
+            },
+            help = "技能的一级分组 = 控制目标/执行者：设备域由设备固件工具执行（如音量、播放控制），服务器域由服务端执行（如提醒类能力组合），IoT 域由服务端执行（tuya 第三方设备，如语音开关插座）。改域只影响目录分组展示，不影响训练标签。",
         )
         labeledTextArea(
             label = "训练例句（每行一条）",
@@ -135,15 +157,15 @@ private fun NluIntentBlock(form: ConfigFormState, nlu: NluSectionState, draft: I
         }
         if (draft.actionKind == "mcp") {
             labeledField(
-                label = "MCP 工具名",
+                label = "设备工具名",
                 value = draft.mcpTool,
                 onValueChange = {
                     draft.mcpTool = it
                     form.markDirty()
                 },
-                placeholder = "set_volume",
-                help = "设备在 MCP 清单里声明的工具名，需精确匹配（清单见「MCP 工具」页）。" +
-                    "命中后先说应答语，再把槽位作为参数派发；设备没有同名工具则跳过、不报错。",
+                placeholder = "self.audio_speaker.set_volume",
+                help = "设备固件在 MCP 清单里声明的工具名（静态字面量），需精确匹配（清单见「MCP 工具」页）。" +
+                    "槽位按工具参数名对应后派发；设备没有声明同名工具则走固定降级话术拒识、不报错崩会话。",
             )
         }
         if (draft.actionKind != "plan") labeledField(

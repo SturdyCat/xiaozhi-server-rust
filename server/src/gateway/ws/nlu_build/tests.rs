@@ -23,6 +23,8 @@ fn training_catalog_contains_command_and_canonical_labels_but_not_deleted_seeds(
         .find(|i| i.name == "end_session")
         .unwrap();
     assert_eq!(command.templates, cfg.command.keywords);
+    // 注入的 end_session 固定为设备域（作用于当前会话/设备）。
+    assert_eq!(command.domain, crate::plugins::nlu::Domain::Device);
     assert!(nlu.bert_label_map.is_empty());
     let effective = crate::plugins::skill::effective_catalog(&cfg.command, &cfg.nlu).unwrap();
     assert_eq!(
@@ -360,6 +362,7 @@ fn saved_snapshot_reads_latest_sqlite_not_startup_or_live_cache() {
             reply: "帮助".into(),
             ..Default::default()
         },
+        ..Default::default()
     });
     store.persist(&saved).unwrap();
     let (actual, revision) = saved_snapshot(store.as_ref(), None).unwrap();

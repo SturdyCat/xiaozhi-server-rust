@@ -30,21 +30,19 @@ internal fun ConfigFormState.fetchProviderLlmModels(ctx: Pager) {
     if (llmApiBase.isNotBlank()) body.put("api_base", llmApiBase.trim())
     if (llmApiKey.isNotBlank()) body.put("api_key", llmApiKey.trim())
     val requestScope = captureCatalogueScope(ctx)
-    val headers = adminRequestHeaders(requestScope.requestToken)
-    network(ctx).httpRequest("${requestScope.base}/api/test/llm/models", true, body, headers) { data, success, errorMsg, resp ->
+    rpcCall(ctx, "${requestScope.base}/api/test/llm/models", "POST", body) { ok, data, status, errorMsg ->
         // Scope invalidation releases the old busy flag. An old callback cannot release
         // a fresh scope's request, even after generic base or credential A→B→A changes.
-        if (!isCatalogueScopeCurrent(ctx, requestScope)) return@httpRequest
+        if (!isCatalogueScopeCurrent(ctx, requestScope)) return@rpcCall
         llmModelsBusy = false
-        val ok = success && (resp.statusCode == null || resp.statusCode in 200..299)
-        val state = data?.optString("state", "") ?: ""
-        val err = data?.optString("error", "")?.takeIf { it.isNotEmpty() } ?: (errorMsg ?: "")
+        val state = data.optString("state", "")
+        val err = data.optString("error", "").takeIf { it.isNotEmpty() } ?: errorMsg
         if (!ok || state != "ok") {
             llmModelOptions.clear()
-            llmModelsMsg = "获取失败：${err.ifEmpty { "HTTP ${resp.statusCode}" }}"
-            return@httpRequest
+            llmModelsMsg = "获取失败：${err.ifEmpty { "HTTP $status" }}"
+            return@rpcCall
         }
-        val arr = data?.optJSONArray("models")
+        val arr = data.optJSONArray("models")
         llmModelOptions.clear()
         val n = arr?.length() ?: 0
         for (i in 0 until n) {
@@ -157,11 +155,9 @@ internal fun ConfigFormState.deriveProviderVoiceGroupAndType() {
 internal fun ConfigFormState.refreshProviderVoices(ctx: Pager) {
     val requestScope = captureCatalogueScope(ctx)
     voicesRefreshMsg = "探测中…（对候选音色逐个真实合成验证，约需 1 分钟）"
-    val headers = adminRequestHeaders(requestScope.requestToken)
-    network(ctx).httpRequest("${requestScope.base}/api/tts/voices/refresh", true, JSONObject(), headers) { _, success, errorMsg, resp ->
-        if (!isCatalogueScopeCurrent(ctx, requestScope)) return@httpRequest
-        val code = resp.statusCode
-        if (success && (code == null || code in 200..299)) {
+    rpcCall(ctx, "${requestScope.base}/api/tts/voices/refresh", "POST", JSONObject()) { rpcOk, _, code, errorMsg ->
+        if (!isCatalogueScopeCurrent(ctx, requestScope)) return@rpcCall
+        if (rpcOk) {
             pollProviderVoices(ctx, attempts = 0, requestScope = requestScope)
         } else {
             voicesRefreshMsg = "探测启动失败: ${if (errorMsg.isNotEmpty()) errorMsg else "HTTP $code"}"
@@ -176,10 +172,9 @@ private fun ConfigFormState.pollProviderVoices(ctx: Pager, attempts: Int, reques
         voicesRefreshMsg = "探测超时（请查看服务端日志）"
         return
     }
-    val headers = adminRequestHeaders(requestScope.requestToken)
-    network(ctx).httpRequest("${requestScope.base}/api/tts/voices", false, JSONObject(), headers) { data, success, _, _ ->
-        if (!isCatalogueScopeCurrent(ctx, requestScope)) return@httpRequest
-        if (success && !data.optBoolean("probing", false)) {
+    rpcCall(ctx, "${requestScope.base}/api/tts/voices", "GET", null) { ok, data, _, _ ->
+        if (!isCatalogueScopeCurrent(ctx, requestScope)) return@rpcCall
+        if (ok && !data.optBoolean("probing", false)) {
             loadCapturedProviderVoices(ctx, requestScope)
         } else {
             ctx.setTimeout(2000) {
@@ -199,11 +194,10 @@ internal fun ConfigFormState.loadProviderVoices(ctx: Pager, baseUrl: String = ""
 
 private fun ConfigFormState.loadCapturedProviderVoices(ctx: Pager, requestScope: CatalogueRequestScope) {
     if (!isCatalogueScopeCurrent(ctx, requestScope)) return
-    val headers = adminRequestHeaders(requestScope.requestToken)
-    network(ctx).httpRequest("${requestScope.base}/api/tts/voices", false, JSONObject(), headers) { data, success, _, _ ->
-        if (!isCatalogueScopeCurrent(ctx, requestScope)) return@httpRequest
-        if (!success) return@httpRequest
-        val arr = data.optJSONArray("voices") ?: return@httpRequest
+    rpcCall(ctx, "${requestScope.base}/api/tts/voices", "GET", null) { ok, data, _, _ ->
+        if (!isCatalogueScopeCurrent(ctx, requestScope)) return@rpcCall
+        if (!ok) return@rpcCall
+        val arr = data.optJSONArray("voices") ?: return@rpcCall
         voicesFemaleClassic.clear()
         voicesFemaleX6.clear()
         voicesMaleClassic.clear()

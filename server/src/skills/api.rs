@@ -10,6 +10,9 @@ pub(super) fn execute(
     step: &SkillStep,
 ) -> Result<Value> {
     match step.api.as_str() {
+        "weather.forecast" => {
+            return super::weather_ops::forecast(&step.args, &ctx);
+        }
         "tasks.list" => return super::task_ops::list(system, ctx, &step.args),
         "tasks.get" => {
             return Ok(

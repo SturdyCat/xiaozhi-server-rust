@@ -1,7 +1,8 @@
-//! 模型意图分类配置与同技能槽位模板。
+//! 技能（统一概念）目录配置与同技能槽位模板。
 //!
-//! 意图只能由真实分类器选择；模板不识别意图、不提供规则/启发式回退。
-//! 初始技能保存在 JSON，保存的同名自定义配置完整覆盖初始项（旧 reply 不升级为执行）。
+//! 技能只能由真实分类器选择；模板不识别技能、不提供规则/启发式回退。
+//! 每个技能 = 名称（训练标签）+ 控制域 + 例句模板 + 动作；保存的同名自定义配置完整覆盖初始项。
+//! 控制域只描述分组与执行者（device 设备固件 / server 服务端 / iot 第三方），不进训练输入。
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -126,6 +127,24 @@ impl NluConfig {
     }
 }
 
+/// 技能控制域：技能的一级分组 = 控制目标类别。
+///
+/// 按**执行者**分域：设备固件执行的归 [`Domain::Device`]（含 end_session 断开对话、
+/// 音量/播放控制），服务端执行的归 [`Domain::Server`]（提醒/天气类 plan 技能），
+/// 第三方智能设备（tuya 等）归 [`Domain::Iot`]（iot_device_on/off 语音开关）。
+/// 枚举即白名单：非法值直接反序列化失败，进入既有"保存态无效"链路。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Domain {
+    /// 服务端执行的技能（缺省：现网保存态只有 reminder_* 等服务端技能）。
+    #[default]
+    Server,
+    /// 设备固件执行的技能（MCP 工具直调、end_session 断开对话）。
+    Device,
+    /// 第三方智能设备域（tuya 等）：语音开关已落地（iot_device_on/off）。
+    Iot,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct IntentDef {
     pub name: String,
@@ -133,6 +152,10 @@ pub struct IntentDef {
     pub templates: Vec<String>,
     #[serde(default)]
     pub action: ActionDef,
+    /// 技能控制域。旧保存态/旧 manifest 缺该字段时缺省 [`Domain::Server`]，
+    /// 与"现网保存态只有服务端技能"的事实一致；不迁移、不改写已保存 JSON。
+    #[serde(default)]
+    pub domain: Domain,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]

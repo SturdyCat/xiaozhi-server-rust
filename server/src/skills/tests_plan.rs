@@ -185,8 +185,13 @@ fn terminal_session_step_must_be_last() {
 #[test]
 fn capability_registry_is_serializable_and_complete() {
     let names: Vec<_> = capabilities().iter().map(|metadata| metadata.api).collect();
-    assert_eq!(names.len(), 8);
-    assert!(names.contains(&"tasks.create") && names.contains(&"devices.call"));
+    assert_eq!(names.len(), 10);
+    assert!(
+        names.contains(&"tasks.create")
+            && names.contains(&"devices.call")
+            && names.contains(&"weather.forecast")
+            && names.contains(&"tuya.control")
+    );
     assert!(serde_json::to_value(capabilities()).is_ok());
 }
 
@@ -265,4 +270,55 @@ fn slots_resolve_deeply_inside_nested_action_args() {
     );
     // 缺槽位照样失败关闭：嵌套里的未解析占位符不允许带进到期执行。
     assert!(resolve_plan(&p, &HashMap::new()).is_err());
+}
+
+// ---------------------------------------------------------------------------
+// tuya.control（NLU iot 域）：必填 name/action + action 静态字面量 on|off
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tuya_control_accepts_static_actions_and_required_name() {
+    for action in ["on", "off"] {
+        validate_plan(&plan(
+            "tuya.control",
+            json!({"name":"客厅插座","action":action}),
+        ))
+        .unwrap();
+    }
+    // name 允许槽位插值（出厂种子即 {{slots.device_name}}），中文名 1..256 字符。
+    let seeded = SkillPlan {
+        conditions: vec![],
+        steps: vec![
+            SkillStep {
+                api: "tuya.control".into(),
+                args: json!({"name":"{{slots.device_name}}","action":"on"}),
+            },
+            SkillStep {
+                api: "replies.say".into(),
+                args: json!({"text":"{{steps.0.speech}}"}),
+            },
+        ],
+    };
+    validate_plan(&seeded).unwrap();
+    let slots = HashMap::from([("device_name".into(), "客厅插座".into())]);
+    let resolved = resolve_plan(&seeded, &slots).unwrap();
+    assert_eq!(resolved.steps[0].args["name"], "客厅插座");
+}
+
+#[test]
+fn tuya_control_rejects_dynamic_actions_missing_name_and_unknown_args() {
+    for p in [
+        plan("tuya.control", json!({"action":"on"})),
+        plan("tuya.control", json!({"name":"客厅插座"})),
+        plan("tuya.control", json!({"name":"客厅插座","action":"toggle"})),
+        plan("tuya.control", json!({"name":"客厅插座","action":"ON"})),
+        plan("tuya.control", json!({"name":"客厅插座","action":true})),
+        plan("tuya.control", json!({"name":"","action":"on"})),
+        plan("tuya.control", json!({"name":"客厅插座","action":"on","device_id":"evil"})),
+        // action 必须是静态字面量：插值（哪怕值恰好合法）在校验层直接拒绝。
+        plan("tuya.control", json!({"name":"客厅插座","action":"{{slots.action}}"})),
+        plan("tuya.control", json!({"name":"x".repeat(257),"action":"on"})),
+    ] {
+        assert!(validate_plan(&p).is_err(), "{p:?}");
+    }
 }

@@ -21,8 +21,3 @@ internal fun echoMuseUrlComponent(value: String): String = buildString {
 
 internal fun echoMuseAuthenticatedUrl(url: String, token: String): String =
     if (token.isEmpty()) url else url + (if ('?' in url) "&" else "?") + "token=" + echoMuseUrlComponent(token)
-
-internal fun echoMuseHeaders(token: String): JSONObject = JSONObject().apply {
-    put("Content-Type", "application/json")
-    if (token.isNotEmpty()) put("Authorization", "Bearer $token")
-}

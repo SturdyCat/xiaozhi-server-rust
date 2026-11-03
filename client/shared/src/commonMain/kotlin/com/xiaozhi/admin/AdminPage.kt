@@ -95,8 +95,14 @@ class AdminPage : ComposeContainer(), FieldHelpHost {
     val stats = StatsState(this)
     val devices = DevicesState(this)
 
+    /** 「服务器出口」（`GET /api/server/geo`，只读）：出口 IP + 地理信息（天气默认定位的来源）。 */
+    val geo = GeoState(this)
+
     /** 「EchoMuse 设备」（`GET /api/echomuse/devices` + 批准 / 重启 / WiFi 下发）。 */
     val echomuse = EchoMuseState(this)
+
+    /** 「涂鸦设备」（`/api/tuya` 系列端点：凭证 + 云同步 + 局域网 DP 控制）。 */
+    val tuya = TuyaState(this)
 
     /** 「控制台」（官方 dashboard 的 CONSOLE / 命令行）：实时服务器日志流 `GET /api/logs`。 */
     val console = ConsoleState(this)
@@ -170,8 +176,11 @@ class AdminPage : ComposeContainer(), FieldHelpHost {
         // 运维面多路数据：并行发出，各自的 loading/loadError 独立（一个端点挂了不影响其他页面）
         stats.load(this, base)
         devices.load(this, base)
+        geo.load(this, base)
         echomuse.configureAccess(token, base)
         echomuse.load(this, base)
+        tuya.configureAccess(token, base)
+        tuya.load(this, base)
         engineHealth.load(this, base)
         // 控制台：连日志流（服务端 /api/logs 已有实现）
         console.connect(base, token)

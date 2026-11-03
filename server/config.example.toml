@@ -275,6 +275,15 @@ slots = [
 ]
 # 兼容已有 action.kind=reply/end_session/mcp:<固定设备工具名>；不自动替换旧配置。
 
+# ===== 天气预报（NMC 国家气象中心，纯 Rust 复刻）=====
+# 默认即可工作，无需改动；仅在需要切换数据源、调超时或缓存时长时调整。
+# 仅「国内」出口 IP 才会被写入默认地区（见 geo 定位），未定位时天气必须显式给城市。
+[weather]
+engine = "nmc"                       # 数据源引擎（当前仅 nmc = 国家气象中心）
+source = "https://www.nmc.cn"        # 数据源根地址（纯 Rust 复刻，不 vendoring python 脚本）
+timeout_secs = 8                     # 单次请求 connect/总超时（秒）
+cache_secs = 600                     # 按站点码缓存天气的 TTL（秒），避免重复打接口
+
 [wakeup]
 enabled = true                      # 默认 true = 启用唤醒问候语（不需要可改 false）
 greeting = """我在"""                # 设备唤醒（固件上报 listen state=detect；EchoMuse 设备
@@ -351,6 +360,18 @@ mdns = true                         # 广播 _esphomelib._tcp 供 HA 自动发�
                                     # 可用 IP:port 手动添加（容器内探测不到局域网 IP 时常见）
 ble_proxy = true                    # 宣告 BLE 代理能力；还需 [echomuse].ble_proxy 也为 true
                                     # 才真正生效——后者才是设备扫描/连接的总闸。
+
+# ===== Tuya IoT 设备集成：涂鸦云只做目录同步（含 local_key），发现与控制纯局域网 =====
+#       UDP 6666/6667/7000 发现 + TCP 6668 控制（协议 3.1–3.5 自动协商），断云可用。
+#       凭证（IoT 平台 → 云开发项目的 access_id/access_secret）在管理台「涂鸦设备」页
+#       录入即可，**全部热生效，无需重启**；access_secret 只写不读（API 永不回显）。
+#       设备目录存独立 SQLite <配置库目录>/tuya/devices.db（0600 权限）。
+[tuya]
+enabled = true                      # false = /api/tuya/* 统一 404、不轮询不同步
+region = "cn"                       # 涂鸦云区域：cn / us / eu / in
+access_id = ""                      # 开发者 access_id（留空 = 仅手动同步会报"凭证未配置"）
+access_secret = ""                  # 开发者 access_secret（只写不读）
+sync_interval_secs = 86400          # 定时云同步周期（秒）；0 = 仅手动同步。最小间隔 60s
 
 # ===== AIUI 全链路（极速超拟人链路）：启用后设备流水线切换为 VAD 切段 → AIUI 云端闭环
 #       （识别 + 大模型 + 合成一体，发音人目录见 AIUI 文档 3.9），本地 ASR/LLM/TTS 引擎闲置。

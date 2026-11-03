@@ -1,5 +1,6 @@
 //! 统一目录、初始数据与保存计划验证。
 use super::*;
+use crate::plugins::nlu::Domain;
 use serde_json::json;
 
 #[test]
@@ -16,6 +17,8 @@ fn effective_training_catalog_contains_saved_command_examples_exactly_once() {
     assert_eq!(ends[0].templates, ["请退下吧。", "停止聆听"]);
     assert_eq!(ends[0].action.kind, "end_session");
     assert_eq!(ends[0].action.reply, command.reply);
+    // end_session 作用于当前会话/设备，按执行者归设备域。
+    assert_eq!(ends[0].domain, Domain::Device);
 }
 
 #[test]
@@ -201,7 +204,7 @@ fn plan_kind_is_required_and_empty_or_missing_plan_is_rejected() {
 }
 
 #[test]
-fn fresh_clock_catalog_has_eleven_seed_skills_and_independent_command() {
+fn fresh_clock_catalog_has_eighteen_seed_skills_and_independent_command() {
     let command = CommandConfig::default();
     let nlu = NluConfig::default();
     let catalog = effective_catalog(&command, &nlu).unwrap();
@@ -220,9 +223,26 @@ fn fresh_clock_catalog_has_eleven_seed_skills_and_independent_command() {
             "reminder_hourly",
             "reminder_list",
             "reminder_cancel",
+            "device_volume_set",
+            "device_mute",
+            "device_pause_playback",
+            "weather_query",
+            "iot_device_on",
+            "iot_device_off",
             "end_session",
         ]
     );
+    // 域口径：提醒类归服务端，设备示例技能归设备，iot 语音开关归 IoT，注入的 end_session 是设备域。
+    for intent in &catalog.intents {
+        let expected = match intent.name.as_str() {
+            "device_volume_set" | "device_mute" | "device_pause_playback" | "end_session" => {
+                Domain::Device
+            }
+            "iot_device_on" | "iot_device_off" => Domain::Iot,
+            _ => Domain::Server,
+        };
+        assert_eq!(intent.domain, expected, "{} 域错误", intent.name);
+    }
     for (name, key, expected) in [
         (
             "reminder_workdays",

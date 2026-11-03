@@ -51,24 +51,22 @@ internal class ConfigFormTests(private val form: ConfigFormState) {
         val body = JSONObject().apply { put("text", "你好") }
         val accessRevision = ctx.adminAccessRevision()
         val requestToken = ctx.adminRequestToken()
-        val headers = adminRequestHeaders(requestToken)
-        network(ctx).httpRequest("$serverBase/api/test/$kind", true, body, headers) { data, success, errorMsg, resp ->
-            if (!gate.finish(ticket)) return@httpRequest
+        rpcCall(ctx, "$serverBase/api/test/$kind", "POST", body) { ok, data, status, errorMsg ->
+            if (!gate.finish(ticket)) return@rpcCall
             if (!ctx.isAdminAccessCurrent(accessRevision, requestToken)) {
                 when (kind) {
                     "llm" -> testBusyLlm = false
                     "tts" -> testBusyTts = false
                     else -> testBusyVad = false
                 }
-                return@httpRequest
+                return@rpcCall
             }
-            val ok = success && (resp.statusCode == null || resp.statusCode in 200..299)
-            val state = data?.optString("state", "") ?: ""
-            val first = data?.optLong("first_packet_ms", -1) ?: -1
-            val elapsed = data?.optLong("elapsed_ms", -1) ?: -1
-            val err = data?.optString("error", "")?.takeIf { it.isNotEmpty() } ?: (errorMsg ?: "")
+            val state = data.optString("state", "")
+            val first = data.optLong("first_packet_ms", -1)
+            val elapsed = data.optLong("elapsed_ms", -1)
+            val err = data.optString("error", "").takeIf { it.isNotEmpty() } ?: errorMsg
             val line = when {
-                !ok -> "测试失败：${err.ifEmpty { "HTTP ${resp.statusCode}" }}"
+                !ok -> "测试失败：${err.ifEmpty { "HTTP $status" }}"
                 state == "ok" -> buildString {
                     append("✓ 通过")
                     if (first >= 0) append(" · 首包 ${first}ms")
@@ -106,22 +104,20 @@ internal class ConfigFormTests(private val form: ConfigFormState) {
         }
         val accessRevision = ctx.adminAccessRevision()
         val requestToken = ctx.adminRequestToken()
-        val headers = adminRequestHeaders(requestToken)
-        network(ctx).httpRequest("${serverBase}/api/tts/voices/test-credentials", true, body, headers) { data, success, errorMsg, resp ->
-            if (!credentialGate.finish(ticket)) return@httpRequest
+        rpcCall(ctx, "${serverBase}/api/tts/voices/test-credentials", "POST", body) { ok, data, code, errorMsg ->
+            if (!credentialGate.finish(ticket)) return@rpcCall
             if (!ctx.isAdminAccessCurrent(accessRevision, requestToken)) {
                 credsTestMsg = ""
                 credsTestOk = false
-                return@httpRequest
+                return@rpcCall
             }
-            val code = resp.statusCode
-            if (success && (code == null || code in 200..299)) {
-                val ok = data?.optBoolean("ok", false) ?: false
-                credsTestOk = ok
-                credsTestMsg = if (ok) {
-                    "凭据可用（合成耗时 ${data?.optLong("elapsed_ms") ?: 0}ms）"
+            if (ok) {
+                val passed = data.optBoolean("ok", false)
+                credsTestOk = passed
+                credsTestMsg = if (passed) {
+                    "凭据可用（合成耗时 ${data.optLong("elapsed_ms")}ms）"
                 } else {
-                    "凭据不可用: ${data?.optString("error", "未知错误")}"
+                    "凭据不可用: ${data.optString("error", "未知错误")}"
                 }
             } else {
                 credsTestOk = false

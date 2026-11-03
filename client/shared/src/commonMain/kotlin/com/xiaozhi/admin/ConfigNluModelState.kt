@@ -114,13 +114,13 @@ class NluModelState {
             // 不传 base_model：服务端只有唯一底座，且 `BuildRequest` 是
             // `deny_unknown_fields`——多传一个键直接 400。
         }
-        network(ctx).httpRequest("${form.serverBase}/api/nlu/model/build", true, body, ctx.adminRequestHeaders()) { data, ok, message, resp ->
-            if (!current(ctx, form, ticket)) return@httpRequest
-            if (!ok || resp.statusCode?.let { it !in 200..299 } == true || data == null ||
-                !data.optBoolean("started", false) || data.optString("state", "") != "running" ||
+        rpcCall(ctx, "${form.serverBase}/api/nlu/model/build", "POST", body) { ok, data, status, message ->
+            if (!current(ctx, form, ticket)) return@rpcCall
+            if (!ok || data.optString("state", "") != "running" ||
+                !data.optBoolean("started", false) ||
                 data.optString("build_id", "").isEmpty() || data.optString("source_revision", "") != sourceRevision) {
-                view = view.copy(busy = false, phase = "failed", message = "启动失败：${error(data, message.ifEmpty { "HTTP ${resp.statusCode}" })}")
-                return@httpRequest
+                view = view.copy(busy = false, phase = "failed", message = "启动失败：${error(data, message.ifEmpty { "HTTP $status" })}")
+                return@rpcCall
             }
             view = view.copy(message = "训练已启动。只使用已保存的技能配置；构建成功不会自动启用。")
             status(ctx, form, ticket, 0)
@@ -142,11 +142,11 @@ class NluModelState {
             return
         }
         // GET uses the same management auth as POST; no credentials in URL/log output.
-        network(ctx).httpRequest("${form.serverBase}/api/nlu/model/build", false, JSONObject(), ctx.adminRequestHeaders()) { data, ok, message, resp ->
-            if (!current(ctx, form, ticket)) return@httpRequest
-            if (!ok || resp.statusCode?.let { it !in 200..299 } == true || data == null) {
-                view = view.copy(busy = false, message = "状态读取失败：${error(data, message.ifEmpty { "HTTP ${resp.statusCode}" })}")
-                return@httpRequest
+        rpcCall(ctx, "${form.serverBase}/api/nlu/model/build", "GET", null) { ok, data, status, message ->
+            if (!current(ctx, form, ticket)) return@rpcCall
+            if (!ok) {
+                view = view.copy(busy = false, message = "状态读取失败：${error(data, message.ifEmpty { "HTTP $status" })}")
+                return@rpcCall
             }
             val phase = data.optString("state", "")
             val candidate = parseCandidate(data.optJSONObject("artifact"), form.nlu.bert)
@@ -178,11 +178,12 @@ class NluModelState {
         val key = testKey(candidate, text, expected)
         view = view.copy(testBusy = true, verified = false, testMessage = "正在直接运行候选 ONNX 模型；不执行技能、不改变全局开关…")
         val body = JSONObject().apply { put("build_id", candidate.buildId); put("text", text); put("expected_intent", expected) }
-        network(ctx).httpRequest("${form.serverBase}/api/nlu/model/test", true, body, ctx.adminRequestHeaders(), timeout = 60) { data, ok, message, resp ->
-            if (!current(ctx, form, ticket)) return@httpRequest
-            if (!ok || resp.statusCode?.let { it !in 200..299 } == true || data == null || data.optString("state", "") != "ok") {
-                view = view.copy(testBusy = false, testMessage = "候选测试失败：${error(data, message.ifEmpty { "HTTP ${resp.statusCode}" })}")
-                return@httpRequest
+        // ONNX 推理 + 分词，60s 本地超时（rpc 帧自动带 62s 服务端执行超时）。
+        rpcCall(ctx, "${form.serverBase}/api/nlu/model/test", "POST", body, timeoutMs = 60_000) { ok, data, status, message ->
+            if (!current(ctx, form, ticket)) return@rpcCall
+            if (!ok || data.optString("state", "") != "ok") {
+                view = view.copy(testBusy = false, testMessage = "候选测试失败：${error(data, message.ifEmpty { "HTTP $status" })}")
+                return@rpcCall
             }
             val valid = data.optString("build_id", "") == candidate.buildId &&
                 data.optString("model_sha256", "") == candidate.sha256 &&

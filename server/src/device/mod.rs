@@ -1,4 +1,4 @@
-//! 设备管理：EchoMuse 设备控制面、固件 OTA、局域网管理客户端发现、
+//! 设备管理：EchoMuse 设备控制面、Tuya IoT 设备集成、固件 OTA、局域网管理客户端发现、
 //! 进程内设备/会话注册表、发音人目录服务。
 
 pub mod discovery;
@@ -7,6 +7,8 @@ pub mod echomuse;
 pub mod esp_home;
 pub mod firmware;
 pub mod registry;
+/// Tuya IoT 设备集成（`[tuya]`）：云目录同步 + 纯局域网发现/控制 + 管理面 `/api/tuya/*`。
+pub mod tuya;
 pub mod voices;
 
 /// 探测本机默认出口的局域网 IPv4（UDP connect 不发包，只查内核路由选源）。

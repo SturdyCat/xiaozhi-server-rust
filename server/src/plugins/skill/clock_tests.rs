@@ -173,6 +173,7 @@ fn equally_specific_conflicting_slot_boundaries_still_clarify() {
             name: "ambiguous".into(),
             templates: vec!["{time}a{task}".into(), "{time}b{task}".into()],
             action: ActionDef::default(),
+            ..Default::default()
         }],
         ..Default::default()
     };

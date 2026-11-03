@@ -5,11 +5,18 @@
 # 本镜像自带 /opt/train.py 供 standalone 使用；独立运行该入口需重建镜像才能更新脚本。
 FROM python:3.11-slim
 
-# PyPI 阿里云镜像作主 index（全量包；ACR 云端构建环境访问清华源会拿到空列表，
-# 阿里源与 ACR 同云最稳），CPU 轮子仓库作 extra index（只收录 torch 系包，
-# 不能当唯一 index，否则 transformers 等报 from versions: none）。失败回退官方 PyPI。
+# 阿里云 PyPI 作主 index（全量包；ACR 云端构建环境访问清华源会拿到空列表，
+# 阿里源与 ACR 同云最稳），其余依赖从这里装。
+# ⚠️ torch 必须单独从 pytorch 的【CPU 轮子仓库】用 --index-url（作主索引）安装：
+#   若把 aliyun 当主索引、cpu 当 extra，pip 会优先命中 aliyun 镜像里的【CUDA 版】
+#   torch（自带 CUDA 运行时，解包 ~2GB），cpu 仓库只是 fallback 不会生效——这正是
+#   镜像此前虚胖的主因。CPU 轮子不含 CUDA，解包仅约 0.5GB。锁 2.4.1 与
+#   transformers<4.44 兼容。
 COPY requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir --retries 5 --timeout 60 \
+      --index-url https://download.pytorch.org/whl/cpu \
+      torch==2.4.1 \
+ && pip install --no-cache-dir --retries 5 --timeout 60 \
       -i https://mirrors.aliyun.com/pypi/simple/ \
       --extra-index-url https://download.pytorch.org/whl/cpu \
       -r /tmp/requirements.txt \

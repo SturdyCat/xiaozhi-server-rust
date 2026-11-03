@@ -1,6 +1,7 @@
 //! Stable declarative skills and device-bound persistent scheduling.
 //! No networking, device playback or arbitrary code runs in this module.
 mod api;
+pub(super) mod weather_ops;
 mod calendar;
 mod delivery;
 mod plan;

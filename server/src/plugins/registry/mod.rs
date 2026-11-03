@@ -249,6 +249,12 @@ const APP_SECTION_HOT: &[(&str, HotReload)] = &[
     // `[esp_home]`（ESPHome 桥）：feature 开关与设备连接在启动时建立，
     // 改动需重启生效。
     ("esp_home", HotReload::RestartOnly),
+    // `[tuya]`（涂鸦 IoT 设备集成）：全部字段热生效——凭证变更由指纹检测
+    // 丢弃云 token 缓存、worker 每 tick 重读 config，无需重启（见 device/tuya/config.rs）。
+    ("tuya", HotReload::Live),
+    // `[weather]`（天气数据源）：`WeatherService` 在 `Engines::assemble` 装配一次
+    // （HTTP 客户端/缓存/站点表），改动需重启生效。
+    ("weather", HotReload::RestartOnly),
 ];
 
 /// 按**字段完整路径**查热生效语义：路径 = `fields_path ++ [key]`

@@ -94,19 +94,19 @@ class OtaState(private val scope: PagerScope) {
     // 读取
     // ============================================================
 
-    /** 拉取托管清单。失败只置 `loadError`，不影响配置表单本身。 */
+    /** 拉取托管清单。失败只置 `loadError`，不影响配置表单本身。
+     *  走 WS RPC（路径带 `?token=` 与 REST 同口径，路由内自身的 token 校验原样生效）。 */
     fun load(ctx: Pager, baseUrl: String = "", authToken: String = "") {
         if (loading) return
         base = baseUrl
         token = authToken
         loading = true
         loadError = ""
-        network(ctx).requestGet("${baseUrl}/api/ota/firmware${authQuery(true)}", JSONObject()) { data, success, errorMsg, resp ->
+        rpcCall(ctx, "${baseUrl}/api/ota/firmware${authQuery(true)}", "GET", null) { ok, data, code, errorMsg ->
             loading = false
-            val code = resp.statusCode
-            if (!success || (code != null && code !in 200..299)) {
+            if (!ok) {
                 loadError = "固件清单加载失败: ${if (errorMsg.isNotEmpty()) errorMsg else "HTTP $code"}"
-                return@requestGet
+                return@rpcCall
             }
             apply(data)
         }
@@ -239,19 +239,16 @@ class OtaState(private val scope: PagerScope) {
         }
     }
 
-    /** 删除一个托管条目（行内二次确认后调用）。 */
+    /** 删除一个托管条目（行内二次确认后调用）。走 WS RPC（POST 别名，同 REST 口径）。 */
     fun remove(ctx: Pager, row: OtaEntryRow, onDone: (ok: Boolean, msg: String) -> Unit) {
         confirmKey = ""
         val q = "?project=${row.project}&model=${row.model}&board=${row.board}${authQuery(false)}"
-        // 客户端 NetworkModule 只暴露 GET/POST，故删除走服务端的 POST 入口
-        //（服务端同时保留 DELETE /api/ota/firmware 供 curl 使用）
-        network(ctx).requestPost("${base}/api/ota/firmware/delete$q", JSONObject()) { data, success, errorMsg, resp ->
-            val code = resp.statusCode
-            if (success && (code == null || code in 200..299)) {
+        rpcCall(ctx, "${base}/api/ota/firmware/delete$q", "POST", JSONObject()) { ok, data, code, errorMsg ->
+            if (ok) {
                 onDone(true, "已删除 ${row.project} · ${row.model} · ${row.version}")
                 refresh(ctx)
             } else {
-                val serverMsg = data?.optString("message", "") ?: ""
+                val serverMsg = data.optString("message", "")
                 onDone(false, "删除失败: " + serverMsg.ifEmpty {
                     if (errorMsg.isNotEmpty()) errorMsg else "HTTP $code"
                 })

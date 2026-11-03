@@ -48,7 +48,7 @@ fn new_effective_command_label_is_testable_without_global_activation() {
         .map(|i| i.name.clone())
         .chain(std::iter::once("other".into()))
         .collect();
-    a.catalog_source = Some("effective_command_nlu_v1".into());
+    a.catalog_source = Some("effective_command_nlu_v2".into());
     let value = prediction(&a, hit("end_session", 0.99), Some("end_session")).unwrap();
     assert_eq!(value["accepted"], true);
     assert_eq!(value["expected_match"], true);

@@ -65,9 +65,10 @@ pub(super) fn validate_plan_refs(plan: &SkillPlan) -> Result<()> {
                 ensure!(
                     matches!(
                         plan.steps[source].api.as_str(),
-                        "tasks.create" | "tasks.list" | "tasks.cancel"
+                        "tasks.create" | "tasks.list" | "tasks.cancel" | "weather.forecast"
+                            | "tuya.control"
                     ),
-                    "only successful task create/list/cancel expose speech references"
+                    "only successful task/iot steps expose speech references"
                 );
             }
         }

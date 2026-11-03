@@ -51,24 +51,24 @@ class WorkflowEditorState(private val form: ConfigFormState) {
         val revision = form.revision
         base = baseUrl
         loading = true
-        network(ctx).requestGet("$baseUrl/api/workflow", JSONObject()) { data, success, message, _ ->
-            if (ticket != generation || base != baseUrl || form.serverBase != baseUrl || !ctx.isAdminAccessCurrent(access, token)) return@requestGet
+        rpcCall(ctx, "$baseUrl/api/workflow", "GET", null) { ok, data, _, message ->
+            if (ticket != generation || base != baseUrl || form.serverBase != baseUrl || !ctx.isAdminAccessCurrent(access, token)) return@rpcCall
             if (revision != form.revision) {
                 loadMetadata(ctx, baseUrl)
-                return@requestGet
+                return@rpcCall
             }
             loading = false
-            if (!success) {
+            if (!ok) {
                 metadata = null
                 error = "工作流管理暂不可用：${message.ifBlank { "服务端可能尚未升级" }}。现有节点配置仍可使用。"
-                return@requestGet
+                return@rpcCall
             }
             try {
                 val next = parseWorkflowMetadata(data.toString())
                 if (revision.isNotEmpty() && next.revision != revision) {
                     error = "流程配置已在其他窗口变更，请重新加载配置；当前草稿仍保留。"
                     metadata = null
-                    return@requestGet
+                    return@rpcCall
                 }
                 metadata = next
                 if (!configSeen && !dirty) {

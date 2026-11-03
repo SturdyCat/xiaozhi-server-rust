@@ -15,11 +15,11 @@ internal class ConfigFormActions(private val form: ConfigFormState, private val 
 
     /** 拉取配置来源元信息（GET /api/config/meta）→ 展示"配置文件路径 + 是否持久化"。 */
     fun loadConfigMeta(ctx: Pager, baseUrl: String = ""): Unit = with(form) {
-        network(ctx).requestGet("${baseUrl}/api/config/meta", JSONObject()) { data, success, _, _ ->
-            if (!success) return@requestGet
-            val path = data?.optString("config_path", "") ?: ""
-            val persistent = data?.optBoolean("persistent", true) ?: true
-            val hint = data?.optString("hint", "") ?: ""
+        rpcCall(ctx, "${baseUrl}/api/config/meta", "GET", null) { ok, data, _, _ ->
+            if (!ok) return@rpcCall
+            val path = data.optString("config_path", "")
+            val persistent = data.optBoolean("persistent", true)
+            val hint = data.optString("hint", "")
             configMetaMsg = when {
                 path.isEmpty() -> "配置来源：内置默认（未指定配置文件，保存不会持久化）"
                 !persistent -> "配置来源：$path ⚠️ 不在挂载卷上，重建容器会丢失！$hint"
@@ -41,9 +41,9 @@ internal class ConfigFormActions(private val form: ConfigFormState, private val 
             loadDeviceTarget(ctx, baseUrl, epoch)
             return@with
         }
-        network(ctx).requestGet("${baseUrl}/api/config", JSONObject()) { data, success, errorMsg, _ ->
-            if (epoch != loadEpoch || serverBase != baseUrl || editDeviceId.isNotEmpty() || !ctx.isAdminAccessCurrent(access, token)) return@requestGet
-            if (success) {
+        rpcCall(ctx, "${baseUrl}/api/config", "GET", null) { ok, data, _, errorMsg ->
+            if (epoch != loadEpoch || serverBase != baseUrl || editDeviceId.isNotEmpty() || !ctx.isAdminAccessCurrent(access, token)) return@rpcCall
+            if (ok) {
                 fill(data)
                 refreshNodeTests(ctx)
                 loadVoices(ctx, baseUrl)
@@ -72,12 +72,12 @@ internal class ConfigFormActions(private val form: ConfigFormState, private val 
         val id = editDeviceId
         val access = ctx.adminAccessRevision()
         val token = ctx.adminRequestToken()
-        network(ctx).requestGet("${baseUrl}/api/config", JSONObject()) { data, success, errorMsg, _ ->
-            if (epoch != loadEpoch || serverBase != baseUrl || editDeviceId != id || !ctx.isAdminAccessCurrent(access, token)) return@requestGet
-            if (!success) {
+        rpcCall(ctx, "${baseUrl}/api/config", "GET", null) { ok, data, _, errorMsg ->
+            if (epoch != loadEpoch || serverBase != baseUrl || editDeviceId != id || !ctx.isAdminAccessCurrent(access, token)) return@rpcCall
+            if (!ok) {
                 statusMsg = "加载失败: $errorMsg"
                 statusLevel = "error"
-                return@requestGet
+                return@rpcCall
             }
             fill(data)
             refreshNodeTests(ctx)
@@ -86,10 +86,10 @@ internal class ConfigFormActions(private val form: ConfigFormState, private val 
             schema.load(ctx, baseUrl)
             // 全局基线快照（必须在套用 overlay 之前抓）
             deviceBaseline = buildOverlayDraft()
-            network(ctx).requestGet("${baseUrl}/api/devices/$id/overlay", JSONObject()) { odata, osuccess, oerr, _ ->
-                if (epoch != loadEpoch || serverBase != baseUrl || editDeviceId != id || !ctx.isAdminAccessCurrent(access, token)) return@requestGet
+            rpcCall(ctx, "${baseUrl}/api/devices/$id/overlay", "GET", null) { osuccess, odata, _, oerr ->
+                if (epoch != loadEpoch || serverBase != baseUrl || editDeviceId != id || !ctx.isAdminAccessCurrent(access, token)) return@rpcCall
                 if (osuccess) {
-                    val overlay = odata?.optJSONObject("overlay")
+                    val overlay = odata.optJSONObject("overlay")
                     val has = overlay != null && overlay.length() > 0
                     if (has) fill(overlay!!) // overlay 只含白名单字段 → fill 缺键保留当前（全局）值
                     conflict = false
@@ -128,12 +128,9 @@ internal class ConfigFormActions(private val form: ConfigFormState, private val 
         val baseUrl = serverBase
         val access = ctx.adminAccessRevision()
         val token = ctx.adminRequestToken()
-        val headers = ctx.adminRequestHeaders()
-        network(ctx).httpRequest("${baseUrl}/api/devices/$id/overlay/delete", true, JSONObject(), headers) { data, success, errorMsg, resp ->
-            if (epoch != loadEpoch || serverBase != baseUrl || editDeviceId != id || !ctx.isAdminAccessCurrent(access, token)) return@httpRequest
-            val code = resp.statusCode
-            val serverMsg = data?.optString("message", "") ?: ""
-            val ok = success && (code == null || code in 200..299)
+        rpcCall(ctx, "${baseUrl}/api/devices/$id/overlay/delete", "POST", JSONObject()) { ok, data, code, errorMsg ->
+            if (epoch != loadEpoch || serverBase != baseUrl || editDeviceId != id || !ctx.isAdminAccessCurrent(access, token)) return@rpcCall
+            val serverMsg = data.optString("message", "")
             val msg = if (ok) {
                 serverMsg.ifEmpty { "已清除设备 $id 的个性化配置（恢复使用全局配置）" }
             } else {
@@ -187,21 +184,15 @@ internal class ConfigFormActions(private val form: ConfigFormState, private val 
         val body = candidate
         val workflowSnapshot = workflow.bindings.toList()
         val workflowChanged = workflow.dirty
-        // ⚠️ 必须显式带 Content-Type: application/json：
-        // Kuikly 的 requestPost 默认 headers=null，原生 KRHttpRequestTool 在非 JSON
-        // Content-Type 下会把 body 编码成 form-urlencoded —— 服务端 Json<Config> 提取器
-        // 直接 415（实测报 "Expected request with `Content-Type: application/json`"，
-        // macApp 表现为「保存配置」失败）。同时按 HTTP 状态码判定成功：
-        // 传输层 success 且 statusCode 非 2xx（如 415/400）时给出明确错误。
-        val headers = ctx.adminRequestHeaders()
-        network(ctx).httpRequest("${baseUrl}/api/config", true, body, headers) { data, success, errorMsg, resp ->
-            if (epoch != loadEpoch || serverBase != baseUrl || editDeviceId != device || !ctx.isAdminAccessCurrent(access, token)) return@httpRequest
+        // 走 WS RPC：服务端帧层自动带 Content-Type: application/json（历史踩坑见
+        // AdminRealtime rpc 契约），body 编码口径与 REST 完全一致，无 form-urlencoded 风险。
+        rpcCall(ctx, "${baseUrl}/api/config", "POST", body) { ok, data, code, errorMsg ->
+            if (epoch != loadEpoch || serverBase != baseUrl || editDeviceId != device || !ctx.isAdminAccessCurrent(access, token)) return@rpcCall
             saving = false
-            val code = resp.statusCode
             // 服务端返回 JSON {ok, message, config_path}：优先透传 message（含**实际写入路径**
             // 与持久化告警）——"配置怎么没生效/丢哪了"直接可见。
-            val serverMsg = data?.optString("message", "") ?: ""
-            if (success && (code == null || code in 200..299)) {
+            val serverMsg = data.optString("message", "")
+            if (ok) {
                 dirty = false
                 conflict = false
                 lastSavedAt = "已保存"
@@ -210,21 +201,21 @@ internal class ConfigFormActions(private val form: ConfigFormState, private val 
                     kotlinx.serialization.json.Json.parseToJsonElement(body.toString()) as kotlinx.serialization.json.JsonObject,
                     kotlinx.serialization.json.Json.parseToJsonElement(buildConfigDraft().toString()) as kotlinx.serialization.json.JsonObject,
                 ).none { it != "expected_revision" }
-                revision = data?.optString("revision", revision) ?: revision
+                revision = data.optString("revision", revision)
                 modeDraft.saved(body)
                 if (workflowChanged) workflow.markSaved(workflowSnapshot)
                 dirty = !stillMatchesRequest || workflow.dirty
                 refreshNodeTests(ctx)
                 // 三档生效文案由**服务端**判定（字段级 hot 取最严格，见 docs §5.4-6）：
                 // 客户端只做翻译，避免"说立即生效、其实要重启"这类误导。
-                val hotText = when (data?.optString("hot", "") ?: "") {
+                val hotText = when (data.optString("hot", "")) {
                     "live" -> "已保存并立即生效"
                     "next_session" -> "已保存，新会话生效"
                     "restart_only" -> "已保存，下次启动生效"
                     else -> ""
                 }
                 // 改动影响高亮：把全局 hot 投影到配置 section 头部（仅确有非即时影响时才提示）
-                saveImpactNote = when (data?.optString("hot", "") ?: "") {
+                saveImpactNote = when (data.optString("hot", "")) {
                     "next_session" -> "本次改动需：新会话生效"
                     "restart_only" -> "本次改动需：重启 server 生效"
                     else -> ""
@@ -278,13 +269,11 @@ internal class ConfigFormActions(private val form: ConfigFormState, private val 
         val clear = diff.length() == 0
         val url = "${baseUrl}/api/devices/$id/overlay" + if (clear) "/delete" else ""
         val body = if (clear) JSONObject() else diff
-        val headers = ctx.adminRequestHeaders()
-        network(ctx).httpRequest(url, true, body, headers) { data, success, errorMsg, resp ->
-            if (epoch != loadEpoch || serverBase != baseUrl || editDeviceId != id || !ctx.isAdminAccessCurrent(access, token)) return@httpRequest
+        rpcCall(ctx, url, "POST", body) { ok, data, code, errorMsg ->
+            if (epoch != loadEpoch || serverBase != baseUrl || editDeviceId != id || !ctx.isAdminAccessCurrent(access, token)) return@rpcCall
             saving = false
-            val code = resp.statusCode
-            val serverMsg = data?.optString("message", "") ?: ""
-            if (success && (code == null || code in 200..299)) {
+            val serverMsg = data.optString("message", "")
+            if (ok) {
                 dirty = changedConfigPaths(
                     kotlinx.serialization.json.Json.parseToJsonElement(diff.toString()) as kotlinx.serialization.json.JsonObject,
                     kotlinx.serialization.json.Json.parseToJsonElement(computeOverlayDraftDiff(deviceBaseline).toString()) as kotlinx.serialization.json.JsonObject,
@@ -317,10 +306,10 @@ internal class ConfigFormActions(private val form: ConfigFormState, private val 
 
     /** 拉取预设名列表（GET /api/config/presets；失败静默，列表保持原样）。 */
     fun loadPresets(ctx: Pager, baseUrl: String = ""): Unit = with(form) {
-        network(ctx).requestGet("${baseUrl}/api/config/presets", JSONObject()) { data, success, _, _ ->
-            if (!success) return@requestGet
+        rpcCall(ctx, "${baseUrl}/api/config/presets", "GET", null) { ok, data, _, _ ->
+            if (!ok) return@rpcCall
             presetNames.clear()
-            val arr = data?.optJSONArray("presets") ?: return@requestGet
+            val arr = data.optJSONArray("presets") ?: return@rpcCall
             for (i in 0 until arr.length()) {
                 val n = arr.optString(i) ?: ""
                 if (n.isNotEmpty()) presetNames.add(n)
@@ -338,12 +327,10 @@ internal class ConfigFormActions(private val form: ConfigFormState, private val 
         presetBusy = true
         presetMsg = ""
         val body = JSONObject().apply { put("name", name) }
-        val headers = JSONObject().apply { put("Content-Type", "application/json") }
-        network(ctx).httpRequest("${baseUrl}/api/config/presets", true, body, headers) { data, success, errorMsg, resp ->
+        rpcCall(ctx, "${baseUrl}/api/config/presets", "POST", body) { ok, data, code, errorMsg ->
             presetBusy = false
-            val code = resp.statusCode
-            val serverMsg = data?.optString("message", "") ?: ""
-            if (success && (code == null || code in 200..299)) {
+            val serverMsg = data.optString("message", "")
+            if (ok) {
                 presetMsg = serverMsg.ifEmpty { "已把当前配置保存为预设「$name」" }
                 presetNameDraft = ""
                 loadPresets(ctx, baseUrl)
@@ -357,12 +344,10 @@ internal class ConfigFormActions(private val form: ConfigFormState, private val 
     fun applyPreset(ctx: Pager, baseUrl: String = "", name: String): Unit = with(form) {
         presetBusy = true
         presetMsg = ""
-        val headers = JSONObject().apply { put("Content-Type", "application/json") }
-        network(ctx).httpRequest("${baseUrl}/api/config/presets/$name/apply", true, JSONObject(), headers) { data, success, errorMsg, resp ->
+        rpcCall(ctx, "${baseUrl}/api/config/presets/$name/apply", "POST", JSONObject()) { ok, data, code, errorMsg ->
             presetBusy = false
-            val code = resp.statusCode
-            val serverMsg = data?.optString("message", "") ?: ""
-            if (success && (code == null || code in 200..299)) {
+            val serverMsg = data.optString("message", "")
+            if (ok) {
                 presetMsg = serverMsg.ifEmpty { "已应用预设「$name」（新会话生效）" }
                 // 全局配置已被预设覆盖：重载表单（预设仅作用于全局；设备目标下预设卡不显示）
                 load(ctx, baseUrl)
@@ -376,11 +361,10 @@ internal class ConfigFormActions(private val form: ConfigFormState, private val 
     fun deletePreset(ctx: Pager, baseUrl: String = "", name: String): Unit = with(form) {
         presetBusy = true
         presetMsg = ""
-        network(ctx).requestPost("${baseUrl}/api/config/presets/$name/delete", JSONObject()) { data, success, errorMsg, resp ->
+        rpcCall(ctx, "${baseUrl}/api/config/presets/$name/delete", "POST", JSONObject()) { ok, data, code, errorMsg ->
             presetBusy = false
-            val code = resp.statusCode
-            val serverMsg = data?.optString("message", "") ?: ""
-            if (success && (code == null || code in 200..299)) {
+            val serverMsg = data.optString("message", "")
+            if (ok) {
                 presetMsg = serverMsg.ifEmpty { "已删除预设「$name」" }
                 loadPresets(ctx, baseUrl)
             } else {

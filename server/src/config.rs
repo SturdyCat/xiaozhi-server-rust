@@ -36,6 +36,7 @@ use serde::{Deserialize, Serialize};
 // 引擎子配置段随插件走（定义在各插件 mod.rs），此处转发以维持 `crate::config::*` 路径稳定：
 pub use crate::device::echomuse::EchomuseConfig;
 pub use crate::device::esp_home::EspHomeConfig;
+pub use crate::device::tuya::TuyaConfig;
 pub use crate::plugins::aiui::AiuiConfig;
 pub use crate::plugins::asr::AsrConfig;
 pub use crate::plugins::command::CommandConfig;
@@ -46,6 +47,7 @@ pub use crate::plugins::soul::SoulConfig;
 pub use crate::plugins::tts::TtsConfig;
 pub use crate::plugins::vad::VadConfig;
 pub use crate::plugins::wakeup::WakeConfig;
+pub use crate::plugins::weather::WeatherConfig;
 
 /// 标准行为默认值的版本化对齐（存量配置迁移，见 `config/defaults.rs`）。
 pub mod defaults;
@@ -179,8 +181,17 @@ pub struct Config {
     /// **默认关闭**（可选模块，需 `--features esp_home` 编译 + `enabled=true` 才监听）。
     #[serde(default)]
     pub esp_home: EspHomeConfig,
+    /// Tuya IoT 设备集成（`[tuya]`）：涂鸦云凭证 + 同步周期。**全部热生效，无需重启**。
+    /// 云侧仅做目录同步（含 local_key）；发现与控制纯局域网（UDP 6666/6667/7000 +
+    /// TCP 6668）。`access_secret` 只写不读（API 永不回显）。默认开启（无凭证时
+    /// 管理面可见、仅同步报"凭证未配置"，零云请求零局域网副作用）。
+    #[serde(default)]
+    pub tuya: TuyaConfig,
     #[serde(default)]
     pub playback: PlaybackConfig,
+    /// 天气预报（`[weather]`）：NMC 国家气象中心数据源与缓存配置。默认即可工作。
+    #[serde(default)]
+    pub weather: WeatherConfig,
     /// Versioned plugin workflow projection. Missing/invalid workflow uses the
     /// built-in plan so legacy databases retain the original pipeline.
     #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
@@ -471,7 +482,9 @@ impl Default for Config {
             wakeup: WakeConfig::default(),
             echomuse: EchomuseConfig::default(),
             esp_home: EspHomeConfig::default(),
+            tuya: TuyaConfig::default(),
             playback: PlaybackConfig::default(),
+            weather: WeatherConfig::default(),
             workflow: serde_json::Value::Null,
         };
         c.normalize();
@@ -499,6 +512,7 @@ impl Config {
         self.wakeup.normalize();
         self.echomuse.normalize();
         self.esp_home.normalize();
+        self.tuya.normalize();
     }
 
     /// 是否处于「真实音频模式」：`sherpa` feature（唯一路径，无 mock）。

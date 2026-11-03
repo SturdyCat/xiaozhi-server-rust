@@ -58,3 +58,7 @@ pub mod soul;
 pub mod tts;
 pub mod vad;
 pub mod wakeup;
+/// 天气预报能力（NMC 国家气象中心，纯 Rust 复刻；持有 reqwest 客户端与缓存）。
+pub mod weather;
+/// 服务器出口 IP 默认定位（启动期解析，仅国内写入）。
+pub mod geo;

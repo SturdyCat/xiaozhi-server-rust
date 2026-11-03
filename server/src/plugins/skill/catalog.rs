@@ -2,12 +2,12 @@
 
 use super::{slot_names, SkillAction};
 use crate::plugins::command::CommandConfig;
-use crate::plugins::nlu::{ActionDef, IntentDef, NluConfig};
+use crate::plugins::nlu::{ActionDef, Domain, IntentDef, NluConfig};
 use anyhow::{bail, Context, Result};
 use std::collections::BTreeSet;
 
 /// 不注入隐藏内置技能；默认 JSON 只在首次缺省配置中播种。
-/// command 仅提供 end_session 的训练样本，不执行关键词匹配。
+/// command 词表 = 设备域技能 `end_session`（断开对话）的训练样本来源，不执行关键词匹配。
 pub fn effective_catalog(command: &CommandConfig, nlu: &NluConfig) -> Result<NluConfig> {
     validate(command, nlu)?;
     let mut catalog = nlu.clone();
@@ -23,6 +23,8 @@ pub fn effective_catalog(command: &CommandConfig, nlu: &NluConfig) -> Result<Nlu
                 templates.push(keyword.to_string());
             }
         }
+        // end_session 是保留训练标签，只能在这里注入（禁止出现在 [nlu].intents）；
+        // 它作用于当前会话/设备，按执行者归设备域。
         catalog.intents.push(IntentDef {
             name: "end_session".into(),
             templates,
@@ -31,6 +33,7 @@ pub fn effective_catalog(command: &CommandConfig, nlu: &NluConfig) -> Result<Nlu
                 reply: command.reply.clone(),
                 ..Default::default()
             },
+            domain: Domain::Device,
         });
     }
     catalog.enabled = !catalog.intents.is_empty();

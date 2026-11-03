@@ -9,7 +9,7 @@
 - 训练脚本通过 `include_str!` 编译进服务，交给依赖镜像内 `python -c` 执行；不执行数据卷中的脚本，不执行用户输入代码。更新训练逻辑需发布新服务。依赖镜像只在缺失时拉取，然后 inspect 并固定 image id；日志不得打印整个脚本 argv。
 - 预训练底座**唯一**：`minirbt-h288`。底座不是可选维度——`BuildRequest` 用 `deny_unknown_fields`，多传一个 `base_model` 直接 400；服务端只认 `base.rs` 的 `BASE_MODEL`。`train.py` 的 `BASES` 表与 Dockerfile 的 `ENV MODEL_NAME=` 必须与它**逐字段一致**（`tests.rs` 用 `include_str!` 解析源码锁定 hub/lr/epochs），否则日志说一套、实际训另一套。
 - 训练输入共用 `plugins::skill::effective_catalog(command, nlu)`：保存态技能与启用的 command 词表（`end_session`）统一成唯一目录。默认技能是配置种子，显式清空不隐藏补回；新训练标签就是目录名，新构建清空外部旧模型的 `bert_label_map` 为同名映射。
-- 成功只表示 Docker 退出成功、三件产物齐全、标签顺序严格等于有效目录顺序加 `other`、文件哈希已记录；**不代表模型准确率合格**。手动构建不自动启用；首启自举按 `NLU_BOOTSTRAP` 决定（默认 `adopt`：冒烟自检通过才自动采用；`build-only` 只训不启用；`off` 关闭）。冒烟只证明"没坏"，不构成效果验收，文案禁止出现"验收通过/准确率/可用"。新 manifest 记录 `catalog_source=effective_command_nlu_v1`；旧 manifest 缺该字段可正常读取，始终使用原快照与原 labels，不伪造新增 `end_session` 标签。
+- 成功只表示 Docker 退出成功、三件产物齐全、标签顺序严格等于有效目录顺序加 `other`、文件哈希已记录；**不代表模型准确率合格**。手动构建不自动启用；首启自举按 `NLU_BOOTSTRAP` 决定（默认 `adopt`：冒烟自检通过才自动采用；`build-only` 只训不启用；`off` 关闭）。冒烟只证明"没坏"，不构成效果验收，文案禁止出现"验收通过/准确率/可用"。新 manifest 记录 `catalog_source=effective_command_nlu_v2`（v2：有效目录的技能结构带 `domain` 控制域字段，`end_session` 注入为设备域；domain 不进训练输入，trainer 零改动）；旧 manifest 缺该字段或记录 v1 可正常读取，始终使用原快照与原 labels，不伪造新增 `end_session` 标签。
 - `manifest.json` 保存 build id、来源 revision、训练输入哈希、依赖镜像 tag/id、可信脚本 SHA-256、标签清单、模型/分词器/标签文件身份和 NLU 推理快照。公开 artifact 不返回整份 NLU 快照。
 - 状态与日志 job 是进程态，重启后回 idle；成功清单持久化，已知 build id 的候选仍可测试。尚未实现历史版本列表/自动清理。
 - 候选测试只接受 `build_id/text/expected_intent?`，不接受任意模型路径或配置补丁；只查受管版本目录，拒绝非规范 UUID、目录或文件符号链接、越界路径、缺清单、哈希变化和标签变化。

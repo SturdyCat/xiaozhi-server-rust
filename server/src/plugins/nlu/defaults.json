@@ -2,6 +2,7 @@
   "intents": [
     {
       "name": "reminder_countdown",
+      "domain": "server",
       "templates": ["{delay}后提醒我{task}", "过{delay}提醒我{task}", "{delay}之后提醒我{task}"],
       "action": {
         "kind": "plan",
@@ -14,6 +15,7 @@
     },
     {
       "name": "reminder_schedule",
+      "domain": "server",
       "templates": ["{time}提醒我{task}", "在{time}提醒我{task}"],
       "action": {
         "kind": "plan",
@@ -26,6 +28,7 @@
     },
     {
       "name": "reminder_repeat",
+      "domain": "server",
       "templates": ["每隔{interval}提醒我{task}", "间隔{interval}提醒我{task}"],
       "action": {
         "kind": "plan",
@@ -38,6 +41,7 @@
     },
     {
       "name": "reminder_daily",
+      "domain": "server",
       "templates": ["每天{daily_time}提醒我{task}", "每日{daily_time}提醒我{task}"],
       "action": {
         "kind": "plan",
@@ -50,6 +54,7 @@
     },
     {
       "name": "reminder_workdays",
+      "domain": "server",
       "templates": ["每个工作日{daily_time}提醒我{task}", "每工作日{daily_time}提醒我{task}", "工作日{daily_time}提醒我{task}"],
       "action": {
         "kind": "plan",
@@ -62,6 +67,7 @@
     },
     {
       "name": "reminder_weekly",
+      "domain": "server",
       "templates": ["每周{weekday}的{daily_time}提醒我{task}", "每周{weekday}{daily_time}提醒我{task}", "每星期{weekday}的{daily_time}提醒我{task}"],
       "action": {
         "kind": "plan",
@@ -74,6 +80,7 @@
     },
     {
       "name": "reminder_monthly",
+      "domain": "server",
       "templates": ["每月{day}日{daily_time}提醒我{task}", "每月{day}号{daily_time}提醒我{task}"],
       "action": {
         "kind": "plan",
@@ -86,6 +93,7 @@
     },
     {
       "name": "reminder_yearly",
+      "domain": "server",
       "templates": ["每年{month}月{day}日{daily_time}提醒我{task}", "每年{month}月{day}号{daily_time}提醒我{task}"],
       "action": {
         "kind": "plan",
@@ -98,6 +106,7 @@
     },
     {
       "name": "reminder_hourly",
+      "domain": "server",
       "templates": ["每小时的{minute}分提醒我{task}", "每小时{minute}分提醒我{task}"],
       "action": {
         "kind": "plan",
@@ -110,6 +119,7 @@
     },
     {
       "name": "reminder_list",
+      "domain": "server",
       "templates": ["查询我的提醒", "我有哪些提醒"],
       "action": {
         "kind": "plan",
@@ -122,12 +132,82 @@
     },
     {
       "name": "reminder_cancel",
+      "domain": "server",
       "templates": ["取消提醒{task}", "取消{task}的提醒"],
       "action": {
         "kind": "plan",
         "reply": "",
         "plan": {"conditions": [], "steps": [
           {"api": "tasks.cancel", "args": {"text": "{{slots.task}}"}},
+          {"api": "replies.say", "args": {"text": "{{steps.0.speech}}"}}
+        ]}
+      }
+    },
+    {
+      "name": "device_volume_set",
+      "domain": "device",
+      "templates": ["音量调到{volume}", "把音量设为{volume}", "把音量调成{volume}"],
+      "action": {
+        "kind": "mcp:self.audio_speaker.set_volume",
+        "reply": ""
+      }
+    },
+    {
+      "name": "device_mute",
+      "domain": "device",
+      "templates": ["静音", "把设备静音", "关声音"],
+      "action": {
+        "kind": "mcp:self.audio_speaker.set_mute",
+        "reply": ""
+      }
+    },
+    {
+      "name": "device_pause_playback",
+      "domain": "device",
+      "templates": ["暂停播放", "暂停音乐", "先停一下"],
+      "action": {
+        "kind": "mcp:self.audio_player.pause",
+        "reply": ""
+      }
+    },
+    {
+      "name": "weather_query",
+      "domain": "server",
+      "templates": [
+        "{city}天气", "{range}天气", "{city}的天气", "{range}的天气",
+        "查天气", "天气怎么样", "查一下天气", "今天天气", "明天天气", "后天天气"
+      ],
+      "action": {
+        "kind": "plan",
+        "reply": "",
+        "plan": {"conditions": [], "steps": [
+          {"api": "weather.forecast", "args": {"city": "{{slots.city}}", "range": "{{slots.range}}"}},
+          {"api": "replies.say", "args": {"text": "{{steps.0.speech}}"}}
+        ]}
+      }
+    },
+    {
+      "name": "iot_device_on",
+      "domain": "iot",
+      "templates": ["打开{device_name}", "把{device_name}打开", "开一下{device_name}", "我要开{device_name}"],
+      "action": {
+        "kind": "plan",
+        "reply": "",
+        "plan": {"conditions": [], "steps": [
+          {"api": "tuya.control", "args": {"name": "{{slots.device_name}}", "action": "on"}},
+          {"api": "replies.say", "args": {"text": "{{steps.0.speech}}"}}
+        ]}
+      }
+    },
+    {
+      "name": "iot_device_off",
+      "domain": "iot",
+      "templates": ["关闭{device_name}", "把{device_name}关了", "关掉{device_name}", "把{device_name}关闭"],
+      "action": {
+        "kind": "plan",
+        "reply": "",
+        "plan": {"conditions": [], "steps": [
+          {"api": "tuya.control", "args": {"name": "{{slots.device_name}}", "action": "off"}},
           {"api": "replies.say", "args": {"text": "{{steps.0.speech}}"}}
         ]}
       }
@@ -142,6 +222,10 @@
     {"name": "weekday", "values": ["一", "二", "三", "四", "五", "六", "七", "日", "天", "1", "2", "3", "4", "5", "6", "7"], "optional": false},
     {"name": "day", "values": [], "optional": false},
     {"name": "month", "values": [], "optional": false},
-    {"name": "minute", "values": [], "optional": false}
+    {"name": "minute", "values": [], "optional": false},
+    {"name": "volume", "values": [], "optional": false},
+    {"name": "city", "values": [], "optional": true},
+    {"name": "range", "values": [], "optional": true},
+    {"name": "device_name", "values": [], "optional": false}
   ]
 }

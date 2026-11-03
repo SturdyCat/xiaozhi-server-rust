@@ -22,7 +22,7 @@ esp_home = ["dep:esphome-native-api"]
 [dependencies]
 axum = { version = "0.8.4", features = ["ws"] }
 tokio = { version = "1.44.2", features = ["full"] }
-reqwest = { version = "0.12.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+reqwest = { version = "0.12.12", default-features = false, features = ["json", "rustls-tls", "stream", "blocking"] }
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
 toml = "0.8.20"
@@ -91,6 +91,13 @@ httpdate = "1.0.3"
 rustls = { version = "0.23.18", default-features = false, features = ["std", "ring"] }
 webpki-roots = "0.26"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
+# Tuya IoT 设备集成（`[tuya]`）：局域网发现（UDP 6666/6667/7000）+ TCP 6668 控制，
+# 协议 3.1–3.5 + device22（含 3.4/3.5 会话密钥握手）由库吸收。只用 **async facade**
+#（`rustuya::Device`/`DeviceBuilder`/`Scanner`）——`sync::Device` 在 tokio runtime 内
+# 会 panic（blocking_send），服务端一律禁用（见 device/tuya/lan.rs 模块注释）。
+# 精确钉版（=0.3.0）：涂鸦局域网协议实现版本敏感（3.4/3.5 会话握手），禁 caret 漂移。
+rustuya = "=0.3.0"
+
 # 仅用于从官方钉版的 onnxruntime-android AAR（zip 容器）里解出 armv7 的
 # libonnxruntime.so（EchoMuse 设备语音门 dlopen 的运行时）。只开 deflate、
 # 关掉加密/其它压缩/时间特性，把依赖树压到最小。

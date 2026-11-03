@@ -1,10 +1,14 @@
 # NLU 训练依赖清单（专用训练镜像构建期安装，见 tools/nlu-trainer/Dockerfile）。
-# torch 走 CPU 轮子仓库（extra index，体积远小于 CUDA 版）；主 index 用清华 PyPI 镜像。
+# ⚠️ torch 不在本文件：CPU 版必须从 pytorch 官方 CPU 轮子仓库单独装
+#   （见 Dockerfile 的 --index-url https://download.pytorch.org/whl/cpu），
+#   否则主索引（阿里云 PyPI 镜像）会命中【CUDA 版】torch，镜像凭空多出 ~1.5GB+。
+# 其余依赖主索引用阿里云 PyPI（全量包；ACR 云端构建访问清华源会拿到空列表，
+#   阿里源与 ACR 同云最稳）；transformers 等不在 cpu 仓库，靠 extra-index 回退到阿里云。
 # transformers 上限 4.43：optimum 1.x 依赖 transformers<4.44，不锁上限会 ResolutionImpossible。
-torch
 transformers>=4.40,<4.44
-datasets
 accelerate
 optimum[onnxruntime]>=1.19
 onnxruntime
 sentencepiece
+# 注：datasets 已移除——train.py 只用 Dataset.from_dict + .select 做内存容器，
+#   改用「批量分词成 list[dict] + 下标取子集」等价替代，省掉 pyarrow/pandas 等重依赖。

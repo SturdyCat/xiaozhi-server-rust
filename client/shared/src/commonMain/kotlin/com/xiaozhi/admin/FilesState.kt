@@ -15,8 +15,9 @@ import com.xiaozhi.admin.state.stateListOf
  * 设计口径与 [OtaState]（同为"只读清单 + 写动作"）一致：
  * - **失败就地显示**：清单加载失败 → [loadError] +「刷新」，不弹 toast；写动作（新建/
  *   上传/删除）结果经 [upload] / [mkdir] / [remove] 的回调走页面顶部 toast；
- * - **鉴权**：GET 把 token 编进查询串（[echoMuseAuthenticatedUrl]），POST 走 Bearer 头
- *   （[echoMuseHeaders]）——与 EchoMuse 端点同一约定；token/base 由 [configureAccess] 传入；
+ * - **鉴权**：JSON API 走管理台 WS RPC（鉴权在连接升级时完成，token 由 [configureAccess]
+ *   传入）；上传/下载等**二进制通道**保留 HTTP（GET 把 token 编进查询串
+ *   [echoMuseAuthenticatedUrl]）——与 EchoMuse 端点同一约定；
  * - **代际守卫**：所有请求回调按 [seq] 丢弃迟到回包（切换服务器/快速换目录后，旧目录的
  *   清单不会覆盖新目录；迟到的上传结果不会误报）；
  * - **删除二次确认**：任何删除（含目录，服务端递归）都要先 [armRemove] 武装
@@ -265,7 +266,7 @@ class FilesState(private val scope: PagerScope) {
         }
     }
 
-    /** JSON POST 公共通道（Bearer 鉴权 + seq 守卫），口径同 EchoMuseState.post。 */
+    /** JSON POST 公共通道（WS RPC + seq 守卫），口径同 EchoMuseState.post。 */
     private fun postJson(
         ctx: Pager,
         url: String,
@@ -273,14 +274,13 @@ class FilesState(private val scope: PagerScope) {
         onDone: (ok: Boolean, code: Int?, reason: String) -> Unit,
     ) {
         val s = ++seq
-        network(ctx).httpRequest(url, true, body, echoMuseHeaders(token)) { data, success, errorMsg, resp ->
-            if (s != seq) return@httpRequest
-            val code = resp.statusCode
-            val ok = success && (code == null || code in 200..299)
+        val (base, path) = splitAdminUrl(url)
+        adminTransport.rpc(ctx, base, token, "POST", path, body) { ok, data, status, message ->
+            if (s != seq) return@rpc
             val reason = data.text("error").takeIf { it.isNotEmpty() }
                 ?: data.text("message").takeIf { it.isNotEmpty() }
-                ?: errorMsg
-            onDone(ok, code, reason)
+                ?: message
+            onDone(ok, status.takeIf { it > 0 }, reason)
         }
     }
 }

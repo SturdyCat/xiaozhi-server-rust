@@ -40,19 +40,44 @@ import com.xiaozhi.admin.state.stateListOf
  * 全 admin 包共用的 Module 获取入口（原为 OpsState.kt 文件级 private，因 7 个 State 类各持
  * 一份逐字相同的实现而统一至此）：`network(ctx).requestGet(...)` 即可发起请求。
  * 各文件同包免 import；OtaState 的 token/authQuery 逻辑与 [getJson] 不同型，仍在类内自持。
+ *
+ * ⚠️ 管理台 API 通讯**始终走 WS**（大文件传输除外）：直连 HTTP 的 `requestGet`/
+ * `requestPost` 仅剩大文件上传/下载等场景，常规 JSON API 一律经 [adminTransport]。
  */
 internal fun network(ctx: Pager): NetworkModule = ctx.acquireModule(NetworkModule.MODULE_NAME)
 
 /**
+ * 管理台 WS RPC 共享传输层（包级单例）：`AdminRealtime` 按 base|token 分组共享连接，
+ * 跨页面复用同一条 WS（订阅与 RPC 混用同组）。管理台与服务器之间的 JSON API 全部经它。
+ */
+internal val adminTransport = AdminRealtime()
+
+/**
+ * 从完整 url 剥出 `(base, path)`：path 取 `/api/` 起始段（RPC 服务端仅接受 API 前缀；
+ * path 可带查询参数，axum 侧按完整 URI 匹配）。web 同域时 base 为空串。
+ */
+internal fun splitAdminUrl(url: String): Pair<String, String> {
+    val idx = url.indexOf("/api/")
+    if (idx < 0) return "" to url
+    return url.substring(0, idx) to url.substring(idx)
+}
+
+/**
+ * 管理台页面的鉴权 token（URL 参数带入，与 [AdminPage.refreshAll] 同源）。
+ * token 为空 = 服务端未设管理令牌。
+ */
+internal fun adminToken(ctx: Pager): String = ctx.pagerData.params.optString("token", "")
+
+/**
  * 只读端点的通用 GET：成功回调 `onDone(true, data, "")`，失败回调 `onDone(false, data, 原因)`。
  *
- * 五个数据源共用同一套错误口径（HTTP 状态码 + 网络错误），避免各写一份后行为漂移
- * ——"有的页面失败有提示、有的页面永远转圈"正是这么来的。
+ * **走管理台 WS RPC**（[adminTransport]，`GET /api/admin/ws` 的 rpc 帧）：与服务端
+ * REST 路由同一批 handler（服务端 tower oneshot 复用），错误口径与 REST 逐字一致
+ * ——404 的成因说明由 [AdminRealtime] 的回执层给出（"端点不存在/未启用对应功能"），
+ * 非 HTTP 失败（断线/超时）reason 为可读中文。
  *
- * 404 单独加一句提示：服务端有若干端点**按设计**返回 404 而不是空列表（最典型是
- * `[echomuse].enabled=false` 时 `/api/echomuse/` 下的管理面接口全部 404，见
- * `device/echomuse/admin.rs`），光显示 "HTTP 404" 会被误读成"服务端挂了"。带上成因
- * 说明后，界面上的就地错误就能自解释是「未启用 / 版本过旧」而非故障。
+ * 五个数据源共用同一套错误口径，避免各写一份后行为漂移——"有的页面失败有提示、
+ * 有的页面永远转圈"正是这么来的。
  *
  * ⚠️ 注释里不要出现斜杠加星号的组合（Kotlin 块注释可嵌套，会吞掉后面整个文件）。
  */
@@ -61,17 +86,33 @@ internal fun getJson(
     url: String,
     onDone: (ok: Boolean, data: JSONObject, message: String) -> Unit,
 ) {
-    network(ctx).requestGet(url, JSONObject()) { data, success, errorMsg, resp ->
-        val code = resp.statusCode
-        val ok = success && (code == null || code in 200..299)
-        val reason = when {
-            ok -> ""
-            errorMsg.isNotEmpty() -> errorMsg
-            code == 404 -> "HTTP 404（该端点不存在，或服务端未启用对应功能）"
-            else -> "HTTP $code"
-        }
-        onDone(ok, data, reason)
+    val (base, path) = splitAdminUrl(url)
+    adminTransport.rpc(ctx, base, adminToken(ctx), "GET", path, null) { ok, data, _, message ->
+        onDone(ok, data, message)
     }
+}
+
+/**
+ * 通用 JSON RPC（GET/POST/PUT/DELETE）：[getJson] 的全方法版，供散点写操作
+ * （配置保存、preset、memory、EchoMuse、NLU、测试台等）从 `network(ctx).httpRequest`
+ * 切到 WS 用。口径与 REST 一致：`ok` = HTTP 2xx，`status` 透传状态码（404/405
+ * 语义保留），`message` = 可读失败原因（非 HTTP 失败 status=0）。
+ *
+ * @param body 仅写方法携带（服务端要求写方法必须带 JSON 对象 body，空对象 `{}` 也要传）；
+ *   GET 传 null。
+ * @param timeoutMs 本地超时（默认 30s）；长端点（NLU 模型测试、节点测试）传 60_000——
+ *   帧会带上服务端执行超时（本地 + 2s），无需服务端配合。
+ */
+internal fun rpcCall(
+    ctx: Pager,
+    url: String,
+    method: String,
+    body: JSONObject?,
+    timeoutMs: Int = RT_RPC_TIMEOUT_MS,
+    onDone: (ok: Boolean, data: JSONObject, status: Int, message: String) -> Unit,
+) {
+    val (base, path) = splitAdminUrl(url)
+    adminTransport.rpc(ctx, base, adminToken(ctx), method, path, body, timeoutMs, onDone)
 }
 
 /**
@@ -267,6 +308,60 @@ class StatsState(scope: PagerScope) : LoadableState(scope) {
     }
 }
 
+/**
+ * 服务器出口 IP 与地理信息（`GET /api/server/geo`，只读快照）。
+ *
+ * 服务端启动时解析一次出口 IP：仅**国内**出口写入默认地区（天气等定位功能的回退值）；
+ * 境外出口（翻墙/代理）**只展示不采用**。三种状态都在界面上说清：
+ *
+ * - `resolved && domestic`：IP + 地区 + 来源，并注明"已作为默认地区"；
+ * - `resolved && !domestic`：IP + 地区照常显示，但标注境外、未写入默认定位；
+ * - `!resolved`：显示服务端给的原因（[note]；空串 = 启动解析尚未完成）。
+ */
+class GeoState(scope: PagerScope) : LoadableState(scope) {
+
+    /** 服务端是否成功解析过出口 IP（含境外）。 */
+    var resolved by stateVar(false)
+
+    /** 是否为国内出口（仅 `true` 才写入了默认地区）。 */
+    var domestic by stateVar(false)
+
+    /** 出口 IP（境外解析成功时也会给出）。 */
+    var ip by stateVar("")
+
+    /** "国家 省 市" 拼接的地区文本（缺项自动省略）。 */
+    var region by stateVar("")
+
+    /** 数据来源（如 `myip.ipip.net`）。 */
+    var source by stateVar("")
+
+    /** 未成功定位的原因（`resolved=false` 时服务端给的解释；空串 = 尚未完成解析）。 */
+    var note by stateVar("")
+
+    /** 服务端下发的口径说明（展示原样，避免两端文案漂移）。 */
+    var scopeNote by stateVar("")
+
+    override fun endpoint(baseUrl: String): String = "$baseUrl/api/server/geo"
+
+    override val errorLabel: String = "出口定位加载失败"
+
+    override fun apply(data: JSONObject) {
+        resolved = data.optBoolean("resolved", false)
+        domestic = data.optBoolean("domestic", false)
+        ip = data.text("ip")
+        region = listOfNotNull(
+            data.text("country").ifEmpty { null },
+            data.text("province").ifEmpty { null },
+            data.text("city").ifEmpty { null },
+        ).joinToString(" ")
+        source = data.text("source")
+        note = data.text("note")
+        scopeNote = data.text("scope_note")
+        loaded = true
+        loadError = ""
+    }
+}
+
 // ============================================================
 // 设备
 // ============================================================
@@ -396,18 +491,18 @@ class DevicesState(scope: PagerScope) : LoadableState(scope) {
         injectBusy = true
         injectMsg = ""
         val body = JSONObject().apply { put("text", text) }
-        val headers = JSONObject().apply { put("Content-Type", "application/json") }
-        network(ctx).httpRequest("$base/api/devices/$deviceId/inject", true, body, headers) { data, success, errorMsg, resp ->
-            val ok = success && (resp.statusCode == null || resp.statusCode in 200..299)
-            val reason = data?.text("message")?.takeIf { it.isNotEmpty() } ?: (errorMsg ?: "")
+        adminTransport.rpc(
+            ctx, base, adminToken(ctx), "POST", "/api/devices/$deviceId/inject", body,
+        ) { ok, data, status, message ->
+            val reason = data.text("message").takeIf { it.isNotEmpty() } ?: message
             if (ok) {
                 injectDraft = ""
                 injectMsg = "✓ 已注入，设备正在走完整回复管线"
             } else {
-                injectMsg = when (resp.statusCode) {
+                injectMsg = when (status) {
                     404 -> "设备不在线：请先唤醒设备（建立会话）再注入"
                     409 -> reason.ifEmpty { "会话不支持注入或正忙，请稍后重试" }
-                    else -> "注入失败：${reason.ifEmpty { "HTTP ${resp.statusCode}" }}"
+                    else -> "注入失败：${reason.ifEmpty { "HTTP $status" }}"
                 }
             }
             injectBusy = false

@@ -275,7 +275,7 @@ pub(super) async fn run_build(
             .map(|i| i.name.clone())
             .chain(std::iter::once("other".into()))
             .collect(),
-        catalog_source: Some("effective_command_nlu_v1".into()),
+        catalog_source: Some("effective_command_nlu_v2".into()),
         base_model: Some(BASE_MODEL.name.to_string()),
         // 训练输入还没有产物：封版时刻由 training.rs 在三件套验收后打点。
         created_at: None,

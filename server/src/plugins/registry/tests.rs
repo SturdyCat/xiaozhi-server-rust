@@ -342,7 +342,13 @@ fn schema_json_shape() {
     assert!(ids.contains(&"server") && ids.contains(&"audio"), "{ids:?}");
     for s in app {
         assert!(s["hot_hint"].as_str().is_some_and(|h| !h.is_empty()), "{s}");
-        assert_ne!(s["hot"], "live", "应用级段不可能是「保存即生效」: {s}");
+        // 例外：`[tuya]` 全字段热生效（worker 每 tick 重读 config，凭证变更即丢缓存），
+        // 是唯一的「保存即生效」应用级段；其余段都是进程级/会话级参数。
+        if s["id"] == "tuya" {
+            assert_eq!(s["hot"], "live", "tuya 是唯一 live 的应用级段: {s}");
+        } else {
+            assert_ne!(s["hot"], "live", "应用级段不可能是「保存即生效」: {s}");
+        }
     }
 }
 

@@ -2,6 +2,7 @@ package com.xiaozhi.admin
 
 import androidx.compose.runtime.Composable
 import com.gearui.components.grid.Grid
+import com.tencent.kuikly.core.pager.Pager
 import com.xiaozhi.admin.kit.LocalAdminSpacing
 import com.xiaozhi.admin.kit.LocalAdminViewport
 
@@ -33,6 +34,7 @@ fun OpsOverviewPage(
     stats: StatsState,
     meta: PluginMetaState,
     health: EngineHealthState,
+    geo: GeoState,
     onJumpSection: (String) -> Unit,
 ) {
     val ctx = LocalAdminPagerOrThrow()
@@ -99,6 +101,11 @@ fun OpsOverviewPage(
             }
         }
 
+        // 服务器出口：出口 IP + 地理信息（`GET /api/server/geo`）。
+        // 服务端启动时解析一次：仅国内出口写入默认地区（天气等定位功能的回退值）；
+        // 境外出口只展示不采用——两种口径都必须在界面上说清，避免"为什么天气问不出城市"。
+        ServerGeoCard(geo, ctx)
+
         // 能力状态：复用既有卡片（数据源 /api/plugins），不在本页第二次实现
         CapabilityOverviewCard(meta)
 
@@ -107,6 +114,54 @@ fun OpsOverviewPage(
         }
         if (stats.version.isNotEmpty()) {
             HintLine("服务端版本 ${stats.version}")
+        }
+    }
+}
+
+/**
+ * 「服务器出口」卡：`GET /api/server/geo` 的投影。
+ *
+ * - 已解析：IP + 地区 + 来源；`domestic` 差异用一行口径区分（已作为默认地区 / 境外仅展示）；
+ * - 未解析：优先展示服务端原因（[GeoState.note]，如"境外出口"/"上游不可达"），
+ *   空串 = 启动解析尚未完成；
+ * - 首次加载失败 → 就地错误 + 「刷新」，不弹 toast（与能力总览同一口径）。
+ */
+@Composable
+private fun ServerGeoCard(geo: GeoState, ctx: Pager) {
+    LabeledCard(title = "服务器出口") {
+        val summary = when {
+            geo.resolved -> listOfNotNull(
+                geo.ip.takeIf { it.isNotEmpty() }?.let { "IP $it" },
+                geo.region.takeIf { it.isNotEmpty() },
+            ).joinToString(" · ").ifEmpty { "已解析（无地区信息）" }
+            geo.note.isNotEmpty() -> "未定位"
+            else -> "解析中…"
+        }
+        SectionSummaryRow(
+            summary = summary,
+            actionText = "刷新",
+            busy = geo.loading,
+            busyText = "刷新中…",
+            onAction = { geo.refresh(ctx) },
+        )
+        if (geo.loadError.isNotEmpty()) {
+            WarnLine(geo.loadError + "（确认服务端地址可达后点「刷新」）", error = true)
+        }
+        when {
+            geo.resolved && geo.region.isNotEmpty() -> {
+                HintLine("地区 ${geo.region} · 来源 ${geo.source.ifEmpty { "—" }}")
+                if (geo.domestic) {
+                    HintLine("已作为默认地区：天气等定位功能在未指定城市时使用")
+                } else {
+                    WarnLine("境外出口：仅展示，未写入默认定位（天气需显式指定城市）")
+                }
+            }
+            geo.resolved -> Unit // 解析成功但地区为空：摘要行已给出 IP，不再重复占行
+            geo.note.isNotEmpty() -> WarnLine(geo.note)
+            else -> HintLine("服务器启动后正在解析出口 IP，稍后点「刷新」")
+        }
+        if (geo.scopeNote.isNotEmpty()) {
+            HintLine(geo.scopeNote)
         }
     }
 }

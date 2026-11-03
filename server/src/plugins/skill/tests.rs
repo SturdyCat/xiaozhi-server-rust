@@ -35,11 +35,13 @@ fn fixture() -> (CommandConfig, NluConfig) {
                     reply: "好的".into(),
                     ..Default::default()
                 },
+                domain: crate::plugins::nlu::Domain::Device,
             },
             IntentDef {
                 name: "control_ac".into(),
                 templates: vec!["把{room}的空调{action}".into()],
                 action: Default::default(),
+                domain: crate::plugins::nlu::Domain::Device,
             },
             IntentDef {
                 name: "help".into(),
@@ -49,6 +51,7 @@ fn fixture() -> (CommandConfig, NluConfig) {
                     reply: "这里是指南".into(),
                     ..Default::default()
                 },
+                ..Default::default()
             },
         ],
         slots: vec![

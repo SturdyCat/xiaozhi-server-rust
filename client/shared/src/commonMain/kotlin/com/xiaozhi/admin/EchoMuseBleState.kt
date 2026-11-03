@@ -330,17 +330,20 @@ class EchoMuseBleState(scope: PagerScope) {
         confirmed = null
         if (strictIdentity && body != null) body.put("session_id", expectedSession)
         val suffix = if (body == null) "?session_id=${echoMuseUrlComponent(expectedSession)}" else ""
-        network(ctx).httpRequest(
+        // BLE 代理操作经设备串行执行可到 45s（rpc 帧自动带 47s 服务端执行超时）。
+        rpcCall(
+            ctx,
             "$base/api/echomuse/devices/${echoMuseUrlComponent(expectedDevice)}/$path$suffix",
-            body != null, body ?: JSONObject(), echoMuseHeaders(token), timeout = 45,
-        ) { data, success, errorMsg, response ->
+            if (body != null) "POST" else "GET",
+            body,
+            timeoutMs = 45_000,
+        ) { ok, data, code, errorMsg ->
             // Only this request may release its busy slot; a target edit does not cancel I/O.
-            if (activeSerial != serial) return@httpRequest
+            if (activeSerial != serial) return@rpcCall
             activeSerial = 0
             busy = ""
-            if (generation != requestGeneration || target != expectedDevice || sessionId != expectedSession) return@httpRequest
-            val code = response.statusCode
-            if (!success || (code != null && code !in 200..299)) {
+            if (generation != requestGeneration || target != expectedDevice || sessionId != expectedSession) return@rpcCall
+            if (!ok) {
                 error = when (code) {
                     401 -> "管理鉴权失败，请确认URL编码后的管理令牌"
                     403 -> "设备未批准或会话未认证，请刷新列表"
@@ -352,12 +355,12 @@ class EchoMuseBleState(scope: PagerScope) {
                     504 -> "BLE请求超时，未确认执行结果；先查询槽位/读回，勿盲目重复写入"
                     else -> "BLE请求失败 HTTP $code：${data.text("error").ifEmpty { errorMsg }}"
                 }
-                return@httpRequest
+                return@rpcCall
             }
             if (strictIdentity && !bleSameIdentity(expectedDevice, expectedSession, data.text("device_id"), data.text("session_id"))) {
                 clearOutputs()
                 error = "BLE响应设备/会话不匹配（含旧服务端缺字段）；已丢弃，请刷新列表后重试"
-                return@httpRequest
+                return@rpcCall
             }
             if (gattType != null) {
                 gattOutput = data.toString()
@@ -365,7 +368,7 @@ class EchoMuseBleState(scope: PagerScope) {
                 val expectedType = if (gattType == "slots") "slots" else "result"
                 if (data.text("t") != expectedType || !bleGattSucceeded(data.text("t"), ok)) {
                     error = "设备GATT失败：error=${field(data, "error")}；att=${field(data, "att")}；detail=${field(data, "detail")}"
-                    return@httpRequest
+                    return@rpcCall
                 }
             }
             done(data)

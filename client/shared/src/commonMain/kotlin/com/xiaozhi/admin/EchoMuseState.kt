@@ -533,7 +533,8 @@ class EchoMuseState(scope: Pager) {
     private fun displayName(deviceId: String): String =
         devices.firstOrNull { it.deviceId == deviceId }?.let { it.title } ?: deviceId
 
-    /** 全包共用的 JSON POST：成功回调 `onDone(true, code, "")`，失败回调 `onDone(false, code, 原因)`。`data` 为响应体。 */
+    /** 全包共用的 JSON POST：成功回调 `onDone(true, code, "")`，失败回调 `onDone(false, code, 原因)`。`data` 为响应体。
+     *  走管理台 WS RPC（鉴权在连接升级时完成，无需逐请求头）。 */
     private fun post(
         ctx: Pager,
         path: String,
@@ -541,15 +542,12 @@ class EchoMuseState(scope: Pager) {
         onDone: (ok: Boolean, code: Int?, reason: String, data: JSONObject?) -> Unit,
     ) {
         val generation = connectionGeneration
-        val headers = echoMuseHeaders(accessToken)
-        network(ctx).httpRequest("$base$path", true, body, headers) { data, success, errorMsg, resp ->
-            if (generation != connectionGeneration) return@httpRequest
-            val code = resp.statusCode
-            val ok = success && (code == null || code in 200..299)
+        rpcCall(ctx, "$base$path", "POST", body) { ok, data, status, errorMsg ->
+            if (generation != connectionGeneration) return@rpcCall
             val reason = data.text("error").takeIf { it.isNotEmpty() }
                 ?: data.text("message").takeIf { it.isNotEmpty() }
                 ?: errorMsg
-            onDone(ok, code, reason, data)
+            onDone(ok, status, reason, data)
         }
     }
 }

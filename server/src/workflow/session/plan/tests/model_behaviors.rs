@@ -4,6 +4,7 @@ mod clock;
 mod delivery_recovery;
 mod mcp_permissions;
 mod preflight;
+mod tuya_control;
 use crate::plugins::skill::{SkillAction, SkillInvocation};
 use crate::skills::{SkillPlan, SkillStep};
 use crate::workflow::session::skill_plan::now_ms;

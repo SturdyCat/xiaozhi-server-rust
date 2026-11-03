@@ -111,6 +111,20 @@ impl<T: Transport> Session<'_, T> {
                             .to_owned(),
                     );
                 }
+                "tuya.control" => {
+                    // NLU iot 域语音开关（架构 §1 D1）：set_dp 是异步 rustuya TCP
+                    // 调用且持有 per-device tokio::Mutex，不能进 spawn_blocking
+                    // （阻塞线程上无法 .await）。voice_control infallible——设备
+                    // 未找到/歧义/离线等业务失败也返回 {"ok":false,"speech"}，
+                    // 作为正常结果进入 results 供 replies.say 引用播报，会话延续。
+                    let name = step.args["name"]
+                        .as_str()
+                        .ok_or_else(|| anyhow::anyhow!("missing tuya device name"))?;
+                    let action = step.args["action"]
+                        .as_str()
+                        .ok_or_else(|| anyhow::anyhow!("missing tuya action"))?;
+                    result = self.engines.tuya.voice_control(name, action).await;
+                }
                 _ => {
                     let system = self.engines.skill_system.clone();
                     let ctx = self.skill_context(index);

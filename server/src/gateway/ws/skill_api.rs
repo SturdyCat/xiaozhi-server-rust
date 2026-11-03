@@ -128,9 +128,10 @@ fn catalog_json(cfg: &Config) -> anyhow::Result<Value> {
         })
         .collect();
     // Only public declarative skill data is serialized: never model paths or the whole config.
+    // domain 随每个技能全量透出（device/server/iot）；end_session 由 command 词表注入，固定为设备域。
     Ok(
         json!({"state":"ok","source":"saved","revision":super::config_revision(cfg),
-        "recognition":"model_only","source_semantics":"default means definition equals shipped seed; custom means saved override/addition; command means command vocabulary",
+        "recognition":"model_only","source_semantics":"default means definition equals shipped seed; custom means saved override/addition; command means the device-domain end_session (disconnect) skill trained from the command vocabulary; every intent carries its control domain (device=firmware-executed, server=server-executed, iot=reserved placeholder)",
         "intents":intents,
         "effective":{"enabled":effective.enabled,"intents":intents,"slots":effective.slots},
         "capabilities":crate::skills::capabilities(),"executed":false}),

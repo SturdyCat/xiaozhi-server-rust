@@ -345,7 +345,6 @@ def main():
     # 这次训练用的是哪个底座、哪组超参（否则失败日志无法归因）。
     print(f"[train] base={BASE_NAME} hub={HUB_NAME} lr={LEARNING_RATE} epochs={EPOCHS}")
 
-    from datasets import Dataset
     from transformers import (
         AutoTokenizer,
         AutoModelForSequenceClassification,
@@ -362,12 +361,17 @@ def main():
     model = AutoModelForSequenceClassification.from_pretrained(
         HUB_NAME, num_labels=len(label_list)
     )
-    ds = Dataset.from_dict({"text": texts, "label": [label_list.index(l) for l in labels]})
-
-    def tok(batch):
-        return tokenizer(batch["text"], truncation=True, max_length=MAX_LEN)
-
-    ds = ds.map(tok, batched=True)
+    # 不用 datasets 库：直接批量分词成 list[dict]，再按切分下标取子集。
+    # 与原来 Dataset.from_dict + .map + .select 等价，但省掉 pyarrow/pandas 等重依赖，
+    # 显著缩小训练镜像体积。HF Trainer 接受 list[dict] 作为 dataset（默认 _remove_unused_columns
+    # 会剔除模型 forward 不接受的多余列，这里本就不含 "text"）。
+    label_ids = [label_list.index(l) for l in labels]
+    enc = tokenizer(texts, truncation=True, max_length=MAX_LEN)
+    features = []
+    for i in range(len(texts)):
+        ex = {key: enc[key][i] for key in enc.keys()}
+        ex["label"] = label_ids[i]
+        features.append(ex)
     args = TrainingArguments(
         output_dir=CKPT_DIR,
         per_device_train_batch_size=32,
@@ -382,8 +386,8 @@ def main():
     trainer = Trainer(
         model=model,
         args=args,
-        train_dataset=ds.select(train_indices),
-        eval_dataset=ds.select(test_indices),
+        train_dataset=[features[i] for i in train_indices],
+        eval_dataset=[features[i] for i in test_indices],
         data_collator=DataCollatorWithPadding(tokenizer),
     )
     trainer.train()

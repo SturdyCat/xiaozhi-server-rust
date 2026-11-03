@@ -178,8 +178,8 @@ class EchoMuseMusicState(
     }
 
     /**
-     * 音乐面唯一的 HTTP 出口。基址在发送时取快照：回包前若已切服务器（`base()` 变了），
-     * 结果直接丢弃——否则旧服务器的曲目清单会被当成本服务器设备的。
+     * 音乐面唯一的 API 出口（走管理台 WS RPC）。基址在发送时取快照：回包前若已切
+     * 服务器（`base()` 变了），结果直接丢弃——否则旧服务器的曲目清单会被当成本服务器设备的。
      */
     private fun post(
         ctx: Pager,
@@ -189,14 +189,12 @@ class EchoMuseMusicState(
     ) {
         val origin = base()
         val url = "$origin/api/echomuse/devices/${echoMuseUrlComponent(deviceId)}/music"
-        network(ctx).httpRequest(url, true, body, echoMuseHeaders(token())) { data, success, errorMsg, resp ->
-            if (base() != origin) return@httpRequest
-            val code = resp.statusCode
-            val ok = success && (code == null || code in 200..299)
+        rpcCall(ctx, url, "POST", body) { ok, data, status, errorMsg ->
+            if (base() != origin) return@rpcCall
             val reason = data.text("error").takeIf { it.isNotEmpty() }
                 ?: data.text("message").takeIf { it.isNotEmpty() }
                 ?: errorMsg
-            onDone(ok, code, reason, data)
+            onDone(ok, status, reason, data)
         }
     }
 }

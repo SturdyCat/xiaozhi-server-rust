@@ -5,23 +5,29 @@ use matcher::match_template;
 #[test]
 fn initial_skill_json_is_visible_editable_configuration() {
     let config = NluConfig::default();
-    assert_eq!(config.intents.len(), 11);
+    assert_eq!(config.intents.len(), 17);
     assert!(config.enabled && !config.bert_enabled);
     assert_eq!(config.bert_threshold, 0.75);
     for intent in &config.intents {
-        assert_eq!(intent.action.kind, "plan");
-        assert!(intent.action.reply.is_empty());
-        assert!(
-            intent.templates.len() >= 2,
-            "each class needs distinct split examples"
-        );
-        let plan = intent.action.plan.as_ref().unwrap();
-        crate::skills::validate_plan(plan).unwrap();
-        assert_eq!(plan.steps.len(), 2);
-        assert_eq!(plan.steps[1].api, "replies.say");
-        assert_eq!(plan.steps[1].args["text"], "{{steps.0.speech}}");
-        if plan.steps[0].api == "tasks.create" {
-            assert_eq!(plan.steps[0].args["timezone"], "Asia/Shanghai");
+        assert!(intent.templates.len() >= 2, "each class needs distinct split examples");
+        if intent.action.kind == "plan" {
+            let plan = intent.action.plan.as_ref().unwrap();
+            crate::skills::validate_plan(plan).unwrap();
+            assert_eq!(plan.steps.len(), 2);
+            assert_eq!(plan.steps[1].api, "replies.say");
+            assert_eq!(plan.steps[1].args["text"], "{{steps.0.speech}}");
+            if plan.steps[0].api == "tasks.create" {
+                assert_eq!(plan.steps[0].args["timezone"], "Asia/Shanghai");
+            }
+        } else {
+            // 设备域示例技能：单工具直调（静态字面量），reply 留空走既有降级话术。
+            assert!(
+                intent.action.kind.starts_with("mcp:"),
+                "非 plan 种子必须是 mcp:<tool> 直调：{}",
+                intent.action.kind
+            );
+            assert!(intent.action.plan.is_none());
+            assert!(intent.action.reply.is_empty());
         }
     }
     assert_eq!(
@@ -36,9 +42,72 @@ fn initial_skill_json_is_visible_editable_configuration() {
 }
 
 #[test]
+fn seed_domains_follow_executor_and_device_skills_call_firmware_tools() {
+    let config = NluConfig::default();
+    for intent in &config.intents {
+        if intent.name.starts_with("reminder_") || intent.name == "weather_query" {
+            assert_eq!(intent.domain, Domain::Server, "{} 应归服务端域", intent.name);
+        } else if intent.name == "iot_device_on" || intent.name == "iot_device_off" {
+            // iot 域语音开关：服务端执行的 plan 能力组合（tuya.control），非固件直调。
+            assert_eq!(intent.domain, Domain::Iot, "{} 应归 IoT 域", intent.name);
+            assert_eq!(intent.action.kind, "plan");
+            let plan = intent.action.plan.as_ref().unwrap();
+            assert_eq!(plan.steps[0].api, "tuya.control");
+            assert_eq!(plan.steps[0].args["name"], "{{slots.device_name}}");
+            let action = intent.name.ends_with("_on");
+            assert_eq!(
+                plan.steps[0].args["action"],
+                serde_json::json!(if action { "on" } else { "off" })
+            );
+        } else {
+            assert_eq!(intent.domain, Domain::Device, "{} 应归设备域", intent.name);
+            assert!(intent.action.kind.starts_with("mcp:"));
+        }
+    }
+    let volume = config
+        .intents
+        .iter()
+        .find(|i| i.name == "device_volume_set")
+        .unwrap();
+    // 槽位名 = 固件工具参数名（volume），工具名是静态字面量。
+    assert_eq!(volume.action.kind, "mcp:self.audio_speaker.set_volume");
+    assert_eq!(volume.templates[0], "音量调到{volume}");
+    assert!(config.slots.iter().any(|s| s.name == "volume"));
+    // iot 开放槽位：values 空（任意设备名），与 task/delay 同模式。
+    let device_name = config.slots.iter().find(|s| s.name == "device_name").unwrap();
+    assert!(device_name.values.is_empty() && !device_name.optional);
+}
+
+#[test]
+fn saved_state_without_domain_field_defaults_to_server_and_unknown_domain_fails() {
+    // 旧保存态 JSON 缺 domain 字段：必须照常反序列化，缺省为服务端域，不改写保存态。
+    let legacy: IntentDef = serde_json::from_value(serde_json::json!({
+        "name": "reminder_countdown",
+        "templates": ["{delay}后提醒我{task}"],
+        "action": {"kind": "reply", "reply": "旧应答"}
+    }))
+    .unwrap();
+    assert_eq!(legacy.domain, Domain::Server);
+    // 序列化会带上缺省 domain，保留判定（skill_api 的 default/custom 比较）依旧成立。
+    assert_eq!(
+        serde_json::to_value(&legacy).unwrap()["domain"],
+        serde_json::json!("server")
+    );
+    // 枚举即白名单：非法域值直接反序列化失败，进入既有"保存态无效"链路。
+    assert!(serde_json::from_value::<IntentDef>(serde_json::json!({
+        "name": "x", "domain": "cloud"
+    }))
+    .is_err());
+    assert!(serde_json::from_value::<IntentDef>(serde_json::json!({
+        "name": "x", "domain": "device"
+    }))
+    .is_ok());
+}
+
+#[test]
 fn omitted_fields_seed_defaults_but_explicit_empty_stays_empty() {
     let omitted: NluConfig = serde_json::from_str("{}").unwrap();
-    assert_eq!(omitted.intents.len(), 11);
+    assert_eq!(omitted.intents.len(), 17);
     let cleared: NluConfig = serde_json::from_str(r#"{"intents":[],"slots":[]}"#).unwrap();
     assert!(cleared.intents.is_empty() && cleared.slots.is_empty());
     assert!(cleared.with_builtins().intents.is_empty());

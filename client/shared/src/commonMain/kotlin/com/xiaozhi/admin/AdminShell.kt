@@ -350,6 +350,7 @@ private fun AdminSectionHost(page: AdminPage, viewport: AdminViewport) {
             stats = page.stats,
             meta = page.plugins,
             health = page.engineHealth,
+            geo = page.geo,
             // 就绪度横幅跳转：菜单归属由 form.onSectionRouted 统一按 section 判定
             onJumpSection = { section -> page.form.openConfigSection(section) },
         )
@@ -381,6 +382,12 @@ private fun AdminSectionHost(page: AdminPage, viewport: AdminViewport) {
             },
             apiBase = page.apiBase,
             token = page.adminRequestToken(),
+        )
+        // 涂鸦设备（Tuya IoT）：凭证卡 + 云同步 + 设备卡栅格；点卡片进 DP 详情视图
+        "tuya" -> TuyaPage(
+            state = page.tuya,
+            toast = page.toast,
+            isActive = { page.selectedSection == "tuya" },
         )
         // 测试台（T12，mac-only）：五 tab 工作区（连接 / ASR 识别 / TTS 合成 / LLM 对话 / NLU 意图），
         // 播放控制下沉 XiaoZhiModule（Audio DSL 视图无法进 Compose 树，见 TestBenchPage.kt）

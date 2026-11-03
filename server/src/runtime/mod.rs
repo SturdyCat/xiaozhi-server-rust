@@ -99,6 +99,10 @@ pub struct Engines {
     /// 设备命令通道：活跃会话注册，scheduler 据此向**在线设备**直推到期定时任务的
     /// 动作（如「10分钟后关电源」）；离线即降级为文字提醒。见 `app/device_cmds` 模块注释。
     pub device_cmds: crate::workflow::device_cmds::DeviceCmdHub,
+    /// Tuya IoT 设备集成引擎（`[tuya]`）：云目录同步 + 纯局域网发现/控制 +
+    /// 管理面 `/api/tuya/*` 的共享状态（store/cloud/lan + DP 缓存）。构造零 IO，
+    /// store 懒开库——dev 模式装配同样安全；worker 由 main 在非 dev 模式 spawn。
+    pub tuya: Arc<crate::device::tuya::TuyaEngine>,
     /// 稳定技能能力与持久任务/outbox；识别模型只有提名权，不直接操作系统。
     pub skill_system: Arc<crate::skills::SkillSystem>,
     /// 推理并发闸门（缺口①）：ASR/TTS 各一把 Semaphore，包在全部 `spawn_blocking`
@@ -226,6 +230,23 @@ impl Engines {
             .filter(|p| !p.as_os_str().is_empty())
             .unwrap_or_else(|| std::path::Path::new("."));
         let skill_system = Arc::new(crate::skills::SkillSystem::new(skill_dir.join("skills.db")));
+        // Tuya 引擎：数据落配置库同卷的 tuya/ 子目录（独立 devices.db，0600）；
+        // 与 skill_dir 同一落点派生口径（location 优先，memory.db_path 兜底）。
+        let tuya_dir = config_store
+            .location()
+            .and_then(|p| std::path::Path::new(p).parent())
+            .filter(|p| !p.as_os_str().is_empty())
+            .or_else(|| std::path::Path::new(&config.memory.db_path).parent())
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join("tuya");
+        let tuya = Arc::new(crate::device::tuya::TuyaEngine::new(&tuya_dir));
+        // 装配天气/地理定位的进程级全局（不依赖 nlu feature；weather/geo 始终编译）。
+        // 与 Engines 同生命周期，仅初始化一次（set_global 重复调用静默忽略）。
+        crate::plugins::weather::set_global(Arc::new(crate::plugins::weather::WeatherService::new(
+            &config.weather,
+        )));
+        crate::plugins::geo::set_location_global(Arc::new(std::sync::RwLock::new(None)));
         Arc::new(Self {
             asr: booted.asr,
             tts: tts::TtsSlot::new(config, booted.tts),
@@ -246,6 +267,7 @@ impl Engines {
             inject: crate::workflow::pipeline::inject::Injector::new(),
             device_cmds: crate::workflow::device_cmds::DeviceCmdHub::new(),
             skill_system,
+            tuya,
             inference: crate::workflow::pipeline::inference::InferenceGates::new(config),
             config: Arc::new(config.clone()),
             config_store,

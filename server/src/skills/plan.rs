@@ -13,6 +13,8 @@ pub fn capabilities() -> Vec<CapabilityMetadata> {
         ("devices.call", "Session dispatch to an advertised MCP tool", "session", json!({"required":["tool","arguments"],"tool":"static literal; no interpolation"})),
         ("sessions.end", "Session-scoped stop listening", "session", json!({})),
         ("replies.say", "Deferred receipt: session speaks only after all plan actions succeed", "session", json!({"required":["text"]})),
+        ("weather.forecast", "Query Chinese weather (NMC) for a city: realtime/current or 7-day forecast", "network", json!({"optional":["city","range","province"],"city":"城市；缺省时回退到服务器出口IP定位的默认地区","range":"实时/当前/今天=实时；明天/后天=+1/+2天；近7天/7天/一周/未来一周=7天预报；空=实时","province":"可选，用于消歧同名城市"})),
+        ("tuya.control", "Turn a synced Tuya device on/off by spoken name (alias or cloud name)", "network", json!({"required":["name","action"],"action":"on|off（静态字面量，不许插值）","name":"设备名或别名；与已同步目录先精确后双向包含匹配"})),
     ].into_iter().map(|(api, description, execution, mut args_schema)| {
         if matches!(api, "tasks.create" | "tasks.cancel" | "messages.send") {
             args_schema["idempotency"] = json!({"scope":"device_id + request_id","retention_days":7,"max_records_global":8192,"conflicting_payload":"rejected","request_id":"stable and unique per logical step"});
@@ -112,6 +114,8 @@ pub fn validate_step(step: &SkillStep) -> Result<()> {
         "messages.send" | "replies.say" => (&["text"], &["text"]),
         "devices.call" => (&["tool", "arguments"], &["tool", "arguments"]),
         "sessions.end" => (&[], &[]),
+        "weather.forecast" => (&[], &["city", "range", "province"]),
+        "tuya.control" => (&["name", "action"], &["name", "action"]),
         _ => bail!("unknown skill capability: {}", step.api),
     };
     for key in required {
@@ -145,8 +149,26 @@ pub fn validate_step(step: &SkillStep) -> Result<()> {
             "tasks.cancel requires exactly one of task_id or exact text"
         );
     }
+    if step.api == "tuya.control" {
+        // action 必须是静态字面量（不许插值，值域锁死 on/off）：开关语义写死在
+        // 独立技能种子里（iot_device_on/off 各自静态 on/off，不共用值槽位），
+        // 运行期任何动态拼接都可能把"开"变成"关"，必须在校验层拒绝。
+        let action = args
+            .get("action")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("tuya.control action must be a string"))?;
+        ensure!(
+            !action.contains("{{") && !action.contains("}}"),
+            "tuya.control action must be a static literal"
+        );
+        ensure!(
+            matches!(action, "on" | "off"),
+            "tuya.control action must be on or off"
+        );
+    }
     for key in [
         "text", "task_id", "after", "at", "interval", "daily", "workdays", "timezone", "tool",
+        "city", "range", "province", "name",
     ] {
         if let Some(value) = args.get(key) {
             let text = value

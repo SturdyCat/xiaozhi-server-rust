@@ -58,7 +58,7 @@ async fn loop_sends_hello_then_event_on_version_bump() {
     let (ver_tx, ver_rx) = tokio::sync::watch::channel(5u64);
     let (_in_tx, in_rx) = tokio::sync::mpsc::channel::<WsIn>(16);
     let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<String>(16);
-    tokio::spawn(admin_ws_loop(in_rx, out_tx, ver_rx));
+    tokio::spawn(admin_ws_loop(in_rx, out_tx, ver_rx, None));
 
     // 连接建立后立刻 hello（当前版本）。
     let hello = recv_frame(&mut out_rx).await;
@@ -77,7 +77,7 @@ async fn loop_replies_ping_with_pong_and_exits_on_closed() {
     let (_ver_tx, ver_rx) = tokio::sync::watch::channel(0u64);
     let (in_tx, in_rx) = tokio::sync::mpsc::channel::<WsIn>(16);
     let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<String>(16);
-    tokio::spawn(admin_ws_loop(in_rx, out_tx, ver_rx));
+    tokio::spawn(admin_ws_loop(in_rx, out_tx, ver_rx, None));
     assert_eq!(recv_frame(&mut out_rx).await["type"], "hello");
 
     // 应用层心跳：ping → pong。
@@ -101,7 +101,7 @@ async fn loop_stays_idle_without_changes() {
     let (ver_tx, ver_rx) = tokio::sync::watch::channel(3u64);
     let (_in_tx, in_rx) = tokio::sync::mpsc::channel::<WsIn>(16);
     let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<String>(16);
-    tokio::spawn(admin_ws_loop(in_rx, out_tx, ver_rx));
+    tokio::spawn(admin_ws_loop(in_rx, out_tx, ver_rx, None));
     assert_eq!(recv_frame(&mut out_rx).await["type"], "hello");
 
     // 无变化时挂住不发帧（短超时探空，hello 之后不应有任何帧）。
@@ -118,7 +118,7 @@ async fn loop_exits_when_subscriber_goes_away() {
     let (_ver_tx, ver_rx) = tokio::sync::watch::channel(0u64);
     let (in_tx, in_rx) = tokio::sync::mpsc::channel::<WsIn>(16);
     let (out_tx, out_rx) = tokio::sync::mpsc::channel::<String>(16);
-    tokio::spawn(admin_ws_loop(in_rx, out_tx, ver_rx));
+    tokio::spawn(admin_ws_loop(in_rx, out_tx, ver_rx, None));
     // 丢弃订阅方：循环下一次回执（ping → pong）发送失败即退出，
     // in_rx 随任务结束被丢弃 → in_tx.send 报错即循环已退出的可观测信号。
     drop(out_rx);
@@ -135,4 +135,157 @@ async fn loop_exits_when_subscriber_goes_away() {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     assert!(exited, "out 订阅方消失后循环应退出");
+}
+
+// ---- RPC 帧：parse_rpc_frame（纯函数校验） ----
+
+use super::admin_ws::{execute_rpc, parse_rpc_frame};
+use axum::routing::get as axum_get;
+use serde_json::json;
+
+#[test]
+fn parse_rpc_frame_accepts_get_and_post_with_body() {
+    let (_, timeout, req) = parse_rpc_frame(&json!({
+        "type": "rpc", "id": 7, "method": "GET", "path": "/api/stats"
+    }))
+    .expect("GET 帧应合法");
+    assert!(timeout.is_none(), "未带 timeout 字段应回退默认");
+    assert_eq!(req.method(), "GET");
+    assert_eq!(req.uri().path(), "/api/stats");
+
+    let (_, timeout, req) = parse_rpc_frame(&json!({
+        "type": "rpc", "id": 8, "method": "POST", "path": "/api/config",
+        "body": {"asr": {"enabled": true}}
+    }))
+    .expect("POST 帧应合法");
+    assert!(timeout.is_none());
+    assert_eq!(req.method(), "POST");
+}
+
+#[test]
+fn parse_rpc_frame_timeout_clamped() {
+    // 45s（NLU 模型测试场景）原样通过。
+    let (_, timeout, _) = parse_rpc_frame(&json!({
+        "type": "rpc", "id": 1, "method": "GET", "path": "/api/x", "timeout": 45
+    }))
+    .expect("45s 应合法");
+    assert_eq!(timeout, Some(45));
+    // 超上限钳到 120s；0 钳到 1s；非整数拒绝。
+    let (_, timeout, _) = parse_rpc_frame(&json!({
+        "type": "rpc", "id": 1, "method": "GET", "path": "/api/x", "timeout": 9999
+    }))
+    .unwrap();
+    assert_eq!(timeout, Some(120));
+    let (_, timeout, _) = parse_rpc_frame(&json!({
+        "type": "rpc", "id": 1, "method": "GET", "path": "/api/x", "timeout": 0
+    }))
+    .unwrap();
+    assert_eq!(timeout, Some(1));
+    assert!(parse_rpc_frame(&json!({
+        "type": "rpc", "id": 1, "method": "GET", "path": "/api/x", "timeout": "fast"
+    }))
+    .is_err());
+}
+
+#[test]
+fn parse_rpc_frame_rejects_bad_frames() {
+    let cases = [
+        json!({"type": "nope", "id": 1, "method": "GET", "path": "/api/x"}),
+        json!({"type": "rpc", "method": "GET", "path": "/api/x"}),           // 缺 id
+        json!({"type": "rpc", "id": 1.5, "method": "GET", "path": "/api/x"}), // id 非整数
+        json!({"type": "rpc", "id": 1, "method": "PATCH", "path": "/api/x"}), // 方法不在白名单
+        json!({"type": "rpc", "id": 1, "method": "GET", "path": "/static/x"}), // 非 /api/
+        json!({"type": "rpc", "id": 1, "method": "GET", "path": "/api/admin/ws"}), // 递归拒绝
+        json!({"type": "rpc", "id": 1, "method": "GET", "path": "/api/x", "body": {}}), // GET 带 body
+        json!({"type": "rpc", "id": 1, "method": "POST", "path": "/api/x"}),  // 写缺 body
+        json!({"type": "rpc", "id": 1, "method": "POST", "path": "/api/x", "body": [1]}), // body 非对象
+    ];
+    for bad in &cases {
+        assert!(parse_rpc_frame(bad).is_err(), "应拒绝: {bad}");
+    }
+}
+
+// ---- RPC 执行：oneshot 直驱 mini Router（不起 HTTP） ----
+
+/// 带超时读一帧并解析为 JSON（沿用本文件 recv_frame 语义）。
+async fn recv_rpc(rx: &mut tokio::sync::mpsc::Receiver<String>) -> serde_json::Value {
+    recv_frame(rx).await
+}
+
+#[tokio::test]
+async fn rpc_executes_through_router_and_returns_status_and_body() {
+    // mini Router：GET /api/echo 回 JSON；POST /api/echo 回显 body。
+    let router = axum::Router::new()
+        .route(
+            "/api/echo",
+            axum_get(|| async {
+                axum::Json(json!({"ok": true, "from": "get"}))
+            })
+            .post(|body: axum::Json<serde_json::Value>| async move {
+                axum::Json(json!({"ok": true, "echoed": body.0}))
+            }),
+        )
+        .with_state(());
+    let router = std::sync::Arc::new(router);
+
+    // GET：命中 handler，status 200 + body 原样。
+    let frame = json!({"type": "rpc", "id": 1, "method": "GET", "path": "/api/echo"});
+    let reply: serde_json::Value =
+        serde_json::from_str(&execute_rpc(router.clone(), &frame).await).unwrap();
+    assert_eq!(reply["type"], "rpc_result");
+    assert_eq!(reply["id"], 1);
+    assert_eq!(reply["status"], 200);
+    assert_eq!(reply["body"]["from"], "get");
+
+    // POST：body 进 handler。
+    let frame = json!({
+        "type": "rpc", "id": 2, "method": "POST", "path": "/api/echo",
+        "body": {"x": 1}
+    });
+    let reply: serde_json::Value =
+        serde_json::from_str(&execute_rpc(router, &frame).await).unwrap();
+    assert_eq!(reply["status"], 200);
+    assert_eq!(reply["body"]["echoed"]["x"], 1);
+}
+
+#[tokio::test]
+async fn rpc_maps_http_404_and_frame_errors_to_result_frames() {
+    let router = std::sync::Arc::new(axum::Router::new().with_state(()));
+
+    // 路由不存在 → axum 默认 404（空 body）→ status 原样透传、body 置 null。
+    let frame = json!({"type": "rpc", "id": 3, "method": "GET", "path": "/api/none"});
+    let reply: serde_json::Value =
+        serde_json::from_str(&execute_rpc(router.clone(), &frame).await).unwrap();
+    assert_eq!(reply["type"], "rpc_result");
+    assert_eq!(reply["status"], 404);
+    assert!(reply["body"].is_null());
+
+    // 帧非法 → status 0 + 原因，id 尽量回带。
+    let frame = json!({"type": "rpc", "id": 4, "method": "BREW", "path": "/api/none"});
+    let reply: serde_json::Value =
+        serde_json::from_str(&execute_rpc(router, &frame).await).unwrap();
+    assert_eq!(reply["status"], 0);
+    assert_eq!(reply["id"], 4);
+    assert!(reply["error"].is_string());
+}
+
+#[tokio::test]
+async fn loop_without_rpc_router_answers_status_zero() {
+    let (_ver_tx, ver_rx) = tokio::sync::watch::channel(0u64);
+    let (in_tx, in_rx) = tokio::sync::mpsc::channel::<WsIn>(16);
+    let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<String>(64);
+    tokio::spawn(admin_ws_loop(in_rx, out_tx, ver_rx, None));
+    assert_eq!(recv_frame(&mut out_rx).await["type"], "hello");
+
+    in_tx
+        .send(WsIn::Text(
+            "{\"type\":\"rpc\",\"id\":9,\"method\":\"GET\",\"path\":\"/api/stats\"}".into(),
+        ))
+        .await
+        .unwrap();
+    let reply = recv_rpc(&mut out_rx).await;
+    assert_eq!(reply["type"], "rpc_result");
+    assert_eq!(reply["id"], 9);
+    assert_eq!(reply["status"], 0);
+    assert!(reply["error"].is_string());
 }

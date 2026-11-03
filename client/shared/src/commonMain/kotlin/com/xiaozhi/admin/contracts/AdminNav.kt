@@ -41,6 +41,9 @@ object AdminNav {
         NavDescriptor("devices", 10, "设备", GROUP_OBSERVE),
         // EchoMuse 设备（批准制登记 + 重启 / WiFi 下发指令，`GET /api/echomuse/devices`）
         NavDescriptor("echomuse", 15, "EchoMuse", GROUP_OBSERVE),
+        // 涂鸦设备（Tuya IoT：云目录同步 + 纯局域网控制，`/api/tuya/*`；凭证/同步
+        // 生命周期自成一体，与 ESP/EchoMuse 设备模型并列，故为独立一级导航）
+        NavDescriptor("tuya", 20, "涂鸦设备", GROUP_OBSERVE),
         // 控制台（官方 dashboard 的 CONSOLE / 命令行）：实时服务器日志流 GET /api/logs，
         // 服务端已有实现、此前客户端未建页面消费（见 ConsoleState / ConsolePage）。
         // （2026-10-29 范围削减：sessions/conversations/usage/metrics 四项已移除，

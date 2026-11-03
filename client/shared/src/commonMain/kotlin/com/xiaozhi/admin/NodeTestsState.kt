@@ -62,8 +62,6 @@ class NodeTestsState(scope: PagerScope) {
         }
     }
 
-    private fun headers(): JSONObject = adminRequestHeaders(adminToken)
-
     fun refresh(ctx: Pager, baseUrl: String, token: String, deviceTarget: String) {
         bind(baseUrl, token, deviceTarget)
         if (target.isNotEmpty()) {
@@ -77,26 +75,25 @@ class NodeTestsState(scope: PagerScope) {
         capabilityMessage = "正在读取测试能力（不执行模型推理）"
         val accessRevision = ctx.adminAccessRevision()
         val requestToken = adminToken
-        network(ctx).httpRequest("$base/api/test/capabilities", false, JSONObject(), headers(), timeout = 10) { data, success, error, response ->
+        rpcCall(ctx, "$base/api/test/capabilities", "GET", null, timeoutMs = 10_000) { ok, data, code, error ->
             if (!ctx.isAdminAccessCurrent(accessRevision, requestToken)) {
                 if (capabilityGate.isActive(ticket)) invalidateScope()
-                return@httpRequest
+                return@rpcCall
             }
-            if (!capabilityGate.finish(ticket)) return@httpRequest
-            val code = response.statusCode
-            if (!success || (code != null && code !in 200..299)) {
+            if (!capabilityGate.finish(ticket)) return@rpcCall
+            if (!ok) {
                 capabilities = emptyMap()
                 snapshotRevision = ""
                 capabilityMessage = if (code == 404) "此服务端尚不支持共享节点测试" else "读取测试能力失败：${error.ifBlank { "HTTP $code" }}"
                 capabilityState = ActionState.Finished(ActionOutcome.Failure(capabilityMessage))
-                return@httpRequest
+                return@rpcCall
             }
             val revision = data.optString("revision", "")
             if (data.optString("source", "") != "saved" || revision.isBlank()) {
                 capabilities = emptyMap()
                 capabilityMessage = "服务端测试能力缺少受支持的已保存快照版本"
                 capabilityState = ActionState.Finished(ActionOutcome.Failure(capabilityMessage))
-                return@httpRequest
+                return@rpcCall
             }
             capabilities = parseNodeTestCapabilities(data)
             samples = parseNodeTestSamples(data)
@@ -152,13 +149,13 @@ class NodeTestsState(scope: PagerScope) {
             if (kind == TestInputKind.Text) put("text", inputText)
             if (kind == TestInputKind.Audio) put("sample_id", selectedSampleId)
         }
-        network(ctx).httpRequest("$base/api/test/run", true, body, headers(), timeout = 60) { data, success, error, response ->
+        // 节点测试跑真实 LLM/TTS 调用，60s 本地超时（rpc 帧自动带 62s 服务端执行超时）。
+        rpcCall(ctx, "$base/api/test/run", "POST", body, timeoutMs = 60_000) { ok, data, code, error ->
             if (!ctx.isAdminAccessCurrent(accessRevision, requestToken)) {
                 if (ledger.isActive(ticket)) invalidateScope()
-                return@httpRequest
+                return@rpcCall
             }
-            val code = response.statusCode
-            val failed = !success || (code != null && code !in 200..299)
+            val failed = !ok
             val transportError = if (failed) {
                 if (code == 409) "配置快照已变化，请刷新测试能力（不会覆盖当前草稿）"
                 else error.ifBlank { "测试请求失败：HTTP $code" }

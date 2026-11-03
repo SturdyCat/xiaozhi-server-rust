@@ -19,6 +19,7 @@
 //! - `GET /api/sessions`：**此刻**活着的连接及其阶段（聆听/思考/说话）。
 //! - `GET /api/conversations`：内存里保留的最近对话（环形，非完整历史；可按设备过滤）。
 //! - `GET /api/stats`：看板聚合（在线数 / 轮次 / 令牌 / 能力状态徽标）。
+//! - `GET /api/server/geo`：服务器出口 IP 与地理信息（启动期解析一次；仅国内写入默认定位）。
 //! - `GET /api/metrics`：延迟/事件聚合大盘（整轮延迟 p50/p95、会话、TTS 下行、异常；
 //!   数据源 [`metrics`]——事件总线常驻订阅者写入的内存态，重启清零）。
 //! - `GET /api/mcp/tools`：按设备列出会话开始时通过 MCP 探测到的工具清单
@@ -105,7 +106,7 @@ pub(crate) use bench_api::service_router as test_bench_router;
 pub(crate) use config::{config_is_persistent, config_revision};
 use ota::ota;
 use plugins::{config_schema, list_plugins};
-use registry::{conversations, device_detail, device_inject, devices, sessions, stats};
+use registry::{conversations, device_detail, device_inject, devices, server_geo, sessions, stats};
 use soul::{soul_presets, soul_preview};
 use usage::{session_usage, usage};
 use workflow::{get_workflow, validate_workflow};
@@ -223,6 +224,7 @@ pub fn router(engines: Arc<Engines>) -> Router {
         .route("/api/sessions", get(sessions))
         .route("/api/conversations", get(conversations))
         .route("/api/stats", get(stats))
+        .route("/api/server/geo", get(server_geo))
         // 延迟/事件聚合大盘（P1-1）：整轮延迟 p50/p95、会话、TTS、异常（内存态，重启清零）
         .route("/api/metrics", get(metrics_snapshot))
         // 设备 MCP 工具：按设备列出会话开始时探测到的工具清单（回答"这台设备能被 AI 指挥做什么"）
@@ -257,7 +259,10 @@ pub fn router(engines: Arc<Engines>) -> Router {
         .merge(crate::device::echomuse::admin::admin_routes())
         // EchoMuse 蓝牙代理管理面（/api/echomuse/devices/{id}/ble/*，同 gate 鉴权）：
         // 广播采集查询 + GATT 直驱；`[echomuse].ble_proxy=false` 时统一 404。
-        .merge(crate::device::echomuse::ble::ble_routes());
+        .merge(crate::device::echomuse::ble::ble_routes())
+        // Tuya IoT 设备管理面（/api/tuya/*，经 auth_ok 鉴权 + [tuya].enabled 闸门）：
+        // 凭证/同步状态、设备目录、DP 控制与重命名；`[tuya].enabled=false` 时统一 404。
+        .merge(crate::device::tuya::api::routes());
 
     let app = if Path::new(&admin_dir).is_dir() {
         // SPA：未知路径回退到 index.html，交给前端路由处理。
@@ -269,7 +274,11 @@ pub fn router(engines: Arc<Engines>) -> Router {
         api.fallback(admin_missing)
     };
 
-    app.with_state(engines)
+    let app = app.with_state(engines);
+    // 管理台 WS 通道的 RPC 复用打的就是这份路由表（tower oneshot）：
+    // 与 REST 同一批 handler、同一套路由内开关/404 语义，业务零复制。
+    admin_ws::set_rpc_router(app.clone());
+    app
 }
 
 /// 健康检查：返回 JSON（HEALTHCHECK 仅校验 HTTP 200）。

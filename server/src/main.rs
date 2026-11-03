@@ -102,6 +102,9 @@ async fn run(config: Config, config_store: Arc<dyn ConfigStore>, dev_mode: bool)
     } else {
         Engines::new(&config, config_store)?
     };
+    // 启动期解析服务器出口 IP 作为默认定位（仅国内写入；非 dev 与 dev 都跑）。
+    // 失败只 warn，绝不阻塞启动。
+    tokio::spawn(crate::plugins::geo::resolve_location());
     // 定时任务只生成持久 outbox；真正音频由设备会话串行投递，不走 ASR/NLU 注入。
     // 到期动作任务（skills_tasks.action）例外：scheduler 经 device_cmds 向在线设备
     // 直推一次工具调用，离线/失败降级为文字提醒（见 runtime/skill_tasks 模块注释）。
@@ -234,6 +237,12 @@ async fn run(config: Config, config_store: Arc<dyn ConfigStore>, dev_mode: bool)
     #[cfg(feature = "esp_home")]
     if config.esp_home.enabled && !dev_mode {
         crate::device::esp_home::spawn(config.esp_home.clone(), engines.clone());
+    }
+    // Tuya IoT 设备集成 worker（常驻）：定时云同步 + 60s 错峰在线轮询 + 5min 局域网发现。
+    // 每 tick 重读 [tuya].enabled（热生效），关闭时本 tick 空转；dev 模式不起
+    // （无真机、避免 UDP/TCP 副作用；管理面路由仍挂载，可验证 UI）。
+    if !dev_mode {
+        crate::device::tuya::worker::spawn(engines.clone());
     }
     // 管理客户端发现（常驻、无配置项）：广播 `_xiaozhi-admin._tcp`，macApp 等
     // 非 web 客户端经 Bonjour 浏览后自动连接，免手填 IP（见 app/discovery.rs）。
