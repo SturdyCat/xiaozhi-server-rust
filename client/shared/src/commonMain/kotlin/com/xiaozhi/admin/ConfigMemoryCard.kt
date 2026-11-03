@@ -15,6 +15,7 @@ import com.xiaozhi.admin.kit.actionRow
 import com.xiaozhi.admin.kit.labeledDecimalField
 import com.xiaozhi.admin.kit.labeledField
 import com.xiaozhi.admin.kit.labeledIntField
+import com.xiaozhi.admin.kit.labeledSecretField
 import com.xiaozhi.admin.kit.labeledSelect
 import com.xiaozhi.admin.kit.switchRow
 
@@ -254,7 +255,7 @@ fun MemoryConfigCard(form: ConfigFormState) {
                     form.markDirty()
                 },
             )
-            labeledField(
+            labeledSecretField(
                 label = "API Key",
                 value = sm.memoryExtractorApiKey,
                 onValueChange = {

@@ -6,7 +6,9 @@
 //!
 //! 1. **实时推送**（原有）：EchoMuse 设备面版本变化推送。设备上线/离线/批准/设置/
 //!    删除都会自增设备面版本号（[`crate::device::echomuse::subscribe_devices_version`]
-//!    的 watch 通道），变化即推给管理台。
+//!    的 watch 通道），变化即推给管理台。同一机制还承载**服务器状态**推送：出口 IP
+//!    解析完成时自增状态版本号（[`crate::plugins::geo::subscribe_status_version`]），
+//!    变化即推 `server_status_changed`；首帧 hello 内嵌状态快照，首连即有数据。
 //! 2. **管理 API 的 RPC 复用**：管理台客户端与服务器之间的 API 通讯**始终走 WS**
 //!    （web 与 macApp；设备连接协议与大文件传输除外）。客户端发
 //!    `{"type":"rpc","id":<n>,"method":"GET","path":"/api/stats"}`，服务端把
@@ -17,8 +19,13 @@
 //!
 //! ## 协议契约（客户端按此实现，不可偏离）
 //!
-//! - 连接建立后服务端**立刻**发 `{"type":"hello","version":<当前版本号>}`；
+//! - 连接建立后服务端**立刻**发 `{"type":"hello","version":<当前版本号>,
+//!   "server_status":{...}}`——`server_status` 是服务器状态快照（首连自动下发，
+//!   客户端不需要主动拉取就能渲染首页状态卡）；
 //! - 版本变化时服务端推 `{"type":"echomuse_devices_changed","version":<新版本>}`；
+//! - 服务器状态变化（当前：出口 IP 解析完成，含境外/失败落 note）推
+//!   `{"type":"server_status_changed","status":{...}}`——`status` 形状与 hello 的
+//!   `server_status` 完全一致（`schema_version` + `geo` 段），客户端用同一套解析；
 //! - 客户端可发文本帧：`{"type":"ping"}` → 回 `{"type":"pong"}`（应用层心跳，
 //!   浏览器 WS 没有协议层 ping API）；
 //! - **RPC 帧**：`{"type":"rpc","id":<u64>,"method":"<GET|POST|PUT|DELETE>",
@@ -52,8 +59,8 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Router;
 use futures_util::{SinkExt, StreamExt};
-use tower::util::ServiceExt;
 use tokio::sync::{mpsc, watch};
+use tower::util::ServiceExt;
 
 use super::auth_ok;
 
@@ -108,7 +115,9 @@ pub(super) fn parse_rpc_frame(v: &serde_json::Value) -> Result<RpcRequest, Strin
         .ok_or("rpc 帧缺少 method")?
         .to_uppercase();
     if !RPC_METHODS.contains(&method.as_str()) {
-        return Err(format!("不支持的 method {method}（仅 GET/POST/PUT/DELETE）"));
+        return Err(format!(
+            "不支持的 method {method}（仅 GET/POST/PUT/DELETE）"
+        ));
     }
     let path = v
         .get("path")
@@ -152,10 +161,7 @@ pub(super) fn parse_rpc_frame(v: &serde_json::Value) -> Result<RpcRequest, Strin
 
 /// 把一条 rpc 文本帧（已是 JSON 对象）交给路由表执行，返回 rpc_result 帧。
 /// 内部带 [`RPC_TIMEOUT_SECS`] 超时；路由表未注入/执行失败按 `status:0` 处理。
-pub(super) async fn execute_rpc(
-    router: Arc<Router<()>>,
-    frame: &serde_json::Value,
-) -> String {
+pub(super) async fn execute_rpc(router: Arc<Router<()>>, frame: &serde_json::Value) -> String {
     let (id, timeout, req) = match parse_rpc_frame(frame) {
         Ok(ok) => ok,
         Err(reason) => return rpc_error_frame(id_of(frame), &reason),
@@ -209,20 +215,44 @@ fn id_of(frame: &serde_json::Value) -> u64 {
 
 /// `status:0` 的 rpc_result 错误帧（非 HTTP 失败：帧非法/超时/路由未注入）。
 fn rpc_error_frame(id: u64, error: &str) -> String {
-    serde_json::json!({ "type": "rpc_result", "id": id, "status": 0, "error": error })
-        .to_string()
+    serde_json::json!({ "type": "rpc_result", "id": id, "status": 0, "error": error }).to_string()
 }
 
 // ---- 帧构造（纯函数，测试直驱） ----
 
-/// 连接建立后的第一帧：告知当前设备面版本号（客户端拿它对齐增量）。
+/// 服务器状态推送的载荷：`schema_version` + `geo` 段（快照唯一来源
+/// [`crate::plugins::geo::status_snapshot`]）。hello 的 `server_status` 字段与
+/// `server_status_changed` 的 `status` 字段共用本函数——两处形状逐字一致。
+pub(super) fn server_status_payload() -> serde_json::Value {
+    serde_json::json!({
+        "schema_version": 1,
+        "geo": crate::plugins::geo::status_snapshot(),
+    })
+}
+
+/// 连接建立后的第一帧：告知当前设备面版本号（客户端拿它对齐增量）+
+/// 服务器状态快照（首连自动下发，首页状态卡无需手动刷新）。
 pub(super) fn hello_frame(version: u64) -> String {
-    serde_json::json!({ "type": "hello", "version": version }).to_string()
+    serde_json::json!({
+        "type": "hello",
+        "version": version,
+        "server_status": server_status_payload(),
+    })
+    .to_string()
 }
 
 /// 版本变化事件帧：管理台收到后刷新设备列表。
 pub(super) fn event_frame(version: u64) -> String {
     serde_json::json!({ "type": "echomuse_devices_changed", "version": version }).to_string()
+}
+
+/// 服务器状态变化事件帧：与 hello 内嵌快照同一形状，客户端复用同一套解析。
+pub(super) fn status_event_frame() -> String {
+    serde_json::json!({
+        "type": "server_status_changed",
+        "status": server_status_payload(),
+    })
+    .to_string()
 }
 
 /// 应用层心跳应答（浏览器 WS 没有协议层 ping API）。
@@ -270,12 +300,13 @@ pub(crate) enum WsIn {
     Closed,
 }
 
-/// 推送核心循环：连接后立刻发 hello（当前版本），随后 `tokio::select!` 挂
-/// 上行事件与版本 watch——变化即发事件帧，`ping` 即回 pong，收到 Closed
-/// （或上行发送端全被丢弃）结束循环；out 发送失败（订阅方没了）同样结束。
+/// 推送核心循环：连接后立刻发 hello（当前版本 + 服务器状态快照），随后
+/// `tokio::select!` 挂上行事件、设备面版本 watch 与状态版本 watch——变化即发
+/// 对应事件帧，`ping` 即回 pong，收到 Closed（或上行发送端全被丢弃）结束循环；
+/// out 发送失败（订阅方没了）同样结束。
 ///
-/// 首帧用 `borrow_and_update` 取版本并标记"已见"：订阅前已发生的 bump 不重放
-/// （客户端凭 hello 的版本号对齐），订阅后的 bump 一条不丢。
+/// 两个 watch 首帧都用 `borrow_and_update` 取值并标记"已见"：订阅前已发生的 bump
+/// 不重放（hello 的快照/版本号已覆盖），订阅后的 bump 一条不丢。
 ///
 /// RPC：`type=="rpc"` 的文本帧在此拦下，`tokio::spawn` 并发执行（不阻塞事件
 /// 推送），结果经 `out` 回给客户端；路由表未注入（`rpc=None`）回 `status:0`。
@@ -283,9 +314,11 @@ pub(super) async fn admin_ws_loop(
     mut incoming: mpsc::Receiver<WsIn>,
     out: mpsc::Sender<String>,
     mut ver: watch::Receiver<u64>,
+    mut status_ver: watch::Receiver<u64>,
     rpc: Option<Arc<Router<()>>>,
 ) {
     let current = *ver.borrow_and_update();
+    let _ = status_ver.borrow_and_update();
     if out.send(hello_frame(current)).await.is_err() {
         return;
     }
@@ -334,6 +367,15 @@ pub(super) async fn admin_ws_loop(
                     return;
                 }
             }
+            changed = status_ver.changed() => {
+                if changed.is_err() {
+                    return;
+                }
+                let _ = status_ver.borrow_and_update();
+                if out.send(status_event_frame()).await.is_err() {
+                    return;
+                }
+            }
         }
     }
 }
@@ -362,6 +404,8 @@ async fn serve_admin_ws(socket: WebSocket) {
     let (in_tx, in_rx) = mpsc::channel::<WsIn>(16);
     let (out_tx, mut out_rx) = mpsc::channel::<String>(64);
     let ver = crate::device::echomuse::subscribe_devices_version();
+    // 服务器状态 watch：出口 IP 解析完成时 bump → 推 server_status_changed。
+    let status_ver = crate::plugins::geo::subscribe_status_version();
     let rpc = RPC_ROUTER.get().cloned();
     tracing::debug!("管理台通道已连接（rpc={})", rpc.is_some());
 
@@ -387,7 +431,7 @@ async fn serve_admin_ws(socket: WebSocket) {
     });
 
     // 推送核心（hello + 事件 + RPC + 回执）跑在自己的任务里。
-    tokio::spawn(admin_ws_loop(in_rx, out_tx, ver, rpc));
+    tokio::spawn(admin_ws_loop(in_rx, out_tx, ver, status_ver, rpc));
 
     // 下行桥（核心循环 → socket）：循环退出后其发送端被丢弃，本循环随 out_rx
     // 取尽而结束；客户端提前消失（写失败）则主动撤上行桥。

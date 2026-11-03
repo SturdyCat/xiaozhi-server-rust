@@ -9,14 +9,18 @@
 //! 供管理台展示的两份只读快照（[last_resolved] / [resolve_note]）：最近一次**成功解析**
 //! 的出口信息（含境外）与未成功定位的原因。
 //!
+//! 解析完成时自增 [status_version]（进程级 watch）：管理台 WS（`/api/admin/ws`）的
+//! 已连接客户端据此收到 `server_status_changed` 推送——不必等下一次手动刷新。
+//!
 //! 网络使用 async `reqwest`（5s 超时），由调用方在 tokio 运行时内 `tokio::spawn`。
 
 #[cfg(test)]
 mod tests;
 
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::sync::{Arc, OnceLock, RwLock};
+use tokio::sync::watch;
 
 /// 服务器出口 IP 定位结果（省市级）。
 #[derive(Debug, Clone, Serialize)]
@@ -37,9 +41,32 @@ static LOCATION: OnceLock<Arc<RwLock<Option<ServerLocation>>>> = OnceLock::new()
 static LAST_LOCATION: OnceLock<Arc<RwLock<Option<ServerLocation>>>> = OnceLock::new();
 /// 未成功定位的原因（空串 = 尚未解析/解析中）；供管理台解释"为什么没有默认地区"。
 static RESOLVE_NOTE: OnceLock<Arc<RwLock<String>>> = OnceLock::new();
+/// 服务器状态版本号（watch）：出口 IP 解析完成（含失败落 note）时自增，管理台 WS
+/// 订阅它向已连接客户端推 `server_status_changed`。首帧快照由 [status_snapshot] 提供，
+/// 版本号本身不进协议——客户端只认「快照内容」，不维护序号。
+static STATUS_VERSION: OnceLock<watch::Sender<u64>> = OnceLock::new();
 
 fn shared<T: Default>() -> Arc<RwLock<T>> {
     Arc::new(RwLock::new(T::default()))
+}
+
+/// 当前服务器状态版本号。
+pub fn status_version() -> u64 {
+    status_version_tx().borrow().clone()
+}
+
+/// 订阅服务器状态版本变化（watch：新订阅者先读当前值，之后的每次 bump 都可见）。
+pub fn subscribe_status_version() -> watch::Receiver<u64> {
+    status_version_tx().subscribe()
+}
+
+fn status_version_tx() -> &'static watch::Sender<u64> {
+    STATUS_VERSION.get_or_init(|| watch::channel(0).0)
+}
+
+/// 自增状态版本号（解析完成时调用；send_modify 唤醒所有订阅者）。
+pub(crate) fn bump_status_version() {
+    status_version_tx().send_modify(|v| *v = v.wrapping_add(1));
 }
 
 /// 设置进程级默认地区锁（重复 set 静默忽略）。
@@ -82,6 +109,32 @@ fn set_note(note: &str) {
     }
 }
 
+/// 状态快照的口径说明（`GET /api/server/geo` 与管理台 WS 推送共用同一份原文）。
+pub const SCOPE_NOTE: &str = "服务器启动时解析一次出口 IP；仅国内出口写入默认地区，\
+                              供天气等需要定位的功能使用。境外出口（可能经代理/翻墙）只展示不采用。";
+
+/// 服务器状态快照（geo 段）：`GET /api/server/geo` 响应体（不含 `ok`）与管理台 WS
+/// `server_status` 推送共用的唯一投影——两端字段/文案天然一致，不会各写一份后漂移。
+pub fn status_snapshot() -> Value {
+    let loc = last_resolved();
+    let note = resolve_note();
+    let mut body = json!({
+        "resolved": loc.is_some(),
+        "note": note,
+        "scope_note": SCOPE_NOTE,
+    });
+    if let Some(loc) = loc {
+        let obj = body.as_object_mut().expect("刚构造的 object");
+        obj.insert("ip".into(), json!(loc.ip));
+        obj.insert("country".into(), json!(loc.country));
+        obj.insert("province".into(), json!(loc.province));
+        obj.insert("city".into(), json!(loc.city));
+        obj.insert("source".into(), json!(loc.source));
+        obj.insert("domestic".into(), json!(loc.domestic));
+    }
+    body
+}
+
 /// `myip.ipip.net` 一次请求的结果分类：
 /// - `Located`：国内且城市非空，可直接写入默认地区；
 /// - `Foreign`：解析成功但出口为国外——**停止**，不写默认定位也不兜底（记录供展示）；
@@ -96,7 +149,15 @@ enum IpipOutcome {
 ///
 /// 先试 `myip.ipip.net`（纯文本），仅当**请求/解析失败或城市为空**才再试
 /// `whois.pconline.com.cn`（JSON，国内 IP 库）。国外出口直接放弃。
+///
+/// 无论落在哪个终态（定位成功 / 境外 / 失败落 note），结束时都自增状态版本号——
+/// 管理台 WS 的已连接客户端随即收到 `server_status_changed`，不用手动刷新。
 pub async fn resolve_location() {
+    resolve_location_inner().await;
+    bump_status_version();
+}
+
+async fn resolve_location_inner() {
     match fetch_ipip().await {
         IpipOutcome::Located(loc) => {
             write_location(loc);
@@ -256,7 +317,11 @@ pub fn parse_ipip(text: &str) -> Option<ServerLocation> {
 /// 解析失败或省份为空返回 `None`。
 fn parse_pconline(text: &str) -> Option<ServerLocation> {
     let v: Value = serde_json::from_str(text).ok()?;
-    let pro = v.get("pro").and_then(Value::as_str).unwrap_or("").to_string();
+    let pro = v
+        .get("pro")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
     let city = v
         .get("city")
         .and_then(Value::as_str)

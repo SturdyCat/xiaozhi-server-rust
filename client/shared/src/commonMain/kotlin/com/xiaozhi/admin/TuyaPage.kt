@@ -1,197 +1,39 @@
 package com.xiaozhi.admin
 
 import androidx.compose.runtime.*
-import com.gearui.components.alert.Alert
-import com.gearui.components.alert.AlertStatus
 import com.gearui.components.button.Button
 import com.gearui.components.button.ButtonType
-import com.gearui.components.empty.EmptyState
-import com.gearui.foundation.primitives.ScrollView
 import com.gearui.foundation.primitives.Text
+import com.gearui.primitives.composite.Card
 import com.gearui.theme.Theme
 import com.tencent.kuikly.compose.foundation.background
+import com.tencent.kuikly.compose.foundation.clickable
 import com.tencent.kuikly.compose.foundation.layout.*
-import com.tencent.kuikly.compose.foundation.shape.RoundedCornerShape
 import com.tencent.kuikly.compose.ui.Alignment
 import com.tencent.kuikly.compose.ui.Modifier
-import com.tencent.kuikly.compose.ui.draw.clip
 import com.tencent.kuikly.compose.ui.unit.dp
-import com.xiaozhi.admin.kit.GearUiBreakpoints
+import com.xiaozhi.admin.contracts.IconToken
+import com.xiaozhi.admin.icons.GearIcon
 import com.xiaozhi.admin.kit.LocalAdminSpacing
-import com.xiaozhi.admin.kit.LocalAdminViewport
 import com.xiaozhi.admin.kit.labeledField
+import com.xiaozhi.admin.kit.labeledSecretField
 import com.xiaozhi.admin.kit.labeledSelect
 
 /**
- * 「涂鸦设备」列表页：凭证状态条 + 立即同步 + 设备卡片栅格 → 点击进详情。
+ * 涂鸦设备零件库：凭证卡（设备管理中心「齿轮」弹层用）+ 只读说明行 + 设备卡（中心列表用）。
  *
- * 布局参照 `EchoMusePage`（GearUI 浅色主题 + 卡片栅格断点换算），状态全部来自
- * [TuyaState]（stateVar/stateListOf）；凭证表单的 secret 输入在保存成功后由状态层
- * 立即清空（服务端也永不回显），页面上只见"已配置（掩码）"。
+ * 原「涂鸦设备」独立页面已并入 [DeviceManagementCenter]（2026-11-03 导航合并：统一卡片列表
+ * + 齿轮一次性配置）；本文件只保留跨处复用的零件，页面级编排不再这里。
+ * 状态全部来自 [TuyaState]（stateVar/stateListOf）；secret 输入保存成功后由状态层立即清空
+ * （服务端也永不回显），界面上只见「已配置（掩码）」。
  */
-@Composable
-fun TuyaPage(
-    state: TuyaState,
-    toast: ToastState,
-    isActive: () -> Boolean,
-) {
-    val pager = LocalAdminPagerOrThrow()
-    val spacing = LocalAdminSpacing.current
-    val active = isActive()
-    var confirmClear by remember { mutableStateOf(false) }
-
-    if (active && state.detailId.isNotEmpty()) {
-        // 详情视图（单开一台设备）：返回按钮 + 设备信息 + DP 控制
-        TuyaDetailPage(state = state, toast = toast)
-        return
-    }
-
-    Column(modifier = Modifier.fillMaxSize()) {
-        // ---- 头部：摘要 + 立即同步 ----
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(spacing.pagePadding),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(spacing.sm),
-        ) {
-            Text(
-                text = if (state.loading && !state.loaded) "加载中…" else state.summaryText(),
-                modifier = Modifier.weight(1f),
-                style = Theme.typography.titleMedium,
-                color = Theme.colors.foreground,
-            )
-            Button(
-                text = if (state.syncing) "同步中…" else "立即同步",
-                type = ButtonType.OUTLINE,
-                loading = state.syncing,
-                disabled = state.syncing || !state.enabled,
-                onClick = {
-                    state.syncNow(pager) { ok, msg -> toast.show(msg, if (ok) "ok" else "error") }
-                },
-            )
-        }
-
-        ScrollView(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            Column(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = spacing.pagePadding),
-                verticalArrangement = Arrangement.spacedBy(spacing.gutter),
-            ) {
-                if (state.loadError.isNotEmpty()) {
-                    Alert(
-                        title = "加载失败",
-                        description = state.loadError,
-                        status = AlertStatus.DANGER,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-                if (!state.enabled) {
-                    TuyaNote("涂鸦设备未启用。请到「全局配置 → Tuya」开启 [tuya].enabled（保存即生效，无需重启）。")
-                }
-                if (state.enabled) {
-                    TuyaCredentialsCard(
-                        state = state,
-                        confirmClear = confirmClear,
-                        onConfirmClearChange = { confirmClear = it },
-                        onDone = { ok, msg -> toast.show(msg, if (ok) "ok" else "error") },
-                    )
-                    if (state.loaded && state.devices.isEmpty()) {
-                        EmptyState(
-                            message = "还没有涂鸦设备",
-                            description = "录入凭证后点「立即同步」拉取账号下的设备目录；设备列表与控制全部走服务端局域网直连。",
-                            actionText = "立即同步",
-                            onAction = {
-                                state.syncNow(pager) { ok, msg -> toast.show(msg, if (ok) "ok" else "error") }
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                    }
-                    TuyaDeviceGrid(state = state)
-                    if (state.storePath.isNotEmpty()) {
-                        Text(
-                            text = "设备目录存储：${state.storePath}",
-                            style = Theme.typography.caption,
-                            color = Theme.colors.mutedForeground,
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-/** 设备卡片栅格：按可用宽度自适应列数（与 EchoMusePage 同一换算口径）。 */
-@Composable
-private fun TuyaDeviceGrid(state: TuyaState) {
-    val pager = LocalAdminPagerOrThrow()
-    val spacing = LocalAdminSpacing.current
-    val viewport = LocalAdminViewport.current
-    val contentWidth = viewport.width.value -
-        (if (viewport.isNarrow) 0f else GearUiBreakpoints.SIDEBAR_WIDTH + 1f) - spacing.pagePadding.value * 2
-    val columns = ((contentWidth + spacing.gutter.value) / (260f + spacing.gutter.value)).toInt().coerceAtLeast(1)
-    val cardWidth = ((contentWidth - spacing.gutter.value * (columns - 1)) / columns).coerceAtLeast(1f)
-    for (group in state.devices.chunked(columns)) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(spacing.gutter),
-        ) {
-            for (row in group) {
-                TuyaDeviceCard(
-                    row = row,
-                    modifier = Modifier.width(cardWidth.dp),
-                    onOpen = { state.openDetail(pager, row) },
-                )
-            }
-        }
-    }
-}
-
-/** 单张设备卡片：名称 / 型号 / 在线状态点 / IP（点击进详情）。 */
-@Composable
-private fun TuyaDeviceCard(row: TuyaDeviceRow, modifier: Modifier, onOpen: () -> Unit) {
-    Column(
-        modifier = modifier
-            .clip(RoundedCornerShape(12.dp))
-            .background(Theme.colors.surface)
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Box(
-                modifier = Modifier
-                    .size(8.dp)
-                    .background(
-                        if (row.online) Theme.colors.primary else Theme.colors.mutedForeground,
-                        RoundedCornerShape(4.dp),
-                    ),
-            )
-            Text(
-                text = row.name.ifEmpty { row.deviceId },
-                style = Theme.typography.titleSmall,
-                color = Theme.colors.foreground,
-                modifier = Modifier.weight(1f),
-            )
-        }
-        Text(
-            text = row.displayModel,
-            style = Theme.typography.caption,
-            color = Theme.colors.mutedForeground,
-        )
-        if (row.ip.isNotEmpty()) {
-            Text(
-                text = "${row.ip} · ${if (row.online) "在线" else "离线"}",
-                style = Theme.typography.caption,
-                color = Theme.colors.mutedForeground,
-            )
-        }
-        Button(text = "查看详情", type = ButtonType.OUTLINE, onClick = onOpen)
-    }
-}
 
 /**
  * 凭证卡：状态行（已配置 + 掩码 / 未配置）+ 区域/ID/secret 表单 + 保存/清除。
- * secret 保存成功后由状态层清空草稿；这里只渲染"已配置"与掩码，不出现原值。
+ * secret 保存成功后由状态层清空草稿；这里只渲染「已配置」与掩码，不出现原值。
  */
 @Composable
-private fun TuyaCredentialsCard(
+internal fun TuyaCredentialsCard(
     state: TuyaState,
     confirmClear: Boolean,
     onConfirmClearChange: (Boolean) -> Unit,
@@ -202,9 +44,7 @@ private fun TuyaCredentialsCard(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(Theme.colors.surface)
-            .padding(16.dp),
+            .padding(vertical = spacing.xs),
         verticalArrangement = Arrangement.spacedBy(spacing.sm),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(spacing.sm)) {
@@ -220,11 +60,6 @@ private fun TuyaCredentialsCard(
                 color = if (state.configured) Theme.colors.primary else Theme.colors.warning,
             )
         }
-        Text(
-            text = state.lastSyncText,
-            style = Theme.typography.caption,
-            color = Theme.colors.mutedForeground,
-        )
         labeledSelect(
             label = "区域",
             selectedId = state.formRegion,
@@ -249,7 +84,7 @@ private fun TuyaCredentialsCard(
                 color = Theme.colors.mutedForeground,
             )
         }
-        labeledField(
+        labeledSecretField(
             label = if (state.configured) "access_secret（留空保留旧值）" else "access_secret",
             value = state.formAccessSecret,
             onValueChange = { state.formAccessSecret = it },
@@ -282,7 +117,65 @@ private fun TuyaCredentialsCard(
     }
 }
 
-/** 只读说明行（浅色主题 caption；列表页与详情页共用）。 */
+/**
+ * 单张涂鸦设备卡：视觉对齐 [EchoMuseDeviceCard]（头部信息条 → 图标 → 状态条），
+ * 来源标识「涂鸦」放头部右侧（卡片在中心的分区标签下，徽标只做卡片级溯源）。
+ */
+@Composable
+internal fun TuyaDeviceCard(row: TuyaDeviceRow, modifier: Modifier, onOpen: () -> Unit) {
+    val spacing = LocalAdminSpacing.current
+    Card(modifier = modifier.clickable(onClick = onOpen)) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier.fillMaxWidth().background(Theme.colors.muted)
+                    .padding(horizontal = spacing.md, vertical = spacing.sm),
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(spacing.xs),
+                ) {
+                    Text(
+                        text = row.name.ifEmpty { row.deviceId },
+                        style = Theme.typography.titleSmall,
+                        color = Theme.colors.foreground,
+                        maxLines = 1,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(text = "涂鸦", style = Theme.typography.caption, color = Theme.colors.mutedForeground)
+                }
+                Text(text = row.displayModel, maxLines = 1, style = Theme.typography.caption,
+                    color = Theme.colors.mutedForeground)
+            }
+            Box(modifier = Modifier.fillMaxWidth().padding(vertical = spacing.lg), contentAlignment = Alignment.Center) {
+                GearIcon(
+                    token = IconToken.Wifi,
+                    size = 64.dp,
+                    tint = if (row.online) Theme.colors.success else Theme.colors.mutedForeground,
+                )
+            }
+            Column(modifier = Modifier.fillMaxWidth().padding(horizontal = spacing.md).padding(bottom = spacing.md)) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().background(Theme.colors.muted).padding(spacing.sm),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text(
+                        text = if (row.online) "在线" else "离线",
+                        style = Theme.typography.bodyMedium,
+                        color = if (row.online) Theme.colors.success else Theme.colors.mutedForeground,
+                    )
+                    Text(
+                        text = row.ip.ifEmpty { "IP 未上报" },
+                        style = Theme.typography.caption,
+                        color = Theme.colors.mutedForeground,
+                        maxLines = 1,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** 只读说明行（浅色主题 caption；设备中心与详情弹窗共用）。 */
 @Composable
 internal fun TuyaNote(text: String) {
     Text(

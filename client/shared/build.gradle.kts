@@ -246,8 +246,15 @@ tasks.matching { it.name == "check" || it.name.startsWith("packLocalJSBundle") }
 // 服务器出口定位：OpsState.GeoState 新增7项 stateVar（resolved/domestic/ip/region/source/note/scopeNote）。
 // 在途 tuya 集成（TuyaState/TuyaDetailPage 等）实测 +28 stateVar、+2 stateListOf，随本次一并入账。
 // 台账实测 452→487，列表 47→49，legacy 0 不变。
-val expectedStateVarCalls = 487
-val expectedStateListCalls = 49
+// Tuya 状态条透出失败原因与 LAN 未登记设备：TuyaState 新增 lastSyncMessage 1 个 stateVar（487→488）、
+// lanUnregistered 1 个 stateListOf（49→50）。
+// 服务器状态实时推送：GeoState 的 WS 占位三字段（serverStatus/serverStatusNote/serverStatusUpdatedAt，
+// 服务端契约最终不下发标量状态）收敛为 liveApplied 一个"已收实时快照"标记，实测 488→489。
+// 设备管理中心（echomuse+tuya 两页合并）：新增 [tuya] 配置段草稿 TuyaSectionState
+// （enabled/syncIntervalSecs 两个 stateVar），实测 489→491。
+// 设备插件注册门控：PluginMetaState 新增 devicePluginRows 列表（device_plugins 投影），50→51。
+val expectedStateVarCalls = 491
+val expectedStateListCalls = 51
 val bridgeWhitelist = emptySet<String>()
 val verifyComposeStateMigration by tasks.registering {
     group = "verification"

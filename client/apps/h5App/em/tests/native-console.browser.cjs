@@ -50,7 +50,7 @@ const device = { device_id:'test-dot2', label:'测试音箱', approved:true, onl
  const wait=async predicate=>{for(let i=0;i<80;i++){if(await predicate())return;await page.waitForTimeout(100);}throw Error('condition timed out');};
  try {
   await page.goto('http://echomuse.test/?page_name=admin');
-  await page.getByText('EchoMuse',{exact:true}).first().click({force:true});
+  await page.getByText('设备管理',{exact:true}).first().click({force:true});
   await page.getByText('测试音箱',{exact:true}).first().click({force:true});
   await page.getByText('输出音量',{exact:true}).waitFor();
    assert.equal(await page.locator('iframe').count(),0,'all management tabs are native');

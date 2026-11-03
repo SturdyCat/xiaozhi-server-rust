@@ -3,6 +3,7 @@ package com.xiaozhi.admin
 import androidx.compose.runtime.Composable
 import com.xiaozhi.admin.kit.labeledField
 import com.xiaozhi.admin.kit.labeledIntField
+import com.xiaozhi.admin.kit.labeledSecretField
 import com.xiaozhi.admin.kit.labeledTextArea
 import com.xiaozhi.admin.kit.switchRow
 
@@ -41,7 +42,7 @@ fun ServerSection(form: ConfigFormState) {
             help = "WebSocket 与 HTTP 共用端口：设备固件、管理台、测试台都按它连接。" +
                 "改端口后必须同步设备端配置，否则设备连不上。",
         )
-        labeledField(
+        labeledSecretField(
             label = "接入令牌",
             value = form.expectedToken,
             onValueChange = {
@@ -110,7 +111,7 @@ fun AiuiSection(form: ConfigFormState) {
                     form.markDirty()
                 },
             )
-            labeledField(
+            labeledSecretField(
                 label = "API Key",
                 value = form.aiuiApiKey,
                 onValueChange = {
@@ -119,7 +120,7 @@ fun AiuiSection(form: ConfigFormState) {
                 },
                 note = secretHint(form.aiuiApiKeyConfigured),
             )
-            labeledField(
+            labeledSecretField(
                 label = "API Secret",
                 value = form.aiuiApiSecret,
                 onValueChange = {

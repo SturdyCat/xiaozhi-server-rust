@@ -224,6 +224,8 @@ class ConfigFormState(private val scope: PagerScope) {
     // ===== [echomuse]：EchoMuse 设备入口（enabled + token；RestartOnly）=====
     /// 拆到 `EchoMuseSectionState`（同上：`AGENTS.md` §5.10 文件规模约定）。
     val em = EchoMuseSectionState(scope)
+    /// `[tuya]` 段（启用 / 同步周期；凭证走 /api/tuya/credentials，见 TuyaSectionState 注释）。
+    val tuya = TuyaSectionState(scope)
 
     /// 字段元数据（`GET /api/config/schema`）：目前用于「这个字段多久生效」提示（见 FormSchemaState）。
     val schema = FormSchemaState(scope)
@@ -351,6 +353,14 @@ class ConfigFormState(private val scope: PagerScope) {
      * 单页模式（`@Page("config")` 没有侧边栏）保持为 null，行为不变。
      */
     var onSectionRouted: ((String) -> Unit)? = null
+
+    /**
+     * 「设备管理」中心跳转槽：配置卡里的「管理设备」按钮经它切到侧栏「设备管理」
+     * （设备列表 / 审批 / 详情弹层都在那边——配置页只管参数，多入口复用同一处界面）。
+     * 与 [onSectionRouted] 同理由壳页面注册；单页模式（`@Page("config")` 无侧边栏）
+     * 保持为 null，按钮不渲染。
+     */
+    var onOpenDeviceHub: (() -> Unit)? = null
 
     /** 全局配置左菜单选择：记下位置，切到语音流程再回来时仍在同一 section。 */
     fun selectGlobalSection(sectionId: String) {

@@ -309,7 +309,7 @@ class StatsState(scope: PagerScope) : LoadableState(scope) {
 }
 
 /**
- * 服务器出口 IP 与地理信息（`GET /api/server/geo`，只读快照）。
+ * 服务器出口 IP 与地理信息（`GET /api/server/geo` + 管理台 WS 实时推送，只读快照）。
  *
  * 服务端启动时解析一次出口 IP：仅**国内**出口写入默认地区（天气等定位功能的回退值）；
  * 境外出口（翻墙/代理）**只展示不采用**。三种状态都在界面上说清：
@@ -317,8 +317,15 @@ class StatsState(scope: PagerScope) : LoadableState(scope) {
  * - `resolved && domestic`：IP + 地区 + 来源，并注明"已作为默认地区"；
  * - `resolved && !domestic`：IP + 地区照常显示，但标注境外、未写入默认定位；
  * - `!resolved`：显示服务端给的原因（[note]；空串 = 启动解析尚未完成）。
+ *
+ * 除首次 HTTP 拉取外，管理台 WS（[AdminRealtime]）会推两路更新（[applyRealtime]）：
+ * 连接首帧 `hello` 内嵌 `server_status` 快照（首连即有数据），出口 IP 解析完成时推
+ * `server_status_changed`——**不需要手动刷新**，「刷新」按钮只是兜底。
  */
 class GeoState(scope: PagerScope) : LoadableState(scope) {
+
+    /** 是否收到过管理台 WS 的实时快照（hello 或 server_status_changed）。 */
+    var liveApplied by stateVar(false)
 
     /** 服务端是否成功解析过出口 IP（含境外）。 */
     var resolved by stateVar(false)
@@ -346,20 +353,67 @@ class GeoState(scope: PagerScope) : LoadableState(scope) {
     override val errorLabel: String = "出口定位加载失败"
 
     override fun apply(data: JSONObject) {
-        resolved = data.optBoolean("resolved", false)
-        domestic = data.optBoolean("domestic", false)
-        ip = data.text("ip")
-        region = listOfNotNull(
+        applySnapshot(data)
+        loaded = true
+        loadError = ""
+    }
+
+    /**
+     * 应用管理台 WS 的服务器状态帧（hello 的 `server_status` 或 `server_status_changed`
+     * 的 `status`，两者同形：`schema_version` + `geo` 段）。找不到 geo 段的帧（旧服务端
+     * 的裸 hello）直接忽略——不碰现有状态，避免把 Geo 卡刷成空白。
+     */
+    fun applyRealtime(frame: JSONObject) {
+        val payload = frame.optJSONObject("status")
+            ?: frame.optJSONObject("server_status")
+            ?: frame.optJSONObject("state")
+            ?: frame.optJSONObject("server")
+            ?: frame.optJSONObject("data")
+            ?: frame
+        val geo = payload.optJSONObject("geo")
+            ?: payload.optJSONObject("server_geo")
+            ?: payload.optJSONObject("serverGeo")
+        when {
+            geo != null -> applySnapshot(geo)
+            hasGeoFields(payload) -> applySnapshot(payload)
+            else -> return
+        }
+        liveApplied = true
+        loaded = true
+        loadError = ""
+    }
+
+    private fun applySnapshot(data: JSONObject) {
+        val hasResolved = data.opt("resolved") != null
+        if (hasResolved) resolved = data.optBoolean("resolved", resolved)
+        data.text("scope_note").takeIf { it.isNotEmpty() }?.let { scopeNote = it }
+        if (hasResolved && !resolved) {
+            // 服务端明确"未解析"（重启后首连 / 解析未完成 / 失败落 note）：
+            // 清掉旧定位，不展示上一进程的残留；note 以本次快照为准（可为空 = 解析中）。
+            ip = ""
+            region = ""
+            source = ""
+            domestic = false
+            note = data.text("note")
+            return
+        }
+        data.text("ip").takeIf { it.isNotEmpty() }?.let { ip = it }
+        if (data.opt("domestic") != null) domestic = data.optBoolean("domestic", domestic)
+        val nextRegion = listOfNotNull(
             data.text("country").ifEmpty { null },
             data.text("province").ifEmpty { null },
             data.text("city").ifEmpty { null },
         ).joinToString(" ")
-        source = data.text("source")
-        note = data.text("note")
-        scopeNote = data.text("scope_note")
-        loaded = true
-        loadError = ""
+        if (nextRegion.isNotEmpty()) region = nextRegion
+        data.text("source").takeIf { it.isNotEmpty() }?.let { source = it }
+        data.text("note").takeIf { it.isNotEmpty() }?.let { note = it }
+        data.text("scope_note").takeIf { it.isNotEmpty() }?.let { scopeNote = it }
     }
+
+    private fun hasGeoFields(data: JSONObject): Boolean =
+        data.opt("resolved") != null || data.text("ip").isNotEmpty() ||
+            data.text("country").isNotEmpty() || data.text("province").isNotEmpty() ||
+            data.text("city").isNotEmpty()
 }
 
 // ============================================================

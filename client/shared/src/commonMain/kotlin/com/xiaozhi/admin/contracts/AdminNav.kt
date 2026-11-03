@@ -39,11 +39,11 @@ object AdminNav {
         // 测试台（P1-3）：macOnly —— web 端彻底隐藏该菜单（麦克风/音频链路不可用），真实现只在 macOS 客户端
         NavDescriptor("testbench", 5, "测试台", GROUP_OBSERVE, macOnly = true),
         NavDescriptor("devices", 10, "设备", GROUP_OBSERVE),
-        // EchoMuse 设备（批准制登记 + 重启 / WiFi 下发指令，`GET /api/echomuse/devices`）
-        NavDescriptor("echomuse", 15, "EchoMuse", GROUP_OBSERVE),
-        // 涂鸦设备（Tuya IoT：云目录同步 + 纯局域网控制，`/api/tuya/*`；凭证/同步
-        // 生命周期自成一体，与 ESP/EchoMuse 设备模型并列，故为独立一级导航）
-        NavDescriptor("tuya", 20, "涂鸦设备", GROUP_OBSERVE),
+        // 设备管理中心（2026-11-03 合并）：原「EchoMuse」与「涂鸦设备」两个一级入口并为一张
+        // 设备卡列表——顶部 title 栏 + 齿轮一次性配置（EchoMuse 接入状态/Tuya 凭证）+ 刷新；
+        // 点卡片弹各自的详情管理（EchoMuse 六标签弹窗 / Tuya DP 弹窗）。多入口：配置卡里的
+        // 「管理设备」按钮（openConfigSection 反向跳转）与语音流程节点都复用这一处运行面。
+        NavDescriptor("devicehub", 15, "设备管理", GROUP_OBSERVE),
         // 控制台（官方 dashboard 的 CONSOLE / 命令行）：实时服务器日志流 GET /api/logs，
         // 服务端已有实现、此前客户端未建页面消费（见 ConsoleState / ConsolePage）。
         // （2026-10-29 范围削减：sessions/conversations/usage/metrics 四项已移除，

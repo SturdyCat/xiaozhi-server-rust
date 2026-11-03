@@ -127,11 +127,16 @@ private fun AdminSidebar(page: AdminPage) {
             .background(Theme.colors.surface),
     ) {
         ScrollView(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            // 设备插件注册门控：两个设备插件都未注册（服务端 device_plugins 投影已加载且全 false）
+            // 时隐藏「设备管理」菜单（注册后菜单才出现）；未加载/旧服务端不隐藏，避免闪隐。
+            val hiddenNavIds = buildSet { if (!page.plugins.anyDevicePluginRegistered()) add("devicehub") }
             for ((group, items) in AdminNav.grouped(IS_MACOS)) {
+                val visibleItems = items.filter { it.id !in hiddenNavIds }
+                if (visibleItems.isEmpty()) continue
                 // CellGroup 负责：分组标题对齐、卡片圆角、行间分隔线（末行无分隔）；
                 // 组卡之间留一档空隙，分组在视觉上断开（组标题的 top 内距只管标题与卡片之间）
                 CellGroup(
-                    items = items,
+                    items = visibleItems,
                     title = group,
                     modifier = Modifier.padding(bottom = Spacing.sm),
                     key = { it.id },
@@ -371,23 +376,22 @@ private fun AdminSectionHost(page: AdminPage, viewport: AdminViewport) {
         "console" -> ConsolePage(console = page.console, toast = page.toast)
         // 文件（存储面）：面包屑 + 上传 + 新建目录 + 删除二次确认
         "files" -> FilesPage(state = page.files, toast = page.toast)
-        // EchoMuse：Kuikly 设备卡 + 双 Tab 管理弹窗，官方详情原样嵌入，不再另开页面。
-        "echomuse" -> EchoMusePage(
-            state = page.echomuse,
+        // 设备管理中心（2026-11-03 合并原 EchoMuse / 涂鸦设备两页）：统一卡片列表 +
+        // 齿轮一次性配置 + 刷新；EchoMuse 点卡弹六标签管理窗（自定义扩展经「扩展工具」进入），
+        // 涂鸦点卡弹 DP 详情窗。配置卡里的「管理设备」按钮也跳回这里（多入口复用）。
+        "devicehub" -> DeviceManagementCenter(
+            echoMuse = page.echomuse,
+            tuya = page.tuya,
+            plugins = page.plugins,
             toast = page.toast,
-            isActive = { page.selectedSection == "echomuse" },
+            isActive = { page.selectedSection == "devicehub" },
+            apiBase = page.apiBase,
+            token = page.adminRequestToken(),
+            openConfigSection = { section -> page.form.openConfigSection(section) },
             modelFiles = {
                 LaunchedEffect(Unit) { page.files.openPath(page, OWW_MODELS_DIR) }
                 FilesPage(state = page.files, toast = page.toast)
             },
-            apiBase = page.apiBase,
-            token = page.adminRequestToken(),
-        )
-        // 涂鸦设备（Tuya IoT）：凭证卡 + 云同步 + 设备卡栅格；点卡片进 DP 详情视图
-        "tuya" -> TuyaPage(
-            state = page.tuya,
-            toast = page.toast,
-            isActive = { page.selectedSection == "tuya" },
         )
         // 测试台（T12，mac-only）：五 tab 工作区（连接 / ASR 识别 / TTS 合成 / LLM 对话 / NLU 意图），
         // 播放控制下沉 XiaoZhiModule（Audio DSL 视图无法进 Compose 树，见 TestBenchPage.kt）

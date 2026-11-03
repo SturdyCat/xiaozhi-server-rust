@@ -88,6 +88,8 @@ mod skill_api;
 mod metrics;
 mod ota;
 mod plugins;
+#[cfg(test)]
+mod plugins_tests;
 mod registry;
 mod soul;
 mod usage;

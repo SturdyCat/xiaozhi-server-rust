@@ -56,6 +56,7 @@ enum class IconToken {
     Check, Close, Settings, Microphone, Waveform, Text, Intent, Model, Speaker, Info,
     Wifi, Bluetooth, Power, Copy, Funnel, Folder, Document,
     Edit, Plus, Back, More, Upload,
+    Eye, EyeOff,
 }
 
 /** Read-only node tests only. Does not replace BLE write/session replay protections. */

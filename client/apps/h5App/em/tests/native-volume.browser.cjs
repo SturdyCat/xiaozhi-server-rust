@@ -45,7 +45,7 @@ const web=path.resolve(__dirname,'../../web');
  const activeWidth=()=>slider().evaluate(root=>Math.min(...[...root.querySelectorAll('div')].map(n=>n.getBoundingClientRect()).filter(r=>r.width>=10&&r.width<=48&&r.height>=40&&r.height<=50).map(r=>r.x)));
  const open=async()=>{await click('音量测试音箱');await slider().waitFor();await page.waitForTimeout(250);};
  try{
-  await page.goto('http://native-volume.test/?page_name=admin');await click('EchoMuse');await open();await value('47%');
+  await page.goto('http://native-volume.test/?page_name=admin');await page.getByText('设备管理',{exact:true}).first().click({force:true});await open();await value('47%');
   assert.equal(await page.getByText('下发音量',{exact:true}).count(),0,'no numeric submit button');
   reported=95;await value('75%');assert.ok(runtimeReads>=2,'device changes are polled');
   await startDrag(.75,.85);const during=await activeWidth();assert.ok(Number.isFinite(during));

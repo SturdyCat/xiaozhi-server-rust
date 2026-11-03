@@ -2,6 +2,10 @@ package com.xiaozhi.admin.kit
 import com.xiaozhi.admin.kit.LocalAdminSpacing
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import com.gearui.components.input.Input
 import com.gearui.components.switch.Switch
 import com.gearui.components.textarea.Textarea
@@ -17,8 +21,13 @@ import com.tencent.kuikly.compose.foundation.layout.heightIn
 import com.tencent.kuikly.compose.foundation.layout.padding
 import com.tencent.kuikly.compose.ui.Alignment
 import com.tencent.kuikly.compose.ui.Modifier
+import com.tencent.kuikly.compose.ui.semantics.contentDescription
+import com.tencent.kuikly.compose.ui.semantics.semantics
 import com.tencent.kuikly.compose.ui.text.input.KeyboardType
 import com.tencent.kuikly.compose.ui.unit.dp
+import com.xiaozhi.admin.contracts.IconToken
+import com.xiaozhi.admin.icons.GearIcon
+import com.xiaozhi.admin.maskSecret
 
 /**
  * 表单字段族（Compose 版）—— 旧 `ui/Form.kt` 的等价物，基座换成 GearUI 的
@@ -114,6 +123,8 @@ private fun fieldNote(note: String) {
  * @param help          字段详解正文；非空时标签右侧挂 ⓘ
  * @param trailing      标签行的右侧控制动作
  * @param inputFilter   数字过滤：[INT_INPUT_FILTER] / [DECIMAL_INPUT_FILTER]，null = 不过滤
+ * @param readOnly      只读展示（值仍完整显示，仅不可编辑；[labeledSecretField] 的打码态用）
+ * @param suffix        输入框内右端插槽（如 [labeledSecretField] 的眼睛按钮），空 = 不占位
  * @param onSubmit      回车提交（控制台命令行这类必须能提交的输入，调用方仍须给可见按钮兜底）
  */
 @Composable
@@ -127,9 +138,11 @@ fun labeledField(
     help: String = "",
     trailing: (@Composable () -> Unit)? = null,
     enabled: Boolean = true,
+    readOnly: Boolean = false,
     onSubmit: (() -> Unit)? = null,
     inputFilter: ((String) -> String)? = null,
     keyboardType: KeyboardType = KeyboardType.Text,
+    suffix: (@Composable () -> Unit)? = null,
 ) {
     Column(modifier.fillMaxWidth()) {
         fieldLabelRow(label, help, trailing)
@@ -142,10 +155,12 @@ fun labeledField(
             modifier = Modifier.fillMaxWidth(),
             placeholder = placeholder,
             enabled = enabled,
+            readOnly = readOnly,
             // 管理台字段一律在卡片上 → SECONDARY 变体（GearUI 的口径：卡片/弹层内用 SECONDARY）
             variant = FieldVariant.SECONDARY,
             keyboardType = keyboardType,
             onSend = onSubmit,
+            suffix = suffix,
         )
         fieldNote(note)
     }
@@ -208,6 +223,73 @@ fun labeledDecimalField(
     inputFilter = DECIMAL_INPUT_FILTER,
     keyboardType = KeyboardType.Decimal,
 )
+
+/**
+ * 标签 + **密钥**输入框（眼睛查看）——证书/密钥类配置字段的统一零件。
+ *
+ * 与 [labeledField] 的差异：
+ * - **隐藏态（默认）显示打码版本**：头尾各保留 3 字符、中间 `*` 占位（口径见
+ *   [com.xiaozhi.admin.maskSecret]）；空字段没有可打码内容，照常显示 [placeholder] 提示。
+ *   打码串是只读视图（`readOnly`），此态到达的键盘写入一律丢弃，`*` 不会混进配置草稿。
+ * - **点击输入框右端的眼睛切换明文**：显示真实值并进入可编辑状态，再点一次恢复打码；
+ *   两个状态用 `Eye` / `EyeOff` 图标区分，并带中文 contentDescription。
+ * - **空字段可直接键入**：第一个字符到达时自动切到明文编辑态，之后的输入/粘贴都是真实值
+ *   ——不必先点眼睛才开始填新密钥。
+ *
+ * 刻意**不走 `KeyboardType.Password`**：跨端原生密码通道会把显示整体变成圆点（Kuikly iOS
+ * 走 secureTextEntry，视觉转换不过桥，见 GearUI `Input` 内注释），呈现不了"头尾 3 字符"；
+ * 打码由字符串层完成，行为四端一致。
+ */
+@Composable
+fun labeledSecretField(
+    label: String,
+    value: String,
+    onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    placeholder: String = "",
+    note: String = "",
+    help: String = "",
+    trailing: (@Composable () -> Unit)? = null,
+    enabled: Boolean = true,
+) {
+    // 眼睛开合是纯展示态（AGENTS 口径：纯展示态放 remember，不进状态层）
+    var revealed by remember { mutableStateOf(false) }
+    labeledField(
+        label = label,
+        value = if (revealed) value else maskSecret(value),
+        onValueChange = { raw ->
+            when {
+                revealed -> onValueChange(raw)
+                // 空字段首键入（含粘贴）：直接以真实值进入明文编辑，后续输入不再经过打码态
+                value.isEmpty() && raw.isNotEmpty() -> {
+                    revealed = true
+                    onValueChange(raw)
+                }
+                // 其余打码态写入全部丢弃：打码展示是只读视图，* 不能进草稿
+            }
+        },
+        modifier = modifier,
+        placeholder = placeholder,
+        note = note,
+        help = help,
+        trailing = trailing,
+        enabled = enabled,
+        readOnly = !revealed && value.isNotEmpty(),
+        suffix = {
+            GearIcon(
+                token = if (revealed) IconToken.EyeOff else IconToken.Eye,
+                size = 16.dp,
+                tint = Theme.colors.mutedForeground,
+                modifier = Modifier.semantics {
+                    contentDescription = if (revealed) "隐藏密钥" else "显示密钥"
+                },
+                onClick = if (enabled) {
+                    { revealed = !revealed }
+                } else null,
+            )
+        },
+    )
+}
 
 /**
  * 标签 + 多行输入框：散文 / 提示词 / 系统提示等长文本。用 GearUI `Textarea`（`autosize`）。

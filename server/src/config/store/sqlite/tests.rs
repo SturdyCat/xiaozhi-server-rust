@@ -303,3 +303,108 @@ fn legacy_db_without_column_is_migrated() {
     assert!(loaded.wakeup.enabled && loaded.command.enabled);
     let _ = std::fs::remove_file(&path);
 }
+
+/// 「代码迭代新增了配置，老库没有」：defaults_version 已是最新，但文档缺新段 →
+/// 启动结构补全自动补成当前默认值，升级即用新环境，无需用户重新保存。
+#[test]
+fn align_defaults_fills_new_sections_automatically() {
+    let (store, path) = tmp_store("align_shape_fill");
+    assert!(store.bootstrap_default_if_empty().unwrap());
+    // 模拟老库：删掉 [tuya] 段（新版本代码才有的段）+ 用户改过端口（保证补全后的文档
+    // 与历史 revision 不同、会留下一条新 history），defaults_version 保持最新
+    {
+        let doc: String = store
+            .conn()
+            .query_row("SELECT doc FROM cfg_documents WHERE id = 1", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        let mut v: serde_json::Value = serde_json::from_str(&doc).unwrap();
+        let obj = v.as_object_mut().unwrap();
+        obj.remove("tuya");
+        obj["server"]["port"] = serde_json::json!(9000);
+        store
+            .conn()
+            .execute(
+                "UPDATE cfg_documents SET doc = ?1 WHERE id = 1",
+                rusqlite::params![v.to_string()],
+            )
+            .unwrap();
+    }
+    let report = store
+        .align_defaults()
+        .unwrap()
+        .expect("缺失的新段必须被自动补全");
+    assert!(
+        report.filled.contains(&"tuya".to_string()),
+        "{}",
+        report.summary()
+    );
+    // 补进来的是当前代码默认值；用户已有值原样保留；版本本来就最新，保持不变
+    let loaded = store.load().unwrap();
+    assert!(loaded.tuya.enabled);
+    assert_eq!(loaded.tuya.access_id, "");
+    assert_eq!(loaded.server.port, 9000, "用户已有值不得被补全覆盖");
+    let ver: i64 = store
+        .conn()
+        .query_row(
+            "SELECT defaults_version FROM cfg_documents WHERE id = 1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        ver as u32,
+        crate::config::defaults::CURRENT_DEFAULTS_VERSION
+    );
+    // 幂等：第二次无事可做；补全留一份可回滚 history（补全后内容 ≠ 任何历史 → 新增一行）
+    assert!(store.align_defaults().unwrap().is_none());
+    let n: i64 = store
+        .conn()
+        .query_row(
+            "SELECT COUNT(*) FROM cfg_revisions WHERE source = 'defaults-migration'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(n, 1, "结构补全必须留 history（可用 revision 回滚）");
+    let _ = std::fs::remove_file(&path);
+}
+
+/// 损坏修复：整段被外部写成 `null`（serde 反序列化会失败）→ 结构补全按缺失补回默认段。
+#[test]
+fn align_defaults_repairs_null_section() {
+    let (store, path) = tmp_store("align_null_section");
+    assert!(store.bootstrap_default_if_empty().unwrap());
+    {
+        let doc: String = store
+            .conn()
+            .query_row("SELECT doc FROM cfg_documents WHERE id = 1", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        let mut v: serde_json::Value = serde_json::from_str(&doc).unwrap();
+        v.as_object_mut()
+            .unwrap()
+            .insert("tuya".to_string(), serde_json::Value::Null);
+        store
+            .conn()
+            .execute(
+                "UPDATE cfg_documents SET doc = ?1 WHERE id = 1",
+                rusqlite::params![v.to_string()],
+            )
+            .unwrap();
+    }
+    let report = store
+        .align_defaults()
+        .unwrap()
+        .expect("null 段必须被当作缺失补回");
+    assert!(
+        report.filled.contains(&"tuya".to_string()),
+        "{}",
+        report.summary()
+    );
+    let loaded = store.load().unwrap();
+    assert!(loaded.tuya.enabled, "null 段被补成当前默认（enabled 默认开）");
+    let _ = std::fs::remove_file(&path);
+}

@@ -4,7 +4,9 @@
 
 use std::time::Duration;
 
-use super::admin_ws::{admin_ws_loop, event_frame, hello_frame, reply_for, WsIn};
+use super::admin_ws::{
+    admin_ws_loop, event_frame, hello_frame, reply_for, status_event_frame, WsIn,
+};
 
 /// 读一帧（带超时防挂死），返回解析后的 JSON。
 async fn recv_frame(rx: &mut tokio::sync::mpsc::Receiver<String>) -> serde_json::Value {
@@ -15,6 +17,14 @@ async fn recv_frame(rx: &mut tokio::sync::mpsc::Receiver<String>) -> serde_json:
     serde_json::from_str(&frame).expect("帧必须是 JSON 文本")
 }
 
+/// 构造一对状态 watch（生产环境是 `plugins::geo` 的进程级单例，测试直驱本地通道）。
+fn status_channel() -> (
+    tokio::sync::watch::Sender<u64>,
+    tokio::sync::watch::Receiver<u64>,
+) {
+    tokio::sync::watch::channel(0u64)
+}
+
 // ---- 帧形状 ----
 
 #[test]
@@ -22,9 +32,26 @@ fn hello_and_event_frames_carry_type_and_version() {
     let hello: serde_json::Value = serde_json::from_str(&hello_frame(7)).unwrap();
     assert_eq!(hello["type"], "hello");
     assert_eq!(hello["version"], 7);
+    // 首帧自带服务器状态快照：客户端首连即有数据，不需要主动拉取。
+    let status = &hello["server_status"];
+    assert_eq!(status["schema_version"], 1, "hello 应内嵌 server_status");
+    assert!(
+        status["geo"]["resolved"].is_boolean(),
+        "geo 段必含 resolved"
+    );
+    assert!(status["geo"]["note"].is_string(), "geo 段必含 note");
     let event: serde_json::Value = serde_json::from_str(&event_frame(9)).unwrap();
     assert_eq!(event["type"], "echomuse_devices_changed");
     assert_eq!(event["version"], 9);
+}
+
+#[test]
+fn status_event_frame_matches_hello_snapshot_shape() {
+    // 两处快照同源同形（schema_version + geo 段）：客户端用同一套解析。
+    let hello: serde_json::Value = serde_json::from_str(&hello_frame(1)).unwrap();
+    let event: serde_json::Value = serde_json::from_str(&status_event_frame()).unwrap();
+    assert_eq!(event["type"], "server_status_changed");
+    assert_eq!(event["status"], hello["server_status"]);
 }
 
 // ---- reply_for：ping / 未知 / 非法 ----
@@ -56,9 +83,10 @@ fn reply_for_rejects_unknown_type_invalid_json_and_non_object() {
 #[tokio::test]
 async fn loop_sends_hello_then_event_on_version_bump() {
     let (ver_tx, ver_rx) = tokio::sync::watch::channel(5u64);
+    let (_st_tx, st_rx) = status_channel();
     let (_in_tx, in_rx) = tokio::sync::mpsc::channel::<WsIn>(16);
     let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<String>(16);
-    tokio::spawn(admin_ws_loop(in_rx, out_tx, ver_rx, None));
+    tokio::spawn(admin_ws_loop(in_rx, out_tx, ver_rx, st_rx, None));
 
     // 连接建立后立刻 hello（当前版本）。
     let hello = recv_frame(&mut out_rx).await;
@@ -73,11 +101,33 @@ async fn loop_sends_hello_then_event_on_version_bump() {
 }
 
 #[tokio::test]
+async fn loop_pushes_server_status_on_status_bump() {
+    let (_ver_tx, ver_rx) = tokio::sync::watch::channel(0u64);
+    let (st_tx, st_rx) = status_channel();
+    let (_in_tx, in_rx) = tokio::sync::mpsc::channel::<WsIn>(16);
+    let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<String>(16);
+    tokio::spawn(admin_ws_loop(in_rx, out_tx, ver_rx, st_rx, None));
+
+    // 首帧 hello 内嵌状态快照（出口 IP 尚未解析也带 resolved=false）。
+    let hello = recv_frame(&mut out_rx).await;
+    assert_eq!(hello["type"], "hello");
+    assert!(hello["server_status"]["geo"]["resolved"].is_boolean());
+
+    // 状态版本 bump（对应出口 IP 解析完成）→ 推 server_status_changed。
+    st_tx.send_replace(1);
+    let event = recv_frame(&mut out_rx).await;
+    assert_eq!(event["type"], "server_status_changed");
+    assert_eq!(event["status"]["schema_version"], 1);
+    assert!(event["status"]["geo"]["resolved"].is_boolean());
+}
+
+#[tokio::test]
 async fn loop_replies_ping_with_pong_and_exits_on_closed() {
     let (_ver_tx, ver_rx) = tokio::sync::watch::channel(0u64);
+    let (_st_tx, st_rx) = status_channel();
     let (in_tx, in_rx) = tokio::sync::mpsc::channel::<WsIn>(16);
     let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<String>(16);
-    tokio::spawn(admin_ws_loop(in_rx, out_tx, ver_rx, None));
+    tokio::spawn(admin_ws_loop(in_rx, out_tx, ver_rx, st_rx, None));
     assert_eq!(recv_frame(&mut out_rx).await["type"], "hello");
 
     // 应用层心跳：ping → pong。
@@ -99,9 +149,10 @@ async fn loop_replies_ping_with_pong_and_exits_on_closed() {
 #[tokio::test]
 async fn loop_stays_idle_without_changes() {
     let (ver_tx, ver_rx) = tokio::sync::watch::channel(3u64);
+    let (_st_tx, st_rx) = status_channel();
     let (_in_tx, in_rx) = tokio::sync::mpsc::channel::<WsIn>(16);
     let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<String>(16);
-    tokio::spawn(admin_ws_loop(in_rx, out_tx, ver_rx, None));
+    tokio::spawn(admin_ws_loop(in_rx, out_tx, ver_rx, st_rx, None));
     assert_eq!(recv_frame(&mut out_rx).await["type"], "hello");
 
     // 无变化时挂住不发帧（短超时探空，hello 之后不应有任何帧）。
@@ -116,9 +167,10 @@ async fn loop_stays_idle_without_changes() {
 #[tokio::test]
 async fn loop_exits_when_subscriber_goes_away() {
     let (_ver_tx, ver_rx) = tokio::sync::watch::channel(0u64);
+    let (_st_tx, st_rx) = status_channel();
     let (in_tx, in_rx) = tokio::sync::mpsc::channel::<WsIn>(16);
     let (out_tx, out_rx) = tokio::sync::mpsc::channel::<String>(16);
-    tokio::spawn(admin_ws_loop(in_rx, out_tx, ver_rx, None));
+    tokio::spawn(admin_ws_loop(in_rx, out_tx, ver_rx, st_rx, None));
     // 丢弃订阅方：循环下一次回执（ping → pong）发送失败即退出，
     // in_rx 随任务结束被丢弃 → in_tx.send 报错即循环已退出的可观测信号。
     drop(out_rx);
@@ -191,13 +243,13 @@ fn parse_rpc_frame_timeout_clamped() {
 fn parse_rpc_frame_rejects_bad_frames() {
     let cases = [
         json!({"type": "nope", "id": 1, "method": "GET", "path": "/api/x"}),
-        json!({"type": "rpc", "method": "GET", "path": "/api/x"}),           // 缺 id
+        json!({"type": "rpc", "method": "GET", "path": "/api/x"}), // 缺 id
         json!({"type": "rpc", "id": 1.5, "method": "GET", "path": "/api/x"}), // id 非整数
         json!({"type": "rpc", "id": 1, "method": "PATCH", "path": "/api/x"}), // 方法不在白名单
         json!({"type": "rpc", "id": 1, "method": "GET", "path": "/static/x"}), // 非 /api/
         json!({"type": "rpc", "id": 1, "method": "GET", "path": "/api/admin/ws"}), // 递归拒绝
         json!({"type": "rpc", "id": 1, "method": "GET", "path": "/api/x", "body": {}}), // GET 带 body
-        json!({"type": "rpc", "id": 1, "method": "POST", "path": "/api/x"}),  // 写缺 body
+        json!({"type": "rpc", "id": 1, "method": "POST", "path": "/api/x"}),            // 写缺 body
         json!({"type": "rpc", "id": 1, "method": "POST", "path": "/api/x", "body": [1]}), // body 非对象
     ];
     for bad in &cases {
@@ -218,12 +270,11 @@ async fn rpc_executes_through_router_and_returns_status_and_body() {
     let router = axum::Router::new()
         .route(
             "/api/echo",
-            axum_get(|| async {
-                axum::Json(json!({"ok": true, "from": "get"}))
-            })
-            .post(|body: axum::Json<serde_json::Value>| async move {
-                axum::Json(json!({"ok": true, "echoed": body.0}))
-            }),
+            axum_get(|| async { axum::Json(json!({"ok": true, "from": "get"})) }).post(
+                |body: axum::Json<serde_json::Value>| async move {
+                    axum::Json(json!({"ok": true, "echoed": body.0}))
+                },
+            ),
         )
         .with_state(());
     let router = std::sync::Arc::new(router);
@@ -272,9 +323,10 @@ async fn rpc_maps_http_404_and_frame_errors_to_result_frames() {
 #[tokio::test]
 async fn loop_without_rpc_router_answers_status_zero() {
     let (_ver_tx, ver_rx) = tokio::sync::watch::channel(0u64);
+    let (_st_tx, st_rx) = status_channel();
     let (in_tx, in_rx) = tokio::sync::mpsc::channel::<WsIn>(16);
     let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<String>(64);
-    tokio::spawn(admin_ws_loop(in_rx, out_tx, ver_rx, None));
+    tokio::spawn(admin_ws_loop(in_rx, out_tx, ver_rx, st_rx, None));
     assert_eq!(recv_frame(&mut out_rx).await["type"], "hello");
 
     in_tx

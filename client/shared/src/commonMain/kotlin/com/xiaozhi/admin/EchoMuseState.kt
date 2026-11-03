@@ -23,7 +23,7 @@ import com.xiaozhi.admin.state.stateListOf
  * - 写动作（批准/重启/WiFi/删除）结果走顶部 toast（调用方回调）；
  * - 409（设备离线）单独给"设备离线"提示——指令不会下发，需要先把设备唤醒。
  *
- * ⚠️ 本类不渲染：渲染见 `EchoMusePage.kt` / `EchoMuseDeviceCard.kt` / `EchoMuse*Tab.kt`。
+ * ⚠️ 本类不渲染：渲染见 `DeviceManagementCenter.kt` / `EchoMuseDeviceCard.kt` / `EchoMuse*Tab.kt`。
  *
  * 2026-10 两次拆分：
  * - T03：卡片内的分区选择态与运行状态/系统信息/音量/控制台搬到 [EchoMuseDetailState]，

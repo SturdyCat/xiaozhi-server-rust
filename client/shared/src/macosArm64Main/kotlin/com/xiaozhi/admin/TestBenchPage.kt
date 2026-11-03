@@ -26,7 +26,7 @@ import com.xiaozhi.admin.kit.LocalAdminSpacing
 import com.xiaozhi.admin.kit.LocalAdminViewport
 import com.xiaozhi.admin.kit.actionRow
 import com.xiaozhi.admin.kit.hGap
-import com.xiaozhi.admin.kit.labeledField
+import com.xiaozhi.admin.kit.labeledSecretField
 import com.xiaozhi.admin.kit.statusBadge
 import com.xiaozhi.admin.kit.twoPane
 
@@ -176,7 +176,7 @@ internal fun BenchConnectPage(
             LabeledCard(title = "连接") {
                 // server 地址只读展示：与 API 同一来源（侧边栏「服务器设置」），改一处 WS/API 一起变。
                 HintLine("服务器：${bench.serverUrl}（与 API 同一地址，经侧边栏「服务器设置」修改）")
-                labeledField(
+                labeledSecretField(
                     label = "token（可选）",
                     value = bench.token,
                     onValueChange = { bench.token = it },

@@ -20,51 +20,35 @@ import com.xiaozhi.admin.kit.LocalAdminSpacing
 import com.xiaozhi.admin.kit.labeledField
 
 /**
- * 涂鸦设备**详情视图**（列表页选中一台后替换内容区，返回即回列表）：
+ * 涂鸦设备**详情内容**（[TuyaDeviceDialog] 弹窗的内容区；原独立详情视图已并入设备管理中心）：
  * 设备基本信息 + DP 实时状态（可写项行内控制：布尔 → 开关按钮，数值 → 行内输入）。
  *
  * 控制失败的服务端三归类（offline/timeout/unsupported + 建议动作）原样展示——
  * 客户端不自己编降级文案（与 OpsState「直接展示服务端原话」同一口径）。
  */
 @Composable
-fun TuyaDetailPage(state: TuyaState, toast: ToastState) {
-    val pager = LocalAdminPagerOrThrow()
+internal fun TuyaDeviceDetailContent(state: TuyaState, toast: ToastState) {
     val spacing = LocalAdminSpacing.current
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(spacing.pagePadding),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(spacing.sm),
+    ScrollView(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(spacing.gutter),
         ) {
-            Text(
-                text = state.detailName.ifEmpty { state.detailId },
-                modifier = Modifier.weight(1f),
-                style = Theme.typography.titleMedium,
-                color = Theme.colors.foreground,
-            )
-            Button(text = "返回列表", type = ButtonType.OUTLINE, onClick = { state.closeDetail() })
-        }
-        ScrollView(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            Column(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = spacing.pagePadding),
-                verticalArrangement = Arrangement.spacedBy(spacing.gutter),
-            ) {
-                if (state.detailError.isNotEmpty()) {
-                    Alert(
-                        title = "详情读取失败",
-                        description = state.detailError,
-                        status = AlertStatus.DANGER,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-                TuyaDeviceInfoCard(state)
-                TuyaAliasCard(state, pager, toast)
-                if (state.dpMessage.isNotEmpty()) {
-                    TuyaNote(state.dpMessage)
-                }
-                TuyaDpCard(state, pager, toast)
+            if (state.detailError.isNotEmpty()) {
+                Alert(
+                    title = "详情读取失败",
+                    description = state.detailError,
+                    status = AlertStatus.DANGER,
+                    modifier = Modifier.fillMaxWidth(),
+                )
             }
+            TuyaDeviceInfoCard(state)
+            TuyaAliasCard(state, toast)
+            if (state.dpMessage.isNotEmpty()) {
+                TuyaNote(state.dpMessage)
+            }
+            TuyaDpCard(state, toast)
         }
     }
 }
@@ -104,7 +88,8 @@ private fun TuyaDeviceInfoCard(state: TuyaState) {
 
 /** 本地别名卡（P1-4：只影响本管理台展示名，不影响云端名称）。 */
 @Composable
-private fun TuyaAliasCard(state: TuyaState, pager: com.tencent.kuikly.core.pager.Pager, toast: ToastState) {
+private fun TuyaAliasCard(state: TuyaState, toast: ToastState) {
+    val pager = LocalAdminPagerOrThrow()
     labeledField(
         label = "本地别名（仅本管理台展示，不影响云端名称）",
         value = state.aliasDraft,
@@ -125,7 +110,8 @@ private fun TuyaAliasCard(state: TuyaState, pager: com.tencent.kuikly.core.pager
 
 /** DP 实时状态卡：可写项行内控制（布尔开关 / 数值行内输入），其余只读展示。 */
 @Composable
-private fun TuyaDpCard(state: TuyaState, pager: com.tencent.kuikly.core.pager.Pager, toast: ToastState) {
+private fun TuyaDpCard(state: TuyaState, toast: ToastState) {
+    val pager = LocalAdminPagerOrThrow()
     val spacing = LocalAdminSpacing.current
     Column(
         modifier = Modifier
@@ -144,7 +130,7 @@ private fun TuyaDpCard(state: TuyaState, pager: com.tencent.kuikly.core.pager.Pa
             TuyaNote("暂无 DP 快照：设备上线后由服务端轮询/控制回读填充（每 60s 错峰轮询）。")
         }
         for (dp in state.dps) {
-            TuyaDpRowView(state, dp, pager, toast)
+            TuyaDpRowView(state, dp, toast)
         }
     }
 }
@@ -154,9 +140,9 @@ private fun TuyaDpCard(state: TuyaState, pager: com.tencent.kuikly.core.pager.Pa
 private fun TuyaDpRowView(
     state: TuyaState,
     dp: TuyaDpRow,
-    pager: com.tencent.kuikly.core.pager.Pager,
     toast: ToastState,
 ) {
+    val pager = LocalAdminPagerOrThrow()
     val spacing = LocalAdminSpacing.current
     Row(
         modifier = Modifier.fillMaxWidth(),

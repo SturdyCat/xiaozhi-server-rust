@@ -12,13 +12,17 @@
 //! | GET  /api/tuya/devices/{id} | 详情 + DP 快照 |
 //! | POST /api/tuya/devices/{id}/dp | 控制 {dp, value} |
 //! | POST /api/tuya/devices/{id}/alias | 本地重命名 |
+//! | POST /api/tuya/cloud/proxy | **云调用调试代理**：`{method, path, query?, body?}`
+//!   → 服务端按官方签名转发涂鸦 OpenAPI，回包原样透传（联调免写临时脚本） |
 //!
 //! ## 安全铁律
 //!
 //! - `access_secret` **只写不读**：任何响应/日志永不回显（[`status_payload`] 只出
 //!   `configured` + 掩码，见 `api_tests` 的"不回显"断言）；
 //! - `[tuya].enabled=false` 时全部 404（与 echomuse 管理面同一口径）；
-//! - 凭证写入走 `config_store`（配置库真源），保存后即时丢弃 token 缓存。
+//! - 凭证写入走 `config_store`（配置库真源），保存后即时丢弃 token 缓存；
+//! - 调试代理只放行 `/v1.` 前缀路径 + GET/POST/DELETE（`cloud_proxy_call` 校验），
+//!   回包含 access_token 等临时凭据属调试用途，端点经管理鉴权、与其它 /api 同权。
 //!
 //! 响应体纯函数（[`status_payload`] / [`devices_payload`] / [`credentials_apply`]）
 //! 外置测试直驱（`api_tests.rs`），handler 只做鉴权、取参、组装。
@@ -37,7 +41,7 @@ use crate::runtime::Engines;
 
 use super::lan::ControlFailure;
 use super::store::DeviceRow;
-use super::SyncRecordView;
+use super::{SyncRecordView, UnregisteredDevice};
 
 /// 挂载管理面路由（由 [`crate::gateway::ws::router`] merge）。
 pub(crate) fn routes() -> axum::Router<Arc<Engines>> {
@@ -52,6 +56,7 @@ pub(crate) fn routes() -> axum::Router<Arc<Engines>> {
         .route("/api/tuya/devices/{id}", get(device_get))
         .route("/api/tuya/devices/{id}/dp", post(device_dp))
         .route("/api/tuya/devices/{id}/alias", post(device_alias))
+        .route("/api/tuya/cloud/proxy", post(cloud_proxy))
 }
 
 // ---- 响应体纯函数（api_tests 直驱）----
@@ -97,11 +102,15 @@ pub(crate) fn credentials_clear(cfg: &mut TuyaConfig) {
 }
 
 /// status 端点响应体。**永不包含 access_secret**（测试钉死）。
+///
+/// `lan_unregistered` 是 LAN 扫描发现的未登记设备快照（不纳管，目录以云同步为准）；
+/// `last_sync.message` 带同步失败的具体原因（如 code 1108），UI 状态条据此透出。
 pub(crate) fn status_payload(
     enabled: bool,
     cfg: &TuyaConfig,
     last_sync: Option<&SyncRecordView>,
     syncing: bool,
+    unregistered: &[UnregisteredDevice],
 ) -> Value {
     json!({
         "enabled": enabled,
@@ -117,6 +126,14 @@ pub(crate) fn status_payload(
             "device_count": s.device_count,
             "message": s.message,
         })),
+        "lan_unregistered": unregistered
+            .iter()
+            .map(|u| json!({
+                "device_id": u.device_id,
+                "ip": u.ip,
+                "age_ms": (super::store::now_ms() - u.discovered_at_ms).max(0),
+            }))
+            .collect::<Vec<_>>(),
         "store_path": String::new(), // handler 填（涉及落点，纯函数不管路径）
     })
 }
@@ -200,6 +217,96 @@ pub(crate) fn failure_payload(failure: &ControlFailure) -> Value {
     })
 }
 
+// ---- 云调用调试代理（`POST /api/tuya/cloud/proxy`）----
+
+/// 代理调用参数（`cloud_proxy_call` 校验后的产物，handler 直发 [`super::cloud`]）。
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct CloudProxyCall {
+    pub method: &'static str,
+    /// path?query 一体（query 键已按字典序排好，与签名共用同一串）。
+    pub path_query: String,
+    /// 原始 JSON 文本；非 POST 为空串。
+    pub body_json: String,
+}
+
+/// 代理请求体校验（纯函数）：method 白名单 + path 前缀闸 + query 字典序 + body 限 POST。
+///
+/// 限制理由：代理以**用户凭证**签名转发，必须收敛为"涂鸦 OpenAPI 调试器"而非
+/// 通用代理——`/v1.` 前缀挡住任意路径，方法白名单挡住非常规调用。
+pub(crate) fn cloud_proxy_call(v: &Value) -> Result<CloudProxyCall, String> {
+    let method = match v
+        .get("method")
+        .and_then(Value::as_str)
+        .unwrap_or("GET")
+        .to_ascii_uppercase()
+        .as_str()
+    {
+        "GET" => "GET",
+        "POST" => "POST",
+        "DELETE" => "DELETE",
+        other => return Err(format!("method 只支持 GET/POST/DELETE（收到 {other}）")),
+    };
+    let path = v.get("path").and_then(Value::as_str).unwrap_or("").trim().to_string();
+    if !path.starts_with("/v1.") {
+        return Err("path 必须以 /v1. 开头（涂鸦 OpenAPI 路径，如 /v1.0/devices）".into());
+    }
+    if path.contains(' ') || path.contains('?') || path.contains('#') {
+        return Err("path 不能含空格、? 或 #（query 参数用 query 对象传）".into());
+    }
+    let mut path_query = path;
+    if let Some(q) = v.get("query").filter(|q| q.is_object()) {
+        let map = q.as_object().expect("is_object 已判定");
+        let mut keys: Vec<&String> = map.keys().collect();
+        keys.sort();
+        let pairs: Vec<String> = keys
+            .iter()
+            .map(|k| {
+                let val = &map[*k];
+                let rendered = val.to_string();
+                let text = val.as_str().unwrap_or(&rendered);
+                format!("{}={}", encode_query_component(k), encode_query_component(text))
+            })
+            .collect();
+        path_query = format!("{}?{}", path_query, pairs.join("&"));
+    }
+    let body_json = match v.get("body") {
+        Some(b) if !b.is_null() => {
+            if method != "POST" {
+                return Err("只有 POST 请求允许带 body".into());
+            }
+            serde_json::to_string(b).map_err(|e| format!("body 序列化失败: {e}"))?
+        }
+        _ => String::new(),
+    };
+    Ok(CloudProxyCall { method, path_query, body_json })
+}
+
+/// query 键/值的最小 URL 编码（涂鸦 query 值实践中是 id/游标/分页数，普通字符直通）。
+fn encode_query_component(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for b in text.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+/// 代理回包响应体：云回包原样透传（调试所见即所得），外层带 HTTP 状态。
+pub(crate) fn cloud_proxy_payload(status: u16, raw_body: &str) -> Value {
+    let body: Value =
+        serde_json::from_str(raw_body).unwrap_or(Value::String(raw_body.to_string()));
+    json!({ "status": status, "body": body })
+}
+
+/// 代理失败响应体（网络/鉴权/云业务三归类，消息不含 secret）。
+pub(crate) fn cloud_proxy_error(kind: &'static str, message: &str) -> Value {
+    json!({ "kind": kind, "error": message })
+}
+
 // ---- axum handlers（鉴权 → enabled 闸门 → 组装）----
 
 /// 管理面共用前置：鉴权 + `[tuya].enabled` 闸门；Some = 已定型的错误响应。
@@ -271,7 +378,13 @@ async fn status(
         .flatten()
         .as_ref()
         .map(SyncRecordView::from_record);
-    let mut body = status_payload(cfg.enabled, &cfg, last_sync.as_ref(), engines.tuya.syncing());
+    let mut body = status_payload(
+        cfg.enabled,
+        &cfg,
+        last_sync.as_ref(),
+        engines.tuya.syncing(),
+        &engines.tuya.unregistered_snapshot(),
+    );
     body["store_path"] = json!(engines.tuya.store_path().display().to_string());
     json_ok(body)
 }
@@ -424,5 +537,47 @@ async fn device_alias(
     match engines.tuya.set_alias(&id, alias).await {
         Ok(()) => json_ok(json!({ "ok": true })),
         Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, json!({ "error": e })),
+    }
+}
+
+/// 云调用调试代理：校验 → 读凭证 → 签名转发 → 原样透传。
+async fn cloud_proxy(
+    headers: HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
+    State(engines): State<Arc<Engines>>,
+    body: Option<axum::Json<Value>>,
+) -> Response {
+    if let Some(r) = gate(&engines, &headers, &query) {
+        return r;
+    }
+    let payload = body.map(|axum::Json(v)| v).unwrap_or(json!({}));
+    let call = match cloud_proxy_call(&payload) {
+        Ok(c) => c,
+        Err(e) => return json_error(StatusCode::BAD_REQUEST, json!({ "error": e })),
+    };
+    let cfg = match load_config(&engines).await {
+        Ok(c) => c,
+        Err(e) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, json!({ "error": e })),
+    };
+    if !cfg.credentials_ready() {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            json!({ "error": "涂鸦凭证未配置：先 POST /api/tuya/credentials 录入" }),
+        );
+    }
+    let mut client = engines.tuya.cloud.lock().await;
+    match client
+        .proxy_request(&cfg.region, &cfg.access_id, &cfg.access_secret, call.method, &call.path_query, &call.body_json)
+        .await
+    {
+        Ok(resp) => json_ok(cloud_proxy_payload(resp.status, &resp.body)),
+        Err(e) => {
+            let kind = match &e {
+                super::cloud::CloudError::Auth(_) => "auth",
+                super::cloud::CloudError::Network(_) => "network",
+                super::cloud::CloudError::Api(_) => "api",
+            };
+            json_error(StatusCode::BAD_GATEWAY, cloud_proxy_error(kind, &e.message()))
+        }
     }
 }

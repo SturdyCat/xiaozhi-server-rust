@@ -1,6 +1,9 @@
 //! 出口 IP 定位解析的离线测试（不联网）。
 
-use super::{parse_ipip, parse_ipip_parts};
+use super::{
+    bump_status_version, parse_ipip, parse_ipip_parts, status_snapshot, status_version,
+    subscribe_status_version,
+};
 
 #[test]
 fn test_parse_ipip_domestic() {
@@ -37,4 +40,21 @@ fn test_parse_ipip_bad_format_returns_none() {
     // 格式不符（如被劫持页/接口变更）：结构解析失败。
     assert!(parse_ipip_parts("<html>blocked</html>").is_none());
     assert!(parse_ipip("").is_none());
+}
+
+#[test]
+fn test_status_snapshot_shape_and_version_bump() {
+    // 快照三种状态都必有这三个口径字段（未解析时不带 ip 等可选字段）。
+    let snap = status_snapshot();
+    assert!(snap["resolved"].is_boolean());
+    assert!(snap["note"].is_string());
+    assert!(snap["scope_note"].is_string());
+    assert_eq!(snap["scope_note"], super::SCOPE_NOTE);
+
+    // bump → 版本自增且订阅者可见（管理台 WS 据此推 server_status_changed）。
+    let before = status_version();
+    let mut rx = subscribe_status_version();
+    bump_status_version();
+    assert_eq!(status_version(), before.wrapping_add(1));
+    assert!(rx.has_changed().unwrap(), "订阅者应观察到版本变化");
 }

@@ -1,14 +1,19 @@
 package com.xiaozhi.admin
 
 import androidx.compose.runtime.Composable
+import com.gearui.components.button.Button
+import com.gearui.components.button.ButtonType
+import com.xiaozhi.admin.kit.actionRow
 import com.xiaozhi.admin.kit.labeledField
+import com.xiaozhi.admin.kit.labeledSecretField
 import com.xiaozhi.admin.kit.switchRow
 
 /**
  * 「EchoMuse 设备接入」section（`echomuse`，`[echomuse]` 段）—— Compose 版。
  *
- * ⚠️ 与侧边栏「EchoMuse」菜单**不是同一处**：那边是设备运行面（设备列表 / 批准 / WiFi 下发，
- * 见 `EchoMuseState`，属另一任务），这里只有三项**配置字段**（开关 / 接入令牌 / 欢迎语）。
+ * ⚠️ 与侧边栏「设备管理」**不是同一处**：那边是设备运行面（设备列表 / 批准 / WiFi 下发，
+ * 见 `EchoMuseState`，属另一任务），这里只有三项**配置字段**（开关 / 接入令牌 / 欢迎语）；
+ * 卡片尾部的「管理设备」按钮是多入口复用——同一处运行面，配置页可直接跳过去。
  *
  * 语义（服务端为唯一权威）：`enabled` 默认 true（开机即用：挂 em 路由并广播 mDNS）；
  * 显式关闭时零路由、零 mDNS，行为与没有这段完全一致。该段属 **RestartOnly**，
@@ -28,7 +33,7 @@ fun EchoMuseSection(form: ConfigFormState) {
             help = "启用后挂载 em 路由并与同网段设备建立连接；关闭时 EchoMuse 页只显示「未启用」提示，" +
                 "不挂 em 路由、不广播 mDNS。",
         )
-        labeledField(
+        labeledSecretField(
             label = "接入令牌",
             value = form.em.token,
             onValueChange = {
@@ -49,6 +54,16 @@ fun EchoMuseSection(form: ConfigFormState) {
         )
         if (form.em.enabled != "true") {
             HintLine("未启用：EchoMuse 页只显示「未启用」提示，不挂 em 路由、不广播 mDNS。")
+        }
+        // 多入口：配置 → 设备管理中心（侧栏「设备管理」）。单页 config 模式无侧栏，槽位为 null 不渲染。
+        form.onOpenDeviceHub?.let { openHub ->
+            actionRow {
+                Button(
+                    text = "管理设备",
+                    type = ButtonType.OUTLINE,
+                    onClick = openHub,
+                )
+            }
         }
     }
 }

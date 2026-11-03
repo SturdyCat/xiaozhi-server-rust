@@ -101,7 +101,7 @@ fun OpsOverviewPage(
             }
         }
 
-        // 服务器出口：出口 IP + 地理信息（`GET /api/server/geo`）。
+        // 服务器出口：出口 IP + 地理信息（HTTP 首载 + 管理台 WS 实时推送）。
         // 服务端启动时解析一次：仅国内出口写入默认地区（天气等定位功能的回退值）；
         // 境外出口只展示不采用——两种口径都必须在界面上说清，避免"为什么天气问不出城市"。
         ServerGeoCard(geo, ctx)
@@ -119,11 +119,13 @@ fun OpsOverviewPage(
 }
 
 /**
- * 「服务器出口」卡：`GET /api/server/geo` 的投影。
+ * 「服务器出口」卡：`GET /api/server/geo` + 管理台 WS 实时推送的投影。
  *
  * - 已解析：IP + 地区 + 来源；`domestic` 差异用一行口径区分（已作为默认地区 / 境外仅展示）；
  * - 未解析：优先展示服务端原因（[GeoState.note]，如"境外出口"/"上游不可达"），
  *   空串 = 启动解析尚未完成；
+ * - [GeoState.liveApplied]：已收到 WS 实时快照（首帧 hello / server_status_changed），
+ *   出口信息自动更新，无需手动刷新——「刷新」按钮只是兜底；
  * - 首次加载失败 → 就地错误 + 「刷新」，不弹 toast（与能力总览同一口径）。
  */
 @Composable
@@ -158,7 +160,10 @@ private fun ServerGeoCard(geo: GeoState, ctx: Pager) {
             }
             geo.resolved -> Unit // 解析成功但地区为空：摘要行已给出 IP，不再重复占行
             geo.note.isNotEmpty() -> WarnLine(geo.note)
-            else -> HintLine("服务器启动后正在解析出口 IP，稍后点「刷新」")
+            else -> HintLine("服务器启动后正在解析出口 IP，解析完成会自动更新到这里")
+        }
+        if (geo.liveApplied) {
+            HintLine("实时通道已连接：出口状态变化自动更新，无需手动刷新")
         }
         if (geo.scopeNote.isNotEmpty()) {
             HintLine(geo.scopeNote)

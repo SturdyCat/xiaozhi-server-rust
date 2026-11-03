@@ -56,7 +56,7 @@ const web=path.resolve(__dirname,'../../web');
  };
  try{
   await page.goto('http://native-management.test/?page_name=admin');
-  await click('EchoMuse');await click('测试音箱');
+  await page.getByText('设备管理',{exact:true}).first().click({force:true});await click('测试音箱');
   await page.getByText('输出音量',{exact:true}).waitFor();await page.waitForTimeout(350);
   assert.equal(await page.locator('iframe').count(),0);
   await page.screenshot({path:path.resolve(web,'../../../build/echomuse-native-status.png')});
@@ -97,7 +97,7 @@ const web=path.resolve(__dirname,'../../web');
   await page.getByLabel('刷新资产状态',{exact:true}).scrollIntoViewIfNeeded();
   await page.screenshot({path:path.resolve(web,'../../../build/echomuse-native-updates-compact.png')});
   assert.equal(await page.locator('iframe').count(),0);
-  await page.setViewportSize({width:1440,height:1000});await click('关闭设备详情');await click('自定义扩展');await click('测试音箱');
+  await page.setViewportSize({width:1440,height:1000});await click('关闭设备详情');await click('扩展工具');await click('测试音箱');
    await page.getByText('GATT 工具',{exact:true}).waitFor();
    assert.equal(await page.getByText('状态',{exact:true}).count(),0,'custom workspace excludes official tabs');
    await click('原始诊断');await click('读取设备报告');
