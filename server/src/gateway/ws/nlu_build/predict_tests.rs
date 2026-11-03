@@ -36,7 +36,6 @@ fn artifact(map: Value) -> Artifact {
         ],
         catalog_source: None,
         base_model: None,
-        base_model_source: None,
         created_at: None,
         files: vec![],
         nlu,

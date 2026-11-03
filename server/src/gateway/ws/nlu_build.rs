@@ -55,9 +55,6 @@ struct BuildJob {
     error: String,
     build_id: Option<String>,
     source_revision: Option<String>,
-    /// 本次（或最近一次）构建的预训练底座规范名与来源；空闲时为 None。
-    base_model: Option<String>,
-    base_model_source: Option<String>,
     /// 谁发起的：`manual`（管理台点按钮）/ `bootstrap`（首启自举）。
     /// 只用于状态与日志可读性，不改变任何构建口径。
     origin: Option<&'static str>,
@@ -186,8 +183,6 @@ fn saved_snapshot(
 #[serde(deny_unknown_fields)]
 struct BuildRequest {
     expected_revision: Option<String>,
-    /// 底座规范名（minirbt-h288 / rbt3）；缺省 = 服务端缺省臂，非法 = 400，绝不静默回退。
-    base_model: Option<String>,
 }
 
 /// 构建发起方。只影响状态/日志可读性，不改变任何构建口径（同一套 docker 与产物校验）。
@@ -202,8 +197,6 @@ pub(super) enum BuildStart {
     Started {
         build_id: String,
         source_revision: String,
-        base: BaseModel,
-        base_source: &'static str,
         output_dir: PathBuf,
     },
     /// 已有构建在跑（手动与自举共用唯一槽位）。
@@ -223,19 +216,8 @@ pub(super) enum BuildStart {
 pub(super) async fn run_build(
     engines: &Arc<Engines>,
     expected_revision: Option<String>,
-    requested_base: Option<String>,
     origin: &'static str,
 ) -> BuildStart {
-    // 底座先于读配置校验：非法名字立刻失败，不进入 docker 分支，也不落任何构建目录。
-    let (base, base_source) = match resolve_base(requested_base.as_deref()) {
-        Ok(v) => v,
-        Err(e) => {
-            return BuildStart::Invalid {
-                code: "invalid_base_model",
-                message: e,
-            }
-        }
-    };
     let store = engines.config_store.clone();
     let loaded = tokio::task::spawn_blocking(move || {
         saved_snapshot(store.as_ref(), expected_revision.as_deref())
@@ -275,8 +257,6 @@ pub(super) async fn run_build(
         state: "running",
         build_id: Some(id.clone()),
         source_revision: Some(revision.clone()),
-        base_model: Some(base.name.to_string()),
-        base_model_source: Some(base_source.to_string()),
         origin: Some(origin),
         output_dir: Some(out.display().to_string()),
         ..BuildJob::default()
@@ -296,26 +276,17 @@ pub(super) async fn run_build(
             .chain(std::iter::once("other".into()))
             .collect(),
         catalog_source: Some("effective_command_nlu_v1".into()),
-        base_model: Some(base.name.to_string()),
-        base_model_source: Some(base_source.to_string()),
+        base_model: Some(BASE_MODEL.name.to_string()),
         // 训练输入还没有产物：封版时刻由 training.rs 在三件套验收后打点。
         created_at: None,
         files: Vec::new(),
         nlu,
     };
     drop(j);
-    tokio::spawn(training::run_training(
-        work,
-        out.clone(),
-        input,
-        candidate,
-        base,
-    ));
+    tokio::spawn(training::run_training(work, out.clone(), input, candidate));
     BuildStart::Started {
         build_id: id,
         source_revision: revision,
-        base,
-        base_source,
         output_dir: out,
     }
 }
@@ -344,24 +315,14 @@ pub(super) async fn start_build(
             Err(e) => return error(StatusCode::BAD_REQUEST, "invalid_input", e),
         }
     };
-    match run_build(
-        &engines,
-        req.expected_revision,
-        req.base_model,
-        ORIGIN_MANUAL,
-    )
-    .await
-    {
+    match run_build(&engines, req.expected_revision, ORIGIN_MANUAL).await {
         BuildStart::Started {
             build_id,
             source_revision,
-            base,
-            base_source,
             output_dir,
         } => Json(json!({"started":true,"state":"running","build_id":build_id,
-            "source_revision":source_revision,"base_model":base.name,
-            "base_model_source":base_source,"origin":ORIGIN_MANUAL,"output_dir":output_dir}))
-        .into_response(),
+            "source_revision":source_revision,"origin":ORIGIN_MANUAL,"output_dir":output_dir}))
+            .into_response(),
         BuildStart::Busy => error(
             StatusCode::CONFLICT,
             "build_running",
@@ -391,9 +352,7 @@ fn status_json(j: &BuildJob) -> Value {
         "bert_enabled":true,"bert_model":"<output_dir>/model.onnx","bert_vocab":"<output_dir>/tokenizer.json","bert_labels":"<output_dir>/labels.txt"}));
     json!({"type":"state","state":j.state,"running":j.running,"error":j.error,"log_tail":j.log,
         "build_id":j.build_id,"source_revision":j.source_revision,"output_dir":j.output_dir,
-        "base_model":j.base_model,"base_model_source":j.base_model_source,"origin":j.origin,
-        // 臂表是界面选择器的唯一权威：客户端不再硬编码档位（旧服务端无此字段时才本地回落）。
-        "bases":bases_json(),
+        "origin":j.origin,
         "artifact":artifact,"expected_config":expected,"auto_activated":false})
 }
 

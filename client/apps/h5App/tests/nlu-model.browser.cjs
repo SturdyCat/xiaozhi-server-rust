@@ -28,16 +28,12 @@ const out = path.resolve(__dirname, '../../../build/nlu-model-browser');
     bert_model: '/old/model.onnx', bert_vocab: '/old/tokenizer.json', bert_labels: '/old/labels.txt',
     bert_threshold: 0.75, bert_num_threads: 1, bert_max_len: 64, bert_label_map: {} } };
   let artifact = null;
-  // 服务端臂表（GET /api/nlu/model/build 的 bases）：界面不再硬编码档位。
-  const bases = [
-    { name: 'minirbt-h288', hub: 'hfl/minirbt-h288', onnx_estimate_mb: 10, note: '6 层 miniRBT（h288 词表），更小更快', default: true },
-    { name: 'rbt3', hub: 'hfl/rbt3', onnx_estimate_mb: 40, note: '3 层中文 RoBERTa，约 40MB，兼容历史产物', default: false }];
-  const BASE_H288 = 'minirbt-h288 · 6 层 miniRBT（h288 词表），更小更快（默认）';
-  const BASE_RBT3 = 'rbt3 · 3 层中文 RoBERTa，约 40MB，兼容历史产物';
-  // base_model 由构建请求回显：服务端只在 manifest 里记录训练用的底座。
-  const makeArtifact = (base = 'minirbt-h288') => ({ build_id: '11111111-1111-4111-8111-111111111111', source_revision: revision,
+  // 服务端只有唯一底座：状态里不再有 `bases` 臂表，构建请求也不再带 `base_model`。
+  const BASE = 'minirbt-h288';
+  // base_model 由构建产物回显：服务端只在 manifest 里记录训练用的底座。
+  const makeArtifact = () => ({ build_id: '11111111-1111-4111-8111-111111111111', source_revision: revision,
     model_sha256: 'a'.repeat(64), labels: ['reminder_daily', 'new_help', 'other'], output_dir: '/data/models/nlu-builds/test',
-    base_model: base, base_model_source: 'request',
+    base_model: BASE,
     expected_config: { bert_enabled: true, bert_model: '/data/models/nlu-builds/test/model.onnx',
       bert_vocab: '/data/models/nlu-builds/test/tokenizer.json', bert_labels: '/data/models/nlu-builds/test/labels.txt',
       bert_threshold: 0.75, bert_num_threads: 1, bert_max_len: 64, bert_label_map: {} } });
@@ -72,13 +68,15 @@ const out = path.resolve(__dirname, '../../../build/nlu-model-browser');
     else if (u.pathname === '/api/nlu/model/build' && req.method() === 'POST') {
       const request = req.postDataJSON(); builds.push(request);
       assert.equal(request.expected_revision, revision);
-      artifact = makeArtifact(request.base_model);
+      // 服务端 `BuildRequest` 是 deny_unknown_fields：客户端多传一个键直接 400。
+      assert.ok(!Object.hasOwn(request, 'base_model'), 'build request must not carry base_model');
+      artifact = makeArtifact();
       body = { started: true, state: 'running', build_id: artifact.build_id, source_revision: artifact.source_revision,
-        base_model: artifact.base_model, base_model_source: artifact.base_model_source, bases };
+        base_model: artifact.base_model };
     } else if (u.pathname === '/api/nlu/model/build') body = artifact
       ? { state: 'success', build_id: artifact.build_id, source_revision: artifact.source_revision,
-          base_model: artifact.base_model, base_model_source: artifact.base_model_source, bases, artifact, log_tail: '' }
-      : { state: 'idle', artifact: null, log_tail: '', bases };
+          base_model: artifact.base_model, artifact, log_tail: '' }
+      : { state: 'idle', artifact: null, log_tail: '' };
     else if (u.pathname === '/api/nlu/model/test') {
       const request = req.postDataJSON(); tests.push(request);
       assert.equal(request.build_id, artifact.build_id);
@@ -101,17 +99,7 @@ const out = path.resolve(__dirname, '../../../build/nlu-model-browser');
   const attempt = async text => { const b = button(text); await b.scrollIntoViewIfNeeded(); await page.waitForTimeout(250); await b.click({ force: true }); await page.waitForTimeout(250); };
   // GearUI Select 的弹层里有一层全屏承载 div（overlay 层自身），Playwright 的可点性检查
   // 判它"intercepts pointer events"，点不动；真实用户点击没有这个问题（事件由 overlay 层
-  // 自己路由到选项行，见下方 aria-label 断言）。这里按元素中心坐标点原生鼠标事件，
-  // 不用 force 掩盖拦截问题。
-  const clickAtCenter = async text => {
-    const el = page.getByText(text, { exact: true }).last();
-    await el.scrollIntoViewIfNeeded();
-    await page.waitForTimeout(250);
-    const box = await el.boundingBox();
-    if (!box) throw new Error(`no bounding box for ${text}`);
-    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-    await page.waitForTimeout(300);
-  };
+  // 自己路由到选项行）。底座不再可选，本文件不再需要按坐标点击弹层选项的辅助函数。
   const saveButton = () => page.getByText('保存配置', { exact: true }).last();
   // 「保存按钮可点」的唯一判据：文案回到「保存配置」。保存期间是「保存中…」，此时点击
   // 在 Kotlin 侧被 `if (saving) return@with` 静默丢弃。所有"点保存"的地方都先过这一句，
@@ -293,21 +281,16 @@ const out = path.resolve(__dirname, '../../../build/nlu-model-browser');
     assert.equal(writes[0].nlu.intents[1].name, 'new_help');
     assert.ok(!Object.hasOwn(writes[0].nlu, 'model_threshold'));
     assert.ok(!Object.hasOwn(writes[0].nlu, 'model_margin'));
-    // 底座维度：选择器的档位来自服务端 `bases`，先刷新一次状态把它取回来；
-    // 缺省臂是表里 default=true 的那一臂（h288），切换只影响下一次构建请求。
+    // 底座维度：服务端只有唯一底座，界面没有可切换的臂，构建请求也不带 base_model。
     await click('刷新状态');
-    await page.getByText(BASE_H288, { exact: true }).first().waitFor();
-    await clickAtCenter(BASE_H288); // 打开弹层（此时只有 trigger 有这段文本）
-    await page.getByLabel(`${BASE_RBT3}, 未选择`, { exact: true }).waitFor();
-    await clickAtCenter(BASE_RBT3);
-    // 弹层选完即关：断言 trigger 文案已切换（"已选择"是弹层内的瞬时语义，不再断言）。
-    await page.getByText(BASE_RBT3, { exact: true }).first().waitFor();
+    await page.getByText(/当前固定使用预训练底座 minirbt-h288/).waitFor();
+    assert.equal(await page.getByText('预训练底座', { exact: true }).count(), 0, 'no base model selector');
     await click('构建新模型');
     await page.getByText(/候选模型已生成，尚未启用/).waitFor();
     assert.equal(builds.length, 1); assert.equal(builds[0].expected_revision, 'r2');
-    assert.equal(builds[0].base_model, 'rbt3', 'selected base must travel with the build request');
-    console.log(`base_model in build request: ${JSON.stringify(builds[0])}`);
-    await page.getByText(/训练底座：rbt3/).waitFor();
+    assert.ok(!Object.hasOwn(builds[0], 'base_model'), 'build request must not carry base_model');
+    console.log(`build request: ${JSON.stringify(builds[0])}`);
+    await page.getByText(/训练底座：minirbt-h288/).waitFor();
     assert.equal(writes.length, 1, 'build success never saves/activates');
     assert.equal(config.nlu.bert_enabled, false);
     await attempt('采用候选并保存启用');
@@ -352,15 +335,15 @@ const out = path.resolve(__dirname, '../../../build/nlu-model-browser');
     await attempt('构建新模型');
     assert.equal(builds.length, 1, '409 conflict preserves draft and blocks builds');
     assert.ok(await page.getByPlaceholder('好的，已为你打开灯。', { exact: true }).inputValue() === '保留的未保存应答');
-    // D 回归：重进页面后选择器必须用服务端「最近一次构建的底座」初始化，而不是恒回 rbt3；
-    // 否则用户以为下次仍按上次的臂训练，实际静默换回默认臂。
+    // D 回归：重进页面后仍只有固定底座，界面不残留可切换的臂表。
     await page.reload();
     await page.getByText('VAD · 语音分段', { exact: true }).first().waitFor();
     const axisAfterReload = page.getByLabel('打开NLU节点', { exact: true });
     await (await axisAfterReload.count() ? axisAfterReload : page.getByText('NLU', { exact: true }).first()).click();
     await page.getByText('NLU · 意图与技能', { exact: true }).first().waitFor();
     await click('刷新状态');
-    await page.getByText(BASE_RBT3, { exact: true }).first().waitFor();
+    await page.getByText(/当前固定使用预训练底座 minirbt-h288/).waitFor();
+    assert.equal(await page.getByText('预训练底座', { exact: true }).count(), 0, 'no base model selector after reload');
     assert.deepEqual(errors, []);
     await page.screenshot({ path: path.join(out, 'nlu-candidate.png') });
     console.log('PASS NLU UI: simple-mode add, saved revision build, no automatic activation, isolated test, fail-closed evidence, explicit save activation, 409 draft retention. Mocked APIs only; no real model accuracy claim.');

@@ -403,11 +403,11 @@ class DefaultSkillCorpusTests(unittest.TestCase):
 
 
 class BaseModelTests(unittest.TestCase):
-    """底座是**单变量维度**：只允许两臂，名字错就失败，不猜 hub id。"""
+    """底座是**唯一模型**：只允许 minirbt-h288，名字错就失败，不猜 hub id。"""
 
-    def test_only_two_supported_bases_and_shipped_default(self):
-        self.assertEqual(sorted(train.BASES), ["minirbt-h288", "rbt3"])
-        # 首项即缺省臂：服务端 DEFAULT_BASE_MODEL 与前端 view 初值必须同批对齐，
+    def test_only_one_supported_base_and_shipped_default(self):
+        self.assertEqual(sorted(train.BASES), ["minirbt-h288"])
+        # 首项即缺省臂：服务端 BASE_MODEL 与前端 view 初值必须同批对齐，
         # 顺序本身也是契约（有 Rust 单测从这份源码里读首项）。
         self.assertEqual(list(train.BASES)[0], "minirbt-h288")
         if "MODEL_NAME" not in os.environ:
@@ -421,16 +421,16 @@ class BaseModelTests(unittest.TestCase):
                 self.assertGreater(profile["lr"], 0.0)
                 self.assertGreater(profile["epochs"], 0.0)
 
-    def test_profiles_keep_distinct_hyperparameters(self):
+    def test_profile_matches_the_shipped_base(self):
         minirbt = train.resolve_base("minirbt-h288")
         self.assertEqual(minirbt, {"hub": "hfl/minirbt-h288", "lr": 1e-4, "epochs": 10.0})
-        self.assertEqual(
-            train.resolve_base("rbt3"), {"hub": "hfl/rbt3", "lr": 5e-5, "epochs": 6.0}
-        )
+        # 返回副本：调用方改动超参不得污染 profile 原表。
+        minirbt["lr"] = 0.5
+        self.assertEqual(train.BASES["minirbt-h288"]["lr"], 1e-4)
 
     def test_unknown_base_is_rejected_with_allowed_values(self):
-        # 历史语义（直接传 hub id）与将来可能的新底座都不能被静默接受。
-        for name in ("hfl/rbt3", "rbt4-h312", "", " RBT3 "):
+        # 历史语义（直接传 hub id）、已移除的旧底座与将来可能的新底座都不能被静默接受。
+        for name in ("hfl/minirbt-h288", "hfl/rbt3", "rbt3", "rbt4-h312", "", " RBT3 "):
             with self.subTest(base=name), self.assertRaisesRegex(ValueError, "allowed"):
                 train.resolve_base(name)
         with self.assertRaisesRegex(ValueError, "minirbt-h288"):

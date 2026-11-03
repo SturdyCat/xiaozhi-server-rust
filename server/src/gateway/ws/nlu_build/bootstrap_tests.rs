@@ -279,7 +279,6 @@ fn state_file_round_trips_atomically_and_recovers_from_garbage() {
     st.last_error_kind = Some("weights_unavailable".into());
     st.last_error = Some("OSError: can't load".into());
     st.last_build_id = Some("b".into());
-    st.last_base_model = Some(DEFAULT_BASE_MODEL.into());
     st.build_source_revision = Some("rev-a".into());
     st.current_revision = Some("rev-b".into());
     st.smoke = Some(SmokeSummary {
@@ -422,13 +421,7 @@ async fn missing_docker_cli_is_attributed_without_panicking() {
     let store = SqliteConfigStore::open(":memory:").unwrap();
     store.persist(&cfg).unwrap();
     let engines = Arc::new(crate::runtime::Engines::new_dev(&cfg, store).unwrap());
-    let started = run_build(
-        &engines,
-        None,
-        Some(DEFAULT_BASE_MODEL.into()),
-        ORIGIN_BOOTSTRAP,
-    )
-    .await;
+    let started = run_build(&engines, None, ORIGIN_BOOTSTRAP).await;
     let build_id = match started {
         BuildStart::Started { build_id, .. } => build_id,
         other => panic!("应当启动构建，实际 {}", describe_start(&other)),
@@ -483,7 +476,7 @@ async fn run_build_reports_busy_when_the_single_slot_is_taken() {
             ..Default::default()
         };
     }
-    let started = run_build(&engines, None, None, ORIGIN_BOOTSTRAP).await;
+    let started = run_build(&engines, None, ORIGIN_BOOTSTRAP).await;
     assert!(matches!(started, BuildStart::Busy), "占用中必须让路");
     // 复原槽位，别把状态留给后面的用例。
     {

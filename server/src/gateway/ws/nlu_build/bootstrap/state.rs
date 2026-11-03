@@ -157,7 +157,6 @@ pub(super) struct State {
     pub(super) last_error_kind: Option<String>,
     pub(super) last_error: Option<String>,
     pub(super) last_build_id: Option<String>,
-    pub(super) last_base_model: Option<String>,
     pub(super) adopted_at: Option<i64>,
     /// 冒烟实测值（门禁跑到才写）。
     pub(super) smoke: Option<SmokeSummary>,
@@ -182,7 +181,6 @@ impl Default for State {
             last_error_kind: None,
             last_error: None,
             last_build_id: None,
-            last_base_model: None,
             adopted_at: None,
             smoke: None,
             bad_class_detail: Vec::new(),

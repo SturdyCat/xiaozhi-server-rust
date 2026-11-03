@@ -24,16 +24,14 @@ CKPT_DIR = os.environ.get("TRAIN_CKPT", "/work/ckpt")
 FP32_DIR = os.environ.get("TRAIN_FP32", "/work/onnx-fp32")
 
 # 预训练底座：环境变量 MODEL_NAME 承载**规范名**（值语义不是 hub id）。
-# 服务端按同一约定传参（server/src/gateway/ws/nlu_build.rs 的 BASE_MODELS 表），
+# 服务端按同一约定传参（server/src/gateway/ws/nlu_build/base.rs 的 BASE_MODEL），
 # 两侧键集合由该文件的单测锁定，避免加了一边忘了另一边。
 BASE_NAME = os.environ.get("MODEL_NAME", "minirbt-h288").strip()
-# **顺序有意义**：服务端 `DEFAULT_BASE_MODEL` 必须等于这里的首项（有单测锁定），
-# 否则"服务端缺省臂"与"脚本 standalone 缺省臂"会分叉。
+# **当前唯一底座**：6 层 miniRBT（h288 词表）。体积/延迟更低，不代表更准。
+# 表结构保留（而非写死常量）：服务端单测按源码解析这张表，锁 hub/lr/epochs 三字段
+# 与服务端 BASE_MODEL 逐字段一致——只改一边会导致"日志说 h288、实际训的是别的"。
 BASES = {
-    # 缺省臂：6 层 miniRBT（h288 词表）。体积/延迟更低，不代表更准。
     "minirbt-h288": {"hub": "hfl/minirbt-h288", "lr": 1e-4, "epochs": 10.0},
-    # 兼容臂：3 层中文 RoBERTa，int8 后约 40MB，与历史产物同源。
-    "rbt3": {"hub": "hfl/rbt3", "lr": 5e-5, "epochs": 6.0},
 }
 
 
@@ -49,7 +47,7 @@ def resolve_base(name):
             "unknown base model MODEL_NAME=%r; allowed: %s"
             % (name, ", ".join(sorted(BASES)))
         )
-    # 返回副本：调用方改动超参不得污染其他臂的 profile。
+    # 返回副本：调用方改动超参不得污染 profile 原表。
     return dict(profile)
 
 

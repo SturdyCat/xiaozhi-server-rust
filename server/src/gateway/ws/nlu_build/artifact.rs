@@ -33,13 +33,10 @@ pub(crate) struct Artifact {
     /// Absent in older manifests: their NLU and label snapshots remain unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub catalog_source: Option<String>,
-    /// 训练用预训练底座规范名（rbt3 / minirbt-h288）。与 `catalog_source` 同一兼容范式：
-    /// 旧 manifest 没有该键时读成 None，前端按 rbt3 展示，绝不反过来判 null 拒收。
+    /// 训练用预训练底座规范名（minirbt-h288）。与 `catalog_source` 同一兼容范式：
+    /// 旧 manifest 没有该键时读成 None，仅作历史展示，不影响任何构建口径。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_model: Option<String>,
-    /// 底座来源：`request` 显式指定 / `default` 缺省臂。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub base_model_source: Option<String>,
     /// 产物封版时刻（RFC3339 / UTC，秒精度 `Z` 后缀）。三件套校验全过、manifest
     /// 即将落盘时打点，是"这份产物是哪次构建出的"唯一可信来源。
     ///
@@ -163,8 +160,6 @@ pub(crate) struct ManifestHead {
     pub created_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base_model: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub base_model_source: Option<String>,
     pub labels: Vec<String>,
     pub files: Vec<FileIdentity>,
     /// `unverified`（文件齐全但没算哈希）/ `incomplete` / `corrupt` 之一；
@@ -187,7 +182,6 @@ struct ManifestHeadRaw {
     build_id: Option<String>,
     created_at: Option<String>,
     base_model: Option<String>,
-    base_model_source: Option<String>,
     labels: Vec<String>,
     files: Vec<ManifestFileProbe>,
 }
@@ -198,7 +192,6 @@ impl Default for ManifestHeadRaw {
             build_id: None,
             created_at: None,
             base_model: None,
-            base_model_source: None,
             labels: Vec::new(),
             files: Vec::new(),
         }
@@ -220,7 +213,6 @@ pub(crate) fn load_manifest(data: &Path, id: &str) -> Result<ManifestHead, Candi
                 build_id: id.to_string(),
                 created_at: None,
                 base_model: None,
-                base_model_source: None,
                 labels: Vec::new(),
                 files: Vec::new(),
                 integrity: INTEGRITY_INCOMPLETE,
@@ -276,7 +268,6 @@ pub(crate) fn load_manifest(data: &Path, id: &str) -> Result<ManifestHead, Candi
             build_id: id.to_string(),
             created_at: head.created_at,
             base_model: head.base_model,
-            base_model_source: head.base_model_source,
             labels: head.labels,
             files: Vec::new(),
             integrity: INTEGRITY_INCOMPLETE,
@@ -287,7 +278,6 @@ pub(crate) fn load_manifest(data: &Path, id: &str) -> Result<ManifestHead, Candi
         build_id: id.to_string(),
         created_at: head.created_at,
         base_model: head.base_model,
-        base_model_source: head.base_model_source,
         labels: head.labels,
         files: Vec::new(),
         integrity: INTEGRITY_UNVERIFIED,
@@ -441,7 +431,7 @@ impl Artifact {
             "source_input_sha256":self.source_input_sha256,"trainer_image":self.trainer_image,
             "trainer_image_id":self.trainer_image_id,"trainer_script_sha256":self.trainer_script_sha256,"model_sha256":self.model_sha256(),
             "labels":self.labels,"catalog_source":self.catalog_source,
-            "base_model":self.base_model,"base_model_source":self.base_model_source,
+            "base_model":self.base_model,
             "created_at":self.created_at,
             "files":self.files,"output_dir":dir,
             "expected_config":{"bert_enabled":true,"bert_model":cfg.bert_model,

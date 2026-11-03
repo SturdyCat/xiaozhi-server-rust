@@ -77,60 +77,9 @@ async fn status_body_shape() {
     assert_eq!(body["state"], "idle");
     assert_eq!(body["running"], false);
     assert!(body["expected_config"]["bert_enabled"].as_bool().unwrap());
-    // 空闲态如实给 null，不假装跑过某个底座；前端只在有构建时读这两个键。
+    // 单模型后不再下发 `bases`（客户端不再有底座选择器），状态体只描述构建本身。
+    assert!(body["bases"].is_null());
     assert!(body["base_model"].is_null());
-    assert!(body["base_model_source"].is_null());
-}
-
-#[test]
-fn status_exposes_the_arm_table_and_flags_the_default() {
-    // 界面选择器的数据源：`bases` 必须自带 default 标记，客户端不再硬编码档位。
-    let body = status_json(&BuildJob::new());
-    let bases = body["bases"].as_array().unwrap();
-    assert_eq!(bases.len(), BASE_MODELS.len());
-    let default = bases
-        .iter()
-        .find(|b| b["default"] == true)
-        .expect("必须有一臂被标记为默认");
-    assert_eq!(default["name"], DEFAULT_BASE_MODEL);
-    for base in bases {
-        assert!(base["hub"].as_str().unwrap().starts_with("hfl/"));
-        assert!(base["onnx_estimate_mb"].as_u64().unwrap() > 0);
-        assert!(!base["note"].as_str().unwrap().is_empty());
-    }
-    // 空闲态不假装跑过某个底座。
-    assert!(body["base_model"].is_null());
-    assert!(body["origin"].is_null());
-}
-
-#[test]
-fn base_model_defaults_to_the_shipped_arm_and_never_silently_falls_back() {
-    // 缺省臂 = h288（与 train.py 的 BASE_NAME 缺省、前端 view 初值同批改）。
-    let (base, source) = resolve_base(None).unwrap();
-    assert_eq!(base.name, DEFAULT_BASE_MODEL);
-    assert_eq!(base.name, "minirbt-h288");
-    assert_eq!(base.hub, "hfl/minirbt-h288");
-    assert_eq!(source, BASE_SOURCE_DEFAULT);
-    let (explicit, source) = resolve_base(Some("rbt3")).unwrap();
-    assert_eq!(explicit.name, "rbt3");
-    assert_eq!(source, BASE_SOURCE_REQUEST);
-    let (small, source) = resolve_base(Some("minirbt-h288")).unwrap();
-    assert_eq!(small.hub, "hfl/minirbt-h288");
-    assert_eq!(source, BASE_SOURCE_REQUEST);
-    // 空白对齐 train.py 的 .strip()：两侧对 " rbt3" 的口径必须一致（脚本接受、服务端就不能 400）。
-    for name in [" rbt3", "rbt3 ", "\tminirbt-h288 "] {
-        let (base, _) = resolve_base(Some(name)).unwrap();
-        assert!(
-            base.name == "rbt3" || base.name == "minirbt-h288",
-            "{name:?}"
-        );
-    }
-    // 历史写法（直接传 hub id）、大小写不符、空串、未来臂都必须报错而不是回落默认臂。
-    for name in ["hfl/rbt3", "RBT3", "   ", "", "rbt4-h312"] {
-        let err = resolve_base(Some(name)).unwrap_err();
-        assert!(err.contains("allowed"), "{err}");
-        assert!(err.contains("minirbt-h288"), "{err}");
-    }
 }
 
 #[test]
@@ -139,9 +88,8 @@ fn base_model_env_matches_trainer_contract() {
     // 参数必须是成对的 `-e KEY=VALUE`：`docker run` 会把裸 `KEY=VALUE` 解析成镜像
     // 引用（2026-11-02 NAS 实测 exit 125：library/MODEL_NAME=minirbt-h288 must be
     // lowercase），所以这里锁定含 `-e` 的完整 docker 参数，只锁值挡不住这次回归。
-    let (base, _) = resolve_base(None).unwrap();
     assert_eq!(
-        base.env_args(),
+        BASE_MODEL.env_args(),
         [
             "-e".to_string(),
             "MODEL_NAME=minirbt-h288".to_string(),
@@ -151,29 +99,17 @@ fn base_model_env_matches_trainer_contract() {
             "EPOCHS=10".to_string()
         ]
     );
-    // 结构断言独立于具体臂：每个 env 值都必须紧跟 `-e`，防止以后把旗标拆到调用方
+    // 结构断言：每个 env 值都必须紧跟 `-e`，防止以后把旗标拆到调用方
     // 或加第四个 env 时漏掉旗标。
-    for pair in base.env_args().chunks(2) {
+    for pair in BASE_MODEL.env_args().chunks(2) {
         assert_eq!(pair[0], "-e", "env 值 {:?} 缺少 -e 旗标", pair[1]);
         assert!(pair[1].contains('='), "{:?} 不是 KEY=VALUE 形式", pair[1]);
     }
-    let (base, _) = resolve_base(Some("rbt3")).unwrap();
-    assert_eq!(
-        base.env_args(),
-        [
-            "-e".to_string(),
-            "MODEL_NAME=rbt3".to_string(),
-            "-e".to_string(),
-            "LEARNING_RATE=0.00005".to_string(),
-            "-e".to_string(),
-            "EPOCHS=6".to_string()
-        ]
-    );
 }
 
 #[test]
-fn base_model_table_matches_trainer_source_profile_for_profile() {
-    // 双表一致性：服务端表与编译进二进制的 train.py 的 BASES 必须**逐字段**相同。
+fn base_model_matches_trainer_source_profile() {
+    // 双表一致性：服务端唯一底座与编译进二进制的 train.py 的 BASES 必须**逐字段**相同。
     // 只锁键集合不够：`hub` 在服务端只用于日志（training.rs 的 base_hub=），真实下载读的是
     // train.py 的表，只改一边的 hub 会让测试全绿而日志骗人；lr/epochs 同理会训练出
     // 与表上记录不一致的超参。纯内存断言，不启动 docker、不读工作区外的文件。
@@ -182,31 +118,26 @@ fn base_model_table_matches_trainer_source_profile_for_profile() {
         !profiles.is_empty(),
         "未能从 TRAINER_SOURCE 解析出 BASES profile，解析方式需要更新"
     );
-    let served = BASE_MODELS
-        .iter()
-        .map(|base| {
-            (
-                base.name.to_string(),
-                (base.hub.to_string(), base.learning_rate, base.epochs),
-            )
-        })
-        .collect::<std::collections::BTreeMap<_, _>>();
-    assert_eq!(profiles, served);
-    assert!(profiles.contains_key(DEFAULT_BASE_MODEL));
+    // 当前只支持一个底座：python 侧也必须是单臂。
+    assert_eq!(profiles.len(), 1, "train.py 的 BASES 必须只剩 minirbt-h288 一臂");
+    let (name, (hub, lr, epochs)) = profiles.into_iter().next().unwrap();
+    assert_eq!(name, BASE_MODEL.name);
+    assert_eq!(hub, BASE_MODEL.hub);
+    assert_eq!(lr, BASE_MODEL.learning_rate);
+    assert_eq!(epochs, BASE_MODEL.epochs);
     // 保序解析与内容解析必须看到同样多的臂：否则"首项"断言会因为解析漏行而假绿。
     assert_eq!(
         python_bases_order(TRAINER_SOURCE).len(),
-        profiles.len(),
+        1,
         "python_bases_order 与 python_bases_profiles 解析出的臂数不一致"
     );
-    // 缺省臂必须等于 `BASES` 的**首项**（顺序即语义）：改默认臂时服务端与脚本
-    // 必须同批改，否则 standalone `docker run` 会训另一个底座。
+    // 唯一底座必须等于 `BASES` 的**首项**（顺序即语义）。
     assert_eq!(
         python_bases_order(TRAINER_SOURCE)
             .first()
             .map(String::as_str),
-        Some(DEFAULT_BASE_MODEL),
-        "服务端 DEFAULT_BASE_MODEL 必须等于 train.py BASES 的首项"
+        Some(BASE_MODEL.name),
+        "服务端 BASE_MODEL 必须等于 train.py BASES 的首项"
     );
 }
 
@@ -215,53 +146,28 @@ const TRAINER_DOCKERFILE: &str = include_str!("../../../../../tools/nlu-trainer/
 
 #[test]
 fn trainer_image_defaults_to_the_same_arm() {
-    // 缺省臂在**四处**同时存在：train.py 的 `BASE_NAME`、`base.rs` 的 `DEFAULT_BASE_MODEL`、
-    // Dockerfile 的 `ENV MODEL_NAME=`、前端 view 初值。QA 复核发现 Dockerfile 漏改
-    // （值还是 rbt3，注释却写着 h288）——只改值不加断言，下次还会漂，所以在这里钉住。
+    // 唯一底座在**三处**必须一致：server 的 `BASE_MODEL`、`train.py` 的 `BASES` 首项、
+    // Dockerfile 的 `ENV MODEL_NAME=`。只改一处不加断言会漂，所以在这里钉死。
     let value = TRAINER_DOCKERFILE
         .lines()
         .find_map(|line| line.trim().strip_prefix("MODEL_NAME="))
         .expect("Dockerfile 里必须有 MODEL_NAME=");
-    assert_eq!(value.trim(), DEFAULT_BASE_MODEL);
+    assert_eq!(value.trim(), BASE_MODEL.name);
 }
 
 #[test]
-fn request_parsing_keeps_deny_unknown_fields_and_accepts_base_model() {
-    let req: BuildRequest = serde_json::from_slice(br#"{"base_model":"minirbt-h288"}"#).unwrap();
-    assert_eq!(req.base_model.as_deref(), Some("minirbt-h288"));
+fn request_parsing_rejects_unknown_fields() {
     let bare: BuildRequest = serde_json::from_slice(b"{}").unwrap();
-    assert!(bare.base_model.is_none());
-    // 未知键依旧拒绝：底座不能靠另一种字段名混进来。
-    assert!(serde_json::from_slice::<BuildRequest>(br#"{"base":"rbt3"}"#).is_err());
-}
-
-#[tokio::test]
-async fn start_build_rejects_invalid_base_model_with_400_before_reading_config() {
-    let mut engines = Arc::try_unwrap(dev_fixture()).ok().unwrap();
-    engines.dev_mode = false; // 走到真实校验分支；非法底座在读配置前就应当失败。
-    let engines = Arc::new(engines);
-    let mut headers = HeaderMap::new();
-    headers.insert("authorization", "Bearer admin-test".parse().unwrap());
-    let result = start_build(
-        State(engines),
-        headers,
-        Query(HashMap::new()),
-        Bytes::from_static(br#"{"base_model":"hfl/rbt3"}"#),
-    )
-    .await;
-    assert_eq!(result.status(), StatusCode::BAD_REQUEST);
-    let bytes = axum::body::to_bytes(result.into_body(), 8192)
-        .await
-        .unwrap();
-    let body = serde_json::from_slice::<Value>(&bytes).unwrap();
-    assert_eq!(body["error_code"], "invalid_base_model");
-    assert!(body["error"].as_str().unwrap().contains("minirbt-h288"));
+    assert!(bare.expected_revision.is_none());
+    // 未知键依旧拒绝：底座不能靠另一种字段名混进来（单模型后已无 base_model 字段）。
+    assert!(serde_json::from_slice::<BuildRequest>(br#"{"base_model":"minirbt-h288"}"#).is_err());
+    assert!(serde_json::from_slice::<BuildRequest>(br#"{"base":"minirbt-h288"}"#).is_err());
 }
 
 /// 从训练脚本源码里取 `BASES` 每一臂的 profile：`name → (hub, lr, epochs)`。
 ///
 /// 只认这一种写法：`BASES = {` 起始、单独一行 `}` 结束、每臂一行、嵌套字典写在行内。
-/// 行内字典是 JSON 兼容字面量（`{"hub": "hfl/rbt3", "lr": 5e-5, "epochs": 6.0}`，5e-5/6.0
+/// 行内字典是 JSON 兼容字面量（`{"hub": "hfl/minirbt-h288", "lr": 1e-4, "epochs": 10.0}`，1e-4/10.0
 /// 都是合法 JSON 数字），所以直接 serde_json 解析，能逐字段比对而不只是比键。
 /// 解析失败（profile 为空）由调用方断言暴露，而不是静默通过。
 /// `BASES` 的键**按源码出现顺序**（`python_bases_profiles` 用 BTreeMap 排序，

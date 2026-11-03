@@ -36,11 +36,11 @@ fn legacy_manifest_does_not_invent_command_label_or_expand_its_catalog() {
 
 #[test]
 fn legacy_manifest_without_base_model_loads_as_none_instead_of_failing() {
-    // 底座是本期新维度：此前生成的 manifest 没有这两个键，必须照常可读、照常可测，
-    // 且不得凭空补一个底座值（None 由前端按 rbt3 展示，服务端不猜）。
+    // 底座是可选维度：此前生成的 manifest 没有该键，必须照常可读、照常可测，
+    // 且不得凭空补一个底座值。
     let (data, id, dir, artifact) = fixture();
     let mut legacy = serde_json::to_value(&artifact).unwrap();
-    for key in ["catalog_source", "base_model", "base_model_source"] {
+    for key in ["catalog_source", "base_model"] {
         legacy.as_object_mut().unwrap().remove(key);
     }
     std::fs::write(
@@ -50,16 +50,13 @@ fn legacy_manifest_without_base_model_loads_as_none_instead_of_failing() {
     .unwrap();
     let (loaded, actual) = load_candidate(&data, &id).unwrap();
     assert!(loaded.base_model.is_none());
-    assert!(loaded.base_model_source.is_none());
     assert!(loaded.catalog_source.is_none());
     assert_eq!(loaded.labels, artifact.labels);
     let wire = loaded.public_json(&actual);
     assert!(wire["base_model"].is_null());
-    assert!(wire["base_model_source"].is_null());
-    // 重新写出的 manifest 也不带这两个键（兼容旧读取方的白名单习惯）。
+    // 重新写出的 manifest 也不带该键（兼容旧读取方的白名单习惯）。
     let round_trip = serde_json::to_value(&loaded).unwrap();
     assert!(round_trip.get("base_model").is_none());
-    assert!(round_trip.get("base_model_source").is_none());
 }
 
 #[test]
@@ -131,8 +128,7 @@ fn candidate(id: &str) -> Artifact {
             .chain(std::iter::once("other".into()))
             .collect(),
         catalog_source: None,
-        base_model: Some("rbt3".into()),
-        base_model_source: Some("default".into()),
+        base_model: Some("minirbt-h288".into()),
         created_at: None,
         files: vec![],
         nlu,
@@ -164,8 +160,7 @@ fn manifest_checks_hash_labels_source_and_version_paths() {
     let wire = loaded.public_json(&actual);
     assert_eq!(wire["auto_activated"], false);
     assert_eq!(wire["trainer_script_sha256"], sha256(b"trusted-source"));
-    assert_eq!(wire["base_model"], "rbt3");
-    assert_eq!(wire["base_model_source"], "default");
+    assert_eq!(wire["base_model"], "minirbt-h288");
     assert!(wire.get("nlu").is_none());
     assert!(wire["expected_config"]["bert_model"]
         .as_str()

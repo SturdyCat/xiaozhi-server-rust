@@ -19,8 +19,7 @@
 //! - `Io`/`Persist`（SQLite busy、磁盘抖动）→ 重试 200/400/800ms，仍失败 → `adopt_io_error`。
 
 use super::{
-    data_dir, load_candidate, push_log, run_build, Artifact, BuildStart, DEFAULT_BASE_MODEL,
-    ORIGIN_BOOTSTRAP,
+    data_dir, load_candidate, push_log, run_build, Artifact, BuildStart, BASE_MODEL, ORIGIN_BOOTSTRAP,
 };
 /// 槽位句柄只有单测会直接碰（等待逻辑已搬去 `wait`）；`pub(super)` 是为了让
 /// `bootstrap_tests` 的 `use super::*` 仍然拿得到，同时不产生未使用导入警告。
@@ -247,21 +246,15 @@ async fn run_once(engines: &Arc<Engines>) -> Tick {
     }
 
     push_log(&format!(
-        "[bootstrap] 模型产物缺失，开始自举训练（底座 {DEFAULT_BASE_MODEL}）…"
+        "[bootstrap] 模型产物缺失，开始自举训练（底座 {}）…",
+        BASE_MODEL.name
     ))
     .await;
-    let started = run_build(
-        engines,
-        None,
-        Some(DEFAULT_BASE_MODEL.to_string()),
-        ORIGIN_BOOTSTRAP,
-    )
-    .await;
+    let started = run_build(engines, None, ORIGIN_BOOTSTRAP).await;
     let (build_id, revision) = match started {
         BuildStart::Started {
             build_id,
             source_revision,
-            base,
             ..
         } => {
             st.attempts += 1;
@@ -271,7 +264,6 @@ async fn run_once(engines: &Arc<Engines>) -> Tick {
                 st.first_seen_at = now;
             }
             st.last_build_id = Some(build_id.clone());
-            st.last_base_model = Some(base.name.to_string());
             st.build_source_revision = Some(source_revision.clone());
             st.current_revision = None;
             st.last_error_kind = None;
@@ -283,8 +275,8 @@ async fn run_once(engines: &Arc<Engines>) -> Tick {
                 tracing::warn!(target: "nlu_bootstrap", "写状态失败: {e}");
             }
             push_log(&format!(
-                "[bootstrap] 构建 {build_id} 已启动（底座 {})",
-                base.name
+                "[bootstrap] 构建 {build_id} 已启动（底座 {}）",
+                BASE_MODEL.name
             ))
             .await;
             (build_id, source_revision)

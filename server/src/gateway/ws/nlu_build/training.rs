@@ -83,7 +83,6 @@ pub(super) async fn run_training(
     out: PathBuf,
     input: serde_json::Value,
     mut candidate: Artifact,
-    base: super::BaseModel,
 ) {
     let result: Result<Artifact> = async {
         tokio::fs::create_dir_all(work.parent().context("work parent missing")?).await?;
@@ -95,8 +94,8 @@ pub(super) async fn run_training(
         push_log(&format!(
             "build={} base_model={} base_hub={} source_revision={} input_sha256={}",
             candidate.build_id,
-            base.name,
-            base.hub,
+            super::BASE_MODEL.name,
+            super::BASE_MODEL.hub,
             candidate.source_revision,
             candidate.source_input_sha256
         ))
@@ -153,7 +152,7 @@ pub(super) async fn run_training(
         run.args(["run", "--rm", "--cpus", &cpus, "--memory", &memory])
             // 底座与超参只经 env 传给训练脚本；input.json 的字段语义保持不变，
             // 也不新增第四个训练产物文件（三件套白名单在 artifact.rs 的 FILES）。
-            .args(base.env_args())
+            .args(super::BASE_MODEL.env_args())
             .arg("-v")
             .arg(format!("{host_work}:/work"))
             .arg("-v")
@@ -164,7 +163,7 @@ pub(super) async fn run_training(
             .arg(super::TRAINER_SOURCE);
         push_log(&format!(
             "开始训练（底座 {}，独立版本目录，不覆盖当前模型）…",
-            base.name
+            super::BASE_MODEL.name
         ))
         .await;
         run_cmd(run).await?;

@@ -20,7 +20,7 @@ fn active_build_id_takes_the_parent_directory_of_bert_model() {
     let model = format!("/data/models/nlu-builds/{id}/model.onnx");
     assert_eq!(active_id_of(&model).as_deref(), Some(id.as_str()));
     // 旧式路径 / 外部路径：父目录不是规范 UUID → None，不猜。
-    assert_eq!(active_id_of("/models/rbt3/model.onnx"), None);
+    assert_eq!(active_id_of("/models/legacy/model.onnx"), None);
     assert_eq!(active_id_of(""), None);
     assert_eq!(active_id_of("/"), None);
 }
@@ -32,7 +32,6 @@ fn rows_sort_none_last_then_newest_first_then_build_id() {
             build_id: id.into(),
             created_at: created.map(String::from),
             base_model: None,
-            base_model_source: None,
             labels: Vec::new(),
             files: Vec::new(),
             integrity: INTEGRITY_UNVERIFIED,
@@ -84,8 +83,7 @@ fn seed(data: &std::path::Path, id: &str, labels: &[&str]) -> std::path::PathBuf
             {"name":"labels.txt","bytes":labels.join("\n").len()+1,"sha256":"x"}
         ],
         "created_at": "2026-11-02T08:00:00Z",
-        "base_model": "rbt3",
-        "base_model_source": "default"
+        "base_model": "minirbt-h288"
     });
     std::fs::write(dir.join("manifest.json"), serde_json::to_vec(&manifest).unwrap()).unwrap();
     dir
@@ -103,7 +101,7 @@ fn load_manifest_reports_unverified_without_hashing() {
     assert_eq!(head.build_id, id);
     assert_eq!(head.integrity, INTEGRITY_UNVERIFIED);
     assert_eq!(head.created_at.as_deref(), Some("2026-11-02T08:00:00Z"));
-    assert_eq!(head.base_model.as_deref(), Some("rbt3"));
+    assert_eq!(head.base_model.as_deref(), Some("minirbt-h288"));
     assert!(head.missing.is_empty());
     std::fs::remove_dir_all(&data).unwrap();
 }
