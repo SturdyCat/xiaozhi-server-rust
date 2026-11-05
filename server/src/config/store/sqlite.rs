@@ -85,14 +85,18 @@ impl SqliteConfigStore {
         Ok(true)
     }
 
-    /// **存量配置的默认值对齐**（启动时调用一次；规则见 [`crate::config::defaults`]）。
+    /// **存量配置的默认值对齐 + 结构补全**（启动时调用一次；规则见 [`crate::config::defaults`]）。
     ///
-    /// 返回 `None` = 无需处理（空库 / 已是当前默认值版本 / 库内文档解析失败——最后一种
-    /// 只告警不写库，避免用"半个配置"覆盖用户的库）。返回 `Some(report)` = 已对齐并落库。
+    /// 两步（均为纯函数，报告合并返回）：
+    /// ① **默认值变更对齐**：库内 `defaults_version` 落后时按 `BATCHES` 逐条对齐——
+    ///    仍是旧默认的项 → 改成新默认；用户显式自定义 → 原样保留。老库把
+    ///    `[wakeup].enabled` 存成 `false` 后，代码改默认值不会生效，全靠这一步；
+    /// ② **结构补全**：代码迭代新增的配置段/键（如新版本新增 `[tuya]`）在老库中不存在
+    ///    → 自动补成当前默认值，"升级即用新环境"，无需用户重新保存。与版本无关、幂等，
+    ///    补完即无事可做。
     ///
-    /// 为什么必须做：库里存的是**显式值**，serde 的默认值只对缺失键生效。老库把
-    /// `[wakeup].enabled` 存成 `false` 后，代码把默认改成 `true` 也永远不会生效
-    /// ——表现为"重装/重建容器后仍要手动打开唤醒问候语"。
+    /// 返回 `None` = 无需写库（空库 / 两步都无事可做 / 库内文档解析失败——最后一种
+    /// 只告警不写库，避免用"半个配置"覆盖用户的库）。
     pub fn align_defaults(&self) -> Result<Option<AlignReport>> {
         let row: Option<(String, i64)> = {
             let conn = self.conn();
@@ -108,12 +112,19 @@ impl SqliteConfigStore {
             return Ok(None);
         };
         let version = version.clamp(0, u32::MAX as i64) as u32;
-        if version >= CURRENT_DEFAULTS_VERSION {
-            return Ok(None);
-        }
         let mut value: serde_json::Value =
             serde_json::from_str(&doc).context("解析配置库中的 Config 失败")?;
-        let report = defaults::align(&mut value, version);
+        // ① 默认值变更对齐（版本化登记；已是最新版本则无事可做）
+        let mut report = defaults::align(&mut value, version);
+        // ② 结构补全：新增配置段/键自动补当前默认值（每次启动幂等执行，见 defaults 文档）
+        let defaults_doc =
+            serde_json::to_value(Config::default()).context("序列化当前默认配置失败")?;
+        report
+            .filled
+            .extend(defaults::fill_missing(&mut value, &defaults_doc));
+        if report.is_noop() {
+            return Ok(None);
+        }
         let mut cfg: Config = match serde_json::from_value(value) {
             Ok(c) => c,
             Err(e) => {

@@ -5,7 +5,6 @@ import com.gearui.components.button.Button
 import com.gearui.components.button.ButtonType
 import com.tencent.kuikly.compose.foundation.layout.*
 import com.tencent.kuikly.compose.ui.Modifier
-import com.tencent.kuikly.compose.ui.text.input.KeyboardType
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.xiaozhi.admin.contracts.IconToken
 import com.xiaozhi.admin.kit.*
@@ -58,7 +57,7 @@ internal fun EchoMuseNativeWifi(row: EchoMuseDeviceRow, state: EchoMuseState, to
             EmNativeConfigColumns(left = {
                 labeledField("网络名称（SSID）", ssid, { ssid = it }, enabled = canSend)
             }, right = {
-                labeledField("网络密码", psk, { psk = it }, keyboardType = KeyboardType.Password, enabled = canSend)
+                labeledSecretField("网络密码", psk, { psk = it }, enabled = canSend)
             })
             actionRow {
                 Button(text = "切换到新网络", disabled = !canSend || ssid.trim().isEmpty(), onClick = {

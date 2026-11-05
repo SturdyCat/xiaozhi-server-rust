@@ -81,6 +81,8 @@ const SECRET_PATHS: &[&[&str]] = &[
     &["memory", "extractor", "api_key"],
     // EchoMuse 设备接入凭据（同网段设备接入令牌；空串 = 不校验）
     &["echomuse", "token"],
+    // 涂鸦云接入凭据（access_id 是 client_id 标识可留，secret 只写不读）
+    &["tuya", "access_secret"],
 ];
 
 /// 数组型敏感字段：路径指向**对象数组**，每个元素内的 `api_key` 都按敏感字段处理。

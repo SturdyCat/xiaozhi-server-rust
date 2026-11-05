@@ -14,6 +14,7 @@ import com.xiaozhi.admin.kit.fieldLabelRow
 import com.xiaozhi.admin.kit.labeledDecimalField
 import com.xiaozhi.admin.kit.labeledField
 import com.xiaozhi.admin.kit.labeledIntField
+import com.xiaozhi.admin.kit.labeledSecretField
 import com.xiaozhi.admin.kit.labeledSelect
 import com.xiaozhi.admin.kit.labeledTextArea
 import com.xiaozhi.admin.kit.switchRow
@@ -362,7 +363,7 @@ private fun XfyunRemoteSection(form: ConfigFormState) {
             form.markDirty()
         },
     )
-    labeledField(
+    labeledSecretField(
         label = "API Key",
         value = form.xfyunApiKey,
         onValueChange = {
@@ -371,7 +372,7 @@ private fun XfyunRemoteSection(form: ConfigFormState) {
         },
         placeholder = secretHint(form.xfyunApiKeyConfigured),
     )
-    labeledField(
+    labeledSecretField(
         label = "API Secret",
         value = form.xfyunApiSecret,
         onValueChange = {
@@ -457,8 +458,8 @@ fun LlmConfigCard(form: ConfigFormState) {
             help = "OpenAI 兼容端点，通常要带 /v1（如 https://api.openai.com/v1）。" +
                 "必须是服务器能直连的地址；内网反代请填反代地址。",
         )
-        // 密钥不回传明文（服务端打码）：已配置时提示"留空则不修改"
-        labeledField(
+        // 密钥不回传明文（服务端打码）：已配置时提示"留空则不修改"；页面侧头尾打码 + 眼睛查看
+        labeledSecretField(
             label = "API Key",
             value = form.llmApiKey,
             onValueChange = {

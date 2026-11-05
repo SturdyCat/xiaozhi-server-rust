@@ -164,6 +164,44 @@ fn echomuse_token_is_secret_and_enabled_passes_through() {
     assert_eq!(out.echomuse.token, "em-pair-secret", "空串 token 保留原值");
 }
 
+/// `[tuya]`：`access_secret` 已入 [`SECRET_PATHS`]（GET 打码 + 空串保留原值）；
+/// `access_id` 是 client_id 标识、非密钥，明文保留。
+#[test]
+fn tuya_access_secret_is_redacted_but_access_id_stays() {
+    let mut current = full_test_config();
+    current.tuya.access_id = "cloud-client-id".into();
+    current.tuya.access_secret = "cloud-secret".into();
+
+    // GET 打码：secret 明文摘除只回 presence；access_id 原样保留
+    let mut v = serde_json::to_value(&current).unwrap();
+    redact_secrets(&mut v);
+    assert!(
+        v["tuya"].get("access_secret").is_none(),
+        "access_secret 明文不应出现在 GET 响应中"
+    );
+    assert_eq!(v["tuya"]["has_access_secret"], true);
+    assert_eq!(
+        v["tuya"]["access_id"], "cloud-client-id",
+        "access_id 是标识不是密钥，保留明文"
+    );
+
+    // 旧客户端回传打码后的 GET 结果（secret 空串 + presence）不清密钥；非空覆盖
+    let echo = serde_json::json!({
+        "tuya": {"access_id": "cloud-client-id-2", "access_secret": "", "has_access_secret": true},
+    });
+    let out = simulate_put(&current, echo);
+    assert_eq!(out.tuya.access_id, "cloud-client-id-2");
+    assert_eq!(
+        out.tuya.access_secret, "cloud-secret",
+        "空串 secret 保留原值"
+    );
+    let out = simulate_put(
+        &current,
+        serde_json::json!({"tuya": {"access_secret": "new-secret"}}),
+    );
+    assert_eq!(out.tuya.access_secret, "new-secret");
+}
+
 /// 数组型敏感字段（`[[llm.fallback.providers]]`）：GET 逐元素摘除 `api_key` 留 presence；
 /// POST 整数组替换时，元素缺 `api_key` 从基线**同下标**回填（整表单回传不清密钥），
 /// 显式 `null` 仍可清除。

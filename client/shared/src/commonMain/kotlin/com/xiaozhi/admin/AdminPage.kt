@@ -110,6 +110,10 @@ class AdminPage : ComposeContainer(), FieldHelpHost {
     /** 「控制台」（官方 dashboard 的 CONSOLE / 命令行）：实时服务器日志流 `GET /api/logs`。 */
     val console = ConsoleState(this)
 
+    /** 服务器状态实时订阅：首帧快照及 `server_status_changed` 事件写入 [geo]。 */
+    private var serverStatusSubscription: AdminRealtime.Subscription? = null
+    private var serverStatusSubscriptionKey = ""
+
     /** 当前选中的导航项（[AdminNav] 的 id）。 */
     var selectedSection by stateVar(AdminNav.DEFAULT)
 
@@ -157,6 +161,9 @@ class AdminPage : ComposeContainer(), FieldHelpHost {
         form.onSectionRouted = { section ->
             selectedSection = if (ConfigSections.isGlobal(section)) "settings" else "config"
         }
+        // 配置卡「管理设备」按钮的多入口跳转：切到侧栏「设备管理」中心
+        //（EchoMuse/Tuya 的设备列表、审批与详情弹层都在那边）。单页模式不注册。
+        form.onOpenDeviceHub = { selectSection("devicehub") }
         refreshAll(pagerBaseUrl(this))
     }
 
@@ -188,6 +195,26 @@ class AdminPage : ComposeContainer(), FieldHelpHost {
         engineHealth.load(this, base)
         // 控制台：连日志流（服务端 /api/logs 已有实现）
         console.connect(base, token)
+        ensureServerStatusSubscription(base, token)
+    }
+
+    /**
+     * 订阅管理台 WS（`GET /api/admin/ws`）的服务器状态：首帧 `hello` 内嵌
+     * `server_status` 快照（首连自动下发），出口 IP 解析完成时推
+     * `server_status_changed`——两者都进 [GeoState.applyRealtime]，概览页的
+     * 服务器出口卡随之实时更新，不需要手动刷新。切服务器（base/token 变化）
+     * 时断旧连新；连接本身由 [AdminRealtime] 共享持有并自动重连。
+     */
+    private fun ensureServerStatusSubscription(base: String, token: String) {
+        val key = "$base|$token"
+        if (key == serverStatusSubscriptionKey && serverStatusSubscription != null) return
+        serverStatusSubscription?.close()
+        serverStatusSubscriptionKey = key
+        serverStatusSubscription = adminTransport.subscribe(this, base, token) { type, data ->
+            when (type) {
+                "hello", "server_status_changed" -> geo.applyRealtime(data)
+            }
+        }
     }
 
     override fun createExternalModules(): Map<String, Module> = platformExternalModules()

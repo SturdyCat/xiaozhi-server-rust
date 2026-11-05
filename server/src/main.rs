@@ -386,7 +386,8 @@ fn load_config_inner(options: &dev::Options) -> (Config, Arc<dyn ConfigStore>) {
             // 存量配置的默认值对齐：老库把「标准行为」存成了显式 false，代码把默认值
             // 改成 true 也不会生效（serde 的默认值只对**缺失键**生效）。这里按库内
             // `defaults_version` 对齐一次：仍是旧默认的项 → 打开；用户显式改过的项 → 保留。
-            // 见 `config/defaults.rs`（为什么不能用"一律写默认值"解决）。
+            // 缺失的新配置段/键（代码迭代新增，如 [tuya]）也在此自动补成当前默认值——
+            // 升级即用新环境，无需用户重存。见 `config/defaults.rs`。
             match store.align_defaults() {
                 Ok(Some(report)) => tracing::info!("{}", report.summary()),
                 Ok(None) => {}

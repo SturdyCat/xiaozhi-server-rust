@@ -245,11 +245,15 @@ tasks.matching { it.name == "check" || it.name.startsWith("packLocalJSBundle") }
 // 模型唯一路径：删除4个启发式/旧关键词状态与1个死选项列表，新增1个只读技能目录快照。
 // 服务器出口定位：OpsState.GeoState 新增7项 stateVar（resolved/domestic/ip/region/source/note/scopeNote）。
 // 在途 tuya 集成（TuyaState/TuyaDetailPage 等）实测 +28 stateVar、+2 stateListOf，随本次一并入账。
-// P2e wasm 插件槽位：PluginMetaState.wasmSlots 快照（`GET /api/plugins` 的 wasm 键），+1 stateVar。
-// P3 管理台插件页：PluginsManageState（uploading/uploadResult→resultText/busy），+3 stateVar。
-// 台账实测 452→491，列表 47→49，legacy 0 不变。
-val expectedStateVarCalls = 491
-val expectedStateListCalls = 49
+// 台账实测 452→487，列表 47→49，legacy 0 不变。
+// Tuya 状态条透出失败原因与 LAN 未登记设备：TuyaState 新增 lastSyncMessage 1 个 stateVar（487→488）、
+// lanUnregistered 1 个 stateListOf（49→50）。
+// 服务器状态实时推送：GeoState 的 WS 占位三字段收敛为 liveApplied 一个"已收实时快照"标记，实测 488→489。
+// 设备管理中心（echomuse+tuya 两页合并）：TuyaSectionState 两个 stateVar，实测 489→491。
+// 设备插件注册门控：devicePluginRows 列表（device_plugins 投影），50→51。
+// 合并 origin/main(Tuya 设备中心) + HEAD(WASM 插件槽位) 实测 stateVar 491→495。
+val expectedStateVarCalls = 495
+val expectedStateListCalls = 51
 val bridgeWhitelist = emptySet<String>()
 val verifyComposeStateMigration by tasks.registering {
     group = "verification"

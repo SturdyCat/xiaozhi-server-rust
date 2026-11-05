@@ -171,6 +171,19 @@ CREATE TABLE IF NOT EXISTS cfg_presets (
 );
 ```
 
+### 4.1 表关系一览（无 ORM；schema 以 `sqlite.rs::MIGRATION_*` DDL 为唯一权威）
+
+| 表 | 角色 | 关系 / 约定 |
+|---|---|---|
+| `_cfg_migrations` | 配置子系统迁移编号（m1…`CFG_LATEST_VERSION`） | 与 memory 的 `_migrations` 同库文件、**编号互不相干**（§3.1） |
+| `cfg_documents` | 全局配置现状，恒 1 行（`id=1`） | `revision` = 内容指纹，逻辑指向当前 `cfg_revisions.revision`；`defaults_version` = 默认值对齐进度（m2） |
+| `cfg_revisions` | 历史版本（审计 / 回滚） | 主键 `revision` 即内容指纹；`source` ∈ save / bootstrap / preset:<name> / rollback / defaults-migration；`doc` = 该版本完整快照 |
+| `cfg_device_overlays` | 每设备增量 patch | 主键 `device_id`，与设备注册表按 id 对应；只含白名单会话字段 |
+| `cfg_presets` | 命名全局快照 | 主键 `name`；应用 = 走 `PUT /api/config` 部分更新管线 |
+
+- 配置表与 memory/RAG 表同库（`/data/data.db`）但**不共享外键**；唯一的跨表逻辑指向是 `cfg_documents.revision → cfg_revisions.revision`（内容指纹，非强制外键）。
+- 表结构演进一律往 `_cfg_migrations` 追加编号并同步 `CFG_LATEST_VERSION`，**不引入 ORM**；字段级配置演进（新增键/段）不建列、不加表——Config 是 JSON blob，新键由 `defaults::fill_missing` 启动时自动补全（见 [上级默认值说明](<../AGENTS.md>)）。
+
 可选（P2）：`cfg_audit(revision, changed_paths TEXT, hot TEXT, at INTEGER)` —— 直接落 `impact.rs` 的 `SaveImpact`，管理页即可显示"这次改了哪些字段、多久生效"。
 
 并发模型取舍：

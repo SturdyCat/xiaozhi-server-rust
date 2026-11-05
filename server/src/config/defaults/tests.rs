@@ -209,3 +209,62 @@ fn standard_behaviors_default_on() {
     assert!(!paths.contains(&"aiui.enabled"));
     assert!(!paths.contains(&"nlu.bert_enabled"));
 }
+
+/// 结构补全：缺失 / 显式 null 的键补当前默认；用户已有值原样保留；
+/// 缺键补整棵默认子树时路径记到该键为止。
+#[test]
+fn fill_missing_fills_absent_and_null_keys() {
+    let mut doc = json!({
+        "a": { "kept": 42 },
+        "b": Value::Null,
+    });
+    let defaults = json!({
+        "a": { "kept": 1, "added": { "deep": true } },
+        "b": { "x": 1 },
+        "c": [1, 2],
+    });
+    let filled = fill_missing(&mut doc, &defaults);
+    assert_eq!(
+        filled,
+        vec!["a.added".to_string(), "b".to_string(), "c".to_string()],
+        "补全清单必须可读"
+    );
+    assert_eq!(get_path(&doc, "a.kept"), Some(&json!(42)), "用户已有值不得覆盖");
+    assert_eq!(get_path(&doc, "a.added.deep"), Some(&json!(true)));
+    assert_eq!(get_path(&doc, "b.x"), Some(&json!(1)));
+    assert_eq!(get_path(&doc, "c"), Some(&json!([1, 2])));
+}
+
+/// 结构补全：幂等（补齐后再跑无事可做）；类型不匹配（默认对象 vs 库内标量）跳过不动。
+#[test]
+fn fill_missing_is_idempotent_and_skips_mismatches() {
+    let mut doc = json!({ "sec": "库内标量（坏类型）", "ok": 1 });
+    let defaults = json!({ "sec": { "x": 1 }, "ok": 2 });
+    let filled = fill_missing(&mut doc, &defaults);
+    assert!(filled.is_empty(), "类型不匹配不得补写: {filled:?}");
+    assert_eq!(
+        get_path(&doc, "sec"),
+        Some(&json!("库内标量（坏类型）")),
+        "类型不匹配不得覆盖，交给反序列化护栏报错"
+    );
+    assert_eq!(get_path(&doc, "ok"), Some(&json!(1)));
+    // 已是完整形状 → 再跑无变更、文档不动
+    let mut full = json!({ "sec": { "x": 9 } });
+    let defaults2 = json!({ "sec": { "x": 1 } });
+    assert!(fill_missing(&mut full, &defaults2).is_empty());
+    assert_eq!(get_path(&full, "sec.x"), Some(&json!(9)));
+}
+
+/// 护栏：空文档经结构补全后必须与 `Config::default()` 序列化形状完全一致——
+/// 这是"新配置段（如 [tuya]）在老库自动出现"的实现基准。
+#[test]
+fn fill_missing_from_empty_matches_code_defaults() {
+    let defaults = serde_json::to_value(Config::default()).expect("序列化默认配置");
+    let mut empty = json!({});
+    let filled = fill_missing(&mut empty, &defaults);
+    assert_eq!(empty, defaults, "空文档补全后必须与当前默认完全一致");
+    assert!(
+        filled.contains(&"tuya".to_string()),
+        "新增配置段必须在补全清单里: {filled:?}"
+    );
+}

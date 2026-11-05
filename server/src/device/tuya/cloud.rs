@@ -1,26 +1,41 @@
 //! 涂鸦云 OpenAPI 客户端（**仅目录同步用**——控制与状态读取纯局域网，零云依赖）。
 //!
-//! ## 签名（simple_sign 模式，HMAC-SHA256 hex）
+//! ## 签名（涂鸦官方 v1.0 口径，2026-11-03 真凭证联调**全链路验证通过**）
 //!
-//! - token 请求：`sign = HMAC-SHA256(secret, client_id + t)`（无 access_token，按空串拼接）；
-//! - 业务请求：`sign = HMAC-SHA256(secret, client_id + access_token + t)`；
-//! - 统一头：`client_id / t(13 位毫秒) / sign_mode=simple_sign`（业务请求另有 `access_token`）。
-//!   simple_sign 不参与 body/url 计算。
+//! 与官方 SDK（tuya-connector-python `_calculate_sign`）逐字节一致：
 //!
-//! ## 待真机验证项（集中在本文件常量，勿散落多处）
+//! ```text
+//! str_to_sign = METHOD + "\n" + sha256(body).小写hex + "\n" + "\n" + path?排序后query
+//! sign        = HMAC-SHA256(secret, client_id + access_token + t + str_to_sign).大写hex
+//! ```
 //!
-//! - 端点 host：`openapi.tuya{cn,us,eu,in}.com`（架构文档记作 `openapi.tuya{,aus,eu,in}`，
-//!   按官方公开文档修正为 `tuyacn`——见 [`region_host`]）；
-//! - 设备清单端点 `/v1.0/iot-01/associated-users/actions/authorized-devices` 的翻页参数
-//!   （`page_size` + `last_row_id` 游标）与回包形状（`result.list` / 裸数组两种都解析）；
-//! - token 失效错误码 1010/1011 → 重取一次重试（重试判定见 `is_token_failure`）。
+//! - body 为空（GET）时 sha256 取空串（`e3b0c442…`）；两段 `\n` 之间是**预留的空
+//!   Header 段，必须保留**——2026-11-03 之前所有 1004 sign invalid 的根因就是这里
+//!   少了一段换行，**不是凭证错**（调试台黄金样本复核确认）；
+//! - query 参数按字典序拼接（`k=v&k=v`）——设备清单翻页 `last_row_key` 排在 `size` 前；
+//! - 统一头：`client_id / access_token(token 请求传空) / t(13 位毫秒) /
+//!   sign_method=HMAC-SHA256 / sign / lang`。涂鸦调试台自用的 `mode=cors` +
+//!   `signVersion=2.0` 是平台前端私有签名（掺会话），公开 API 不适用，勿模仿。
+//!
+//! ## 端点（2026-11-03 cn 区真机验证：token ✓ 设备详情 ✓ 授权设备清单 ✓ 4 台）
+//!
+//! - token：`GET /v1.0/token?grant_type=1`（7200s，提前 300s 刷新）；
+//! - 设备清单：`GET /v1.0/iot-01/associated-users/devices?size=50`，回包
+//!   `result.{devices[], has_more, last_row_key, total}`，翻页带 `last_row_key`；
+//!   旧路径 `…/actions/authorized-devices` 恒 1108（cn 网关不存在，已废弃）；
+//! - 错误判读：1004=签名/secret 错；1108=路径不存在；28841003=API 组未订阅；
+//!   1010/1011=token 失效 → 重取一次重试（`is_token_failure`）。
+//!
+//! 管理面调试代理：`CloudClient::proxy_request`（`POST /api/tuya/cloud/proxy` 用），
+//! 管理台/curl 可直接签名转发任意 `/v1.` 路径，联调免写临时脚本。
 //!
 //! 测试（`cloud_tests.rs`）用 [`HttpSender`] 假实现驱动：签名向量、请求形状、分页、
 //! 1010 重试全覆盖，**不发真网络请求**。
 
-use std::future::Future;
-use std::pin::Pin;
 use std::time::{Duration, Instant};
+
+pub use super::cloud_transport::{CloudRequest, CloudResponse, HttpSender};
+use super::cloud_transport::ReqwestSender;
 
 use hmac::Hmac;
 // hmac 0.13：`new_from_slice` 来自 digest 树的 KeyInit，`update`/`finalize` 来自
@@ -69,10 +84,10 @@ impl CloudError {
 
 // ---- 协议常量（涂鸦云 OpenAPI；待真机验证项集中在此，勿散落）----
 
-/// token 端点（grant_type=1 = 简单模式 token）。
-pub(crate) const PATH_TOKEN: &str = "/v1/token?grant_type=1";
-/// 账号授权设备清单端点（免 uid，含 local_key）。
-pub(crate) const PATH_DEVICES: &str = "/v1.0/iot-01/associated-users/actions/authorized-devices";
+/// token 端点（grant_type=1 = 简单模式 token；`/v1/token` 会 1108）。
+pub(crate) const PATH_TOKEN: &str = "/v1.0/token?grant_type=1";
+/// 账号授权设备清单端点（免 uid，含 local_key；2026-11-03 cn 区真机验证通过）。
+pub(crate) const PATH_DEVICES: &str = "/v1.0/iot-01/associated-users/devices";
 /// 分页大小（架构口径 50）。
 pub(crate) const PAGE_SIZE: u32 = 50;
 /// 翻页硬上限（5000 台设备的家，护住"服务端忽略游标"场景下的死循环）。
@@ -90,17 +105,46 @@ pub(crate) fn region_host(region: &str) -> String {
     }
 }
 
-/// HMAC-SHA256 → 小写 hex（simple_sign 的 sign 值口径）。
+/// HMAC-SHA256 → **大写** hex（涂鸦 sign 值口径）。
 pub(crate) fn sign_hmac_hex(secret: &str, payload: &str) -> String {
     let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("HMAC 接受任意长度密钥");
     mac.update(payload.as_bytes());
-    hex_lower(&mac.finalize().into_bytes())
+    hex_upper(&mac.finalize().into_bytes())
 }
 
-fn hex_lower(bytes: &[u8]) -> String {
+/// SHA-256 → **小写** hex（涂鸦签名字符串里的 Content-SHA256 段口径）。
+pub(crate) fn sha256_hex_lower(data: &str) -> String {
+    use sha2::Digest;
+    let mut hash = Sha256::new();
+    hash.update(data.as_bytes());
+    hash.finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// 涂鸦官方 v1.0 签名（与 tuya-connector-python `_calculate_sign` 逐字节一致）。
+///
+/// `path_query` 必须与实际发送的 URL 路径+query **完全一致**（query 字典序）；
+/// `body` 为原始 JSON 文本（GET 传空串）。
+pub(crate) fn official_sign(
+    secret: &str,
+    access_id: &str,
+    access_token: &str,
+    t: &str,
+    method: &str,
+    path_query: &str,
+    body: &str,
+) -> String {
+    let content_sha = sha256_hex_lower(body);
+    let message = format!("{access_id}{access_token}{t}{method}\n{content_sha}\n\n{path_query}");
+    sign_hmac_hex(secret, &message)
+}
+
+fn hex_upper(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);
     for b in bytes {
-        out.push_str(&format!("{b:02x}"));
+        out.push_str(&format!("{b:02X}"));
     }
     out
 }
@@ -121,16 +165,29 @@ pub(crate) fn build_token_request(
     access_secret: &str,
     t: &str,
 ) -> CloudRequest {
-    let sign = sign_hmac_hex(access_secret, &format!("{access_id}{t}"));
+    let sign = official_sign(access_secret, access_id, "", t, "GET", PATH_TOKEN, "");
     CloudRequest {
         method: "GET",
         url: format!("{}{PATH_TOKEN}", region_host(region)),
+        body: String::new(),
         headers: vec![
             ("client_id".into(), access_id.to_string()),
+            ("access_token".into(), String::new()),
             ("t".into(), t.to_string()),
-            ("sign_mode".into(), "simple_sign".into()),
+            ("sign_method".into(), "HMAC-SHA256".into()),
             ("sign".into(), sign),
+            ("lang".into(), "zh".into()),
         ],
+    }
+}
+
+/// 设备清单请求的 path?query（纯函数，签名与 URL 共用同一串，测试直驱）。
+/// query 字典序：`last_row_key` 在 `size` 前；无游标时只有 `size`。
+pub(crate) fn devices_path_query(last_row_key: &str) -> String {
+    if last_row_key.is_empty() {
+        format!("{PATH_DEVICES}?size={PAGE_SIZE}")
+    } else {
+        format!("{PATH_DEVICES}?last_row_key={last_row_key}&size={PAGE_SIZE}")
     }
 }
 
@@ -141,100 +198,53 @@ pub(crate) fn build_devices_request(
     access_secret: &str,
     access_token: &str,
     t: &str,
-    last_row_id: &str,
+    last_row_key: &str,
 ) -> CloudRequest {
-    let sign = sign_hmac_hex(access_secret, &format!("{access_id}{access_token}{t}"));
-    let mut url = format!(
-        "{}{PATH_DEVICES}?page_size={PAGE_SIZE}",
-        region_host(region)
-    );
-    if !last_row_id.is_empty() {
-        url.push_str("&last_row_id=");
-        url.push_str(last_row_id);
-    }
+    let path_query = devices_path_query(last_row_key);
+    let sign = official_sign(access_secret, access_id, access_token, t, "GET", &path_query, "");
     CloudRequest {
         method: "GET",
-        url,
+        url: format!("{}{}", region_host(region), path_query),
+        body: String::new(),
         headers: vec![
             ("client_id".into(), access_id.to_string()),
             ("access_token".into(), access_token.to_string()),
             ("t".into(), t.to_string()),
-            ("sign_mode".into(), "simple_sign".into()),
+            ("sign_method".into(), "HMAC-SHA256".into()),
             ("sign".into(), sign),
+            ("lang".into(), "zh".into()),
         ],
     }
 }
 
-// ---- HTTP 抽象（真实 reqwest 实现 + 测试假实现）----
-
-/// 一个待发送的云请求（方法/URL/头；simple_sign 无 body）。
-#[derive(Debug, Clone, PartialEq)]
-pub struct CloudRequest {
-    pub method: &'static str,
-    pub url: String,
-    pub headers: Vec<(String, String)>,
-}
-
-/// 云响应（状态码 + 原始 body 文本）。
-#[derive(Debug, Clone, PartialEq)]
-pub struct CloudResponse {
-    pub status: u16,
-    pub body: String,
-}
-
-/// HTTP 发送抽象：真实实现走 reqwest；测试用 [`cloud_tests::FakeSender`] 脚本应答。
-pub trait HttpSender: Send + Sync {
-    fn send<'a>(
-        &'a self,
-        req: CloudRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<CloudResponse, CloudError>> + Send + 'a>>;
-}
-
-/// reqwest 实现（10s 超时；rustls，与项目依赖栈一致）。
-pub(crate) struct ReqwestSender {
-    client: reqwest::Client,
-}
-
-impl ReqwestSender {
-    pub(crate) fn new() -> Self {
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(10))
-            .build()
-            .unwrap_or_default();
-        ReqwestSender { client }
+/// 调试代理请求构造（纯函数）：官方签名统一入口，签名与发送共用同一串 body。
+pub(crate) fn build_proxy_request(
+    region: &str,
+    access_id: &str,
+    access_secret: &str,
+    access_token: &str,
+    method: &'static str,
+    path_query: &str,
+    body_json: &str,
+    t: &str,
+) -> CloudRequest {
+    let sign = official_sign(access_secret, access_id, access_token, t, method, path_query, body_json);
+    let mut headers = vec![
+        ("client_id".into(), access_id.to_string()),
+        ("access_token".into(), access_token.to_string()),
+        ("t".into(), t.to_string()),
+        ("sign_method".into(), "HMAC-SHA256".into()),
+        ("sign".into(), sign),
+        ("lang".into(), "zh".into()),
+    ];
+    if !body_json.is_empty() {
+        headers.push(("Content-Type".into(), "application/json".into()));
     }
-}
-
-impl HttpSender for ReqwestSender {
-    fn send<'a>(
-        &'a self,
-        req: CloudRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<CloudResponse, CloudError>> + Send + 'a>> {
-        Box::pin(async move {
-            let mut r = self
-                .client
-                .request(req.method.parse().unwrap_or(reqwest::Method::GET), &req.url);
-            for (k, v) in &req.headers {
-                r = r.header(k, v);
-            }
-            match r.send().await {
-                Ok(resp) => {
-                    let status = resp.status().as_u16();
-                    let body = resp
-                        .text()
-                        .await
-                        .map_err(|e| CloudError::Network(format!("读取云响应失败: {e}")))?;
-                    Ok(CloudResponse { status, body })
-                }
-                Err(e) => {
-                    if e.is_timeout() {
-                        Err(CloudError::Network("云请求超时（10s）".into()))
-                    } else {
-                        Err(CloudError::Network(format!("云请求失败: {e}")))
-                    }
-                }
-            }
-        })
+    CloudRequest {
+        method,
+        url: format!("{}{}", region_host(region), path_query),
+        body: body_json.to_string(),
+        headers,
     }
 }
 
@@ -266,33 +276,39 @@ pub(crate) fn parse_token_response(body: &str) -> Result<(String, i64), CloudErr
 
 /// 解析一页设备清单 → (设备, 是否还有更多, 游标)。
 ///
-/// 回包形状防御式解析：`result` 为对象（`list` + `has_more`/`last_row_id`）或裸数组
-/// （has_more 以"满页"近似）——真实形状以真机验收为准（见模块头"待真机验证"）。
-pub(crate) fn parse_devices_page(
-    body: &str,
-) -> Result<(Vec<CloudDevice>, bool, String), CloudError> {
-    let v: Value =
-        serde_json::from_str(body).map_err(|e| CloudError::Api(format!("云响应不是 JSON: {e}")))?;
+/// 真实形状（2026-11-03 cn 区真机验证）：`result.{devices[], has_more, last_row_key,
+/// total}`。防御式兼容旧文档形状 `result.list`/`last_row_id` 与裸数组（满页近似
+/// has_more）。
+pub(crate) fn parse_devices_page(body: &str) -> Result<(Vec<CloudDevice>, bool, String), CloudError> {
+    let v: Value = serde_json::from_str(body)
+        .map_err(|e| CloudError::Api(format!("云响应不是 JSON: {e}")))?;
     if v.get("success").and_then(Value::as_bool) != Some(true) {
         return Err(api_error(&v));
     }
     let Some(result) = v.get("result") else {
         return Ok((Vec::new(), false, String::new()));
     };
-    let (list, has_more) = if let Some(arr) = result.as_array() {
-        (arr.clone(), arr.len() as u32 >= PAGE_SIZE)
+    let (list, has_more) = if let Some(arr) = result.get("devices").and_then(Value::as_array) {
+        let more = result
+            .get("has_more")
+            .and_then(Value::as_bool)
+            .unwrap_or(arr.len() as u32 >= PAGE_SIZE);
+        (arr.clone(), more)
     } else if let Some(arr) = result.get("list").and_then(Value::as_array) {
         let more = result
             .get("has_more")
             .and_then(Value::as_bool)
             .unwrap_or(arr.len() as u32 >= PAGE_SIZE);
         (arr.clone(), more)
+    } else if let Some(arr) = result.as_array() {
+        (arr.clone(), arr.len() as u32 >= PAGE_SIZE)
     } else {
         (Vec::new(), false)
     };
-    let cursor = result
-        .get("last_row_id")
-        .and_then(Value::as_str)
+    // 游标：真机形状 last_row_key；兼容旧文档 last_row_id
+    let cursor = ["last_row_key", "last_row_id"]
+        .iter()
+        .find_map(|k| result.get(*k).and_then(Value::as_str))
         .unwrap_or("")
         .to_string();
     let devices = list
@@ -429,6 +445,68 @@ impl CloudClient {
         (all, None)
     }
 
+    /// 调试代理：按官方签名把任意请求转发到涂鸦云（`POST /api/tuya/cloud/proxy` 用）。
+    ///
+    /// `method` 限 GET/POST/DELETE（管理面已校验）；`path_query` 必须以 `/v1.` 开头
+    /// 且与签名一致；`body_json` 为原始 JSON 文本（非 POST 传空串）。token 失效
+    /// （1010/1011）自动重取重试一次；云回包**原样透传**，联调所见即所得。
+    pub(crate) async fn proxy_request(
+        &mut self,
+        region: &str,
+        access_id: &str,
+        access_secret: &str,
+        method: &str,
+        path_query: &str,
+        body_json: &str,
+    ) -> Result<CloudResponse, CloudError> {
+        let static_method: &'static str = match method {
+            "POST" => "POST",
+            "DELETE" => "DELETE",
+            _ => "GET",
+        };
+        // token/refresh-token 端点**签名字符串与 access_token 头都留空**（网关按无
+        // token 复算；2026-11-03 代理实测：带 token 段恒 1004）。业务路径用缓存 token。
+        let is_token_path = path_query.starts_with("/v1.0/token");
+        let token = self.ensure_token(region, access_id, access_secret).await?;
+        let bearer = if is_token_path { String::new() } else { token };
+        let resp = self
+            .send_proxy_once(region, access_id, access_secret, &bearer, static_method, path_query, body_json)
+            .await?;
+        if resp_body_code(&resp.body).map_or(false, |c| c == 1010 || c == 1011) {
+            tracing::info!("调试代理遇 token 失效，重取后重试一次");
+            self.invalidate();
+            let fresh = self.ensure_token(region, access_id, access_secret).await?;
+            return self
+                .send_proxy_once(region, access_id, access_secret, &fresh, static_method, path_query, body_json)
+                .await;
+        }
+        Ok(resp)
+    }
+
+    /// 代理单次发送（构造签名请求 → 发送；token 失效重试在 [`Self::proxy_request`]）。
+    async fn send_proxy_once(
+        &mut self,
+        region: &str,
+        access_id: &str,
+        access_secret: &str,
+        token: &str,
+        method: &'static str,
+        path_query: &str,
+        body_json: &str,
+    ) -> Result<CloudResponse, CloudError> {
+        let req = build_proxy_request(
+            region,
+            access_id,
+            access_secret,
+            token,
+            method,
+            path_query,
+            body_json,
+            &timestamp_ms(),
+        );
+        self.sender.send(req).await
+    }
+
     /// 拉一页：token 失效（1010/1011）→ 丢弃缓存重取一次再试。
     async fn fetch_page_with_retry(
         &mut self,
@@ -512,4 +590,11 @@ impl CloudClient {
 /// 1001/1004 是签名/token 无效类，重试也无益）。`parse_*` 已把错误码嵌进文本。
 fn is_token_failure(msg: &str) -> bool {
     msg.contains("code 1010") || msg.contains("code 1011")
+}
+
+/// 云回包 body 里的业务错误码（`{"code":N,...}`），非 JSON 或无 code → None。
+fn resp_body_code(body: &str) -> Option<i64> {
+    serde_json::from_str::<Value>(body)
+        .ok()
+        .and_then(|v| v.get("code").and_then(Value::as_i64))
 }

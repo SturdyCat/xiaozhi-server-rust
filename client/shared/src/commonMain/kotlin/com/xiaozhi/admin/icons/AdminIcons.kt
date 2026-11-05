@@ -100,6 +100,16 @@ internal object AdminIconVectors {
     internal val More = listOf(fill("M12 5m-1.5 0a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0-3 0ZM12 12m-1.5 0a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0-3 0ZM12 19m-1.5 0a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0-3 0Z"))
     // 上传：向上的箭头 + 底托横线
     internal val Upload = listOf(stroke("M12 15V4M8 8l4-4 4 4M5 19h14"))
+    // 眼睛（密钥可见）：杏仁形眼眶（上下两段弧）+ 实心圆瞳孔
+    internal val Eye = listOf(
+        stroke("M2.5 12a9.5 6 0 0 1 19 0a9.5 6 0 0 1-19 0Z"),
+        stroke("M9 12a3 3 0 1 0 6 0a3 3 0 1 0-6 0Z"),
+    )
+    // 眼睛闭合（密钥打码）：同一眼眶 + 左上到右下的斜杠（与 Close 同款斜线语汇）
+    internal val EyeOff = listOf(
+        stroke("M2.5 12a9.5 6 0 0 1 19 0a9.5 6 0 0 1-19 0Z"),
+        stroke("M4 4l16 16"),
+    )
 }
 
 /** [IconToken] 的图层序列；与枚举的一一对应由 shared 构建护栏 `verifyAdminIcons` 锁定 */
@@ -135,6 +145,8 @@ internal fun IconToken.vectors(): List<IconLayer> = when (this) {
     IconToken.Back -> AdminIconVectors.Back
     IconToken.More -> AdminIconVectors.More
     IconToken.Upload -> AdminIconVectors.Upload
+    IconToken.Eye -> AdminIconVectors.Eye
+    IconToken.EyeOff -> AdminIconVectors.EyeOff
 }
 
 /**

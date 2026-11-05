@@ -41,6 +41,8 @@ kotlin {
             kotlin.include("com/xiaozhi/admin/ConfigNluPlanJson.kt")
             kotlin.include("com/xiaozhi/admin/NodeTestModels.kt")
             kotlin.include("com/xiaozhi/admin/ConfigSections.kt")
+            // 密钥打码显示口径（头尾各 3 字符 + * 占位）：纯字符串函数，被 SecretMaskTest 直驱。
+            kotlin.include("com/xiaozhi/admin/SecretMask.kt")
             // 控制台纯文本管线（ANSI 剥离 / \r 覆盖 / 双上限）：无 Kuikly 依赖，
             // 直接被 EchoMuseConsoleTextTest 直驱（设计 §7-T03）。
             kotlin.include("com/xiaozhi/admin/EchoMuseConsoleText.kt")

@@ -15,7 +15,6 @@ import com.tencent.kuikly.compose.foundation.layout.fillMaxWidth
 import com.tencent.kuikly.compose.foundation.layout.padding
 import com.tencent.kuikly.compose.ui.Alignment
 import com.tencent.kuikly.compose.ui.Modifier
-import com.tencent.kuikly.compose.ui.text.input.KeyboardType
 import com.tencent.kuikly.compose.ui.unit.dp
 import com.tencent.kuikly.core.module.SharedPreferencesModule
 import com.tencent.kuikly.core.nvi.serialization.json.JSONArray
@@ -25,6 +24,7 @@ import com.xiaozhi.admin.kit.LocalAdminSpacing
 import com.xiaozhi.admin.kit.actionRow
 import com.xiaozhi.admin.kit.dividerH
 import com.xiaozhi.admin.kit.labeledField
+import com.xiaozhi.admin.kit.labeledSecretField
 import com.xiaozhi.admin.state.stateListOf
 import com.xiaozhi.admin.state.stateVar
 
@@ -226,8 +226,10 @@ private fun ServerSwitchPanel(page: AdminPage, pager: Pager, state: ServerSwitch
             },
             placeholder = DEFAULT_SERVER,
         )
-        // 会话令牌：password 键盘；原生 textInputState 通道保持 IME 安全（无受控回写循环）
-        labeledField(
+        // 会话令牌：与全仓密钥字段同一口径（头尾 3 字符打码 + 眼睛查看明文）。
+        // 不再走 KeyboardType.Password 原生密码通道——那会把显示整体变成圆点、
+        // 呈现不了头尾片段；仍保持受控 value/onValueChange 通道（无受控回写循环）。
+        labeledSecretField(
             label = "管理令牌（仅本次会话）",
             value = state.tokenInput,
             onValueChange = {
@@ -235,7 +237,6 @@ private fun ServerSwitchPanel(page: AdminPage, pager: Pager, state: ServerSwitch
                 state.tokenEdited = true
             },
             placeholder = "留空不携带管理令牌",
-            keyboardType = KeyboardType.Password,
             note = "仅用于当前管理请求，不写入服务端配置或本地存储。切换服务器请重新输入令牌。",
         )
         actionRow {

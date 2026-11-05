@@ -323,30 +323,23 @@ pub(super) async fn stats(State(engines): State<Arc<Engines>>) -> Response {
 
 /// `GET /api/server/geo`：服务器出口 IP 与地理信息（启动期解析一次的结果快照）。
 ///
+/// 快照本体由 [`crate::plugins::geo::status_snapshot`] 唯一构建——与管理台 WS 的
+/// `server_status` 推送同源，两端字段/口径说明逐字一致。
+///
 /// 三种状态都在响应里说清（口径字段 `note` / `scope_note`，前端直接展示）：
 /// - 已解析（`resolved=true`）：`ip` + `country/province/city` + `source`；
 ///   `domestic=true` 表示已写入默认地区（天气等定位功能的回退值），
 ///   `domestic=false` 表示境外出口——**仅展示**，未写入默认定位；
 /// - 未解析（`resolved=false`）：`note` 给出原因（境外出口 / 上游不可达 / 尚未完成解析）。
 pub(super) async fn server_geo() -> Response {
-    let loc = crate::plugins::geo::last_resolved();
-    let note = crate::plugins::geo::resolve_note();
-    let scope_note = "服务器启动时解析一次出口 IP；仅国内出口写入默认地区，\
-                      供天气等需要定位的功能使用。境外出口（可能经代理/翻墙）只展示不采用。";
-    let mut body = json!({
-        "ok": true,
-        "resolved": loc.is_some(),
-        "note": note,
-        "scope_note": scope_note,
-    });
-    if let Some(loc) = loc {
-        let obj = body.as_object_mut().expect("刚构造的 object");
-        obj.insert("ip".into(), json!(loc.ip));
-        obj.insert("country".into(), json!(loc.country));
-        obj.insert("province".into(), json!(loc.province));
-        obj.insert("city".into(), json!(loc.city));
-        obj.insert("source".into(), json!(loc.source));
-        obj.insert("domestic".into(), json!(loc.domestic));
+    let mut body = json!({ "ok": true });
+    let obj = body.as_object_mut().expect("刚构造的 object");
+    for (k, v) in crate::plugins::geo::status_snapshot()
+        .as_object()
+        .into_iter()
+        .flatten()
+    {
+        obj.insert(k.clone(), v.clone());
     }
     json_response(StatusCode::OK, body)
 }

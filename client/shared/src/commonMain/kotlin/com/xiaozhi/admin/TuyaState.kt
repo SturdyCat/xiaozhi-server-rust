@@ -25,7 +25,7 @@ import com.xiaozhi.admin.state.stateListOf
  * 每个请求带三重凭证：`generation` 票号 + `base` + `adminAccessRevision`——
  * 迟到的回包（切服务器 / 重新连接后）一律丢弃，避免旧服务器数据覆盖新会话状态。
  *
- * ⚠️ 本类不渲染：渲染见 `TuyaPage.kt` / `TuyaDetailPage.kt`。
+ * ⚠️ 本类不渲染：渲染见 `DeviceManagementCenter.kt` / `TuyaPage.kt`（零件）/ `TuyaDeviceDialog.kt`。
  */
 class TuyaState(private val scope: Pager) {
 
@@ -52,10 +52,15 @@ class TuyaState(private val scope: Pager) {
     var region by stateVar("cn")
     var lastSyncText by stateVar("")
     var lastSyncResult by stateVar("")
+    /** 最近一次同步的具体消息（失败原因，如 code 1108；服务端 last_sync.message）。 */
+    var lastSyncMessage by stateVar("")
     var syncing by stateVar(false)
     var storePath by stateVar("")
 
     val devices: MutableList<TuyaDeviceRow> = stateListOf()
+
+    /** LAN 扫描发现的未登记设备快照（不纳管，目录以云同步为准；服务端内存态）。 */
+    val lanUnregistered: MutableList<TuyaLanDevice> = stateListOf()
 
     // ---- 凭证录入表单（secret 保存成功后立即清空，绝不回显）----
     var formRegion by stateVar("cn")
@@ -122,11 +127,27 @@ class TuyaState(private val scope: Pager) {
             if (last == null) {
                 lastSyncText = "从未同步"
                 lastSyncResult = ""
+                lastSyncMessage = ""
             } else {
                 lastSyncResult = last.text("result")
+                lastSyncMessage = last.text("message")
                 val count = last.optLong("device_count") ?: 0L
                 val age = last.optLong("age_ms") ?: 0L
                 lastSyncText = "最近同步：${resultLabel(lastSyncResult)} · $count 台 · ${humanAge(age)}"
+            }
+            lanUnregistered.clear()
+            val lan = d.array("lan_unregistered")
+            if (lan != null) {
+                for (i in 0 until lan.length()) {
+                    val u = lan.optJSONObject(i) ?: continue
+                    lanUnregistered.add(
+                        TuyaLanDevice(
+                            deviceId = u.text("device_id"),
+                            ip = u.text("ip"),
+                            ageMs = (u.opt("age_ms") as? Number)?.toLong() ?: 0L,
+                        ),
+                    )
+                }
             }
             // 状态就绪后拉设备目录（同票据内递进，避免两次全量竞态）
             loadDevices(ctx, ticket)
@@ -410,6 +431,15 @@ class TuyaDeviceRow(
     val updatedAt: Long,
 ) {
     val displayModel: String get() = model.ifEmpty { "型号未知" }
+}
+
+/** LAN 发现的未登记设备一行（status.lan_unregistered 投影；展示 label= id[@ip]）。 */
+class TuyaLanDevice(
+    val deviceId: String,
+    val ip: String,
+    val ageMs: Long,
+) {
+    val label: String get() = if (ip.isEmpty()) deviceId else "$deviceId @ $ip"
 }
 
 /** 详情页一条 DP（dp id + 服务端算好的展示值与控件形态）。 */

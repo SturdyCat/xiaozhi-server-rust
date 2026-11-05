@@ -277,6 +277,7 @@ private fun globalSectionIcon(sectionId: String): IconToken = when (sectionId) {
     "presets" -> IconToken.Save
     "aiui" -> IconToken.Model
     "echomuse" -> IconToken.Waveform
+    "tuya" -> IconToken.Wifi
     "mcp" -> IconToken.Intent
     "ota" -> IconToken.Document
     else -> IconToken.Settings

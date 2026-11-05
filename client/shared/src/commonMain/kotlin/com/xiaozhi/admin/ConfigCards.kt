@@ -98,6 +98,7 @@ fun ConfigSectionHost(
             "server" -> ServerSection(form)
             "aiui" -> AiuiSection(form)
             "echomuse" -> EchoMuseSection(form)
+            "tuya" -> TuyaSection(form)
             "mcp" -> McpSection(mcp)
             "ota" -> OtaSection(ota)
             // 未注册内容不要静默留白（"新加了 section 却忘了写内容"会表现成点进去什么都没有）

@@ -138,6 +138,8 @@ internal fun ConfigFormState.fill(obj: JSONObject) {
     nlu.fill(obj)
     // [echomuse]（设备入口）：映射集中在 EchoMuseSectionState（token presence 打码）
     em.fill(obj)
+    // [tuya]（涂鸦接入开关/同步周期）：映射集中在 TuyaSectionState（凭证不经配置表单）
+    tuya.fill(obj)
     // 全部字段已就位：刷新内容栏重建键，强制表单整段重渲染——web 渲染器不会在异步
     // fill 后重 diff Input props，不重建则输入框停留在 build 时的初始值（误读成「保存的值丢了」）
     notifyConfigReloaded()

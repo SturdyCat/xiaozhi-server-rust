@@ -97,19 +97,23 @@ class UiContractsTest {
     }
 
     /**
-     * 范围削减后（docs/plans/gearui-kit-scope-reduction.md §二）`sessions` /
-     * `conversations` / `usage` / `metrics` 已移除；涂鸦接入追加了 `tuya`（2026-11-04
-     * 补契约：表实际 9 项、web 8 项，此前断言还停在 8/7 项的旧口径）。
-     * macOnly 的 `testbench` 只在 macOS 客户端可见。
+     * 导航契约表（随功能演进更新断言，契约本身仍是「常量表 + 唯一/升序/分组相邻」）：
+     * - 2026-10-29 范围削减：12 项 → 8 项，`sessions` / `conversations` / `usage` / `metrics` 移除；
+     * - 2026-11-03 Tuya IoT 集成（e68866d）：新增 `tuya`（涂鸦设备）→ 9 项；
+     * - 2026-11-03 设备管理中心：`echomuse` + `tuya` 合并为 `devicehub`（order 15，观测组）
+     *   ——统一卡片列表 + 齿轮一次性配置，EchoMuse/Tuya 运行面只此一处；
+     * - P2e/P3 插件管理：`plugins`（order 57，配置组）作为独立导航项（nav.main 的插件注册项
+     *   经 PluginSlots 合并为独立「插件」组，不进本编译期表）；
+     * - macOnly 的 `testbench` 只在 macOS 客户端可见（web 不显示）。
      * 顺序断言 = order 升序的声明顺序，`AdminNav.init` 里的分组相邻性校验必须继续通过。
      */
-    @Test fun navIsReducedAfterScopeCutAndIncludesTuya() {
+    @Test fun navTableMatchesCanonicalContract() {
         assertEquals(
-            listOf("overview", "testbench", "devices", "echomuse", "tuya", "console", "config", "settings", "plugins", "files"),
+            listOf("overview", "testbench", "devices", "devicehub", "console", "config", "settings", "plugins", "files"),
             AdminNav.all.map { it.id },
         )
         assertEquals(
-            listOf("overview", "devices", "echomuse", "tuya", "console", "config", "settings", "plugins", "files"),
+            listOf("overview", "devices", "devicehub", "console", "config", "settings", "plugins", "files"),
             AdminNav.visible(macos = false).map { it.id },
         )
         assertEquals("config", AdminNav.DEFAULT)

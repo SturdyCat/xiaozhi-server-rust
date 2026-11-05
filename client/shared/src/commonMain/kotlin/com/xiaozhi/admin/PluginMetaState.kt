@@ -30,6 +30,13 @@ class PluginMetaState(scope: PagerScope) : LoadableState(scope) {
     /** 可选能力：坏掉只降级（记忆 / 灵魂 / 发音人目录 / 固件托管 / AIUI）。 */
     val optionalRows: MutableList<CapabilityRow> = stateListOf()
 
+    /**
+     * 设备插件（echomuse/tuya）注册投影（`device_plugins[]`）——它们不是语音引擎
+     * （无 implementations），服务端单独成数组随同一端点下发。
+     * 注册语义 = 配置段启用：管理台据此决定「设备管理」菜单与各插件分区是否出现。
+     */
+    val devicePluginRows: MutableList<DevicePluginRow> = stateListOf()
+
     /** 计数摘要（只含非零项）；未加载时为空串。 */
     var summary by stateVar("")
 
@@ -40,10 +47,24 @@ class PluginMetaState(scope: PagerScope) : LoadableState(scope) {
 
     override val errorLabel: String = "能力清单加载失败"
 
+    fun devicePlugin(id: String): DevicePluginRow? = devicePluginRows.firstOrNull { it.id == id }
+
+    /**
+     * 是否至少注册了一个设备插件（「设备管理」菜单的门控）。
+     * 未加载或旧服务端未上报 `device_plugins`（空数组）时按 true 处理：
+     * 菜单不因加载间隙闪隐，旧服务端维持合并前的常显行为。
+     */
+    fun anyDevicePluginRegistered(): Boolean {
+        if (!loaded || devicePluginRows.isEmpty()) return true
+        return devicePluginRows.any { it.registered }
+    }
+
     /** 解析 `capabilities[]` → 两行列表 + 计数摘要。 */
     override fun apply(data: JSONObject) {
         requiredRows.clear()
         optionalRows.clear()
+        // 设备插件注册投影（device_plugins[]）：它们不是语音引擎，服务端单独成数组下发。
+        devicePluginRows.clear()
         // `wasm` 是 P2e 增量投影；解析失败/缺失统一回静态导航，不影响能力总览。
         // Kuikly JSON → 纯契约层解析（contracts 零 Kuikly 依赖）：失败 = 静态基线回退
         wasmSlots = runCatching {
@@ -85,6 +106,24 @@ class PluginMetaState(scope: PagerScope) : LoadableState(scope) {
         if (failed > 0) parts.add("$failed 异常")
         if (disabled > 0) parts.add("$disabled 已关闭")
         summary = parts.joinToString(" · ")
+        // 设备插件注册投影（旧服务端无此键 → 保持空数组，门控按"已注册"兜底）
+        val dps = data.optJSONArray("device_plugins")
+        if (dps != null) {
+            for (i in 0 until dps.length()) {
+                val p = dps.optJSONObject(i) ?: continue
+                devicePluginRows.add(
+                    DevicePluginRow(
+                        id = p.optString("id") ?: "",
+                        label = p.optString("label") ?: "",
+                        registered = p.optBoolean("registered", false),
+                        phase = p.optString("phase", "disabled"),
+                        configSection = p.optString("config_section", ""),
+                        note = p.optString("note", ""),
+                        reason = p.optString("last_error", ""),
+                    ),
+                )
+            }
+        }
         loaded = true
         loadError = ""
     }
@@ -145,5 +184,22 @@ class CapabilityRow(
     /** 生效语义文案（"保存后新会话生效"等）。 */
     val hotHint: String,
     /** 降级/失败原因（含「怎么修」）；正常时为空串。 */
+    val reason: String,
+)
+
+/**
+ * 设备插件一行（`GET /api/plugins` 的 `device_plugins[]` 投影）。
+ * `registered` = 配置段启用（注册门控）；`configSection` 指向唯一配置表单的 section id。
+ */
+class DevicePluginRow(
+    val id: String,
+    val label: String,
+    val registered: Boolean,
+    /** `active` / `disabled`（纯配置投影，不做运行探测）。 */
+    val phase: String,
+    val configSection: String,
+    /** 热生效语义说明（服务端下发，如「RestartOnly：开关保存后需重启生效」）。 */
+    val note: String,
+    /** 异常原因；正常时为空串。 */
     val reason: String,
 )

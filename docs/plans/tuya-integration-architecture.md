@@ -69,11 +69,27 @@ sync_interval_secs = 86400  # 定时同步周期；0 = 仅手动
 
 ## 3. 云同步设计（OpenAPI 仅目录同步）
 
-签名流程要点（HMAC-SHA256）：
-1. token：`GET https://openapi.{region}/v1/token?grant_type=1`，头 `client_id`、`t`（13 位毫秒）、`sign_mode=simple_sign`，`sign = HMAC-SHA256(secret, client_id + t)`（token 请求无 access_token，按空串拼接）。
-2. 业务请求统一头：`client_id / access_token / t / sign_mode=simple_sign`，`sign = HMAC-SHA256(secret, client_id + access_token + t)`。simple_sign 不参与 body/url 计算（Tuya 官方支持，本场景足够）；错误码 1010/1011（token 失效）→ 重取一次重试。
-3. token 缓存于 cloud.rs（expire 7200s，提前 300s 刷新）。
-- 设备清单：`GET /v1.0/iot-01/associated-users/actions/authorized-devices`（免 uid，含 local_key/name/model/online/ip），page_size=50 翻页至空。
+签名流程要点（**涂鸦官方 v1.0 口径**，2026-11-03 真凭证联调**全链路验证通过**——token ✓、
+设备详情 ✓、授权设备清单 ✓；与官方 SDK tuya-connector-python `_calculate_sign` 逐字节一致）：
+
+```text
+str_to_sign = METHOD + "\n" + sha256(body).小写hex + "\n" + "\n" + path?排序后query
+sign        = HMAC-SHA256(secret, client_id + access_token + t + str_to_sign).大写hex
+```
+
+- body 为空（GET）时 sha256 取空串；**两段 `\n` 之间的空 Header 段必须保留**——
+  2026-11-03 之前所有 `1004 sign invalid` 的根因就是少了这段换行，**不是凭证错**；
+- 统一头：`client_id / access_token(token 请求传空) / t(13 位毫秒) / sign_method=HMAC-SHA256 / sign / lang`；
+- token：`GET /v1.0/token?grant_type=1`（7200s，提前 300s 刷新）；1010/1011 → 重取一次重试；
+- 设备清单：`GET /v1.0/iot-01/associated-users/devices?size=50`（免 uid，含 local_key/name/model/online/ip/status），
+  回包 `result.{devices[], has_more, last_row_key, total}`，翻页带 `last_row_key`；
+  旧路径 `…/actions/authorized-devices` 恒 1108（cn 网关不存在，已废弃）；
+- 错误码判读：1108 = 路径不存在；1004 = 签名串构造错或 secret 不配对；
+  28841003 = API 组未订阅；调试台（platform.tuya.com）的 `mode=cors`+`signVersion=2.0`
+  是平台前端私有签名，公开 API 不适用；
+- **调试代理**：`POST /api/tuya/cloud/proxy`，请求体 `{method, path, query?, body?}`
+  （method 限 GET/POST/DELETE，path 限 `/v1.` 前缀），服务端按官方签名转发、回包原样透传——
+  联调/修 bug 免写临时脚本（约定：**外部 SDK 集成一律以代理 API 形式暴露调试入口**）。
 - 触发：手动按钮（POST /api/tuya/sync）+ 可选定时（默认 86400s）。**频率上限：最小同步间隔 60s** 全局闸门，手动与定时共用（防连点 + 云额度保护）。
 - 失败处理：auth 失败 → cloud_auth_failed（提示检查凭证）；网络/超时 → network_error；部分页失败 → partial。全部写 sync_history，UI 状态条展示最近一次结果。
 - local_key 变更：upsert 覆盖；若该设备在会话池中且 key 变化 → 重建对应 Device。
@@ -116,7 +132,7 @@ sequenceDiagram
 
 | 方法/路径 | 说明 | 请求 | 响应要点 |
 |---|---|---|---|
-| GET /api/tuya/status | 凭证/同步状态 | - | {configured, access_id_masked, region, last_sync{at,result,count}, syncing} |
+| GET /api/tuya/status | 凭证/同步状态 | - | {configured, access_id_masked, region, last_sync{finished_at,age_ms,result,device_count,message}, syncing, lan_unregistered:[{device_id,ip,age_ms}], store_path}；`last_sync.message` 带同步失败具体原因（如 code 1108），`lan_unregistered` 为 LAN 扫描发现的未登记设备内存快照（不纳管，目录以云同步为准） |
 | POST /api/tuya/credentials | 录入/更新凭证 | {region, access_id, access_secret} | ok；**secret 永不回显**，GET 永远只有掩码 |
 | DELETE /api/tuya/credentials | 清除凭证 | - | ok |
 | POST /api/tuya/sync | 立即同步（60s 闸门） | - | {result} 或 {queued} |

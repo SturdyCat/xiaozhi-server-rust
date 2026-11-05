@@ -12,7 +12,9 @@
 //!
 //! - [`config`]：`[tuya]` 配置段（全部热生效）；
 //! - [`store`]：独立 SQLite `<data>/tuya/devices.db`（devices + sync_history，0600）；
-//! - [`cloud`]：涂鸦云 OpenAPI 客户端（simple_sign 签名 + token 缓存 + 设备清单翻页）；
+//! - [`cloud`]：涂鸦云 OpenAPI 客户端（官方 v1.0 签名 + token 缓存 + 设备清单翻页
+//!   + 调试代理 `proxy_request`；2026-11-03 真凭证联调全链路验证）；
+//! - [`cloud_transport`]：云 HTTP 传输层（请求/响应形状 + reqwest 发送抽象）；
 //! - [`sync`]：同步编排（拉清单 → upsert → sync_history；60s 最小间隔全局闸门）；
 //! - [`lan`]：rustuya 会话池（懒式建连）+ 失败三归类 + DP 载荷解析；
 //! - [`voice`]：NLU iot 域语音控制（名称匹配 / 开关 DP 识别 / 话术组装）；
@@ -27,6 +29,7 @@
 
 pub mod api;
 pub mod cloud;
+pub mod cloud_transport;
 pub mod config;
 pub mod lan;
 pub mod store;
@@ -63,6 +66,21 @@ use store::{now_ms, DeviceRow, TuyaStore};
 /// 重启后由轮询/控制回读重建（架构 §2.1）。
 pub type DpCache = Mutex<HashMap<String, HashMap<String, serde_json::Value>>>;
 
+/// LAN 扫描发现的**未登记**设备（内存快照，仅状态条展示；不纳管、不落库）。
+///
+/// 目录真源是云同步：未登记设备等云目录把它带回来（云同步会写入 local_key），
+/// 这里只把"局域网里有这么一台设备"透出到 `GET /api/tuya/status` 的
+/// `lan_unregistered`，让管理台不再只有日志可见。
+#[derive(Debug, Clone, PartialEq)]
+pub struct UnregisteredDevice {
+    pub device_id: String,
+    pub ip: String,
+    pub discovered_at_ms: i64,
+}
+
+/// 快照容量上限：家庭规模足够，防异常网络下无限增长。
+const UNREGISTERED_MAX: usize = 32;
+
 /// 在线轮询的每设备记账（错峰相位 + 连续失败计数）。
 struct PollState {
     /// 下次应轮询的时刻（首见设备按 device_id 哈希散列到 60s 内，避免整点齐发）。
@@ -92,6 +110,8 @@ pub struct TuyaEngine {
     inflight: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     poll: Mutex<HashMap<String, PollState>>,
     sync_state: Mutex<SyncState>,
+    /// LAN 发现的未登记设备快照（状态条展示用；容量见 [`UNREGISTERED_MAX`]）。
+    unregistered: Mutex<Vec<UnregisteredDevice>>,
     /// 已生效的凭证指纹（变化 → 丢弃 token 缓存；勿打日志，含 secret）。
     cred_fp: Mutex<String>,
 }
@@ -117,10 +137,8 @@ fn assemble(data_dir: &Path) -> TuyaEngine {
         writable: Arc::new(Mutex::new(HashMap::new())),
         inflight: Mutex::new(HashMap::new()),
         poll: Mutex::new(HashMap::new()),
-        sync_state: Mutex::new(SyncState {
-            syncing: false,
-            last_start: None,
-        }),
+        sync_state: Mutex::new(SyncState { syncing: false, last_start: None }),
+        unregistered: Mutex::new(Vec::new()),
         cred_fp: Mutex::new(String::new()),
     }
 }
@@ -385,10 +403,13 @@ impl TuyaEngine {
                     merged += 1;
                     self.lan.drop_if_ip_differs(&d.id, &d.ip);
                 }
-                Ok(Ok(false)) => tracing::info!(
-                    "Tuya 发现未登记设备 {}（不自动纳管，目录以云同步为准）",
-                    d.id
-                ),
+                Ok(Ok(false)) => {
+                    tracing::info!(
+                        "Tuya 发现未登记设备 {}（不自动纳管，目录以云同步为准）",
+                        d.id
+                    );
+                    self.note_unregistered(&d.id, &d.ip);
+                }
                 Ok(Err(e)) => tracing::warn!("Tuya 发现结果合并失败（{}）: {e}", d.id),
                 Err(e) => tracing::warn!("Tuya 发现合并任务失败: {e}"),
             }
@@ -396,10 +417,42 @@ impl TuyaEngine {
         merged
     }
 
+    /// 记录一台 LAN 发现的未登记设备（upsert by device_id；容量到顶丢最旧）。
+    fn note_unregistered(&self, device_id: &str, ip: &str) {
+        let now = now_ms();
+        let mut list = self.unregistered.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(entry) = list.iter_mut().find(|u| u.device_id == device_id) {
+            entry.ip = ip.to_string();
+            entry.discovered_at_ms = now;
+            return;
+        }
+        list.push(UnregisteredDevice {
+            device_id: device_id.to_string(),
+            ip: ip.to_string(),
+            discovered_at_ms: now,
+        });
+        if list.len() > UNREGISTERED_MAX {
+            // 丢最旧（发现时间最小）
+            list.sort_by(|a, b| b.discovered_at_ms.cmp(&a.discovered_at_ms));
+            list.truncate(UNREGISTERED_MAX);
+        }
+    }
+
+    /// 未登记设备快照（status 状态条）：按发现时间倒序，上限 [`UNREGISTERED_MAX`]。
+    pub(crate) fn unregistered_snapshot(&self) -> Vec<UnregisteredDevice> {
+        let mut list = self
+            .unregistered
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        list.sort_by(|a, b| b.discovered_at_ms.cmp(&a.discovered_at_ms));
+        list.truncate(UNREGISTERED_MAX);
+        list
+    }
+
     // ============================================================
     // 凭证热生效
     // ============================================================
-
     /// 凭证指纹比对（worker 每 tick / 凭证保存后调用）：变化 → 丢弃 token 缓存。
     ///
     /// 竞态修复：指纹提交放在 `try_lock` **成功之后**。若先提交指纹再拿锁失败，

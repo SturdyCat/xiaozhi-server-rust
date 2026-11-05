@@ -42,6 +42,9 @@ object ConfigSections {
         SectionDescriptor("audio", 110, "音频与播放", "service"),
         SectionDescriptor("server", 120, "服务", "service"),
         SectionDescriptor("echomuse", 130, "EchoMuse 接入", "service"),
+        // 涂鸦接入：部署级开关（enabled/同步周期）落全局配置；凭证与设备运行面在
+        // 侧栏「设备管理」（POST /api/tuya/credentials 是凭证唯一录入路径）
+        SectionDescriptor("tuya", 135, "Tuya 接入", "service"),
         SectionDescriptor("mcp", 140, "MCP 工具", "service"),
         SectionDescriptor("ota", 150, "固件与 OTA", "service"),
     )

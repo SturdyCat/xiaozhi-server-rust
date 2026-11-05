@@ -27,6 +27,15 @@
 //! ⚠️ 只在**启动**时执行一次，且写库时是原子事务 + 留一份 `cfg_revisions`
 //! （`source = "defaults-migration"`），需要时可按 revision 回滚。
 //!
+//! ## 结构补全（新增配置自动生效，[`fill_missing`]）
+//!
+//! 版本化批次只覆盖"**默认值变更**"。代码迭代还经常**新增**配置段/键（如新版本新增的
+//! `[tuya]`）：老库里这些键根本不存在，serde 运行时虽按默认生效，库内文档却长期缺键
+//! （`db/query`、原始备份里都看不到，用户观感就是"迭代了新配置，库里没有"）。因此启动
+//! 对齐在批次之后追加一次**结构补全**：以当前 `Config::default()` 的序列化形状为基准，
+//! 只补缺失/`null` 键，用户已有值与类型不匹配一律不动；幂等、与 `defaults_version`
+//! 无关、无变更不写库。新增字段因此**不需要**登记 `BATCHES`——那只用于默认值变更。
+//!
 //! ## 设备 overlay / 预设不参与
 //!
 //! - `cfg_device_overlays` 只在用户显式保存单设备增量时写入，不存在"带旧默认的整份
@@ -276,6 +285,44 @@ pub fn align(doc: &mut Value, from_version: u32) -> AlignReport {
         }
     }
     report
+}
+
+/// 结构补全（见模块文档「结构补全」节）：以 `defaults`（当前 `Config::default()` 的
+/// 序列化形状）为基准，把 `doc` 里**缺失或为 `null`** 的键补成当前默认值，返回被补的
+/// 点分路径（键缺失时整棵默认子树一次补齐，路径记到该键为止）。
+///
+/// 规则只有三条：① 缺失/`null` → 插入默认值；② 两边都是对象 → 递归下钻；③ 其余
+/// （用户已有值、类型不匹配）一律不动——类型不匹配交给反序列化护栏显式报错，绝不猜。
+/// 只增不删：`doc` 里代码已移除的旧键原样保留（serde 忽略未知键，留作 revision 历史）。
+pub fn fill_missing(doc: &mut Value, defaults: &Value) -> Vec<String> {
+    let mut filled = Vec::new();
+    if doc.as_object().is_none() || defaults.as_object().is_none() {
+        // 根不是对象：坏配置，交给 `align` 的 broken 与反序列化护栏，这里无事可做。
+        return filled;
+    }
+    fill_object(doc, defaults, "", &mut filled);
+    filled
+}
+
+/// [`fill_missing`] 的递归实现体；`prefix` 为空表示根层。
+fn fill_object(doc: &mut Value, defaults: &Value, prefix: &str, filled: &mut Vec<String>) {
+    let (Some(doc_obj), Some(def_obj)) = (doc.as_object_mut(), defaults.as_object()) else {
+        return;
+    };
+    for (key, dval) in def_obj {
+        let path = if prefix.is_empty() {
+            key.clone()
+        } else {
+            format!("{prefix}.{key}")
+        };
+        if matches!(doc_obj.get(key), None | Some(Value::Null)) {
+            doc_obj.insert(key.clone(), dval.clone());
+            filled.push(path);
+        } else if dval.is_object() {
+            // 两边都是对象才下钻；库内是标量/数组而默认是对象 → 类型不匹配，跳过不动
+            fill_object(doc_obj.get_mut(key).expect("键刚检查过存在"), dval, &path, filled);
+        }
+    }
 }
 
 /// 单条变更落地（见模块文档的三条规则）。

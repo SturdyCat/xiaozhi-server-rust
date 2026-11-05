@@ -92,6 +92,9 @@ internal fun ConfigFormState.buildConfigDraft(): JSONObject {
         nlu.putJson(this)
         // [echomuse]：设备入口（enabled/token）——同样整段回传，否则保存一次就把它关掉。
         em.putJson(this)
+        // [tuya]：只回传 enabled/同步周期（凭证键刻意不带，唯一录入路径是
+        // POST /api/tuya/credentials——见 TuyaSectionState 注释）。
+        tuya.putJson(this)
         // Workflow writes use the same config patch and revision, never a second submit route.
         workflow.putPatch(this)
         // [aiui]：此前管理页**完全没有这个段**，保存一次就把它静默关掉（后端已改为部分更新
