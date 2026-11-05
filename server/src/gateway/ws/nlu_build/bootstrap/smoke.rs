@@ -302,7 +302,10 @@ pub(super) fn run_gate(
         // 当成拒识的话，一个输出 NaN 的坏产物会以"全部拒识"混过 bad_class 那一级，
         // 再靠正例通过率慢慢暴露甚至不暴露。所以一律硬失败，不计入任何 rejected 计数。
         let guess = classify(bert.as_ref(), artifact, &case.text).map_err(|e| {
-            GateFailure::new("smoke_bad_class", format!("推理失败（模型坏了不能当拒识吞掉）: {e}"))
+            GateFailure::new(
+                "smoke_bad_class",
+                format!("推理失败（模型坏了不能当拒识吞掉）: {e}"),
+            )
         })?;
         // 契约问题当场报，不等计数：哪一条映射到了不存在的技能，信息必须原样带给人。
         if let Some(failure) = unmapped_failure(artifact, &guess) {

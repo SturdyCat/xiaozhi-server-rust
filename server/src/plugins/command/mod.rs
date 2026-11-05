@@ -82,7 +82,9 @@ impl CommandConfig {
             .iter()
             .any(|keyword| keyword.contains('{') || keyword.contains('}'))
         {
-            anyhow::bail!("[command].keywords是断开对话技能的完整训练句，不允许槽位占位符，请移除花括号");
+            anyhow::bail!(
+                "[command].keywords是断开对话技能的完整训练句，不允许槽位占位符，请移除花括号"
+            );
         }
         Ok(())
     }

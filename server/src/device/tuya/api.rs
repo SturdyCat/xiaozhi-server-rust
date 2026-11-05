@@ -46,7 +46,10 @@ pub(crate) fn routes() -> axum::Router<Arc<Engines>> {
         .route("/api/tuya/status", get(status))
         .route("/api/tuya/credentials", post(credentials_put))
         .route("/api/tuya/credentials/delete", post(credentials_delete))
-        .route("/api/tuya/credentials", axum::routing::delete(credentials_delete))
+        .route(
+            "/api/tuya/credentials",
+            axum::routing::delete(credentials_delete),
+        )
         .route("/api/tuya/sync", post(sync_now))
         .route("/api/tuya/devices", get(devices_list))
         .route("/api/tuya/devices/{id}", get(device_get))
@@ -62,22 +65,44 @@ pub(crate) fn mask_access_id(id: &str) -> String {
     if chars.len() <= 4 {
         "****".to_string()
     } else {
-        format!("{}****{}", chars[..2].iter().collect::<String>(), chars[chars.len() - 2..].iter().collect::<String>())
+        format!(
+            "{}****{}",
+            chars[..2].iter().collect::<String>(),
+            chars[chars.len() - 2..].iter().collect::<String>()
+        )
     }
 }
 
 /// 凭证写入决策（纯函数）：region 必须在白名单；access_id 非空必填；
 /// access_secret 留空且已配置 → 保留旧值（管理员只想改区域/ID 的场景）。
 pub(crate) fn credentials_apply(cfg: &mut TuyaConfig, body: &Value) -> Result<(), String> {
-    let region = body.get("region").and_then(Value::as_str).unwrap_or(&cfg.region).trim().to_ascii_lowercase();
+    let region = body
+        .get("region")
+        .and_then(Value::as_str)
+        .unwrap_or(&cfg.region)
+        .trim()
+        .to_ascii_lowercase();
     if !crate::device::tuya::config::REGIONS.contains(&region.as_str()) {
-        return Err(format!("region 只支持 {:?}", crate::device::tuya::config::REGIONS));
+        return Err(format!(
+            "region 只支持 {:?}",
+            crate::device::tuya::config::REGIONS
+        ));
     }
-    let access_id = body.get("access_id").and_then(Value::as_str).unwrap_or("").trim().to_string();
+    let access_id = body
+        .get("access_id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
     if access_id.is_empty() {
         return Err("access_id 不能为空".into());
     }
-    let access_secret = body.get("access_secret").and_then(Value::as_str).unwrap_or("").trim().to_string();
+    let access_secret = body
+        .get("access_secret")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
     cfg.region = region;
     cfg.access_id = access_id;
     if !access_secret.is_empty() {
@@ -203,7 +228,11 @@ pub(crate) fn failure_payload(failure: &ControlFailure) -> Value {
 // ---- axum handlers（鉴权 → enabled 闸门 → 组装）----
 
 /// 管理面共用前置：鉴权 + `[tuya].enabled` 闸门；Some = 已定型的错误响应。
-fn gate(engines: &Engines, headers: &HeaderMap, query: &HashMap<String, String>) -> Option<Response> {
+fn gate(
+    engines: &Engines,
+    headers: &HeaderMap,
+    query: &HashMap<String, String>,
+) -> Option<Response> {
     if !auth_ok(headers, query, &engines.config.server) {
         return Some((StatusCode::UNAUTHORIZED, "unauthorized").into_response());
     }
@@ -245,7 +274,9 @@ async fn persist_config(
         let mut cfg = store.load().map_err(|e| format!("配置读取失败: {e}"))?;
         apply(&mut cfg.tuya)?;
         crate::config::Config::normalize(&mut cfg);
-        store.persist(&cfg).map_err(|e| format!("配置写回失败: {e}"))
+        store
+            .persist(&cfg)
+            .map_err(|e| format!("配置写回失败: {e}"))
     })
     .await
     .map_err(|e| format!("配置写回任务失败: {e}"))?
@@ -271,7 +302,12 @@ async fn status(
         .flatten()
         .as_ref()
         .map(SyncRecordView::from_record);
-    let mut body = status_payload(cfg.enabled, &cfg, last_sync.as_ref(), engines.tuya.syncing());
+    let mut body = status_payload(
+        cfg.enabled,
+        &cfg,
+        last_sync.as_ref(),
+        engines.tuya.syncing(),
+    );
     body["store_path"] = json!(engines.tuya.store_path().display().to_string());
     json_ok(body)
 }
@@ -389,11 +425,21 @@ async fn device_dp(
         return r;
     }
     let payload = body.map(|axum::Json(v)| v).unwrap_or(json!({}));
-    let Some(dp) = payload.get("dp").and_then(Value::as_str).map(str::to_string) else {
-        return json_error(StatusCode::BAD_REQUEST, json!({ "error": "需要 dp（数据点 ID）" }));
+    let Some(dp) = payload
+        .get("dp")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+    else {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            json!({ "error": "需要 dp（数据点 ID）" }),
+        );
     };
     let Some(value) = payload.get("value").cloned() else {
-        return json_error(StatusCode::BAD_REQUEST, json!({ "error": "需要 value（目标值）" }));
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            json!({ "error": "需要 value（目标值）" }),
+        );
     };
     match engines.tuya.set_dp(&id, &dp, value).await {
         Ok(dps) => {
@@ -419,7 +465,10 @@ async fn device_alias(
     }
     let payload = body.map(|axum::Json(v)| v).unwrap_or(json!({}));
     let Some(alias) = payload.get("alias").and_then(Value::as_str) else {
-        return json_error(StatusCode::BAD_REQUEST, json!({ "error": "需要 alias（本地展示名，可为空串清除）" }));
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            json!({ "error": "需要 alias（本地展示名，可为空串清除）" }),
+        );
     };
     match engines.tuya.set_alias(&id, alias).await {
         Ok(()) => json_ok(json!({ "ok": true })),

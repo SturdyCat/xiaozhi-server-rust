@@ -186,6 +186,7 @@ fn non_fs_capabilities_have_no_probe() {
         Capability::Command,
         Capability::Wake,
         Capability::Nlu,
+        Capability::Echomuse,
     ] {
         assert!(probe(&cfg, cap).is_none(), "{} 不应有本地探测项", cap.id());
     }
@@ -202,13 +203,13 @@ fn probe_report_json_shape() {
     assert_eq!(fail.to_json()["detail"], "修一下");
 }
 
-/// 全部 12 个能力都已被 match 覆盖（穷尽性由编译器保证，这里再显式数一遍，
+/// 全部 14 个能力都已被 match 覆盖（穷尽性由编译器保证，这里再显式数一遍，
 /// 防止"新增能力后 probe 忘了写 match 分支"以外的方式引入漂移——其实编译不过，
 /// 这条是文档级断言）。
 #[test]
 fn every_capability_is_matched() {
     let cfg = Config::default();
-    assert_eq!(crate::plugins::registry::ALL_CAPABILITIES.len(), 12);
+    assert_eq!(crate::plugins::registry::ALL_CAPABILITIES.len(), 14);
     for &cap in crate::plugins::registry::ALL_CAPABILITIES {
         let _ = probe(&cfg, cap); // 只要不 panic 即覆盖
     }

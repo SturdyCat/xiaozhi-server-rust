@@ -18,6 +18,12 @@ nlu = ["dep:ort", "dep:tokenizers"]
 # ESPHome Native API 桥（`[esp_home].enabled` 时监听 6053，把 Dot 2 暴露为标准 ESPHome
 # 节点；纯 Rust，无系统依赖）。默认关闭：不加该 feature 时零依赖、零监听、零行为变化。
 esp_home = ["dep:esphome-native-api"]
+# WASM 插件平台（方案 v4 / docs/designs/wasm-plugin-platform.md）：wasmtime 宿主 + WIT 契约
+# （server/wit/plugin.wit）+ 扩展点解析/回退 + waterfall 事件内核。默认关闭：不加该 feature
+# 时零依赖、零行为变化；Docker 部署镜像启用。
+# 精选 feature 子集（非 default）：不需要 async/cranelift 之外的引擎、cache、GC、threads。
+# 48.x 线：rustc 下限 1.95，本仓库工具链满足；50.x 尚年轻，暂不追新。
+wasm-plugins = ["dep:wasmtime"]
 
 [dependencies]
 axum = { version = "0.8.4", features = ["ws"] }
@@ -83,6 +89,19 @@ esphome-native-api = { version = "3.0.0", optional = true }
 # 精确钉 rc.10：caret 会被锁到 rc.14（要求 ONNX Runtime >=1.31），与镜像内 1.22.1 dylib 不配对
 ort = { version = "=2.0.0-rc.10", optional = true, features = ["load-dynamic"] }
 tokenizers = { version = "0.21", optional = true, default-features = false, features = ["onig"] }
+
+# 仅在 wasm-plugins feature 下引入：WASM Component Model 宿主。
+# feature 子集说明见 [features].wasm-plugins；component-model 是 bindgen! 与组件装载的前提。
+wasmtime = { version = "48", optional = true, default-features = false, features = [
+    "anyhow",
+    "backtrace",
+    "component-model",
+    "cranelift",
+    "demangle",
+    "parallel-compilation",
+    "runtime",
+    "std",
+] }
 tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots", "url"] }
 hmac = "0.13.0"
 sha2 = "0.11.0"

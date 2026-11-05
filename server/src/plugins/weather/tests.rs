@@ -100,14 +100,20 @@ fn test_extract_time() {
         extract_time("上海未来一周", ""),
         ("上海".to_string(), "未来一周".to_string())
     );
-    assert_eq!(extract_time("深圳", ""), ("深圳".to_string(), String::new()));
+    assert_eq!(
+        extract_time("深圳", ""),
+        ("深圳".to_string(), String::new())
+    );
 }
 
 #[test]
 fn test_strip_weather_words_pipeline() {
     // 「未来一周天气」这类组合：先清洗非地名词，再切时段 → 城市为空（走默认定位）。
     let cleaned = strip_weather_words("未来一周天气");
-    assert_eq!(extract_time(&cleaned, ""), (String::new(), "未来一周".to_string()));
+    assert_eq!(
+        extract_time(&cleaned, ""),
+        (String::new(), "未来一周".to_string())
+    );
     // 「深圳今天天气」→ 深圳 + 今天
     let cleaned = strip_weather_words("深圳今天天气");
     assert_eq!(

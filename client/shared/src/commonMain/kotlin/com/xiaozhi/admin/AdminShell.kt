@@ -36,6 +36,7 @@ import com.tencent.kuikly.compose.ui.unit.dp
 import com.xiaozhi.admin.contracts.AdminNav
 import com.xiaozhi.admin.contracts.IconToken
 import com.xiaozhi.admin.contracts.NavDescriptor
+import com.xiaozhi.admin.contracts.PluginSlots
 import com.xiaozhi.admin.icons.GearIcon
 import com.xiaozhi.admin.kit.AdminScopeHost
 import com.xiaozhi.admin.kit.AdminViewport
@@ -127,7 +128,11 @@ private fun AdminSidebar(page: AdminPage) {
             .background(Theme.colors.surface),
     ) {
         ScrollView(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            for ((group, items) in AdminNav.grouped(IS_MACOS)) {
+            val groups = PluginSlots.mergeGrouped(
+                AdminNav.grouped(IS_MACOS),
+                page.plugins.wasmSlots,
+            )
+            for ((group, items) in groups) {
                 // CellGroup 负责：分组标题对齐、卡片圆角、行间分隔线（末行无分隔）；
                 // 组卡之间留一档空隙，分组在视觉上断开（组标题的 top 内距只管标题与卡片之间）
                 CellGroup(
@@ -389,15 +394,25 @@ private fun AdminSectionHost(page: AdminPage, viewport: AdminViewport) {
             toast = page.toast,
             isActive = { page.selectedSection == "tuya" },
         )
+        "plugins" -> PluginsManagePage(
+            meta = page.plugins,
+            manage = page.pluginManage,
+            toast = page.toast,
+        )
         // 测试台（T12，mac-only）：五 tab 工作区（连接 / ASR 识别 / TTS 合成 / LLM 对话 / NLU 意图），
         // 播放控制下沉 XiaoZhiModule（Audio DSL 视图无法进 Compose 树，见 TestBenchPage.kt）
         "testbench" -> TestbenchSection(page)
-        else -> Box(modifier = Modifier.fillMaxSize()) {
-            SectionPlaceholder(
-                title = AdminNav.label(page.selectedSection),
-                detail = sectionDetail(page.selectedSection),
-                viewport = viewport,
-            )
+        else -> {
+            val pluginId = PluginSlots.pluginIdFromNavigation(page.selectedSection)
+            val plugin = pluginId?.let { page.plugins.wasmSlots?.plugin(it) }
+            Box(modifier = Modifier.fillMaxSize()) {
+                SectionPlaceholder(
+                    title = plugin?.title ?: AdminNav.label(page.selectedSection),
+                    detail = plugin?.description?.takeIf { it.isNotBlank() }
+                        ?: sectionDetail(page.selectedSection),
+                    viewport = viewport,
+                )
+            }
         }
     }
 }

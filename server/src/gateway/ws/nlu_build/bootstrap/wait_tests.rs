@@ -99,23 +99,21 @@ fn precheck_releases_by_elapsed_since_build_start_not_by_a_step() {
     let now = 10_000;
     let mut st = State::default();
     st.attempts = 1;
-    let wait = |st: &State| {
-        match precheck(
-            false,
-            Mode::Adopt,
-            true,
-            &nlu,
-            ArtifactState::Missing,
-            st,
-            now,
-        ) {
-            None => None,
-            Some(Block::Wait { reason, seconds }) => {
-                assert_eq!(reason, "backoff", "这里只该撞退避，不该是别的 Block");
-                Some(seconds)
-            }
-            Some(other) => panic!("{other:?}"),
+    let wait = |st: &State| match precheck(
+        false,
+        Mode::Adopt,
+        true,
+        &nlu,
+        ArtifactState::Missing,
+        st,
+        now,
+    ) {
+        None => None,
+        Some(Block::Wait { reason, seconds }) => {
+            assert_eq!(reason, "backoff", "这里只该撞退避，不该是别的 Block");
+            Some(seconds)
         }
+        Some(other) => panic!("{other:?}"),
     };
     // 构建跑了 1 小时：早过 600s 窗口，放行。
     st.last_attempt_at = Some(now - 3600);

@@ -81,6 +81,11 @@ pub(super) fn validate_tts_kokoro(cfg: &Config) -> Result<()> {
     Ok(())
 }
 
+/// WASM TTS 只是控制策略包装，底层仍需可用的 Kokoro native 引擎。
+pub(super) fn validate_tts_wasm_policy(cfg: &Config) -> Result<()> {
+    validate_tts_kokoro(cfg)
+}
+
 pub(super) fn validate_llm(cfg: &Config) -> Result<()> {
     // 硬条件：地址缺失无法调用（保留既有行为：密钥为空**不**阻止启动，见 warn_llm）
     if cfg.llm.api_base.trim().is_empty() {

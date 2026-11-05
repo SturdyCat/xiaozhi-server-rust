@@ -1,7 +1,6 @@
 //! Stable declarative skills and device-bound persistent scheduling.
 //! No networking, device playback or arbitrary code runs in this module.
 mod api;
-pub(super) mod weather_ops;
 mod calendar;
 mod delivery;
 mod plan;
@@ -11,6 +10,7 @@ mod schedule;
 mod store;
 mod task_ops;
 mod types;
+pub(super) mod weather_ops;
 
 pub use plan::{
     capabilities, conditions_match, resolve_plan, resolve_step, validate_plan, validate_step,

@@ -151,18 +151,25 @@ pub(super) fn strip_weather_words(city: &str) -> String {
 pub(super) fn extract_time(city: &str, range: &str) -> (String, String) {
     // 长词先匹配，避免「未来一周」被「未来」提前命中。
     let time_words = [
-        "未来一周", "近7天", "近七天", "未来", "一周", "七天", "7天", "实时", "当前", "今天",
-        "明天", "后天",
+        "未来一周",
+        "近7天",
+        "近七天",
+        "未来",
+        "一周",
+        "七天",
+        "7天",
+        "实时",
+        "当前",
+        "今天",
+        "明天",
+        "后天",
     ];
     let combined = format!("{}{}", range, city);
     for tw in time_words {
         if combined.contains(tw) {
             let mut c = city.to_string();
-            let mut r = range.to_string();
             if c.contains(tw) {
                 c = c.replace(tw, "");
-            } else if r.contains(tw) {
-                r = r.replace(tw, "");
             }
             return (c.trim().to_string(), tw.to_string());
         }
@@ -183,7 +190,7 @@ pub(super) fn match_station(
     let exact: Vec<(String, String)> = list
         .iter()
         .filter(|(c, _, _)| normalize_name(c) == cn)
-        .map(|(c, code, p)| (code.clone(), p.clone()))
+        .map(|(_, code, p)| (code.clone(), p.clone()))
         .collect();
     let mut matched = exact;
     if matched.is_empty() && cn.chars().count() > 2 {
@@ -193,7 +200,7 @@ pub(super) fn match_station(
                 let n = normalize_name(c);
                 n.chars().count() >= 2 && cn.ends_with(&n)
             })
-            .map(|(c, code, p)| (code.clone(), p.clone()))
+            .map(|(_, code, p)| (code.clone(), p.clone()))
             .collect();
     }
     if matched.is_empty() {

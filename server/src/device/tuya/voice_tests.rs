@@ -54,7 +54,10 @@ fn exact_alias_wins_over_everything() {
 
 #[test]
 fn exact_name_matches_when_alias_misses() {
-    let devices = vec![row("d1", "客厅插座", "", true), row("d2", "卧室灯", "台灯", true)];
+    let devices = vec![
+        row("d1", "客厅插座", "", true),
+        row("d2", "卧室灯", "台灯", true),
+    ];
     assert_eq!(unique(match_devices("客厅插座", &devices)).device_id, "d1");
     // 别名精确
     assert_eq!(unique(match_devices("台灯", &devices)).device_id, "d2");
@@ -66,7 +69,10 @@ fn bidirectional_contains_hits_short_and_long_queries() {
     // 话短名长：query ⊆ name
     assert_eq!(unique(match_devices("客厅", &devices)).device_id, "d1");
     // 话长名短（含「的」）：规范化后 name ⊆ query
-    assert_eq!(unique(match_devices("客厅的插座", &devices)).device_id, "d1");
+    assert_eq!(
+        unique(match_devices("客厅的插座", &devices)).device_id,
+        "d1"
+    );
     assert_eq!(unique(match_devices("客厅 插座", &devices)).device_id, "d1");
     // 无交集
     assert_eq!(match_devices("卧室", &devices), NameMatch::NotFound);
@@ -112,7 +118,10 @@ fn ambiguous_speech_lists_at_most_three_candidates() {
 
 #[test]
 fn label_prefers_alias_then_cloud_name() {
-    assert_eq!(device_label(&row("d1", "云名称", "我的别名", true)), "我的别名");
+    assert_eq!(
+        device_label(&row("d1", "云名称", "我的别名", true)),
+        "我的别名"
+    );
     assert_eq!(device_label(&row("d1", "云名称", "  ", true)), "云名称");
 }
 
@@ -137,14 +146,23 @@ fn speech_assembly_covers_success_and_failure_kinds() {
     let not_found = speech_not_found(" 存在的插座 ");
     assert!(not_found.contains("存在的插座") && not_found.contains("管理台"));
     // 三归类一一映射（架构 §5 后三行），不透传引擎内部 advice。
-    assert_eq!(failure_speech("offline", "客厅插座"), "客厅插座现在离线，请检查设备供电和网络后再试。");
-    assert_eq!(failure_speech("timeout", "客厅插座"), "客厅插座没有响应，请稍后再试。");
+    assert_eq!(
+        failure_speech("offline", "客厅插座"),
+        "客厅插座现在离线，请检查设备供电和网络后再试。"
+    );
+    assert_eq!(
+        failure_speech("timeout", "客厅插座"),
+        "客厅插座没有响应，请稍后再试。"
+    );
     assert_eq!(
         failure_speech("unsupported", "客厅插座"),
         "客厅插座不是可开关的设备，暂时不支持语音开关。"
     );
     // 未知 kind 归 offline 兜底（三类是完整口径，防御性收口）。
-    assert_eq!(failure_speech("whatever", "客厅插座"), failure_speech("offline", "客厅插座"));
+    assert_eq!(
+        failure_speech("whatever", "客厅插座"),
+        failure_speech("offline", "客厅插座")
+    );
 }
 
 #[test]

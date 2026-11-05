@@ -25,6 +25,8 @@ kotlin {
             // 导航常量表（零依赖纯数据）：2026-10-29 范围削减后 UiContractsTest 需要断言
             // 「12 项 → 8 项」的导航契约，故纳入编译清单
             kotlin.include("com/xiaozhi/admin/contracts/AdminNav.kt")
+            // P2e：wasm 插件槽位投影 + 导航合并（零 Kuikly 依赖，PluginSlotsModelTest 回归）
+            kotlin.include("com/xiaozhi/admin/contracts/PluginSlots.kt")
             kotlin.include("com/xiaozhi/admin/EchoMuseWakeWord.kt")
             kotlin.include("com/xiaozhi/admin/FilesModel.kt")
             // 时间展示口径（formatEpochSeconds 的格式契约）：依赖 kotlinx-datetime，

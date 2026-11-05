@@ -96,9 +96,9 @@ pub(crate) fn match_devices(raw_query: &str, devices: &[DeviceRow]) -> NameMatch
     let contains: Vec<DeviceRow> = devices
         .iter()
         .filter(|row| {
-            [alias_of(row), name_of(row)].iter().any(|name| {
-                !name.is_empty() && (name.contains(&query) || query.contains(name))
-            })
+            [alias_of(row), name_of(row)]
+                .iter()
+                .any(|name| !name.is_empty() && (name.contains(&query) || query.contains(name)))
         })
         .cloned()
         .collect();
@@ -149,7 +149,10 @@ pub(crate) fn speech_success(on: bool, label: &str) -> String {
 
 /// 未找到。
 pub(crate) fn speech_not_found(name: &str) -> String {
-    format!("没有找到叫「{}」的设备，可以在管理台确认设备名称或别名后再试。", name.trim())
+    format!(
+        "没有找到叫「{}」的设备，可以在管理台确认设备名称或别名后再试。",
+        name.trim()
+    )
 }
 
 /// 歧义：最多列 3 个标签，请用户说得更具体些（OQ2 采纳：不自动选择）。
@@ -219,46 +222,107 @@ impl TuyaEngine {
             NameMatch::Ambiguous(matched) => {
                 json!({"ok": false, "kind": "ambiguous", "speech": speech_ambiguous(name, &matched)})
             }
-            NameMatch::Unique(row) => {
-                let label = device_label(&row).to_string();
-                // 在线预检：离线设备直接话术提示（set_dp 内的 online 预检是兜底）。
-                if !row.online {
-                    return failure_result("offline", &label);
-                }
-                // 开关 DP：缓存优先；缓存 None 先 status 回读填充（架构 §3）。
-                let dps = match self.cached_dps(&row.device_id) {
-                    Some(dps) => dps,
-                    None => match self.read_dps(&row).await {
-                        Ok(dps) => dps,
-                        Err(failure) => {
-                            tracing::info!(
-                                "Tuya 语音控制 {} 回读状态失败（{}）",
-                                row.device_id,
-                                failure.kind
-                            );
-                            return failure_result(failure.kind, &label);
-                        }
-                    },
-                };
-                let Some(dp) = find_switch_dp(&dps) else {
-                    return failure_result("unsupported", &label);
-                };
-                match self.set_dp(&row.device_id, &dp, json!(on)).await {
-                    Ok(_) => json!({"ok": true, "device_id": row.device_id, "speech": speech_success(on, &label)}),
-                    Err(failure) => failure_result(failure.kind, &label),
-                }
-            }
+            NameMatch::Unique(row) => self.control_row(row, on).await,
         }
+    }
+
+    async fn control_row(&self, row: DeviceRow, on: bool) -> Value {
+        let label = device_label(&row).to_string();
+        // 在线预检：离线设备直接话术提示（set_dp 内的 online 预检是兜底）。
+        if !row.online {
+            return failure_result("offline", &label);
+        }
+        // 开关 DP：缓存优先；缓存 None 先 status 回读填充（架构 §3）。
+        let dps = match self.cached_dps(&row.device_id) {
+            Some(dps) => dps,
+            None => match self.read_dps(&row).await {
+                Ok(dps) => dps,
+                Err(failure) => {
+                    tracing::info!(
+                        "Tuya 语音控制 {} 回读状态失败（{}）",
+                        row.device_id,
+                        failure.kind
+                    );
+                    return failure_result(failure.kind, &label);
+                }
+            },
+        };
+        let Some(dp) = find_switch_dp(&dps) else {
+            return failure_result("unsupported", &label);
+        };
+        match self.set_dp(&row.device_id, &dp, json!(on)).await {
+            Ok(_) => {
+                json!({"ok": true, "device_id": row.device_id, "speech": speech_success(on, &label)})
+            }
+            Err(failure) => failure_result(failure.kind, &label),
+        }
+    }
+
+    /// WASM 控制策略选择候选设备，native 继续执行 DP 识别和 rustuya LAN 控制。
+    #[cfg(feature = "wasm-plugins")]
+    pub async fn voice_control_with_policy(
+        &self,
+        host: &crate::plugins::wasm::WasmHost,
+        name: &str,
+        action: &str,
+    ) -> Value {
+        let on = match action {
+            "on" => true,
+            "off" => false,
+            _ => {
+                return json!({
+                    "ok": false,
+                    "kind": "unsupported",
+                    "speech": "暂时不支持这个开关操作。"
+                })
+            }
+        };
+        let devices = match self.list_devices().await {
+            Ok(devices) => devices,
+            Err(e) => {
+                tracing::warn!("Tuya WASM 策略读目录失败: {e}");
+                return json!({"ok": false, "kind": "error", "speech": "暂时读不到设备目录，请稍后再试。"});
+            }
+        };
+        let candidates: Vec<Value> = devices
+            .iter()
+            .enumerate()
+            .map(|(index, row)| {
+                let has_switch_dp = self
+                    .cached_dps(&row.device_id)
+                    .is_some_and(|dps| find_switch_dp(&dps).is_some());
+                json!({
+                    "index": index,
+                    "label": device_label(row),
+                    "online": row.online,
+                    "model": row.model,
+                    "has_switch_dp": has_switch_dp,
+                })
+            })
+            .collect();
+        let decision = match crate::plugins::wasm::bridge::tuya_prepare(
+            host,
+            name,
+            action,
+            &candidates,
+        ) {
+            Ok(decision) => decision,
+            Err(e) => {
+                tracing::warn!("Tuya WASM 策略失败：{e}");
+                return json!({"ok": false, "kind": "error", "speech": "Tuya 控制策略暂时不可用，请稍后再试。"});
+            }
+        };
+        let Some(row) = devices.into_iter().nth(decision.candidate_index) else {
+            return json!({"ok": false, "kind": "error", "speech": "Tuya 策略选择的设备已失效，请稍后重试。"});
+        };
+        self.control_row(row, on).await
     }
 
     /// DP 缓存未命中时的一次性回读（`get_or_build` + `status()`，架构 §3）。
     ///
     /// 成功即回填 dp_cache（与轮询/控制回读同一份缓存）；失败按三归类返回，
     /// 由 [`TuyaEngine::voice_control`] 映射成话术。
-    async fn read_dps(
-        &self,
-        row: &DeviceRow,
-    ) -> Result<HashMap<String, Value>, ControlFailure> {
+    async fn read_dps(&self, row: &DeviceRow) -> Result<HashMap<String, Value>, ControlFailure> {
         let device = self.lan.get_or_build(row).await?;
         self.lan.ensure_listener(&row.device_id);
         let text = lan::with_call_timeout(device.status()).await?;

@@ -12,6 +12,7 @@ use crate::plugins::aiui::{AiuiSession, FullChainEngine};
 use crate::plugins::skill::SkillRegistry;
 use crate::plugins::wakeup::WakeGreeting;
 use crate::runtime::Engines;
+use crate::workflow::designer;
 use crate::workflow::downlink::DownlinkPacer;
 use crate::workflow::protocol::Transport;
 
@@ -124,8 +125,31 @@ pub async fn run_session<T: Transport>(
     // `[command]` + `[nlu]` 统一编译为模型标签目录；共享真实分类器，
     // 没有模板规则/启发式/LLM技能回提，关闭模型仅纯聊天。
     // 数据源用每设备生效配置。
-    let workflow =
-        crate::workflow::designer::compile(&eff_config.workflow).map_err(anyhow::Error::msg)?;
+    // workflow 快照：观察者（wasm）绑定须"当时已装载"才参与编译——**会话侧宽松**
+    // （未装载剔除+告警；缺插件不炸会话），与保存侧的严格校验（compile_with_observers
+    // 对当时目录）互补：热卸载/换机重启后旧绑定只降级不阻断。
+    let workflow = {
+        let observers = engines.wasm_observers();
+        let mut value = eff_config.workflow.clone();
+        if let Some(bindings) = value
+            .get_mut("bindings")
+            .and_then(serde_json::Value::as_array_mut)
+        {
+            bindings.retain(|b| {
+                let pid = b
+                    .get("plugin_id")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default();
+                let keep =
+                    designer::is_static_plugin(pid) || observers.iter().any(|(id, _)| id == pid);
+                if !keep {
+                    tracing::warn!(plugin = pid, "workflow 观察者绑定未装载（会话期剔除）");
+                }
+                keep
+            });
+        }
+        designer::compile_with_observers(&value, &observers).map_err(anyhow::Error::msg)?
+    };
     let bert = engines.bert_engine(&eff_config.nlu);
     let skills = SkillRegistry::new(&eff_config.command, &eff_config.nlu, bert.clone());
     if skills.active() {

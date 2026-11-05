@@ -18,6 +18,11 @@
 //! app_id = "..."
 //! ```
 //!
+//! `wasm-policy` 是由 `tts.provider` 扩展点驱动的策略包装：请求以整句文本事件
+//! 发送给 WASM 插件，插件经 kv 返回 `tts-result:<req_id>`，内容至少含 `{text}`，可选
+//! `speed` / `speaker` / `route`。WASM 只控制原生 TTS 的参数，底层 native 引擎仍负责
+//! 模型推理和流式 PCM；默认 native 路径不变。
+//!
 //! **旧写法仍可读**：`[tts].model` 等直接放本体的字段、以及 `backend = "sherpa"`，
 //! 由 [`TtsConfig::normalize`] 在加载时搬到规范位置（见模块内 `LEGACY_BODY_FIELDS`），
 //! 保存时只写新结构（旧字段一律 `skip_serializing`）。因此 P4 对本文件是**只增不删**。
@@ -55,6 +60,10 @@ pub const TTS_ENGINES: &[EngineSpec] = &[
         id: "xfyun",
         aliases: &[],
     },
+    EngineSpec {
+        id: "wasm-policy",
+        aliases: &[],
+    },
 ];
 
 const DEFAULT_TTS_ENGINE: &str = "kokoro";
@@ -62,7 +71,8 @@ const DEFAULT_TTS_ENGINE: &str = "kokoro";
 /// TTS 配置（`[tts]`）：本体只留**跨实现通用项** + 各实现的私有段。
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TtsConfig {
-    /// 实现 id：`"kokoro"`（本地 Kokoro INT8，默认）| `"xfyun"`（科大讯飞在线）。
+    /// 实现 id：`"kokoro"`（本地 Kokoro INT8，默认）| `"xfyun"`（科大讯飞在线）|
+    /// `"wasm-policy"`（WASM 控制策略 + 原生 Kokoro）。
     /// 空 = 未指定 → 取 [`DEFAULT_TTS_ENGINE`]（旧配置无此键时照常工作）。
     #[serde(default)]
     pub engine: String,
@@ -291,6 +301,11 @@ fn default_tts_threads() -> u32 {
 pub(crate) mod aiui;
 #[cfg(feature = "sherpa")]
 mod kokoro;
+#[cfg(feature = "wasm-plugins")]
+pub mod wasm_engine;
+#[cfg(feature = "wasm-plugins")]
+#[cfg(test)]
+mod wasm_engine_tests;
 // pub(crate)：AIUI 全链路插件复用同厂商的 HMAC 签名算法
 pub(crate) mod xfyun;
 
@@ -401,6 +416,16 @@ pub fn build_kokoro_with_lang(cfg: &KokoroTtsConfig, lang: &str) -> Result<Arc<d
 /// 构造讯飞 AIUI 在线合成引擎（描述符 `tts.xfyun` 的 `build`）。
 pub fn build_xfyun(cfg: &XfyunTtsConfig) -> Result<Arc<dyn TtsEngine>> {
     Ok(Arc::new(aiui::AiuiTts::new(cfg)?))
+}
+
+/// 构造由 WASM 策略包装的原生 Kokoro 引擎（描述符 `tts.wasm-policy` 的 `build`）。
+///
+/// WASM 只参与整句控制策略；PCM 仍由现有原生引擎产生。这样保持下行流式、
+/// 重采样和缓存契约不变，同时让缺少插件/坏策略结果在显式选择时可见。
+#[cfg(feature = "wasm-plugins")]
+pub fn build_tts_wasm(cfg: &TtsConfig) -> Result<Arc<dyn TtsEngine>> {
+    let native = build_kokoro(&cfg.kokoro)?;
+    Ok(Arc::new(wasm_engine::WasmTtsPolicy::new(native)))
 }
 
 impl Default for TtsConfig {

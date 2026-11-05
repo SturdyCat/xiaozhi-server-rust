@@ -101,7 +101,10 @@ fn threshold_boundary_is_accepted_only_when_not_below() {
     let below = verdict(&a, &hit("reminder_countdown", 0.499)).unwrap();
     assert_eq!(below.reason, Reason::BelowThreshold);
     assert_eq!(below.intent(), None);
-    assert_eq!(below.mapped, "reminder_countdown", "低于阈值也要给出它以为的技能");
+    assert_eq!(
+        below.mapped, "reminder_countdown",
+        "低于阈值也要给出它以为的技能"
+    );
 }
 
 #[test]

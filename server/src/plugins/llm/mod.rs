@@ -20,10 +20,16 @@ use serde::{Deserialize, Serialize};
 use crate::config::{canonical_engine, EngineSpec};
 
 /// LLM 可选实现（`[llm].engine` 的权威表）。当前只有 OpenAI 兼容 Responses 一条路径。
-pub const LLM_ENGINES: &[EngineSpec] = &[EngineSpec {
-    id: "openai",
-    aliases: &[],
-}];
+pub const LLM_ENGINES: &[EngineSpec] = &[
+    EngineSpec {
+        id: "openai",
+        aliases: &[],
+    },
+    EngineSpec {
+        id: "wasm-policy",
+        aliases: &[],
+    },
+];
 const DEFAULT_LLM_ENGINE: &str = "openai";
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -155,6 +161,10 @@ pub mod failure;
 pub mod fallback;
 mod openai;
 mod retry;
+#[cfg(feature = "wasm-plugins")]
+pub mod wasm_engine;
+#[cfg(all(feature = "wasm-plugins", test))]
+mod wasm_engine_tests;
 
 pub use failure::TokenUsage;
 // bin crate 内部暂无直接引用者（装饰器/实现走 `failure::` 路径）：作为插件对外 API 面保留
@@ -296,6 +306,14 @@ pub fn build_llm(cfg: &LlmConfig) -> Llm {
     }
     let min_switch_reset = Duration::from_secs(u64::from(cfg.fallback.min_switch_reset_seconds));
     Arc::new(FallbackLlm::new(chain, min_switch_reset))
+}
+
+/// 构造 WASM 控制策略 + 原生 OpenAI provider。
+#[cfg(feature = "wasm-plugins")]
+pub fn build_llm_wasm(cfg: &LlmConfig) -> Llm {
+    let mut native_cfg = cfg.clone();
+    native_cfg.engine = "openai".into();
+    Arc::new(wasm_engine::WasmLlmPolicy::new(build_llm(&native_cfg)))
 }
 
 impl Default for LlmConfig {

@@ -1,8 +1,8 @@
 package com.xiaozhi.admin
 
-
 import com.tencent.kuikly.core.base.PagerScope
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
+import com.xiaozhi.admin.contracts.PluginSlotSnapshot
 import com.xiaozhi.admin.state.stateVar
 import com.xiaozhi.admin.state.stateListOf
 
@@ -33,6 +33,9 @@ class PluginMetaState(scope: PagerScope) : LoadableState(scope) {
     /** 计数摘要（只含非零项）；未加载时为空串。 */
     var summary by stateVar("")
 
+    /** 动态 WASM 槽位；null = 旧服务端/不可达，调用方必须保留静态基线。 */
+    var wasmSlots by stateVar<PluginSlotSnapshot?>(null)
+
     override fun endpoint(baseUrl: String): String = "$baseUrl/api/plugins"
 
     override val errorLabel: String = "能力清单加载失败"
@@ -41,6 +44,11 @@ class PluginMetaState(scope: PagerScope) : LoadableState(scope) {
     override fun apply(data: JSONObject) {
         requiredRows.clear()
         optionalRows.clear()
+        // `wasm` 是 P2e 增量投影；解析失败/缺失统一回静态导航，不影响能力总览。
+        // Kuikly JSON → 纯契约层解析（contracts 零 Kuikly 依赖）：失败 = 静态基线回退
+        wasmSlots = runCatching {
+            PluginSlotSnapshot.parse(data.optJSONObject("wasm")?.toString())
+        }.getOrNull()
         val caps = data.optJSONArray("capabilities")
         if (caps == null) {
             loadError = "能力清单为空（服务端返回异常）"
@@ -81,19 +89,27 @@ class PluginMetaState(scope: PagerScope) : LoadableState(scope) {
         loadError = ""
     }
 
-    /** 当前选中的实现/服务商展示名（`implementations[]` 里找 `active_impl`）。 */
-    private fun activeImplLabel(cap: JSONObject): String {
-        val impls = cap.optJSONArray("implementations") ?: return ""
+    /** 找到 `active_impl` 对应的实现对象（无命中返回 null）。 */
+    private fun findActiveImpl(cap: JSONObject): JSONObject? {
         val active = cap.optString("active_impl", "")
-        var firstEnabled: String = ""
+        val impls = cap.optJSONArray("implementations") ?: return null
         for (i in 0 until impls.length()) {
             val im = impls.optJSONObject(i) ?: continue
-            val id = im.optString("id") ?: ""
-            val label = im.optString("display") ?: ""
-            if (id == active) return label
-            if (firstEnabled.isEmpty() && im.optBoolean("enabled", false)) firstEnabled = label
+            if ((im.optString("id") ?: "") == active) return im
         }
-        return firstEnabled
+        return null
+    }
+
+    /** 当前选中的实现/服务商展示名；无命中时回退到第一个 enabled 实现。 */
+    private fun activeImplLabel(cap: JSONObject): String {
+        val active = findActiveImpl(cap)
+        if (active != null) return active.optString("display") ?: ""
+        val impls = cap.optJSONArray("implementations") ?: return ""
+        for (i in 0 until impls.length()) {
+            val im = impls.optJSONObject(i) ?: continue
+            if (im.optBoolean("enabled", false)) return im.optString("display") ?: ""
+        }
+        return ""
     }
 
     /**
@@ -101,17 +117,8 @@ class PluginMetaState(scope: PagerScope) : LoadableState(scope) {
      * 缺失时才本地兜底——避免前后端各写一份文案而漂移。
      */
     private fun hotHintOf(cap: JSONObject): String {
-        val impls = cap.optJSONArray("implementations")
-        if (impls != null) {
-            val active = cap.optString("active_impl", "")
-            for (i in 0 until impls.length()) {
-                val im = impls.optJSONObject(i) ?: continue
-                if ((im.optString("id") ?: "") == active) {
-                    val hint = im.optString("hot_hint", "")
-                    if (hint.isNotEmpty()) return hint
-                }
-            }
-        }
+        val hint = findActiveImpl(cap)?.optString("hot_hint") ?: ""
+        if (hint.isNotEmpty()) return hint
         return when (cap.optString("hot", "")) {
             "live" -> "保存即生效"
             "next_session" -> "保存后新会话生效"

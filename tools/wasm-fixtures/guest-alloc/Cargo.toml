@@ -1,0 +1,5 @@
+# guest-alloc：wasm32-unknown-unknown 极简增长式分配器（测试 guest 共用）
+[package]
+name = "guest-alloc"
+version = "0.1.0"
+edition = "2021"

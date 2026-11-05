@@ -243,3 +243,86 @@ fn core_metadata_uses_real_registry_and_never_offers_bindings() {
         assert!(compile(&json!({"version":1,"bindings":[{"id":"invalid","plugin_id":id,"position_id":row["owner_position"]}]})).is_err());
     }
 }
+
+// ============================================================
+// wasm 观察者绑定（P2d）
+// ============================================================
+
+fn observers() -> Vec<(String, String)> {
+    vec![("hello.official".into(), "Hello 演示插件".into())]
+}
+
+fn observer_binding(position: &str, on_error: &str) -> Value {
+    json!({"version":1,"bindings":[
+        {"id":"b1","plugin_id":"hello.official","position_id":position,"enabled":true,"order":0,"condition":{"kind":"always"},"on_error":on_error}
+    ]})
+}
+
+#[test]
+fn observer_bindings_compile_on_hook_positions_only() {
+    let obs = observers();
+    // v1 钉死三个已接线 hook 位
+    for pos in ["start", "link.nlu.llm", "end"] {
+        let c = compile_with_observers(&observer_binding(pos, "continue"), &obs)
+            .unwrap_or_else(|e| panic!("{pos} 应允许：{e}"));
+        assert_eq!(c.plan[0].plugin_id, "hello.official");
+    }
+    // 非钩位拒绝（引擎位/门控位不是观察者能挂的）
+    for pos in ["nlu", "link.asr.nlu", "asr", "llm"] {
+        let err = compile_with_observers(&observer_binding(pos, "continue"), &obs).unwrap_err();
+        assert!(err.contains("hook 位"), "{pos}：{err}");
+    }
+}
+
+#[test]
+fn observer_on_error_must_be_continue() {
+    let err = compile_with_observers(&observer_binding("start", "stop"), &observers()).unwrap_err();
+    assert!(err.contains("continue"), "{err}");
+}
+
+#[test]
+fn observer_unknown_without_catalog_and_conditions_still_gate() {
+    // 目录外 → 仍是未知插件（保存门不放松）；能力描述符仍拒绝
+    let err = compile_with_observers(&observer_binding("start", "continue"), &[]).unwrap_err();
+    assert!(err.contains("未知 plugin_id"), "{err}");
+    let err = compile_with_observers(
+        &json!({"version":1,"bindings":[
+            {"id":"b1","plugin_id":"tts.kokoro","position_id":"start","enabled":true,"order":0,"condition":{"kind":"always"},"on_error":"continue"}
+        ]}),
+        &observers(),
+    )
+    .unwrap_err();
+    assert!(err.contains("描述符"), "{err}");
+    // 观察者不可重复声明；condition 沿用普通 hook 面（confidence 不可用）
+    let dup = json!({"version":1,"bindings":[
+        {"id":"b1","plugin_id":"hello.official","position_id":"start","enabled":true,"order":0,"condition":{"kind":"always"},"on_error":"continue"},
+        {"id":"b2","plugin_id":"hello.official","position_id":"end","enabled":true,"order":1,"condition":{"kind":"always"},"on_error":"continue"}
+    ]});
+    assert!(compile_with_observers(&dup, &observers()).is_err());
+    let conf = json!({"version":1,"bindings":[
+        {"id":"b1","plugin_id":"hello.official","position_id":"start","enabled":true,"order":0,"condition":{"kind":"confidence","min":0.5},"on_error":"continue"}
+    ]});
+    assert!(compile_with_observers(&conf, &observers()).is_err());
+}
+
+#[test]
+fn projection_lists_observers_with_marker() {
+    let meta = projection_with_observers(
+        &observer_binding("start", "continue"),
+        "rev".into(),
+        "local",
+        &observers(),
+    );
+    let row = meta["plugins"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == "hello.official")
+        .expect("观察者应在节点目录");
+    assert_eq!(row["observer"], true);
+    assert_eq!(
+        row["allowed_positions"],
+        json!(["start", "link.nlu.llm", "end"])
+    );
+    assert_eq!(row["on_error_options"], json!(["continue"]));
+}

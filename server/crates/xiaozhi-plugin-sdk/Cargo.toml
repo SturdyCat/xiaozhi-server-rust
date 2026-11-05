@@ -1,0 +1,21 @@
+# 小智 WASM 插件 guest SDK（方案 v4 / P1）。
+#
+# 独立 crate（不进 server 依赖图——宿主绝不依赖 guest 侧代码，依赖箭头单向）：
+# - 契约绑定唯一入口：wit_bindgen::generate! 以 server/wit/plugin.wit 为源，
+#   guest 引用本 crate 即与宿主同一份契约（改契约 → 重编本 crate + 全部 guest）；
+# - 运行期分配纪律：fallible 模块（分配失败 → 显式 Err，不 panic 成陷阱）；
+# - 静态注册构建器：manifest/registration 落地前在 guest 侧先做与宿主同源的
+#   形状校验（fail fast：错误在构建期暴露，而不是装载期被宿主拒绝）。
+#
+# guest 用法：`use xiaozhi_plugin_sdk::*;` + `xiaozhi_plugin_sdk::export!(Component);`
+[package]
+name = "xiaozhi-plugin-sdk"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+wit-bindgen = "0.63"
+
+# 注意：不放 [profile]——本 crate 作为路径依赖构建时 profile 由顶层 workspace 决定
+# （tools/wasm-fixtures 已有同款体积优化 profile）；本地 cargo test 也需要 unwind。

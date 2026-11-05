@@ -15,6 +15,7 @@
 
 - [server](<server/AGENTS.md>)：服务端构建、依赖、源码与测试。
 - [client](<client/AGENTS.md>)：客户端平台、构建、公共管理台与原生宿主。
+- [plugins-src](<plugins-src/AGENTS.md>)：真实 WASM 插件源码根（P3 构建流水线取源；当前以夹具形态联调）。
 
 ## 本级资料
 

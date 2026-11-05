@@ -57,10 +57,17 @@ async fn sync_now_first_call_passes_gate() {
 #[tokio::test]
 async fn sync_now_rejected_within_interval() {
     let (_dir, engine) = temp_engine("within");
-    set_last_start(&engine, Some(Duration::from_secs(MIN_SYNC_INTERVAL.as_secs() - 1)));
+    set_last_start(
+        &engine,
+        Some(Duration::from_secs(MIN_SYNC_INTERVAL.as_secs() - 1)),
+    );
     let outcome = engine.sync_now(&unconfigured_cfg()).await;
     assert_eq!(outcome.result, "skipped", "间隔内必须被拦截");
-    assert!(outcome.message.contains("60"), "拒绝文案应提示最小间隔: {}", outcome.message);
+    assert!(
+        outcome.message.contains("60"),
+        "拒绝文案应提示最小间隔: {}",
+        outcome.message
+    );
     let state = engine.sync_state.lock().unwrap_or_else(|e| e.into_inner());
     assert!(!state.syncing, "被拦截的调用不得占用 syncing 标记");
 }
@@ -69,10 +76,7 @@ async fn sync_now_rejected_within_interval() {
 #[tokio::test]
 async fn sync_now_passes_after_interval() {
     let (_dir, engine) = temp_engine("after");
-    set_last_start(
-        &engine,
-        Some(MIN_SYNC_INTERVAL + Duration::from_secs(1)),
-    );
+    set_last_start(&engine, Some(MIN_SYNC_INTERVAL + Duration::from_secs(1)));
     let outcome = engine.sync_now(&unconfigured_cfg()).await;
     assert_ne!(
         outcome.result, "skipped",

@@ -22,7 +22,9 @@ use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use parse::{extract_time, match_station, parse_forecast, parse_forecast_at, parse_realtime, summarize};
+use parse::{
+    extract_time, match_station, parse_forecast, parse_forecast_at, parse_realtime, summarize,
+};
 
 /// 天气插件配置段（`[weather]`）。所有字段带 `#[serde(default)]`，缺省即工作。
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -36,6 +38,10 @@ pub struct WeatherConfig {
     pub timeout_secs: u64,
     /// 按站点码缓存天气数据的 TTL（秒）。
     pub cache_secs: u64,
+    /// 技能查询后端（绞杀者双跑开关）：`native` = 本模块 reqwest 实现（默认）；
+    /// `wasm` = 经 `skill.weather` 扩展点插件（官方默认 `weather.official`，或用户
+    /// 兼容实现）。wasm 缺依赖（feature 未编入/插件未装载）**明确报错，不静默回退**。
+    pub backend: String,
 }
 
 impl Default for WeatherConfig {
@@ -45,6 +51,7 @@ impl Default for WeatherConfig {
             source: "https://www.nmc.cn".into(),
             timeout_secs: 8,
             cache_secs: 600,
+            backend: "native".into(),
         }
     }
 }
@@ -65,6 +72,12 @@ pub struct WeatherService {
     cache_secs: u64,
     /// 懒加载的「(城市名, 站点码, 省份名)」列表；首次解析后缓存，后续直接内存匹配。
     stations: Mutex<Option<Vec<(String, String, String)>>>,
+    /// 技能查询后端开关（`[weather].backend`）。
+    backend: String,
+    /// wasm 宿主句柄（feature 编入且初始化成功时由 Engines 装配注入；OnceLock：
+    /// 装配一次性，运行期只读）。native 后端永不触碰。
+    #[cfg(feature = "wasm-plugins")]
+    wasm: std::sync::OnceLock<std::sync::Arc<crate::plugins::wasm::WasmHost>>,
 }
 
 impl WeatherService {
@@ -77,7 +90,16 @@ impl WeatherService {
             cache: Mutex::new(HashMap::new()),
             cache_secs: cfg.cache_secs,
             stations: Mutex::new(None),
+            backend: cfg.backend.clone(),
+            #[cfg(feature = "wasm-plugins")]
+            wasm: std::sync::OnceLock::new(),
         }
+    }
+
+    /// 注入 wasm 宿主（Engines 装配期一次性；backend=wasm 时的事件桥执行载体）。
+    #[cfg(feature = "wasm-plugins")]
+    pub fn set_wasm_host(&self, host: std::sync::Arc<crate::plugins::wasm::WasmHost>) {
+        let _ = self.wasm.set(host);
     }
 
     /// 取阻塞客户端（首次调用时创建；调用方必须在非 async 上下文，即 spawn_blocking）。
@@ -101,14 +123,10 @@ impl WeatherService {
         let mut last_err: Option<anyhow::Error> = None;
         for attempt in 0..3 {
             let result = (|| -> Result<Value> {
-                let resp = client
-                    .get(&url)
-                    .send()
-                    .context("request send failed")?;
+                let resp = client.get(&url).send().context("request send failed")?;
                 let resp = resp.error_for_status().context("http non-2xx status")?;
                 let text = resp.text().context("read response body failed")?;
-                let v: Value =
-                    serde_json::from_str(&text).context("parse response json failed")?;
+                let v: Value = serde_json::from_str(&text).context("parse response json failed")?;
                 Ok(v)
             })();
             match result {
@@ -159,8 +177,16 @@ impl WeatherService {
             if let Ok(cities) = cities {
                 if let Some(arr) = cities.as_array() {
                     for c in arr {
-                        let cname = c.get("city").and_then(Value::as_str).unwrap_or("").to_string();
-                        let ccode = c.get("code").and_then(Value::as_str).unwrap_or("").to_string();
+                        let cname = c
+                            .get("city")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string();
+                        let ccode = c
+                            .get("code")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string();
                         let cprov = c
                             .get("province")
                             .and_then(Value::as_str)
@@ -180,8 +206,7 @@ impl WeatherService {
             let mut guard = self.stations.lock().unwrap();
             *guard = Some(list.clone());
         }
-        match_station(&list, city, province)
-            .ok_or_else(|| anyhow!("找不到城市 {}", city))
+        match_station(&list, city, province).ok_or_else(|| anyhow!("找不到城市 {}", city))
     }
 
     /// 取天气 `data`：先查 TTL 缓存，未命中再请求并写入缓存。`code != 0` 视为失败。
@@ -194,8 +219,7 @@ impl WeatherService {
                 }
             }
         }
-        let v = self
-            .http_get_json(&format!("/rest/weather?stationid={}", code))?;
+        let v = self.http_get_json(&format!("/rest/weather?stationid={}", code))?;
         if v.get("code").and_then(Value::as_i64).unwrap_or(-1) != 0 {
             return Err(anyhow!("weather api returned code != 0"));
         }
@@ -210,12 +234,46 @@ impl WeatherService {
         Ok(data)
     }
 
-    /// 查询天气：永远返回成功形态的 `Value`（不会 panic、不会返回 `Err`）。
+    /// 查询天气入口（后端分发）：`native` = 本实现；`wasm` = `skill.weather` 扩展点
+    /// 插件。永远返回成功形态的 `Value`（不会 panic、不会返回 `Err`）。
+    pub fn forecast(&self, city: &str, province: &str, range: &str) -> Value {
+        match self.backend.as_str() {
+            "native" => self.forecast_native(city, province, range),
+            "wasm" => self.forecast_wasm(city, province, range),
+            other => json!({
+                "ok": false,
+                "speech": format!("未知天气后端 {other:?}（合法：native / wasm）"),
+            }),
+        }
+    }
+
+    /// wasm 后端：宿主句柄在则走事件桥；缺依赖明确报错（不静默回退 native——
+    /// 双跑对照的价值在于差异可见，静默回退会把插件故障伪装成正常）。
+    #[cfg(feature = "wasm-plugins")]
+    fn forecast_wasm(&self, city: &str, province: &str, range: &str) -> Value {
+        match self.wasm.get() {
+            Some(host) => crate::plugins::wasm::bridge::forecast(host, city, province, range),
+            None => json!({
+                "ok": false,
+                "speech": "天气后端为 wasm，但插件宿主未初始化（见服务启动日志）",
+            }),
+        }
+    }
+
+    #[cfg(not(feature = "wasm-plugins"))]
+    fn forecast_wasm(&self, _city: &str, _province: &str, _range: &str) -> Value {
+        json!({
+            "ok": false,
+            "speech": "天气后端为 wasm，但服务未编译 wasm-plugins feature（重新构建或改回 native）",
+        })
+    }
+
+    /// 原生实现：reqwest 直连 NMC。
     ///
     /// 流程：① 解析有效城市（空 → 回落服务器出口 IP 默认定位）；② 从城市串二次切出时段
     /// 关键词；③ 解析站点码；④ 拉取天气；⑤ 按 range 选择实时/单日/7 天。任意外部失败
     /// 都降级为 `{"ok":false,"speech":"..."}`。
-    pub fn forecast(&self, city: &str, province: &str, range: &str) -> Value {
+    fn forecast_native(&self, city: &str, province: &str, range: &str) -> Value {
         // ① 清洗城市串（去掉「天气/预报」等非地名词）并二次切分时段关键词
         //   （city 串内嵌「今天/明天/...」由 weather.forecast 处理）
         let (city_cut, range_eff) = extract_time(&parse::strip_weather_words(city), range);
@@ -312,7 +370,12 @@ impl WeatherService {
             .and_then(|r| r.get("publish_time"))
             .and_then(parse::clean)
             .unwrap_or_default();
-        let speech = summarize(&city_clean, range_norm, &realtime, forecast_items.as_array());
+        let speech = summarize(
+            &city_clean,
+            range_norm,
+            &realtime,
+            forecast_items.as_array(),
+        );
         let update_time = publish_time.clone();
 
         json!({

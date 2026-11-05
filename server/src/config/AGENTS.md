@@ -7,11 +7,12 @@
 [ConfigStore](<store.rs>) 唯一实现 `SqliteConfigStore`：读、写、overlay、预设、location、只读查询与备份经同一抽象。**远端访问**：`POST /api/config/db/query` 提供只读 SQL 查询（用户可用数据库客户端形态远程查库），`POST /api/config/db/backup` 提供 `VACUUM INTO` 一致性备份。迁移设计见[迁移设计](<store/AGENTS.md>)（其中文件/默认后端、bootstrap 导入等描述为历史设计，现状以本节与源码为准）。
 
 - `cfg_documents`（整份 Config blob）+ `cfg_device_overlays` + `cfg_presets` + `cfg_revisions`（历史/回滚）。`location()` = DB 文件路径，用于挂载卷持久化判定与 hot-audio 落点派生。
+- `[plugins.entries."<id>"].artifact` 可选持久化 SHA-256 内容钉版；缺省保持旧配置兼容放行，重启重装时摘要不符即跳过。
 - DB 路径必须在挂载卷内；不要把落点随意固定到容器层，容器重建会丢数据。memory 的实际路径以其配置为准，不假定所有路径必然同目录。
 
 ## 兼容与字段修改
 
-[配置聚合](<../config.rs>)只聚合 server/audio 与插件配置；能力私有配置靠近各插件。
+[配置聚合](<../config.rs>)只聚合 server/audio 与插件配置；能力私有配置靠近各插件。P3 起 `[plugins]`（WASM 插件平台）同样入聚合：`enabled` 总闸 + `entries."<id>"` 每插件启停（缺省启用，上传落盘即意图）；RestartOnly（装载/引导都在启动期），禁用的产物重启不装载、引导跳过。
 
 - `engine` 选实现，TTS 私有参数进 `[tts.<id>]`，speed/speaker 等 trait 入参留本体。LLM/ASR/VAD 当前单实现参数仍在本体，不机械搬进不存在的子段。
 - 旧 backend、TTS 扁平参数继续双读，normalize 幂等且新位置优先；保存只写新结构。旧客户端补丁也必须重写，而非只迁移文件。

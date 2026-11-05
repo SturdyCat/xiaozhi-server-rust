@@ -211,7 +211,15 @@ fn legacy_toml_fixture_migrates_to_convention() {
     let text = toml::to_string_pretty(&cfg).unwrap();
     assert!(text.contains("[tts.kokoro]"), "{text}");
     assert!(text.contains("engine = \"kokoro\""), "{text}");
-    assert!(!text.contains("backend ="), "旧键不得写回: {text}");
+    // 旧 backend 键只对 tts/memory 段禁绝（[weather].backend 是合法插件后端开关，P2c）
+    let parsed: toml::Value = toml::from_str(&text).unwrap();
+    for section in ["tts", "memory"] {
+        let table = parsed.get(section).and_then(toml::Value::as_table);
+        assert!(
+            table.is_none_or(|t| !t.contains_key("backend")),
+            "旧键 {section}.backend 不得写回: {text}"
+        );
+    }
     assert!(
         text.contains("engine = \"graph\""),
         "memory 也应写 engine: {text}"

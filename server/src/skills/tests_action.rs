@@ -117,7 +117,12 @@ fn a_recurring_action_task_advances_and_keeps_delivering() {
     let due = &report.actions[0];
     assert!(db
         .system
-        .enqueue_task_speech(&due.task_id, &due.device_id, &due.text, NEXT_MIDNIGHT_UTC + 1)
+        .enqueue_task_speech(
+            &due.task_id,
+            &due.device_id,
+            &due.text,
+            NEXT_MIDNIGHT_UTC + 1
+        )
         .unwrap());
     let claim = db
         .system

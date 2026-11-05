@@ -61,6 +61,7 @@ docs/
 | 文档 | 内容 |
 |---|---|
 | [插件架构统一](<designs/plugin-architecture-unification.md>) | 改造前盘点、描述符与宿主、LLM 护栏、配置约定、管理页与分期实施 |
+| [WASM 插件平台](<designs/wasm-plugin-platform.md>) | 方案 v4：DSH 概念映射、控制面/数据面分离铁律、WIT 契约、沙箱预算、扩展点回退与 P0–P8 阶段 |
 | [人格与图记忆](<designs/soul-and-graph-memory-plan.md>) | 集成背景、上游尽调、人格档案、记忆数据流、界面与提示词调研 |
 | [管理台界面设计与验收记录](<designs/admin-ui-design.md>) | 管理页信息架构、配置与上下文页面、健康和记忆的前端验收 |
 | [三项缺口设计](<designs/gap-implementation-design.md>) | 推理并发闸门、TTFA 分段指标、残句定时 flush 的设计与实施记录 |

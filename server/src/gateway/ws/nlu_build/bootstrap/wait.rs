@@ -29,7 +29,9 @@ pub(super) enum WaitOutcome {
     /// 只能等满 `TRAIN_WAIT_SECS=3700s`，然后把"槽位被抢"误报成"训练超时"——
     /// 运维会去查一个早已结束的构建。也不要去读 A 的产物：A 成功与否未知，
     /// 半成品只会给出更难懂的错。
-    TakenOver { by: String },
+    TakenOver {
+        by: String,
+    },
 }
 
 /// 槽位是否已被**别人**接管（我们那一次的结果已不可观察）。

@@ -122,12 +122,10 @@ async fn catalog_is_saved_effective_seed_and_command_not_a_demo_response() {
         .iter()
         .any(|i| i["name"] == "end_session" && i["source"] == "command"));
     // 控制域随技能全量透出：reminder 种子=server，设备示例技能与注入的 end_session=device。
-    assert!(intents
-        .iter()
-        .all(|i| matches!(
-            i["domain"].as_str(),
-            Some("device") | Some("server") | Some("iot")
-        )));
+    assert!(intents.iter().all(|i| matches!(
+        i["domain"].as_str(),
+        Some("device") | Some("server") | Some("iot")
+    )));
     assert!(intents
         .iter()
         .any(|i| i["name"] == "reminder_countdown" && i["domain"] == "server"));

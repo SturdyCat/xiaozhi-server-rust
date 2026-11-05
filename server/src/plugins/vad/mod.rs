@@ -16,10 +16,16 @@ use serde::{Deserialize, Serialize};
 use crate::config::{canonical_engine, EngineSpec};
 
 /// VAD 可选实现（`[vad].engine` 的权威表）。当前只有 Silero 一条真实路径。
-pub const VAD_ENGINES: &[EngineSpec] = &[EngineSpec {
-    id: "silero",
-    aliases: &[],
-}];
+pub const VAD_ENGINES: &[EngineSpec] = &[
+    EngineSpec {
+        id: "silero",
+        aliases: &[],
+    },
+    EngineSpec {
+        id: "wasm-policy",
+        aliases: &[],
+    },
+];
 const DEFAULT_VAD_ENGINE: &str = "silero";
 
 /// VAD 引擎接口。每会话持有一个独立实例（内部有状态）。
@@ -80,6 +86,34 @@ mod silero;
 
 #[cfg(feature = "sherpa")]
 pub use silero::SherpaVad;
+
+#[cfg(feature = "wasm-plugins")]
+pub mod wasm_engine;
+#[cfg(all(feature = "wasm-plugins", test))]
+mod wasm_engine_tests;
+
+/// 为当前 VAD engine 准备 native 构造配置；WASM 只改控制参数，不接收音频帧。
+pub(crate) fn prepare_engine_config(
+    cfg: &VadConfig,
+) -> anyhow::Result<(VadConfig, Option<String>)> {
+    if cfg.engine_id() == "wasm-policy" {
+        #[cfg(all(feature = "wasm-plugins", feature = "sherpa"))]
+        {
+            return wasm_engine::WasmVadPolicy::for_extension("vad.provider")
+                .prepare_with_identity(cfg)
+                .map(|(effective, plugin_id)| (effective, Some(plugin_id)));
+        }
+        #[cfg(all(feature = "wasm-plugins", not(feature = "sherpa")))]
+        anyhow::bail!(
+            "[vad].engine = \"wasm-policy\" 需要 sherpa + wasm-plugins feature（native Silero 数据面不可用）"
+        );
+        #[cfg(not(feature = "wasm-plugins"))]
+        anyhow::bail!(
+            "[vad].engine = \"wasm-policy\" 需要以 wasm-plugins feature 构建的服务端（且需 vad.provider 策略插件）"
+        );
+    }
+    Ok((cfg.clone(), None))
+}
 
 /// 能量阈值占位实现——**仅未启用 `sherpa` feature 的编译**（测试/检查用），生产不含。
 #[cfg(not(feature = "sherpa"))]

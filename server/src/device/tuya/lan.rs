@@ -45,12 +45,20 @@ pub struct ControlFailure {
 
 impl ControlFailure {
     fn new(kind: &'static str, message: String, advice: &'static str) -> Self {
-        ControlFailure { kind, message, advice }
+        ControlFailure {
+            kind,
+            message,
+            advice,
+        }
     }
 
     /// 库内预检/无 ip 的离线失败（不经过 TuyaError）。
     pub fn offline(message: String) -> Self {
-        ControlFailure::new("offline", message, "检查设备供电与网络；可尝试「立即同步」更新设备目录")
+        ControlFailure::new(
+            "offline",
+            message,
+            "检查设备供电与网络；可尝试「立即同步」更新设备目录",
+        )
     }
 
     /// HTTP 状态码映射：offline→409 / timeout→504 / unsupported→400。
@@ -172,11 +180,17 @@ pub(crate) struct LanPool {
 
 impl LanPool {
     pub(crate) fn new(sink: LanSink) -> Self {
-        LanPool { sessions: Mutex::new(HashMap::new()), sink }
+        LanPool {
+            sessions: Mutex::new(HashMap::new()),
+            sink,
+        }
     }
 
     /// 取（或按需建）会话。local_key 变化 → 停旧建新。
-    pub(crate) async fn get_or_build(&self, row: &DeviceRow) -> Result<Arc<Device>, ControlFailure> {
+    pub(crate) async fn get_or_build(
+        &self,
+        row: &DeviceRow,
+    ) -> Result<Arc<Device>, ControlFailure> {
         if let Some(session) = self.reusable(&row.device_id, &row.local_key) {
             return Ok(session);
         }
@@ -187,7 +201,11 @@ impl LanPool {
                 "设备没有局域网地址（尚未被发现；请稍候或点「立即同步」）".into(),
             ));
         }
-        tracing::info!("Tuya 设备 {} 建立局域网会话（ip={}，协议自动协商）", row.device_id, row.ip);
+        tracing::info!(
+            "Tuya 设备 {} 建立局域网会话（ip={}，协议自动协商）",
+            row.device_id,
+            row.ip
+        );
         let device = Arc::new(
             rustuya::DeviceBuilder::new(row.device_id.clone(), row.local_key.clone().into_bytes())
                 .address(row.ip.clone())
@@ -199,7 +217,12 @@ impl LanPool {
             .unwrap_or_else(|e| e.into_inner())
             .insert(
                 row.device_id.clone(),
-                Session { device: device.clone(), local_key: row.local_key.clone(), ip: row.ip.clone(), listening: false },
+                Session {
+                    device: device.clone(),
+                    local_key: row.local_key.clone(),
+                    ip: row.ip.clone(),
+                    listening: false,
+                },
             );
         Ok(device)
     }
@@ -241,7 +264,9 @@ impl LanPool {
     pub(crate) fn ensure_listener(&self, device_id: &str) {
         let device = {
             let mut guard = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
-            let Some(session) = guard.get_mut(device_id) else { return };
+            let Some(session) = guard.get_mut(device_id) else {
+                return;
+            };
             if session.listening {
                 return;
             }

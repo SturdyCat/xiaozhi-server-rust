@@ -7,12 +7,34 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::config::{canonical_engine, EngineSpec};
+
+/// `[tuya].engine` 可选实现（配置层权威表）。
+///
+/// `backend`/`lan` 是历史 native 写法，`wasm` 是历史 WASM 策略写法；读取时只做
+/// 兼容收敛，序列化与 `engine_id()` 始终使用规范实现 id。
+pub const TUYA_ENGINES: &[EngineSpec] = &[
+    EngineSpec {
+        id: "native",
+        aliases: &["backend", "lan"],
+    },
+    EngineSpec {
+        id: "wasm-policy",
+        aliases: &["wasm"],
+    },
+];
+const DEFAULT_TUYA_ENGINE: &str = "native";
+
 /// 涂鸦 OpenAPI 支持的区域（`openapi.tuya{cn,us,eu,in}.com`）。
 pub const REGIONS: &[&str] = &["cn", "us", "eu", "in"];
 
 /// `[tuya]` 配置段：Tuya IoT 设备集成入口。
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TuyaConfig {
+    /// 连接器实现：`native`（原生 rustuya）或 `wasm-policy`（WASM 控制策略 + 原生数据面）。
+    /// 旧值 `backend` / `lan` → `native`，`wasm` → `wasm-policy`。
+    #[serde(default = "default_engine", alias = "backend")]
+    pub engine: String,
     /// 总开关。默认 **true**（管理面路由就绪、worker 起跑）；关闭时 `/api/tuya/*`
     /// 统一 404、不轮询、不同步——行为与没有这个模块完全一致。
     /// 局域网控制不依赖云凭证：关掉只影响云目录同步与管理面。
@@ -33,6 +55,10 @@ pub struct TuyaConfig {
     pub sync_interval_secs: u64,
 }
 
+fn default_engine() -> String {
+    DEFAULT_TUYA_ENGINE.to_string()
+}
+
 fn default_true() -> bool {
     true
 }
@@ -48,6 +74,7 @@ fn default_sync_interval() -> u64 {
 impl Default for TuyaConfig {
     fn default() -> Self {
         TuyaConfig {
+            engine: default_engine(),
             enabled: true,
             region: default_region(),
             access_id: String::new(),
@@ -58,8 +85,9 @@ impl Default for TuyaConfig {
 }
 
 impl TuyaConfig {
-    /// 规范化（幂等）：trim + 区域白名单收敛 + 同步周期下限（0 = 仅手动，其余 ≥60s）。
+    /// 规范化（幂等）：引擎别名/区域白名单收敛 + 同步周期下限（0 = 仅手动，其余 ≥60s）。
     pub fn normalize(&mut self) {
+        self.engine = canonical_engine(&self.engine, TUYA_ENGINES, DEFAULT_TUYA_ENGINE);
         self.region = self.region.trim().to_ascii_lowercase();
         if !REGIONS.contains(&self.region.as_str()) {
             tracing::warn!(
@@ -81,6 +109,11 @@ impl TuyaConfig {
         }
     }
 
+    /// 规范化后的实现 id（未知值原样小写，交由注册表 fail-loud 校验）。
+    pub fn engine_id(&self) -> String {
+        canonical_engine(&self.engine, TUYA_ENGINES, DEFAULT_TUYA_ENGINE)
+    }
+
     /// 凭证是否已配置（id 与 secret 都非空才算——半套凭证无法通过 OpenAPI 鉴权）。
     pub fn credentials_ready(&self) -> bool {
         !self.access_id.is_empty() && !self.access_secret.is_empty()
@@ -91,7 +124,12 @@ impl TuyaConfig {
         use std::fmt::Write as _;
         // 不引入额外依赖：FNV-1a 64 位足够做"变更检测"（不用于安全）。
         let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-        for byte in format!("{}\u{1f}{}\u{1f}{}", self.region, self.access_id, self.access_secret).bytes() {
+        for byte in format!(
+            "{}\u{1f}{}\u{1f}{}",
+            self.region, self.access_id, self.access_secret
+        )
+        .bytes()
+        {
             h ^= byte as u64;
             h = h.wrapping_mul(0x0000_0100_0000_01b3);
         }

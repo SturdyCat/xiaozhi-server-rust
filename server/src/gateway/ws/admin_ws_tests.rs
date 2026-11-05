@@ -191,13 +191,13 @@ fn parse_rpc_frame_timeout_clamped() {
 fn parse_rpc_frame_rejects_bad_frames() {
     let cases = [
         json!({"type": "nope", "id": 1, "method": "GET", "path": "/api/x"}),
-        json!({"type": "rpc", "method": "GET", "path": "/api/x"}),           // 缺 id
+        json!({"type": "rpc", "method": "GET", "path": "/api/x"}), // 缺 id
         json!({"type": "rpc", "id": 1.5, "method": "GET", "path": "/api/x"}), // id 非整数
         json!({"type": "rpc", "id": 1, "method": "PATCH", "path": "/api/x"}), // 方法不在白名单
         json!({"type": "rpc", "id": 1, "method": "GET", "path": "/static/x"}), // 非 /api/
         json!({"type": "rpc", "id": 1, "method": "GET", "path": "/api/admin/ws"}), // 递归拒绝
         json!({"type": "rpc", "id": 1, "method": "GET", "path": "/api/x", "body": {}}), // GET 带 body
-        json!({"type": "rpc", "id": 1, "method": "POST", "path": "/api/x"}),  // 写缺 body
+        json!({"type": "rpc", "id": 1, "method": "POST", "path": "/api/x"}),            // 写缺 body
         json!({"type": "rpc", "id": 1, "method": "POST", "path": "/api/x", "body": [1]}), // body 非对象
     ];
     for bad in &cases {
@@ -218,12 +218,11 @@ async fn rpc_executes_through_router_and_returns_status_and_body() {
     let router = axum::Router::new()
         .route(
             "/api/echo",
-            axum_get(|| async {
-                axum::Json(json!({"ok": true, "from": "get"}))
-            })
-            .post(|body: axum::Json<serde_json::Value>| async move {
-                axum::Json(json!({"ok": true, "echoed": body.0}))
-            }),
+            axum_get(|| async { axum::Json(json!({"ok": true, "from": "get"})) }).post(
+                |body: axum::Json<serde_json::Value>| async move {
+                    axum::Json(json!({"ok": true, "echoed": body.0}))
+                },
+            ),
         )
         .with_state(());
     let router = std::sync::Arc::new(router);

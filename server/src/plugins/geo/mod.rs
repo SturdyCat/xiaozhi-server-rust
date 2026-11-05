@@ -256,7 +256,11 @@ pub fn parse_ipip(text: &str) -> Option<ServerLocation> {
 /// 解析失败或省份为空返回 `None`。
 fn parse_pconline(text: &str) -> Option<ServerLocation> {
     let v: Value = serde_json::from_str(text).ok()?;
-    let pro = v.get("pro").and_then(Value::as_str).unwrap_or("").to_string();
+    let pro = v
+        .get("pro")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
     let city = v
         .get("city")
         .and_then(Value::as_str)

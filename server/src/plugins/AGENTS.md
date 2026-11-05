@@ -39,9 +39,30 @@
 - **TTS 固定文本持久化缓存**（`hot-audio/`）：生产预取路径**逐句**登记完整身份（`HotAudioKey`），完整合成成功即落盘、跨进程复用——配置固定文本（问候语/告别语/技能应答/兜底话术）复用率最高，稳态零合成；测试台强制真合成不落盘；AIUI 云闭环无法避免云端已发生的合成。磁盘存的是**可直接播放的裸音频文件**：`<哈希>.pcm` = 24kHz mono S16LE 整句 PCM，无容器/头部/登记表（`ffplay -f s16le -ar 24000 -ch_layout mono` 即可播放）；下行采样率/帧长/编解码档不参与磁盘身份，改设备档位不再作废缓存，命中后按会话格式现场编码；上限 4096 文件 / 512MiB 总量 / 单句 8MiB，超限按 mtime 淘汰、损坏安全回退真合成。清理刻意最简：旧文案/旧音色的文件靠容量淘汰，旧格式遗留（`.hot`/`managed.json`）不读取也不自动清理，由使用者手动处理。
 - **AIUI 全链路**（`[aiui]`，与本地级联互斥）：VAD 切段 → 讯飞云端 ASR + LLM + TTS 闭环；启用后本地引擎与 `[soul]`/`[memory]` 均不参与。
 
+## WASM 插件平台（P0–P7g/P5b，feature 门控）
+
+`wasm/` 与静态注册表并存（绞杀者迁移，P4 起逐域替换）：控制面插件化（注册/槽位/策略/效果），**模型推理与帧级计算铁律留原生**。契约唯一源是 `server/wit/plugin.wit`（宿主 bindgen 与 guest SDK 同源）；guest 侧统一走 [xiaozhi-plugin-sdk](<../../crates/xiaozhi-plugin-sdk/AGENTS.md>)（独立 crate，不进 server 依赖图）；改契约必须双侧同步重建测试夹具。测试夹具**按需本地构建、产物不入库**（`ensure_fixture`：缺失/源更新自动重建，git 忽略）：hello/trap/greeter-user 源在 [tools/wasm-fixtures](<../../../tools/wasm-fixtures/AGENTS.md>)（测试件），weather 源在 [plugins-src](<../../../plugins-src/AGENTS.md>)（真实插件源根）。生产分发：管理界面上传已构建组件（JSON `POST /api/plugins/upload` 或管理台桥 raw 通道 `POST /api/plugins/upload/raw?id=<id>`——共享 `adopt_bytes` 管线：大小上限→**[plugins] 配置门**（禁用 id 403）→隔离验证→采用→热装载→重启重装）或启动引导（缺产物 → Docker 构建，`bootstrap.rs` + `plugins-src/manifest.toml` 数据表）。
+
+- 宿主导入面：log / now-ms / **kv-get**（P1a；未声明 `kv` 权限 → deny-as-absent，温和拒绝）。
+- 效果面：log / kv-put / **http-get**（两段式：宿主执行后**按步批量**回灌 `http.responses` 事件——一步的全部请求合成一个数组，深度按步计、上限 4；权限门校验 URL host ∈ `http-out:<host>` 白名单；HTTP 经 `HttpFetcher` 抽象，测试注入脚本实现零真实网络）。
+- 扩展点替换演练已落地：官方默认 vs 用户自建同一扩展点，首选切换/卸载回退/注册-回收全链路有真实 wasm 测试（`usermade_plugin_replaces_official_and_falls_back_on_unload`）。
+- 首个真实源根插件：[plugins-src/weather](<../../../plugins-src/weather/AGENTS.md>)（`skill.weather` 官方默认，纯决策瀑布 + 与原生共享 parse.rs 单源；回放测试 `wasm/tests/weather.rs`）。
+- **生产接线（P2c）**：`[weather].backend = "native"|"wasm"`（默认 native，重启生效）——wasm 经 `wasm/bridge.rs` 事件桥（扩展点解析/geo 预填/事件派发/kv 结果通道），skills 层零改动；缺依赖明确报错不静默回退。
+- **观察者挂钩（P2d）**：wasm 插件经 workflow 绑定进会话 hook 位（start/link.nlu.llm/end）——`try_dispatch` 单步派发不执行、`spawn_deferred` 异步执行效果（fire-and-forget 不回灌）；陷阱降级只告警，永不打断对话轮。
+- **配置门（P3）**：`[plugins]` `enabled` 总闸 + `entries."<id>".enabled` 每插件启停（缺省启用；RestartOnly）——装配扫描与启动引导都按它过滤，禁用产物不装载不引导（落盘保留，重新启用即恢复）。`entries."<id>".artifact` 可选持久化 SHA-256 内容钉版；上传采用经 ConfigStore 回写，重启摘要不符即跳过，缺省 pin 兼容旧配置放行。
+- **asr.provider 事件桥（P4a/P4b）**：utterance 级 `asr.transcribe` 事件（f32-le PCM base64 payload）→ 插件 kv `asr-result:<req_id>` 结果通道（JSON `{text}`）；原生适配器 `asr/wasm_engine.rs` 实现 `AsrEngine`，`[asr].engine = "wasm-remote"` 经 `asr.wasm-remote` 注册表描述符与 boot 装配接线；缺宿主/插件显式报错，不静默回退 SenseVoice。hello 夹具带探针事件与多扩展点声明。
+- **tts.provider / llm.provider 控制策略（P4c）**：`tts.wasm-policy` 包装 native Kokoro，`tts.prepare` 只返回文本/速度/音色控制；`llm.wasm-policy` 包装 native OpenAI，`llm.prepare` 只接收受限元数据。WASM 不承载 TTS PCM、完整历史、HTTP/SSE 或模型响应；策略缺失/结果非法显式失败，默认 native 路径不变。
+- **vad.provider 会话级控制策略（P4d）**：`vad.wasm-policy` 只在 `VadPool` 借出 native Silero 前执行一次 `vad.prepare`，返回受限阈值/时长控制；逐帧 `accept`/`flush`、PCM 和 segment callback 全部留 native。策略结果及插件 id 进入池签名，缺宿主/插件/非法结果显式失败，EchoMuse device-VAD 继续旁路；无 sherpa 时显式拒绝该策略，不构造 MockVad。
+- **connector.tuya 控制策略（P5a）**：`[tuya].engine = "wasm-policy"` 经 `connector.tuya.prepare` 选择有限候选索引；WASM 不接收 local_key、IP、云凭证、原始 DP/报文或 socket。native `TuyaEngine` 继续负责 rustuya LAN 会话、set→status 回读、DP cache、互斥、超时和错误归类；策略缺失/结果非法 fail-closed，默认 `native` 零行为变化。
+- **typed lan-socket effect（P5b）**：WIT 提供 `effect-lan-status`/`effect-lan-set-dp`，仅传不透明设备句柄、数字 DP 与有界 JSON；`lan-socket` 权限门 + `LanSocketQueue` 有界 drain，队列满/非法值显式失败；命令带仅宿主内部的 `plugin_id` 路由元数据（不跨 WIT），native Tuya consumer 已由 `device/tuya/worker.rs` drain，复用真实 rustuya 数据面并将有界结果回写插件 KV；原始 socket/密钥/报文不跨边界。
+- **device.echomuse 会话入口策略（P6a）**：`[echomuse].engine = "wasm-policy"` 仅经 `device.echomuse.prepare` 选择受限欢迎文案；WS/keepalive/hub、bounded-turn、PCM、BLE、shell/PTY、鉴权和设备状态全部留 native，缺策略或非法结果显式终止入口，默认 `native` 零行为变化。
+- 验证：`cargo test --features wasm-plugins`（默认 feature 零影响）；阶段与证据见[WASM 插件平台](<../../../docs/designs/wasm-plugin-platform.md>) §9–10。
+
+
 ## 直属下级
 
 - [registry](<registry/AGENTS.md>)：能力/实现/字段元数据、描述符与宿主、配置约定。
+- [wasm](<wasm/mod.rs>)：WASM 插件平台 P0–P7g/P5b（契约 `server/wit/plugin.wit` + 沙箱宿主 + 扩展点解析/回退 + waterfall + kv/http 闭环 + typed lan-socket effect/有界 native command queue + weather 试点回放 + 配置门/摘要钉版 + ASR 远端适配器 + TTS/LLM/VAD 控制策略 + Tuya connector 控制策略 + EchoMuse 会话入口控制策略 + wakeup.strategy/prompt.soul/debug.policy/skill.policy/memory.policy/nlu.catalog 有界策略桥），默认 feature 关闭；guest 侧见 [crates/xiaozhi-plugin-sdk](<../../crates/xiaozhi-plugin-sdk/AGENTS.md>)，设计与阶段见[WASM 插件平台](<../../../docs/designs/wasm-plugin-platform.md>)。
 - [llm](<llm/AGENTS.md>)：Responses API 请求、失败分类与重试、用量口径。
 - [memory](<memory/AGENTS.md>)：graph/store/rag 后端、召回预算与保留策略；集成、尽调与路线见[人格与记忆集成](<../../../docs/designs/soul-and-graph-memory-plan.md>)。
 - [soul](<soul/AGENTS.md>)：人格档案、预设覆盖与 preview 语义。

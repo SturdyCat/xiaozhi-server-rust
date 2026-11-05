@@ -73,7 +73,12 @@ fn hmac_sha256_matches_known_vector() {
 fn token_request_signs_client_id_plus_t() {
     let req = build_token_request("cn", "aid", "asec", "1700000000000");
     assert_eq!(req.url, "https://openapi.tuyacn.com/v1/token?grant_type=1");
-    let header = |k: &str| req.headers.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+    let header = |k: &str| {
+        req.headers
+            .iter()
+            .find(|(n, _)| n == k)
+            .map(|(_, v)| v.clone())
+    };
     assert_eq!(header("client_id").as_deref(), Some("aid"));
     assert_eq!(header("t").as_deref(), Some("1700000000000"));
     assert_eq!(header("sign_mode").as_deref(), Some("simple_sign"));
@@ -88,10 +93,17 @@ fn token_request_signs_client_id_plus_t() {
 #[test]
 fn devices_request_signs_client_id_plus_token_plus_t() {
     let req = build_devices_request("eu", "aid", "asec", "tok", "1700000000001", "row-9");
-    assert!(req.url.starts_with("https://openapi.tuyaeu.com/v1.0/iot-01/associated-users/actions/authorized-devices"));
+    assert!(req.url.starts_with(
+        "https://openapi.tuyaeu.com/v1.0/iot-01/associated-users/actions/authorized-devices"
+    ));
     assert!(req.url.contains("page_size=50"));
     assert!(req.url.contains("last_row_id=row-9"));
-    let header = |k: &str| req.headers.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+    let header = |k: &str| {
+        req.headers
+            .iter()
+            .find(|(n, _)| n == k)
+            .map(|(_, v)| v.clone())
+    };
     assert_eq!(header("access_token").as_deref(), Some("tok"));
     assert_eq!(
         header("sign").as_deref(),
@@ -136,10 +148,18 @@ fn parse_devices_page_object_shape() {
     ],"has_more":false,"last_row_id":"d2"}}"#;
     let (devices, has_more, cursor) = parse_devices_page(body).expect("parse");
     assert_eq!(devices.len(), 2);
-    assert_eq!(devices[0], CloudDevice {
-        device_id: "d1".into(), name: "插座".into(), model: "m1".into(),
-        local_key: "k1".into(), online: true, ip: "192.168.1.5".into(), product_id: "p1".into(),
-    });
+    assert_eq!(
+        devices[0],
+        CloudDevice {
+            device_id: "d1".into(),
+            name: "插座".into(),
+            model: "m1".into(),
+            local_key: "k1".into(),
+            online: true,
+            ip: "192.168.1.5".into(),
+            product_id: "p1".into(),
+        }
+    );
     assert!(!has_more);
     assert_eq!(cursor, "d2");
 }
@@ -213,7 +233,10 @@ fn token_error_1010_retries_once_with_fresh_token() {
         ok(r#"{"success":true,"result":{"access_token":"tok-a","expire_time":7200}}"#.into()),
         ok(r#"{"success":false,"code":1010,"msg":"token invalid"}"#.into()),
         ok(r#"{"success":true,"result":{"access_token":"tok-b","expire_time":7200}}"#.into()),
-        ok(r#"{"success":true,"result":{"list":[{"id":"d1","local_key":"k1"}],"has_more":false}}"#.into()),
+        ok(
+            r#"{"success":true,"result":{"list":[{"id":"d1","local_key":"k1"}],"has_more":false}}"#
+                .into(),
+        ),
     ]));
     let mut client = CloudClient::with_sender(Box::new(sender.clone()));
     let (devices, err) = tokio::runtime::Runtime::new()
@@ -224,9 +247,18 @@ fn token_error_1010_retries_once_with_fresh_token() {
 
     let reqs = sender.requests();
     assert_eq!(reqs.len(), 4, "token→page→token→page");
-    let header = |r: &CloudRequest, k: &str| r.headers.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+    let header = |r: &CloudRequest, k: &str| {
+        r.headers
+            .iter()
+            .find(|(n, _)| n == k)
+            .map(|(_, v)| v.clone())
+    };
     assert_eq!(header(&reqs[1], "access_token").as_deref(), Some("tok-a"));
-    assert_eq!(header(&reqs[3], "access_token").as_deref(), Some("tok-b"), "重试必须换新 token");
+    assert_eq!(
+        header(&reqs[3], "access_token").as_deref(),
+        Some("tok-b"),
+        "重试必须换新 token"
+    );
 }
 
 #[test]
@@ -261,10 +293,11 @@ fn network_failure_classified_as_network() {
 fn cursor_loop_is_bounded_when_server_repeats_page() {
     // 服务端忽略游标：每页都回同样的 d1 + has_more=true → stale 判定终止（≤ MAX_PAGES 次请求）
     let page = ok(r#"{"success":true,"result":{"list":[{"id":"d1","local_key":"k1"}],"has_more":true,"last_row_id":"d1"}}"#.into());
-    let script: Vec<Result<CloudResponse, CloudError>> =
-        std::iter::once(ok(r#"{"success":true,"result":{"access_token":"tok","expire_time":7200}}"#.into()))
-            .chain(std::iter::repeat(page).take(MAX_PAGES as usize))
-            .collect();
+    let script: Vec<Result<CloudResponse, CloudError>> = std::iter::once(ok(
+        r#"{"success":true,"result":{"access_token":"tok","expire_time":7200}}"#.into(),
+    ))
+    .chain(std::iter::repeat(page).take(MAX_PAGES as usize))
+    .collect();
     let sender = FakeSender::new(script);
     let mut client = CloudClient::with_sender(Box::new(sender));
     let (devices, err) = tokio::runtime::Runtime::new()

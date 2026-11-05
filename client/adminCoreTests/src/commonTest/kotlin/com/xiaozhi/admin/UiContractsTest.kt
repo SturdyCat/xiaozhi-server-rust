@@ -97,18 +97,19 @@ class UiContractsTest {
     }
 
     /**
-     * 2026-10-29 范围削减后的导航表（docs/plans/gearui-kit-scope-reduction.md §二）：
-     * 12 项 → 8 项，`sessions` / `conversations` / `usage` / `metrics` 已移除；
-     * macOnly 的 `testbench` 只在 macOS 客户端可见（web 7 项）。
+     * 范围削减后（docs/plans/gearui-kit-scope-reduction.md §二）`sessions` /
+     * `conversations` / `usage` / `metrics` 已移除；涂鸦接入追加了 `tuya`（2026-11-04
+     * 补契约：表实际 9 项、web 8 项，此前断言还停在 8/7 项的旧口径）。
+     * macOnly 的 `testbench` 只在 macOS 客户端可见。
      * 顺序断言 = order 升序的声明顺序，`AdminNav.init` 里的分组相邻性校验必须继续通过。
      */
-    @Test fun navIsReducedToEightEntriesAfterScopeCut() {
+    @Test fun navIsReducedAfterScopeCutAndIncludesTuya() {
         assertEquals(
-            listOf("overview", "testbench", "devices", "echomuse", "console", "config", "settings", "files"),
+            listOf("overview", "testbench", "devices", "echomuse", "tuya", "console", "config", "settings", "plugins", "files"),
             AdminNav.all.map { it.id },
         )
         assertEquals(
-            listOf("overview", "devices", "echomuse", "console", "config", "settings", "files"),
+            listOf("overview", "devices", "echomuse", "tuya", "console", "config", "settings", "plugins", "files"),
             AdminNav.visible(macos = false).map { it.id },
         )
         assertEquals("config", AdminNav.DEFAULT)

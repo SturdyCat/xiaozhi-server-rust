@@ -233,7 +233,10 @@ pub fn router(engines: Arc<Engines>) -> Router {
         // 单次训练的聚焦日志流（全局日志流见 /api/logs）：终态帧后服务端主动关闭。
         .route("/api/nlu/model/build/log", get(build_log_ws))
         // 构建历史列表：O(1) 窄头部判据（manifest 存在性，不算哈希），带四态完整性与现役标记。
-        .route("/api/nlu/model/builds", get(nlu_build::history::build_history))
+        .route(
+            "/api/nlu/model/builds",
+            get(nlu_build::history::build_history),
+        )
         .route(
             "/api/nlu/model/test",
             axum::routing::post(nlu_model::test_model),
@@ -263,6 +266,31 @@ pub fn router(engines: Arc<Engines>) -> Router {
         // Tuya IoT 设备管理面（/api/tuya/*，经 auth_ok 鉴权 + [tuya].enabled 闸门）：
         // 凭证/同步状态、设备目录、DP 控制与重命名；`[tuya].enabled=false` 时统一 404。
         .merge(crate::device::tuya::api::routes());
+
+    // WASM 插件统一动作端点 + 扩展点首选（feature 门控；未编入 = 路由不存在，
+    // 客户端按 404 隐藏插件 UI）。链尾条件续接：链中不能插 #[cfg]。
+    #[cfg(feature = "wasm-plugins")]
+    let api = api
+        .route(
+            "/api/plugins/{id}/actions/{name}",
+            axum::routing::post(plugins::plugin_action),
+        )
+        .route(
+            "/api/plugins/extensions/{point}/preference",
+            axum::routing::post(plugins::set_extension_preference),
+        )
+        .route(
+            "/api/plugins/upload/raw",
+            axum::routing::post(plugins::upload_plugin_raw),
+        )
+        .route(
+            "/api/plugins/upload",
+            axum::routing::post(plugins::upload_plugin),
+        )
+        .route(
+            "/api/plugins/{id}/unload",
+            axum::routing::post(plugins::unload_plugin),
+        );
 
     let app = if Path::new(&admin_dir).is_dir() {
         // SPA：未知路径回退到 index.html，交给前端路由处理。

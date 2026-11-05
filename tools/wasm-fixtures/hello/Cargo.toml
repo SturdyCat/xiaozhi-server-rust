@@ -1,0 +1,12 @@
+# hello：行为良好的演示插件（P0 冒烟 → P1 起改用 guest SDK 构建契约绑定）
+[package]
+name = "hello"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+xiaozhi-plugin-sdk = { path = "../../../server/crates/xiaozhi-plugin-sdk" }
+guest-alloc = { path = "../guest-alloc" }

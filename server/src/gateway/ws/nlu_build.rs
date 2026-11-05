@@ -39,9 +39,9 @@ pub(crate) use artifact::{
 pub(super) use artifact::{load_candidate, valid_id, Artifact};
 pub(super) use base::*;
 pub(crate) use bootstrap::spawn_nlu_bootstrap;
-pub(crate) use predict::{classify, verdict, Reason, Verdict};
 #[cfg(test)]
 use mounts::{map_via_mounts, mount_host_path};
+pub(crate) use predict::{classify, verdict, Reason, Verdict};
 
 const TRAINER_IMAGE: &str = "registry.cn-hangzhou.aliyuncs.com/notip-com-cn/nlu-trainer:latest";
 // Trusted source is compiled into this server; never execute scripts from writable data directories.
@@ -322,7 +322,7 @@ pub(super) async fn start_build(
             output_dir,
         } => Json(json!({"started":true,"state":"running","build_id":build_id,
             "source_revision":source_revision,"origin":ORIGIN_MANUAL,"output_dir":output_dir}))
-            .into_response(),
+        .into_response(),
         BuildStart::Busy => error(
             StatusCode::CONFLICT,
             "build_running",

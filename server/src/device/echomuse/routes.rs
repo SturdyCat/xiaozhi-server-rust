@@ -254,7 +254,33 @@ async fn control_session(
     let params = session_params(&engines.config);
     // 连接欢迎语由本入口决策并注入会话（`[echomuse].welcome`，RestartOnly）：
     // workflow 只收文本，不反向依赖 device::echomuse 的配置。
+    #[cfg(feature = "wasm-plugins")]
+    let mut welcome = super::connect_welcome("echomuse", &engines.config.echomuse);
+    #[cfg(not(feature = "wasm-plugins"))]
+    if engines.config.echomuse.engine_id() == "wasm-policy" {
+        anyhow::bail!("[echomuse].engine = \"wasm-policy\" 需要 wasm-plugins feature");
+    }
+    #[cfg(not(feature = "wasm-plugins"))]
     let welcome = super::connect_welcome("echomuse", &engines.config.echomuse);
+    #[cfg(feature = "wasm-plugins")]
+    if engines.config.echomuse.engine_id() == "wasm-policy" {
+        if let Some(host) = engines.wasm.as_ref() {
+            welcome = match crate::plugins::wasm::bridge::echomuse_prepare(
+                host,
+                &device_id,
+                register.base_os.as_deref().unwrap_or_default(),
+                welcome.as_deref().unwrap_or_default(),
+            ) {
+                Ok(value) => value,
+                Err(error) => {
+                    tracing::warn!(device = %device_id, "EchoMuse WASM 策略失败：{error}");
+                    anyhow::bail!("EchoMuse WASM 策略不可用：{error}");
+                }
+            };
+        } else {
+            anyhow::bail!("EchoMuse WASM 策略宿主未装载");
+        }
+    }
     let session_id = uuid::Uuid::new_v4().to_string();
     // 几何上日志：排查设备端语速/音调问题的第一现场（协议常量，非协商值）。
     tracing::info!(

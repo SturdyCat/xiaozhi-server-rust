@@ -16,7 +16,10 @@ fn sample_cmd() -> DeviceCmd {
 #[test]
 fn send_without_a_registered_channel_is_no_channel() {
     let hub = DeviceCmdHub::new();
-    assert_eq!(hub.send("ghost", sample_cmd()), Err(DeviceCmdError::NoChannel));
+    assert_eq!(
+        hub.send("ghost", sample_cmd()),
+        Err(DeviceCmdError::NoChannel)
+    );
 }
 
 #[test]
@@ -26,7 +29,10 @@ fn dropped_guard_removes_the_channel() {
     let guard = hub.register("dev", tx);
     assert!(hub.send("dev", sample_cmd()).is_ok());
     drop(guard);
-    assert_eq!(hub.send("dev", sample_cmd()), Err(DeviceCmdError::NoChannel));
+    assert_eq!(
+        hub.send("dev", sample_cmd()),
+        Err(DeviceCmdError::NoChannel)
+    );
 }
 
 #[test]
@@ -42,7 +48,10 @@ fn re_register_replaces_and_the_old_guard_keeps_the_new_channel() {
     assert!(hub.send("dev", sample_cmd()).is_ok());
     assert!(rx1.try_recv().is_err(), "旧通道不应再收到命令");
     drop(old);
-    assert_eq!(hub.send("dev", sample_cmd()), Err(DeviceCmdError::NoChannel));
+    assert_eq!(
+        hub.send("dev", sample_cmd()),
+        Err(DeviceCmdError::NoChannel)
+    );
 }
 
 #[tokio::test]

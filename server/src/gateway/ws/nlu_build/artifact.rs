@@ -82,7 +82,11 @@ pub(crate) enum CandidateError {
     /// 文件是符号链接 / 超限等"形态坏了"的情况。
     Corrupt { detail: String },
     /// 三件套哈希与 manifest 记录不符（文件被改过）。
-    HashMismatch { name: String, expected: String, actual: String },
+    HashMismatch {
+        name: String,
+        expected: String,
+        actual: String,
+    },
     /// labels.txt 与 manifest 记录的标签顺序不一致。
     LabelsChanged { detail: String },
 }
@@ -93,10 +97,18 @@ impl std::fmt::Display for CandidateError {
             Self::RootMissing => write!(f, "no managed candidate builds exist"),
             Self::DirectoryMissing => write!(f, "candidate directory is not managed"),
             Self::Incomplete { missing } => {
-                write!(f, "candidate is incomplete, missing: {}", missing.join(", "))
+                write!(
+                    f,
+                    "candidate is incomplete, missing: {}",
+                    missing.join(", ")
+                )
             }
             Self::Corrupt { detail } => write!(f, "candidate manifest is corrupt: {detail}"),
-            Self::HashMismatch { name, expected, actual } => write!(
+            Self::HashMismatch {
+                name,
+                expected,
+                actual,
+            } => write!(
                 f,
                 "candidate integrity mismatch: {name} (manifest {expected}, disk {actual})"
             ),
@@ -126,16 +138,18 @@ pub(crate) fn candidate_http_error(
 ) -> (axum::http::StatusCode, &'static str, String) {
     use axum::http::StatusCode;
     match e {
-        CandidateError::RootMissing => (StatusCode::NOT_FOUND, "candidate_not_found", e.to_string()),
+        CandidateError::RootMissing => {
+            (StatusCode::NOT_FOUND, "candidate_not_found", e.to_string())
+        }
         CandidateError::DirectoryMissing => {
             (StatusCode::NOT_FOUND, "candidate_not_found", e.to_string())
         }
-        CandidateError::Incomplete { .. } => (
-            StatusCode::CONFLICT,
-            "candidate_incomplete",
-            e.to_string(),
-        ),
-        CandidateError::Corrupt { .. } => (StatusCode::CONFLICT, "candidate_corrupt", e.to_string()),
+        CandidateError::Incomplete { .. } => {
+            (StatusCode::CONFLICT, "candidate_incomplete", e.to_string())
+        }
+        CandidateError::Corrupt { .. } => {
+            (StatusCode::CONFLICT, "candidate_corrupt", e.to_string())
+        }
         CandidateError::HashMismatch { .. } => (
             StatusCode::CONFLICT,
             "candidate_hash_mismatch",
@@ -238,9 +252,10 @@ pub(crate) fn load_manifest(data: &Path, id: &str) -> Result<ManifestHead, Candi
             detail: format!("manifest.json 不可读: {e}"),
         })?,
     };
-    let head: ManifestHeadRaw = serde_json::from_slice(&raw).map_err(|e| CandidateError::Corrupt {
-        detail: format!("manifest.json 解析失败: {e}"),
-    })?;
+    let head: ManifestHeadRaw =
+        serde_json::from_slice(&raw).map_err(|e| CandidateError::Corrupt {
+            detail: format!("manifest.json 解析失败: {e}"),
+        })?;
     if let Some(manifest_id) = &head.build_id {
         if manifest_id != id {
             return Err(CandidateError::Corrupt {
@@ -320,7 +335,9 @@ fn managed_dir(root: &Path, id: &str) -> Result<PathBuf, CandidateError> {
     if meta.file_type().is_symlink() || !meta.is_dir() {
         return Err(CandidateError::DirectoryMissing);
     }
-    let dir = requested.canonicalize().map_err(|_| CandidateError::DirectoryMissing)?;
+    let dir = requested
+        .canonicalize()
+        .map_err(|_| CandidateError::DirectoryMissing)?;
     if dir.parent() != Some(root) {
         return Err(CandidateError::Corrupt {
             detail: "candidate directory escapes managed root".into(),

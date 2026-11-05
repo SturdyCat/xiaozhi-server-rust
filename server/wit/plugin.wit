@@ -1,0 +1,180 @@
+// xiaozhi 插件契约 v0.1（唯一契约源，方案 v4 / docs/designs/wasm-plugin-platform.md）
+//
+// 执行模型：插件是「纯决策函数 + 效果列表」——宿主喂事件/动作，插件同步返回 effects，
+// 宿主在权限校验后异步执行。插件不持有任何 I/O 句柄：候选验证可确定性重放、审计单一入口。
+//
+// 版本化：包名 `xiaozhi:plugin@<主.次>`；manifest.api-version 主版本与宿主不符 → 拒绝激活
+// （官方默认实现兜底，见 resolver）。v0.1 刻意只导入 log/now 两个宿主服务（kv/http 由
+// effects 声明式表达），后续阶段按效果执行器落地节奏扩展 import 面。
+
+package xiaozhi:plugin@0.1.0;
+
+/// 宿主服务（插件可 import 的同步、无副作用或可审计服务）
+interface host {
+    /// 结构化日志；level ∈ debug|info|warn|error，宿主自动附加插件 id
+    log: func(level: string, message: string);
+    /// 单调时钟（毫秒）。纯决策插件不应自己造时间
+    now-ms: func() -> u64;
+    /// 读插件隔离 kv（P1：缓存读回，如天气站点码/最近结果）。
+    /// 需要 `kv` 权限：未声明 → deny-as-absent（返回 none + 宿主告警审计），
+    /// 不抛错——插件把它当「没有缓存」处理即可。写入走 kv-put 效果。
+    kv-get: func(key: string) -> option<list<u8>>;
+}
+
+/// 契约类型（manifest / 注册包 / 效果）
+interface types {
+    /// 配置字段热生效档位（与静态注册表 registry::HotReload 同义）
+    enum hot {
+        live,
+        next-session,
+        restart-only,
+    }
+
+    /// manifest：装载前免实例化即可校验的静态声明
+    /// （命名 plugin-manifest：接口内 `use` 的类型名不能与同名导出函数冲突）
+    record plugin-manifest {
+        /// 插件 id，全局唯一（`<域>.<名>`，如 `weather.official`）
+        id: string,
+        /// 插件版本（semver 建议，不做强校验）
+        version: string,
+        /// 宿主契约版本（如 "0.1"）；主版本不匹配 → 拒绝激活
+        api-version: string,
+        /// 展示标题（管理台卡片，zh）
+        title: string,
+        /// 一句话能力描述
+        description: string,
+        /// 申请的权限（v0.1 仅声明与审计：http-out / kv / speak / device-frames / schedule）
+        permissions: list<string>,
+        /// 实现的扩展点（排他解析，如 "asr.provider"）
+        implements: list<string>,
+        /// 官方默认实现标记：随内核分发、不可卸载；扩展点解析的用户插件失败时回退到它
+        official: bool,
+    }
+
+    /// 菜单槽位注册（非排他槽位：nav.main / config.section / workflow.node-menu）
+    record menu-entry {
+        slot: string,
+        /// 槽内唯一 id
+        id: string,
+        label: string,
+        /// 分组（相邻展示；config.section 固定挂「插件」组）
+        group: string,
+        /// 组内排序（小在前）
+        order: u16,
+        /// v1 图标只能取宿主 IconToken 白名单名；非法值在注册校验时拒绝
+        icon: string,
+    }
+
+    /// 配置字段元数据（形状对齐静态注册表 FieldSchema / `/api/config/schema` 投影）
+    record field-schema {
+        /// TOML 路径片段（`[plugins.<id>.config]` 段内）
+        key: string,
+        label: string,
+        /// str|password|int|float|bool|enum|path|dir|text
+        kind: string,
+        default-hint: string,
+        help: string,
+        hot: hot,
+        secret: bool,
+        required: bool,
+        enum-values: list<string>,
+    }
+
+    /// 管理动作（管理台按钮与语音工具共用同一实现：一次操作、双调用方）
+    record action-desc {
+        id: string,
+        label: string,
+        /// 破坏性动作（卸载/清空）UI 二次确认
+        danger: bool,
+        help: string,
+    }
+
+    /// 注册包：激活时一次性收集，随插件启停整体增删（等价 DSH slots 的注册-回收语义）
+    record registration {
+        menu: list<menu-entry>,
+        config-fields: list<field-schema>,
+        actions: list<action-desc>,
+    }
+
+    /// 候选验证自检结果
+    record test-result {
+        name: string,
+        ok: bool,
+        detail: string,
+    }
+
+    // ---------- 效果（声明式；宿主逐效果过权限门后异步执行） ----------
+
+    record effect-log {
+        level: string,
+        message: string,
+    }
+
+    record effect-kv-put {
+        /// 插件隔离命名空间内相对键（宿主强制前缀 `<plugin-id>:`）
+        key: string,
+        value: list<u8>,
+    }
+
+    record effect-http-get {
+        /// 插件自定义请求 id：宿主回灌事件 payload.id 原样带回（多请求并发对账）
+        request-id: string,
+        /// 绝对 http(s) URL。权限门校验其 host ∈ `http-out:<host>` 白名单
+        url: string,
+    }
+
+    /// 受限 Tuya LAN 状态读取：device-handle 是宿主分配的不透明句柄，绝不携带
+    /// local_key、IP、凭证、原始报文或 socket 句柄。
+    record effect-lan-status {
+        request-id: string,
+        device-handle: string,
+    }
+
+    /// 受限 Tuya LAN DP 写入：value-json 只承载已校验的 JSON 值，实际 set→status
+    /// 回读、互斥、超时和错误归类均由 native connector 执行。
+    record effect-lan-set-dp {
+        request-id: string,
+        device-handle: string,
+        dp: string,
+        value-json: string,
+    }
+
+    /// v0.x 效果面：log + kv + http-get + lan-socket。speak / device-frames /
+    /// schedule 的效果变体在对应宿主服务落地时加入；未接线的宿主服务返回 Unsupported。
+    /// lan-socket 只允许上述高层操作，禁止原始 socket/帧/密钥越过边界。
+    ///
+    /// http-get 的两段式瀑布（P1b/P1c）：宿主执行请求后**回灌事件** `http.responses`
+    /// （按步批量：一步产生的全部请求合成一个事件），payload 为 JSON 数组，元素形如
+    /// `{"id":"<request-id>","status":<u16>,"body":"...","error":null|"..."}`。
+    /// （status=0 + error 非空 = 网络/权限失败，非 2xx 也原样回灌，由插件决策降级；
+    /// request-id 是插件侧唯一的关联键——多步流程把上下文编码进 id。）
+    /// 回灌**步数**（非请求数）宿主侧有上限（防插件自我循环），超限停止回灌并告警。
+    variant effect {
+        log(effect-log),
+        kv-put(effect-kv-put),
+        http-get(effect-http-get),
+        lan-status(effect-lan-status),
+        lan-set-dp(effect-lan-set-dp),
+    }
+}
+
+/// 插件 world：guest 实现全部导出
+world plugin {
+    import host;
+
+    export lifecycle: interface {
+        use types.{plugin-manifest, registration, effect, test-result};
+
+        /// 静态声明。装载后、激活前调用一次
+        manifest: func() -> plugin-manifest;
+        /// 注册包收集。激活时调用一次；崩溃/超时 → 激活失败走回退
+        register: func() -> registration;
+        /// 事件步进（连接器帧、turn hook、timer）。ok = 待执行效果列表；
+        /// 开放形状载荷用 JSON 字符串（两端 serde），后续阶段收紧
+        handle-event: func(event: string, payload: string) -> result<list<effect>, string>;
+        /// 管理动作（管理台/语音工具双调用方）
+        handle-action: func(action-id: string, payload: string) -> result<string, string>;
+        /// 候选验证自检；任一 fail → 验证不过、不采用
+        self-test: func() -> result<list<test-result>, string>;
+    }
+}

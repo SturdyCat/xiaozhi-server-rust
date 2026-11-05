@@ -42,10 +42,19 @@ fn rows_sort_none_last_then_newest_first_then_build_id() {
     };
     let mut rows = vec![
         mk(None, "bbbbbbbb-0000-0000-0000-000000000000"),
-        mk(Some("2026-11-02T08:00:00Z"), "cccccccc-0000-0000-0000-000000000000"),
-        mk(Some("2026-11-02T09:00:00Z"), "aaaaaaaa-0000-0000-0000-000000000000"),
+        mk(
+            Some("2026-11-02T08:00:00Z"),
+            "cccccccc-0000-0000-0000-000000000000",
+        ),
+        mk(
+            Some("2026-11-02T09:00:00Z"),
+            "aaaaaaaa-0000-0000-0000-000000000000",
+        ),
         mk(None, "aaaaaaaa-0000-0000-0000-000000000000"),
-        mk(Some("2026-11-02T08:00:00Z"), "bbbbbbbb-0000-0000-0000-000000000000"),
+        mk(
+            Some("2026-11-02T08:00:00Z"),
+            "bbbbbbbb-0000-0000-0000-000000000000",
+        ),
     ];
     sort_rows(&mut rows);
     let ids: Vec<&str> = rows.iter().map(|r| r.head.build_id.as_str()).collect();
@@ -85,7 +94,11 @@ fn seed(data: &std::path::Path, id: &str, labels: &[&str]) -> std::path::PathBuf
         "created_at": "2026-11-02T08:00:00Z",
         "base_model": "minirbt-h288"
     });
-    std::fs::write(dir.join("manifest.json"), serde_json::to_vec(&manifest).unwrap()).unwrap();
+    std::fs::write(
+        dir.join("manifest.json"),
+        serde_json::to_vec(&manifest).unwrap(),
+    )
+    .unwrap();
     dir
 }
 
@@ -151,13 +164,21 @@ fn load_manifest_maps_every_failure_to_a_typed_variant() {
     let other = uuid::Uuid::new_v4().to_string();
     seed(&data, &other, &L3);
     let mut tampered = serde_json::from_slice::<serde_json::Value>(
-        &std::fs::read(data.join("models").join("nlu-builds").join(&other).join("manifest.json"))
-            .unwrap(),
+        &std::fs::read(
+            data.join("models")
+                .join("nlu-builds")
+                .join(&other)
+                .join("manifest.json"),
+        )
+        .unwrap(),
     )
     .unwrap();
     tampered["build_id"] = json!(id);
     std::fs::write(
-        data.join("models").join("nlu-builds").join(&other).join("manifest.json"),
+        data.join("models")
+            .join("nlu-builds")
+            .join(&other)
+            .join("manifest.json"),
         serde_json::to_vec(&tampered).unwrap(),
     )
     .unwrap();
@@ -174,17 +195,24 @@ fn load_manifest_maps_every_failure_to_a_typed_variant() {
 fn http_mapping_sends_404_only_for_missing_roots_or_directories() {
     use axum::http::StatusCode;
     let (status, code, _) = candidate_http_error(&CandidateError::RootMissing);
-    assert_eq!((status, code), (StatusCode::NOT_FOUND, "candidate_not_found"));
+    assert_eq!(
+        (status, code),
+        (StatusCode::NOT_FOUND, "candidate_not_found")
+    );
     let (status, code, _) = candidate_http_error(&CandidateError::DirectoryMissing);
-    assert_eq!((status, code), (StatusCode::NOT_FOUND, "candidate_not_found"));
+    assert_eq!(
+        (status, code),
+        (StatusCode::NOT_FOUND, "candidate_not_found")
+    );
     let incomplete = CandidateError::Incomplete {
         missing: vec!["model.onnx".into()],
     };
     let (status, code, _) = candidate_http_error(&incomplete);
-    assert_eq!((status, code), (StatusCode::CONFLICT, "candidate_incomplete"));
-    let corrupt = CandidateError::Corrupt {
-        detail: "x".into(),
-    };
+    assert_eq!(
+        (status, code),
+        (StatusCode::CONFLICT, "candidate_incomplete")
+    );
+    let corrupt = CandidateError::Corrupt { detail: "x".into() };
     let (status, code, _) = candidate_http_error(&corrupt);
     assert_eq!((status, code), (StatusCode::CONFLICT, "candidate_corrupt"));
     let hash = CandidateError::HashMismatch {
@@ -197,9 +225,7 @@ fn http_mapping_sends_404_only_for_missing_roots_or_directories() {
         (status, code),
         (StatusCode::CONFLICT, "candidate_hash_mismatch")
     );
-    let labels = CandidateError::LabelsChanged {
-        detail: "x".into(),
-    };
+    let labels = CandidateError::LabelsChanged { detail: "x".into() };
     let (status, code, _) = candidate_http_error(&labels);
     assert_eq!(
         (status, code),
@@ -252,10 +278,16 @@ async fn history_endpoint_lists_sorts_and_marks_active() {
 
     let mut headers = HeaderMap::new();
     headers.insert("authorization", "Bearer test-admin-token".parse().unwrap());
-    let response = build_history(State(engines), headers, axum::extract::Query(Default::default()))
-        .await;
+    let response = build_history(
+        State(engines),
+        headers,
+        axum::extract::Query(Default::default()),
+    )
+    .await;
     assert_eq!(response.status(), axum::http::StatusCode::OK);
-    let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+    let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+        .await
+        .unwrap();
     let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(body["total"], 3);
     assert_eq!(body["active_build_id"], json!(newer));
@@ -269,10 +301,7 @@ async fn history_endpoint_lists_sorts_and_marks_active() {
     // corrupt 行：时间缺失垫底，error 带原因，build_id 来自目录名。
     assert_eq!(rows[2]["build_id"], json!(broken));
     assert_eq!(rows[2]["integrity"], INTEGRITY_CORRUPT);
-    assert!(rows[2]["error"]
-        .as_str()
-        .unwrap()
-        .contains("解析失败"));
+    assert!(rows[2]["error"].as_str().unwrap().contains("解析失败"));
     assert_eq!(rows[2]["active"], false);
     std::fs::remove_dir_all(&data).unwrap();
 }
@@ -299,7 +328,9 @@ async fn history_endpoint_treats_a_missing_root_as_an_empty_list() {
     )
     .await;
     assert_eq!(response.status(), axum::http::StatusCode::OK);
-    let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+    let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+        .await
+        .unwrap();
     let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(body["builds"], json!([]));
     assert_eq!(body["total"], 0);

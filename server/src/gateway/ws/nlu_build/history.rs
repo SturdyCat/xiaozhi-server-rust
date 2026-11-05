@@ -63,8 +63,16 @@ impl HistoryRow {
 /// 三段排序键：`created_at` 缺失垫底 → 新的在前 → build_id 字典序兜底。
 fn sort_rows(rows: &mut [HistoryRow]) {
     rows.sort_by(|a, b| {
-        let a_key = (a.head.created_at.is_none(), std::cmp::Reverse(&a.head.created_at), &a.head.build_id);
-        let b_key = (b.head.created_at.is_none(), std::cmp::Reverse(&b.head.created_at), &b.head.build_id);
+        let a_key = (
+            a.head.created_at.is_none(),
+            std::cmp::Reverse(&a.head.created_at),
+            &a.head.build_id,
+        );
+        let b_key = (
+            b.head.created_at.is_none(),
+            std::cmp::Reverse(&b.head.created_at),
+            &b.head.build_id,
+        );
         a_key.cmp(&b_key)
     });
 }
@@ -85,87 +93,91 @@ pub(crate) async fn build_history(
         return r;
     }
     let store = engines.config_store.clone();
-    let task = tokio::task::spawn_blocking(move || -> Result<Value, (StatusCode, &'static str, String)> {
-        let cfg = store.load().map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "config_read_failed",
-                e.to_string(),
-            )
-        })?;
-        let data = data_dir(&cfg);
-        let active = active_build_id(&cfg.nlu.bert_model);
-        let root = data.join("models").join("nlu-builds");
-        // 根目录不存在 = 从未构建过：空列表是**正常**回答，不是 404。
-        let entries = match std::fs::read_dir(&root) {
-            Ok(entries) => entries,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(json!({"builds": [], "total": 0, "active_build_id": active}));
-            }
-            Err(e) => {
-                return Err((
+    let task = tokio::task::spawn_blocking(
+        move || -> Result<Value, (StatusCode, &'static str, String)> {
+            let cfg = store.load().map_err(|e| {
+                (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    "history_unavailable",
-                    format!("build 根目录不可读: {e}"),
-                ))
-            }
-        };
-        let mut ids: Vec<String> = Vec::new();
-        for entry in entries.flatten() {
-            // 行来源是目录：文件与符号链接不是构建目录，丢弃（读目录本身就是行为）。
-            let Ok(file_type) = entry.file_type() else { continue };
-            if !file_type.is_dir() {
-                continue;
-            }
-            let Ok(name) = entry.file_name().into_string() else {
-                continue;
-            };
-            if !valid_id(&name) {
-                continue;
-            }
-            ids.push(name);
-        }
-        let mut rows: Vec<HistoryRow> = Vec::with_capacity(ids.len());
-        for id in &ids {
-            match load_manifest(&data, id) {
-                Ok(head) => rows.push(HistoryRow {
-                    active: active.as_deref() == Some(id),
-                    head,
-                    error: None,
-                }),
-                Err(CandidateError::Corrupt { detail }) => {
-                    // corrupt 行照常进列表（build_id 取自目录名），error 带原因。
-                    rows.push(HistoryRow {
-                        active: active.as_deref() == Some(id),
-                        head: ManifestHead {
-                            build_id: id.clone(),
-                            created_at: None,
-                            base_model: None,
-                            labels: Vec::new(),
-                            files: Vec::new(),
-                            integrity: INTEGRITY_CORRUPT,
-                            missing: Vec::new(),
-                        },
-                        error: Some(detail),
-                    });
+                    "config_read_failed",
+                    e.to_string(),
+                )
+            })?;
+            let data = data_dir(&cfg);
+            let active = active_build_id(&cfg.nlu.bert_model);
+            let root = data.join("models").join("nlu-builds");
+            // 根目录不存在 = 从未构建过：空列表是**正常**回答，不是 404。
+            let entries = match std::fs::read_dir(&root) {
+                Ok(entries) => entries,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    return Ok(json!({"builds": [], "total": 0, "active_build_id": active}));
                 }
-                // RootMissing / DirectoryMissing 对"从目录枚举出来的 id"不可能发生；
-                // Incomplete 是行状态不是错误。出现即内部错位，报 500 让人来看。
                 Err(e) => {
-                    let (status, code, message) = candidate_http_error(&e);
-                    return Err((status, code, message));
+                    return Err((
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "history_unavailable",
+                        format!("build 根目录不可读: {e}"),
+                    ))
+                }
+            };
+            let mut ids: Vec<String> = Vec::new();
+            for entry in entries.flatten() {
+                // 行来源是目录：文件与符号链接不是构建目录，丢弃（读目录本身就是行为）。
+                let Ok(file_type) = entry.file_type() else {
+                    continue;
+                };
+                if !file_type.is_dir() {
+                    continue;
+                }
+                let Ok(name) = entry.file_name().into_string() else {
+                    continue;
+                };
+                if !valid_id(&name) {
+                    continue;
+                }
+                ids.push(name);
+            }
+            let mut rows: Vec<HistoryRow> = Vec::with_capacity(ids.len());
+            for id in &ids {
+                match load_manifest(&data, id) {
+                    Ok(head) => rows.push(HistoryRow {
+                        active: active.as_deref() == Some(id),
+                        head,
+                        error: None,
+                    }),
+                    Err(CandidateError::Corrupt { detail }) => {
+                        // corrupt 行照常进列表（build_id 取自目录名），error 带原因。
+                        rows.push(HistoryRow {
+                            active: active.as_deref() == Some(id),
+                            head: ManifestHead {
+                                build_id: id.clone(),
+                                created_at: None,
+                                base_model: None,
+                                labels: Vec::new(),
+                                files: Vec::new(),
+                                integrity: INTEGRITY_CORRUPT,
+                                missing: Vec::new(),
+                            },
+                            error: Some(detail),
+                        });
+                    }
+                    // RootMissing / DirectoryMissing 对"从目录枚举出来的 id"不可能发生；
+                    // Incomplete 是行状态不是错误。出现即内部错位，报 500 让人来看。
+                    Err(e) => {
+                        let (status, code, message) = candidate_http_error(&e);
+                        return Err((status, code, message));
+                    }
                 }
             }
-        }
-        let total = rows.len();
-        sort_rows(&mut rows);
-        rows.truncate(MAX_ROWS);
-        Ok(json!({
-            "builds": rows.iter().map(HistoryRow::to_json).collect::<Vec<_>>(),
-            "total": total,
-            "active_build_id": active,
-        }))
-    });
+            let total = rows.len();
+            sort_rows(&mut rows);
+            rows.truncate(MAX_ROWS);
+            Ok(json!({
+                "builds": rows.iter().map(HistoryRow::to_json).collect::<Vec<_>>(),
+                "total": total,
+                "active_build_id": active,
+            }))
+        },
+    );
     match tokio::time::timeout(std::time::Duration::from_secs(10), task).await {
         Ok(Ok(Ok(value))) => Json(value).into_response(),
         Ok(Ok(Err((status, code, e)))) => error(status, code, e),

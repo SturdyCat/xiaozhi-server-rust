@@ -67,7 +67,9 @@ fn upsert_preserves_alias_and_prior_ip() {
 fn set_online_updates_last_seen_and_ip() {
     let (_dir, store) = temp_store("online");
     store.upsert_device(&sample("dev")).expect("upsert");
-    store.set_online("dev", true, Some("192.168.1.99")).expect("online");
+    store
+        .set_online("dev", true, Some("192.168.1.99"))
+        .expect("online");
 
     let got = store.get_device("dev").expect("get").expect("exists");
     assert!(got.online);

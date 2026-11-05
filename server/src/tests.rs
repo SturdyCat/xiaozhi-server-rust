@@ -123,7 +123,10 @@ fn rust_log_debug_gets_noise_floor_appended() {
         tracing::debug!(target: "xiaozhi_server_rust", "业务明细：分段延迟");
         tracing::info!(target: "ort::logging", "Session Options {{ intra_op_param: .. }}");
     });
-    assert!(out.contains("业务明细：分段延迟"), "debug 档业务明细可见：{out}");
+    assert!(
+        out.contains("业务明细：分段延迟"),
+        "debug 档业务明细可见：{out}"
+    );
     assert!(
         !out.contains("Session Options"),
         "debug 档 ort 明细仍应压掉，显式 ort 指令才可见：{out}"
@@ -134,7 +137,11 @@ fn rust_log_debug_gets_noise_floor_appended() {
 fn rust_log_with_explicit_ort_directive_is_respected() {
     // 用户显式写 ort 目标指令（含 `ort=…` 与 span 过滤写法）时完全尊重，不追加底座。
     for spec in ["info,ort::logging=info", "ort=debug", "ort[load]=info"] {
-        assert_eq!(resolved_log_filter(Some(spec)), spec, "显式 ort 指令应原样保留");
+        assert_eq!(
+            resolved_log_filter(Some(spec)),
+            spec,
+            "显式 ort 指令应原样保留"
+        );
     }
     let out = capture("info,ort::logging=info", || {
         tracing::info!(target: "ort::logging", "Session Options {{ intra_op_param: .. }}");
@@ -152,5 +159,8 @@ fn rust_log_blank_or_invalid_falls_back_to_baseline() {
     assert_eq!(resolved_log_filter(Some("  ")), default_log_filter());
     assert_eq!(resolved_log_filter(Some(",")), default_log_filter());
     // 非法级别原样透传，由 build_log_filter 解析失败后回退基线（同降噪）。
-    assert_eq!(resolved_log_filter(Some("not-a-level")), "not-a-level,ort::logging=warn");
+    assert_eq!(
+        resolved_log_filter(Some("not-a-level")),
+        "not-a-level,ort::logging=warn"
+    );
 }

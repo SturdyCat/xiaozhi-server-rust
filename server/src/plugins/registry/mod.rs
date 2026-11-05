@@ -40,7 +40,9 @@ use crate::plugins::tts::TtsEngine;
 
 mod fields;
 mod fields_command;
+mod fields_common;
 mod fields_context;
+mod fields_impl;
 mod fields_nlu;
 mod fields_wake;
 mod impls;
@@ -99,6 +101,10 @@ pub enum Capability {
     /// 每会话固定统一技能目录；模板仅为已接受的同一技能抽槽。
     /// 关闭/拒识可聊天，模型故障与缺槽明确停止，不提供规则或 LLM 动作回退。
     Nlu,
+    /// 涂鸦局域网连接器（原生 rustuya 或 WASM 控制策略 + 原生数据面）。
+    Tuya,
+    /// EchoMuse 设备入口（原生控制面或 WASM 控制策略元数据）。
+    Echomuse,
 }
 
 /// 全部能力（顺序即 UI 展示顺序）。
@@ -115,6 +121,8 @@ pub const ALL_CAPABILITIES: &[Capability] = &[
     Capability::Command,
     Capability::Wake,
     Capability::Nlu,
+    Capability::Tuya,
+    Capability::Echomuse,
 ];
 
 impl Capability {
@@ -133,6 +141,8 @@ impl Capability {
             Capability::Command => "command",
             Capability::Wake => "wakeup",
             Capability::Nlu => "nlu",
+            Capability::Tuya => "tuya",
+            Capability::Echomuse => "echomuse",
         }
     }
 
@@ -150,6 +160,8 @@ impl Capability {
             Capability::Command => "命令词表（模型训练样例）",
             Capability::Wake => "唤醒问候语",
             Capability::Nlu => "NLU 模型（意图识别）",
+            Capability::Tuya => "涂鸦局域网连接器",
+            Capability::Echomuse => "EchoMuse 设备入口",
         }
     }
 
@@ -255,6 +267,9 @@ const APP_SECTION_HOT: &[(&str, HotReload)] = &[
     // `[weather]`（天气数据源）：`WeatherService` 在 `Engines::assemble` 装配一次
     // （HTTP 客户端/缓存/站点表），改动需重启生效。
     ("weather", HotReload::RestartOnly),
+    // `[plugins]`（WASM 插件平台）：总闸与每插件启停都在启动装载期生效，
+    // 运行期热卸载涉及会话快照引用，改动需重启生效（Live 留待装载管线成熟）。
+    ("plugins", HotReload::RestartOnly),
 ];
 
 /// 按**字段完整路径**查热生效语义：路径 = `fields_path ++ [key]`
@@ -455,10 +470,18 @@ impl PluginDescriptor {
 /// 全量注册表（顺序即 UI 展示顺序）。
 pub static REGISTRY: &[PluginDescriptor] = &[
     ASR_SENSEVOICE,
+    ASR_WASM_REMOTE,
     VAD_SILERO,
+    VAD_WASM_POLICY,
     TTS_KOKORO,
     TTS_XFYUN,
+    TTS_WASM_POLICY,
     LLM_OPENAI,
+    LLM_WASM_POLICY,
+    TUYA_NATIVE,
+    TUYA_WASM_POLICY,
+    ECHOMUSE_NATIVE,
+    ECHOMUSE_WASM_POLICY,
     AIUI_FULLCHAIN,
     VOICES_CATALOG,
     FIRMWARE_HOST,
@@ -505,6 +528,8 @@ pub fn configured_engine(cfg: &Config, cap: Capability) -> Option<String> {
         Capability::Tts => Some(cfg.tts.engine_id()),
         Capability::Llm => Some(cfg.llm.engine_id()),
         Capability::Memory => Some(cfg.memory.engine_id().to_string()),
+        Capability::Tuya => Some(cfg.tuya.engine_id()),
+        Capability::Echomuse => Some(cfg.echomuse.engine_id()),
         Capability::FullChain
         | Capability::Voices
         | Capability::Firmware

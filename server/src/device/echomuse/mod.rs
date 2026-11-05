@@ -86,6 +86,8 @@ mod tests;
 mod turn;
 mod uplink;
 
+#[cfg(test)]
+pub use config::ECHOMUSE_ENGINES;
 pub use config::{connect_welcome, EchomuseConfig};
 
 use std::collections::HashMap;

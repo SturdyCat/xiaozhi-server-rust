@@ -27,7 +27,10 @@ pub struct SyncOutcome {
 
 impl SyncOutcome {
     fn new(result: &str, message: impl Into<String>) -> Self {
-        SyncOutcome { result: result.to_string(), message: message.into() }
+        SyncOutcome {
+            result: result.to_string(),
+            message: message.into(),
+        }
     }
 }
 
@@ -45,7 +48,10 @@ impl TuyaEngine {
                 if last.elapsed() < MIN_SYNC_INTERVAL {
                     return SyncOutcome::new(
                         "skipped",
-                        format!("距上次同步不足 {}s，请稍后再试", MIN_SYNC_INTERVAL.as_secs()),
+                        format!(
+                            "距上次同步不足 {}s，请稍后再试",
+                            MIN_SYNC_INTERVAL.as_secs()
+                        ),
                     );
                 }
             }
@@ -53,7 +59,10 @@ impl TuyaEngine {
             state.last_start = Some(Instant::now());
         }
         let outcome = self.execute_sync(cfg).await;
-        self.sync_state.lock().unwrap_or_else(|e| e.into_inner()).syncing = false;
+        self.sync_state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .syncing = false;
         outcome
     }
 
@@ -77,7 +86,14 @@ impl TuyaEngine {
     pub(crate) async fn execute_sync(&self, cfg: &TuyaConfig) -> SyncOutcome {
         let started_at = now_ms();
         if !cfg.credentials_ready() {
-            return self.finish_sync(started_at, "cloud_auth_failed", 0, "涂鸦云凭证未配置（请先在管理台录入）").await;
+            return self
+                .finish_sync(
+                    started_at,
+                    "cloud_auth_failed",
+                    0,
+                    "涂鸦云凭证未配置（请先在管理台录入）",
+                )
+                .await;
         }
         self.check_credentials(cfg);
         // 持云客户端锁执行整个拉取（token 缓存复用 + 翻页串行）
@@ -107,14 +123,20 @@ impl TuyaEngine {
         let (upserted, failed) = self.upsert_all(&devices, &cfg.access_id).await;
         if failed > 0 && upserted == 0 {
             return self
-                .finish_sync(started_at, "network_error", 0, format!("设备清单落库全部失败（{failed} 台）"))
+                .finish_sync(
+                    started_at,
+                    "network_error",
+                    0,
+                    format!("设备清单落库全部失败（{failed} 台）"),
+                )
                 .await;
         }
         let mut message = format!("同步 {upserted} 台设备");
         if failed > 0 {
             message.push_str(&format!("（{failed} 台写库失败）"));
         }
-        self.finish_sync(started_at, "ok", upserted as i64, message).await
+        self.finish_sync(started_at, "ok", upserted as i64, message)
+            .await
     }
 
     /// 设备清单落库（spawn_blocking）+ local_key 变化设备的会话重建标记。
@@ -122,7 +144,10 @@ impl TuyaEngine {
     async fn upsert_all(&self, devices: &[CloudDevice], _access_id: &str) -> (usize, usize) {
         // 先取旧表（判断 local_key 变化 → 重建对应会话）
         let old_keys: std::collections::HashMap<String, String> = match self.list_devices().await {
-            Ok(rows) => rows.into_iter().map(|r| (r.device_id, r.local_key)).collect(),
+            Ok(rows) => rows
+                .into_iter()
+                .map(|r| (r.device_id, r.local_key))
+                .collect(),
             Err(e) => {
                 tracing::warn!("Tuya 同步前读旧目录失败（按全新处理）: {e}");
                 std::collections::HashMap::new()
@@ -148,7 +173,10 @@ impl TuyaEngine {
         for row in &rows {
             if let Some(old_key) = old_keys.get(&row.device_id) {
                 if old_key != &row.local_key {
-                    tracing::info!("Tuya 设备 {} local_key 已变更，丢弃旧局域网会话", row.device_id);
+                    tracing::info!(
+                        "Tuya 设备 {} local_key 已变更，丢弃旧局域网会话",
+                        row.device_id
+                    );
                     self.lan.drop_session(&row.device_id);
                 }
             }
@@ -180,7 +208,13 @@ impl TuyaEngine {
     }
 
     /// 收尾：写 sync_history（失败只告警——同步本身已尽力，历史缺失不改变结果）。
-    async fn finish_sync(&self, started_at: i64, result: &str, count: i64, message: impl Into<String>) -> SyncOutcome {
+    async fn finish_sync(
+        &self,
+        started_at: i64,
+        result: &str,
+        count: i64,
+        message: impl Into<String>,
+    ) -> SyncOutcome {
         let message = message.into();
         tracing::info!("[tuya] 云同步完成：result={result}, count={count}, message={message}");
         let record = SyncRecord {
@@ -192,10 +226,12 @@ impl TuyaEngine {
         };
         let store = self.store.clone();
         let task_record = record.clone();
-        if let Err(e) = tokio::task::spawn_blocking(move || store.record_sync(&task_record).map_err(|e| e.to_string()))
-            .await
-            .map_err(|e| format!("写库任务失败: {e}"))
-            .and_then(|r| r)
+        if let Err(e) = tokio::task::spawn_blocking(move || {
+            store.record_sync(&task_record).map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|e| format!("写库任务失败: {e}"))
+        .and_then(|r| r)
         {
             tracing::warn!("Tuya sync_history 写库失败: {e}");
         }
@@ -206,7 +242,10 @@ impl TuyaEngine {
 /// 云错误 → (sync_history 结果, 人话消息)。
 fn classify_cloud_error(err: &CloudError, fetched: usize) -> (&'static str, String) {
     match err {
-        CloudError::Auth(m) => ("cloud_auth_failed", format!("涂鸦云鉴权失败：{m}（请检查凭证与区域）")),
+        CloudError::Auth(m) => (
+            "cloud_auth_failed",
+            format!("涂鸦云鉴权失败：{m}（请检查凭证与区域）"),
+        ),
         CloudError::Network(m) => {
             if fetched > 0 {
                 ("partial", format!("部分页拉取失败：{m}"))

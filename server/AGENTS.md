@@ -30,7 +30,7 @@ DOCS_RS=1 ~/.cargo/bin/cargo check --manifest-path server/Cargo.toml --features 
 - [评测](<src/benchmark/AGENTS.md>)：节点测试服务与样本目录（原 `app/bench_api`）。
 - [媒体](<src/media/AGENTS.md>)：Opus / 重采样 / PCM / 下行预算 / 热欢迎语（原 `app/audio` + `app/hot_audio`）。
 - [观测](<src/observability/AGENTS.md>)：指标 / 事件 / 用量 / 时间格式。
-- [插件层](<src/plugins/AGENTS.md>)：按能力分目录（asr/tts/llm/vad/nlu/memory/soul/skill/command/wakeup/prompt/aiui/health/host/registry）。
+- [插件层](<src/plugins/AGENTS.md>)：按能力分目录（asr/tts/llm/vad/nlu/memory/soul/skill/command/wakeup/prompt/aiui/health/host/registry/wasm）。
 - [测试](<tests/AGENTS.md>)、[部署](<../docs/deployment.md>)：联调、模型、镜像与挂载。
 
 ## 上级入口

@@ -23,7 +23,14 @@ fn due_task(s: &Session<'_, Wire>, text: &str) {
             },
         )
         .unwrap();
-    assert_eq!(s.engines.skill_system.tick_due(now_ms()).unwrap().materialized, 1);
+    assert_eq!(
+        s.engines
+            .skill_system
+            .tick_due(now_ms())
+            .unwrap()
+            .materialized,
+        1
+    );
 }
 fn retry_available(s: &Session<'_, Wire>) -> bool {
     s.engines

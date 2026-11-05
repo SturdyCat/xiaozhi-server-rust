@@ -32,6 +32,8 @@ pub mod lan;
 pub mod store;
 pub mod sync;
 pub mod voice;
+#[cfg(feature = "wasm-plugins")]
+mod wasm;
 pub mod worker;
 
 #[cfg(test)]
@@ -44,6 +46,8 @@ mod lan_tests;
 mod sync_tests;
 #[cfg(test)]
 mod voice_tests;
+#[cfg(all(test, feature = "wasm-plugins"))]
+mod wasm_tests;
 
 pub use config::TuyaConfig;
 
@@ -101,7 +105,10 @@ pub(crate) const SCAN_INTERVAL: Duration = Duration::from_secs(300);
 fn assemble(data_dir: &Path) -> TuyaEngine {
     let store = Arc::new(TuyaStore::new(data_dir));
     let dp_cache: Arc<DpCache> = Arc::new(DpCache::new(HashMap::new()));
-    let sink = LanSink { store: store.clone(), dp_cache: dp_cache.clone() };
+    let sink = LanSink {
+        store: store.clone(),
+        dp_cache: dp_cache.clone(),
+    };
     TuyaEngine {
         store,
         cloud: tokio::sync::Mutex::new(cloud::CloudClient::new()),
@@ -110,7 +117,10 @@ fn assemble(data_dir: &Path) -> TuyaEngine {
         writable: Arc::new(Mutex::new(HashMap::new())),
         inflight: Mutex::new(HashMap::new()),
         poll: Mutex::new(HashMap::new()),
-        sync_state: Mutex::new(SyncState { syncing: false, last_start: None }),
+        sync_state: Mutex::new(SyncState {
+            syncing: false,
+            last_start: None,
+        }),
         cred_fp: Mutex::new(String::new()),
     }
 }
@@ -188,7 +198,9 @@ impl TuyaEngine {
             .ok_or_else(|| ControlFailure::offline("设备不在目录中（请先「立即同步」）".into()))?;
         // online 预检（架构 §4）：离线设备直接归类，不发网络请求
         if !row.online {
-            return Err(ControlFailure::offline("设备离线（等待轮询确认上线）".into()));
+            return Err(ControlFailure::offline(
+                "设备离线（等待轮询确认上线）".into(),
+            ));
         }
         // 单设备互斥：同设备同时只允许 1 个在途控制
         let gate = self.inflight_gate(device_id);
@@ -247,7 +259,11 @@ impl TuyaEngine {
         let device = match self.lan.get_or_build(row).await {
             Ok(d) => d,
             Err(failure) => {
-                tracing::debug!("Tuya 设备 {} 轮询建连失败（{}）", row.device_id, failure.kind);
+                tracing::debug!(
+                    "Tuya 设备 {} 轮询建连失败（{}）",
+                    row.device_id,
+                    failure.kind
+                );
                 self.note_poll_failure(row);
                 return false;
             }
@@ -291,16 +307,19 @@ impl TuyaEngine {
             devices
                 .into_iter()
                 .filter(|row| {
-                    let entry = book.entry(row.device_id.clone()).or_insert_with(|| PollState {
-                        // 错峰相位：device_id 哈希散列到 0..60s，避免整点齐发
-                        next_due: now + Duration::from_secs(hash_offset(&row.device_id)),
-                        fails: 0,
-                    });
+                    let entry = book
+                        .entry(row.device_id.clone())
+                        .or_insert_with(|| PollState {
+                            // 错峰相位：device_id 哈希散列到 0..60s，避免整点齐发
+                            next_due: now + Duration::from_secs(hash_offset(&row.device_id)),
+                            fails: 0,
+                        });
                     entry.next_due <= now
                 })
                 .collect()
         };
-        let results = futures_util::future::join_all(due.iter().map(|row| self.poll_device(row))).await;
+        let results =
+            futures_util::future::join_all(due.iter().map(|row| self.poll_device(row))).await;
         results.iter().filter(|ok| **ok).count()
     }
 
@@ -321,7 +340,10 @@ impl TuyaEngine {
         let mut book = self.poll.lock().unwrap_or_else(|e| e.into_inner());
         let entry = book
             .entry(row.device_id.clone())
-            .or_insert_with(|| PollState { next_due: Instant::now() + POLL_INTERVAL, fails: 0 });
+            .or_insert_with(|| PollState {
+                next_due: Instant::now() + POLL_INTERVAL,
+                fails: 0,
+            });
         entry.fails += 1;
         entry.next_due = Instant::now() + POLL_INTERVAL;
         if entry.fails >= 2 && row.online {
@@ -334,11 +356,7 @@ impl TuyaEngine {
     /// 局域网发现一轮（Scanner UDP 6666/6667/7000）：已登记设备合并 ip/协议版本
     /// （实测覆盖云值），未登记设备只记日志不纳管。返回合并台数。
     pub(crate) async fn scan_and_merge(&self) -> usize {
-        let scan = tokio::time::timeout(
-            Duration::from_secs(20),
-            rustuya::Scanner::scan(),
-        )
-        .await;
+        let scan = tokio::time::timeout(Duration::from_secs(20), rustuya::Scanner::scan()).await;
         let found = match scan {
             Ok(Ok(found)) => found,
             Ok(Err(e)) => {
@@ -357,7 +375,9 @@ impl TuyaEngine {
             let id = d.id.clone();
             let ip = d.ip.clone();
             let merged_ok = tokio::task::spawn_blocking(move || {
-                store.merge_discovery(&id, &ip, &version).map_err(|e| e.to_string())
+                store
+                    .merge_discovery(&id, &ip, &version)
+                    .map_err(|e| e.to_string())
             })
             .await;
             match merged_ok {
@@ -409,7 +429,10 @@ impl TuyaEngine {
     }
     /// 是否有同步正在进行（API 状态条）。
     pub fn syncing(&self) -> bool {
-        self.sync_state.lock().unwrap_or_else(|e| e.into_inner()).syncing
+        self.sync_state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .syncing
     }
 
     /// 设备目录库落点（状态条展示）。

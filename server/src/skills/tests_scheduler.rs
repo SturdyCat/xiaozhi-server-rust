@@ -256,7 +256,10 @@ fn repeating_tasks_coalesce_offline_and_advance_after_submission() {
         json!({"text":"喝水","interval":"1秒"}),
     );
     assert_eq!(db.system.tick_due(NOW + 1000).unwrap().materialized, 1);
-    assert_eq!(db.system.tick_due(NOW + 10_000_000).unwrap().materialized, 0);
+    assert_eq!(
+        db.system.tick_due(NOW + 10_000_000).unwrap().materialized,
+        0
+    );
     assert_eq!(pending_count(&db.system), 1);
     let task = db.system.get_task(&id, None).unwrap().unwrap();
     assert!(task["next_due_ms"].as_i64().unwrap() > NOW + 10_000_000);
@@ -269,7 +272,10 @@ fn repeating_tasks_coalesce_offline_and_advance_after_submission() {
         .system
         .finish_delivery(&claim, true, NOW + 10_000_001)
         .unwrap());
-    assert_eq!(db.system.tick_due(NOW + 10_001_000).unwrap().materialized, 1);
+    assert_eq!(
+        db.system.tick_due(NOW + 10_001_000).unwrap().materialized,
+        1
+    );
     assert_eq!(pending_count(&db.system), 1);
 }
 

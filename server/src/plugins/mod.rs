@@ -46,6 +46,8 @@
 pub mod aiui;
 pub mod asr;
 pub mod command;
+/// 服务器出口 IP 默认定位（启动期解析，仅国内写入）。
+pub mod geo;
 pub mod health;
 pub mod host;
 pub mod llm;
@@ -60,5 +62,12 @@ pub mod vad;
 pub mod wakeup;
 /// 天气预报能力（NMC 国家气象中心，纯 Rust 复刻；持有 reqwest 客户端与缓存）。
 pub mod weather;
-/// 服务器出口 IP 默认定位（启动期解析，仅国内写入）。
-pub mod geo;
+
+/// 插件源根文档契约（plugins-src/<插件> 必须自带 README：功能描述 + 使用方法）。
+#[cfg(test)]
+mod plugin_docs_tests;
+
+// WASM 插件平台（方案 v4，P0）：契约 server/wit/plugin.wit + 沙箱宿主 + 扩展点解析。
+// 默认 feature 不启用（零依赖/零行为变化）；`--features wasm-plugins` 编译。
+#[cfg(feature = "wasm-plugins")]
+pub mod wasm;

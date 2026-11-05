@@ -283,6 +283,18 @@ engine = "nmc"                       # 数据源引擎（当前仅 nmc = 国家�
 source = "https://www.nmc.cn"        # 数据源根地址（纯 Rust 复刻，不 vendoring python 脚本）
 timeout_secs = 8                     # 单次请求 connect/总超时（秒）
 cache_secs = 600                     # 按站点码缓存天气的 TTL（秒），避免重复打接口
+backend = "native"                   # 技能查询后端：native = 内置 reqwest 实现（默认）；
+                                     # wasm = weather.official 插件（需 wasm-plugins feature +
+                                     # 插件已装载；缺依赖明确报错不静默回退，改后需重启）
+
+[plugins]
+enabled = true                       # WASM 插件平台总闸：false = 完全跳过装载与启动引导
+
+[plugins.entries."weather.official"]
+enabled = true                       # 每插件启停（键 = 插件 id；缺省启用——上传落盘即意图）。
+                                     # 禁用 = 重启不装载、启动引导跳过；改后需重启
+# artifact = "<sha256>"              # 可选内容钉版；摘要不符的落盘产物重启时跳过
+                                     # 上传采用会自动回写真实摘要；缺省兼容旧配置放行
 
 [wakeup]
 enabled = true                      # 默认 true = 启用唤醒问候语（不需要可改 false）
@@ -306,7 +318,8 @@ persist = true                      # 把成品音频（裸 24kHz PCM 文件，�
 #       前置：Dot 需先用 firebreak 解锁并经 EchoMuse 官方向导刷入 emOS（一次性）。
 #       ⚠️ 改动本段需**重启**生效。
 [echomuse]
-enabled = true                      # 默认 true = 挂载 /em/control、/em/data 路由并广播 mDNS（不用 EchoMuse 设备可改 false）
+engine = "native"                   # native / wasm-policy；旧值 wasm 仍可读，改动需重启
+enabled = true                       # 默认 true = 挂载 /em/control、/em/data 路由并广播 mDNS（不用 EchoMuse 设备可改 false）
 token = ""                          # 期望的设备 token（`X-Em-Token` 头）；留空 = 不校验。
                                     # 取 Dot 上 EchoMuse 凭据文件里的 token（配对时下发）；
                                     # 生产建议设置——同网段任何设备都能按此协议连进来。
@@ -367,6 +380,7 @@ ble_proxy = true                    # 宣告 BLE 代理能力；还需 [echomuse
 #       录入即可，**全部热生效，无需重启**；access_secret 只写不读（API 永不回显）。
 #       设备目录存独立 SQLite <配置库目录>/tuya/devices.db（0600 权限）。
 [tuya]
+engine = "native"                   # native / wasm-policy；旧值 backend/lan/wasm 仍可读
 enabled = true                      # false = /api/tuya/* 统一 404、不轮询不同步
 region = "cn"                       # 涂鸦云区域：cn / us / eu / in
 access_id = ""                      # 开发者 access_id（留空 = 仅手动同步会报"凭证未配置"）

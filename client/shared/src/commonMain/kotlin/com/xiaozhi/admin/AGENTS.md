@@ -2,7 +2,7 @@
 
 这里是跨端管理页面、表单和网络状态；macOS 专用测试台不属于 commonMain。
 
-**单一壳**：web 与 macOS 共用 `@Page("admin")`（[AdminPage](<AdminPage.kt>)，Compose 壳 [AdminShell](<AdminShell.kt>)，一级导航 8 项），平台差异全部收口到 [AdminPlatform.kt](<AdminPlatform.kt>) 的 expect/actual（macosArm64Main 真实现，js/android/ios 空实现）。全仓只注册 `admin` 与 `config`（[ConfigPage](<ConfigPage.kt>)，无侧栏平台/深链的单页兜底）两个页面——KSP 生成的 `KuiklyCoreEntry` 锁定，**⛔ 不新增 `@Page`**（旧 `router` 双壳与 Compose 试点 `admin-compose` 均已删除）。
+**单一壳**：web 与 macOS 共用 `@Page("admin")`（[AdminPage](<AdminPage.kt>)，Compose 壳 [AdminShell](<AdminShell.kt>)，一级导航 10 项 + 动态插件组），平台差异全部收口到 [AdminPlatform.kt](<AdminPlatform.kt>) 的 expect/actual（macosArm64Main 真实现，js/android/ios 空实现）。全仓只注册 `admin` 与 `config`（[ConfigPage](<ConfigPage.kt>)，无侧栏平台/深链的单页兜底）两个页面——KSP 生成的 `KuiklyCoreEntry` 锁定，**⛔ 不新增 `@Page`**（旧 `router` 双壳与 Compose 试点 `admin-compose` 均已删除）。
 
 ## 组件与状态（GearUI 迁移后）
 
@@ -10,7 +10,7 @@
 - **kit/ 零件索引**：[GearFields](<kit/GearFields.kt>)（`labeledField/labeledIntField/labeledDecimalField/labeledTextArea/switchRow/actionRow` + `INT_INPUT_FILTER/DECIMAL_INPUT_FILTER`）、[GearSelect](<kit/GearSelect.kt>)（`labeledSelect`）、[GearBadges](<kit/GearBadges.kt>)（`statusBadge/pluginStatusBadge`，**只在偏离时打标**——正常/在线不渲染任何徽标）、[GearLayout](<kit/GearLayout.kt>)（`pageScroller/splitRow/splitColumn/menuPaneRow/cardRow/twoPane/dividerH/hGap/vGap`）、[GearUiSpace](<kit/GearUiSpace.kt>)（间距常量）、[AdminScope](<kit/AdminScope.kt>)（`GearUiBreakpoints`：NARROW 768 / TWO_COLUMN 900 / WORKSPACE_COMPACT 700 / SIDEBAR_WIDTH 240，**一字不改**；`LocalAdminPager`/`LocalAdminViewport` CompositionLocal）、[GearFieldHelp](<kit/GearFieldHelp.kt>)（`LocalFieldHelp` 下发 ⓘ 帮助弹层）、[GearTerminal](<kit/GearTerminal.kt>)（深色终端四件：`GearTerminal/GearTerminalText/GearTerminalInput/GearTerminalKey`）、[GearWaveform](<kit/GearWaveform.kt>) / [GearLedRing](<kit/GearLedRing.kt>)。
 - **状态一律 Compose 快照**：`state/StateVar.kt` 的 `stateVar`/`stateListOf`（读写进快照系统，组合期读到即随写入重组）。计数由护栏 `:shared:verifyComposeStateMigration` 锁定（当前 452/47、legacy=0；删除代码后用 codemod `--check` 实测值回填并在常量注释写明原因，⛔ 禁止为凑数字保留死代码）。⛔ 禁止再用 `com.tencent.kuikly.core.reactive` 的 `observable`/`observableList`——旧原语只在护栏白名单 `LegacyVfor.kt`（T12 随 `ui/` 删除）里允许出现。纯展示态（展开集合、开关、输入草稿的反查）放 `remember`，不进状态层。
 - **组合身份与输入中间态**：[插件面板](<WorkflowPluginPanel.kt>)中可排序挂载行按稳定 binding id 使用 `key`，不能按行号绑定控件状态。数值输入允许 `remember` 缓存 `0.` 等中间文本，但只在对应规范值仍匹配唯一配置草稿时使用；外部更新/重载后以权威草稿为准，不新增第二套配置。卡片标题在 RowScope 内用 `weight` 分配剩余宽度，并与右侧操作保留语义间距。
-- **契约层在 [contracts/](<contracts/>)**（零 Kuikly 依赖）：[UiContracts](<contracts/UiContracts.kt>)（`Availability/CheckState/IconToken` 等纯 UI 契约）、[AdminNav](<contracts/AdminNav.kt>)（一级导航常量表，8 项；`init` 断言 id 唯一 / order 升序 / 同组相邻；2026-10-29 范围削减后 `sessions/conversations/usage/metrics` 四项已移除）、[FieldHelpState](<contracts/FieldHelpState.kt>)（帮助状态实现 + `FieldHelpHost` 接口，页面 `val fieldHelp = FieldHelpState()` 持有，经 `LocalFieldHelp` 下发）。
+- **契约层在 [contracts/](<contracts/>)**（零 Kuikly 依赖）：[UiContracts](<contracts/UiContracts.kt>)（`Availability/CheckState/IconToken` 等纯 UI 契约）、[AdminNav](<contracts/AdminNav.kt>)（一级导航常量表，10 项；`init` 断言 id 唯一 / order 升序 / 同组相邻；2026-10-29 范围削减后 `sessions/conversations/usage/metrics` 四项已移除）、[FieldHelpState](<contracts/FieldHelpState.kt>)（帮助状态实现 + `FieldHelpHost` 接口，页面 `val fieldHelp = FieldHelpState()` 持有，经 `LocalFieldHelp` 下发）。
 - **导航与分区**：一级导航由 [AdminNav](<contracts/AdminNav.kt>) 驱动（web 端经 `visible(macos)` 隐藏 `macOnly` 的测试台）；配置分区由 [ConfigSections](<ConfigSections.kt>) 常量表驱动，id 稳定、order 确定，新增分区 = 表加一行 + [ConfigSectionHost](<ConfigCards.kt>) 的 `when` 加一条分支，section 实现落**各自文件**。
 - **图标一律 `GearIcon(IconToken.X)`**（[icons/AdminIcons.kt](<icons/AdminIcons.kt>)，内嵌 SVG pathData 经 Kuikly `Canvas` 即时绘制，解析器见 [IconVectors.kt](<icons/IconVectors.kt>)）：⛔ 不拿文本字符当图标（粗细/基线/居中随字体漂移），也不在调用处手绘。`IconToken`↔几何一一对应由 `:shared:verifyAdminIcons` 锁定（26 个），新增图标改 [IconVectors.kt](<icons/IconVectors.kt>) 的 pathData，禁止回退资源文件/PNG/UIImage/位图。按钮内图标走 GearUI `Button` 的 `iconWidget`——回调签名是 `@Composable (Color) -> Unit`，**入参即按钮当前内容色**（随主题/类型/禁用态解析），`iconWidget = { c -> GearIcon(token, size = 16.dp, tint = c) }` 即可，不要手算 `primaryForeground` 之类的色值。
 - **Compose 运行时事实**（实测，勿踩）：Kuikly Compose **没有** `Modifier.verticalScroll`，页面滚动用 [kit](<kit/GearLayout.kt>) `pageScroller`（GearUI `ScrollView` 基座）；`fillMaxHeight` 在根约束下会退化成 wrap content（需要显式定高或 `weight`）；`Modifier.weight(1f)` 必须在**有 Column/RowScope 的调用处**传（独立 `@Composable` 里写 `.weight(1f)` 会 unresolved）；`Pager` 经 `LocalAdminPagerOrThrow()` 取，不要在 onClick 闭包里现取。GearUI `DecoratedSurface` 的阴影/描边 Canvas 为纯绘制层，必须保持 `setProp("touchEnable", 0)`，不拦截卡片内部按钮、滑杆或输入框的命中。
@@ -52,13 +52,16 @@
 
 - [模式模型](<AdminInterfaceMode.kt>)默认简洁，偏好仅通过 SharedPreferences 按服务器作用域保存；不写服务端配置、不标脏、不填默认值、不丢草稿。字段高级分类消费 [FormSchemaState](<FormSchemaState.kt>) 的服务端 `advanced` / `advanced_fields` 元数据；它不是自动布局系统。
 - [隐藏草稿策略](<ConfigModeDraftPolicy.kt>)只比较唯一表单的提交快照，不持有第二套可编辑草稿。简洁模式保存含隐藏高级修改时必须 ConfirmDialog 明确确认；摘要只包含分区/数量，不显示密钥。取消保留所有草稿；确认绑定确切 payload，确认期间再改值必须重新确认。409 保留草稿，在途编辑不会被成功回包吞掉。
+- **WASM 插件动态槽位（P2e，[contracts/PluginSlots.kt](<contracts/PluginSlots.kt>)）**：[PluginMetaState](<PluginMetaState.kt>) 从 `GET /api/plugins` 的 `wasm` 键解析运行时投影（导航项/插件卡/扩展点解析）。合并规则 = **静态基线永不污染**：无 `wasm` 键/服务端不可达/解析失败一律回退静态基线（web 8 项 / macOS 9 项）；有键则追加独立「插件」组（order 9000 带宽、组内相邻、与静态 id 精确冲突才去重）。插件 section 落占位卡（标题/描述来自 manifest 投影），动作执行与配置编辑随后续批接入。纯模型回归在 [PluginSlotsModelTest](<../../../../../../../adminCoreTests/src/commonTest/kotlin/com/xiaozhi/admin/PluginSlotsModelTest.kt>)。
+- **插件管理页（P3 末件，[PluginsManagePage](<PluginsManagePage.kt>) + [PluginsManageState](<PluginsManageState.kt>)）**：上传走平台桥 raw 直传（`pickUploadFile` 选 `.wasm` → `uploadPickedFile` 流式 POST，**id 缺省由服务端从组件 manifest 探测**）；卸载 `ConfirmDialog(destructive)` 二次确认（注册表+kv+产物三回收）；动作按钮按插件注册清单渲染（白名单在宿主）；清单数据复用 [PluginMetaState] 同一次拉取，写成功后经 `meta.load` 刷新。
 - [插件面板](<WorkflowPluginPanel.kt>)消费 `GET /api/workflow` 清单，挂载、启停、同位置排序、受限条件和异常策略都进入原有 `POST /api/config` 一次提交；设备 overlay 不编辑全局编排。服务端再次编译校验，新会话使用固定快照。核心引擎继续走原 registry，不开放任意跨类型连线、循环或下载执行脚本。
 - 条件配置只使用声明字段，未知条件对象无损保留，损坏条件拒绝编辑；当前没有可信置信度，`confidence` 永不命中并明确提示。AIUI 模式显示云端托管警示，不把本地增强清单称为云端实际执行记录。
 - 维护测试包括 [纯模式测试](<../../../../../../../adminCoreTests/src/commonTest/kotlin/com/xiaozhi/admin/AdminInterfaceModeTest.kt>)、[编排模型测试](<../../../../../../../adminCoreTests/src/commonTest/kotlin/com/xiaozhi/admin/WorkflowEditorModelTest.kt>)及[构建包浏览器回归](<../../../../../../../apps/h5App/tests/workflow-mode.browser.cjs>)；浏览器使用 API 模拟，不代表真实推理、macOS 原生运行或设备播放确认。
 
-| Section（一级导航，8 项） | 数据源 | 回答什么问题 |
+| Section（一级导航，10 项 + 动态插件组） | 数据源 | 回答什么问题 |
 |---|---|---|
 | 概览 | `GET /api/stats` + `/api/plugins` | 设备在线数、活会话、11 个能力健康（degraded/failed 可点击跳配置） |
+| 涂鸦设备 | `/api/tuya/*` | 涂鸦 IoT 云目录同步与局域网控制（2026-11 接入，此前本表漏记） |
 | 测试台 | —（仅 macOS 客户端） | 依赖原生麦克风/音频链路，`NavDescriptor.macOnly`：web 不显示该菜单；端到端语音测试用 macOS 客户端 |
 | 设备 | `GET /api/devices` | 连过的设备、协商参数、上次会话为什么断；消息注入、个性化配置入口 |
 | EchoMuse | `GET /api/echomuse/devices` + 管理台 WS `/api/admin/ws` | Kuikly 中文设备卡 → 官方六标签管理弹窗；自定义扩展从列表独立入口进入五工具工作区，不混排、不重复官方能力；审批与 WiFi 扫描/切网均原生，不嵌入官方网页 |
@@ -66,6 +69,7 @@
 | 语音流程 | `/api/config` 等 | 五个核心阶段 + 连接点分支（唤醒 / 指令 / 人格 / 记忆 / 音频入口与输出）的节点参数与节点测试 |
 | 全局配置 | `/api/config` 等 | 没有流程节点的部署级参数：能力总览、预设、AIUI 全链路、服务、OTA；与语音流程共用一份表单、一次 `POST /api/config` |
 | 文件 | `GET /api/files` + POST mkdir/upload/delete | 服务端存储目录浏览与管理：新建文件夹、上传模型/文件（`oww-models/` 即 EchoMuse 自定义唤醒词模型的存放处）、删除（二次确认，受保护文件拒绝） |
+| 插件 | `GET /api/plugins`（wasm 键）+ `POST .../upload/raw`、`.../{id}/unload`、`.../{id}/actions/{name}` | WASM 插件上传（选文件即传，id 由服务端探测）、清单/徽标、卸载、动作执行、扩展点解析（[PluginsManagePage](<PluginsManagePage.kt>)，P3 末件） |
 
 > ⚠️ 2026-10-29 范围削减（docs/plans/gearui-kit-scope-reduction.md §二）：`sessions / conversations / usage / metrics` 四个观测页已从产品范围移除，导航、页面、state 与服务端请求一并删除；数据口径仍由 `GET /api/stats` 的摘要（概览页磁贴）承载。
 > ⚠️ 设备/对话/延迟是**进程内存态**：重启清零、`online` 由会话生命周期派生、对话只留最近若干轮。长期留存请开启 `[memory]`。

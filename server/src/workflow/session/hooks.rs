@@ -4,6 +4,38 @@ use crate::plugins::prompt::TurnPrompt;
 use crate::workflow::protocol::Transport;
 
 impl<'a, T: Transport> Session<'a, T> {
+    /// wasm **观察者挂钩**派发（P2d）：绑定到本位的 wasm 插件收
+    /// `hook.<position>` 事件（payload `{session_id, device_id, position, text?}`）。
+    /// fire-and-forget——spawn_blocking 内跑 wasm 调用，效果由宿主异步执行；
+    /// **旁路观察者永不阻塞/打断对话轮**，失败只告警，不进 hook_result 错误流。
+    fn dispatch_observer(&self, plugin_id: &str, position: &str, text: Option<&str>) {
+        #[cfg(feature = "wasm-plugins")]
+        if let Some(host) = self.engines.wasm.as_ref() {
+            // 会话快照可能早于插件热卸载：派发前再核对装载目录（未装载静默跳过，
+            // start.rs 已在编译期剔除当时缺失的绑定）
+            if !host.observers().iter().any(|(id, _)| id == plugin_id) {
+                return;
+            }
+            let payload = serde_json::json!({
+                "session_id": self.session_id,
+                "device_id": self.device_id,
+                "position": position,
+                "text": text,
+            })
+            .to_string();
+            let host = std::sync::Arc::clone(host);
+            let plugin_id = plugin_id.to_string();
+            let position = position.to_string();
+            tokio::task::spawn_blocking(move || {
+                crate::plugins::wasm::bridge::observe_hook(&host, &plugin_id, &position, &payload);
+            });
+        }
+        #[cfg(not(feature = "wasm-plugins"))]
+        {
+            let _ = (plugin_id, position, text);
+        }
+    }
+
     pub(super) async fn build_turn_prompt(
         &mut self,
         user_text: &str,
@@ -31,7 +63,10 @@ impl<'a, T: Transport> Session<'a, T> {
                         Ok(())
                     }
                 }
-                _ => Ok(()),
+                _ => {
+                    self.dispatch_observer(&binding.plugin_id, "link.nlu.llm", Some(user_text));
+                    Ok(())
+                }
             };
             hook_result(&binding, result)?;
         }
@@ -62,6 +97,7 @@ impl<'a, T: Transport> Session<'a, T> {
         }
         for binding in self.hook_bindings("end", Some(user_text)) {
             if binding.plugin_id != "memory.writeback" {
+                self.dispatch_observer(&binding.plugin_id, "end", Some(user_text));
                 continue;
             }
             let memory = self.memory.clone();
@@ -99,6 +135,8 @@ impl<'a, T: Transport> Session<'a, T> {
             if binding.plugin_id == "wakeup.greeting" {
                 let result = self.handle_wake_greeting().await;
                 hook_result(&binding, result)?;
+            } else {
+                self.dispatch_observer(&binding.plugin_id, "start", trigger);
             }
         }
         Ok(())

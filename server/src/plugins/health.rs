@@ -107,7 +107,9 @@ pub fn probe(cfg: &Config, cap: Capability) -> Option<ProbeReport> {
         | Capability::Soul
         | Capability::Command
         | Capability::Wake
-        | Capability::Nlu => None,
+        | Capability::Nlu
+        | Capability::Tuya
+        | Capability::Echomuse => None,
     }
 }
 

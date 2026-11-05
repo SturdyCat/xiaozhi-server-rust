@@ -92,8 +92,7 @@ pub(crate) fn region_host(region: &str) -> String {
 
 /// HMAC-SHA256 → 小写 hex（simple_sign 的 sign 值口径）。
 pub(crate) fn sign_hmac_hex(secret: &str, payload: &str) -> String {
-    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes())
-        .expect("HMAC 接受任意长度密钥");
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("HMAC 接受任意长度密钥");
     mac.update(payload.as_bytes());
     hex_lower(&mac.finalize().into_bytes())
 }
@@ -185,7 +184,10 @@ pub struct CloudResponse {
 
 /// HTTP 发送抽象：真实实现走 reqwest；测试用 [`cloud_tests::FakeSender`] 脚本应答。
 pub trait HttpSender: Send + Sync {
-    fn send<'a>(&'a self, req: CloudRequest) -> Pin<Box<dyn Future<Output = Result<CloudResponse, CloudError>> + Send + 'a>>;
+    fn send<'a>(
+        &'a self,
+        req: CloudRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<CloudResponse, CloudError>> + Send + 'a>>;
 }
 
 /// reqwest 实现（10s 超时；rustls，与项目依赖栈一致）。
@@ -209,14 +211,19 @@ impl HttpSender for ReqwestSender {
         req: CloudRequest,
     ) -> Pin<Box<dyn Future<Output = Result<CloudResponse, CloudError>> + Send + 'a>> {
         Box::pin(async move {
-            let mut r = self.client.request(req.method.parse().unwrap_or(reqwest::Method::GET), &req.url);
+            let mut r = self
+                .client
+                .request(req.method.parse().unwrap_or(reqwest::Method::GET), &req.url);
             for (k, v) in &req.headers {
                 r = r.header(k, v);
             }
             match r.send().await {
                 Ok(resp) => {
                     let status = resp.status().as_u16();
-                    let body = resp.text().await.map_err(|e| CloudError::Network(format!("读取云响应失败: {e}")))?;
+                    let body = resp
+                        .text()
+                        .await
+                        .map_err(|e| CloudError::Network(format!("读取云响应失败: {e}")))?;
                     Ok(CloudResponse { status, body })
                 }
                 Err(e) => {
@@ -235,12 +242,14 @@ impl HttpSender for ReqwestSender {
 
 /// 解析 token 回包 → (access_token, 有效期秒)。
 pub(crate) fn parse_token_response(body: &str) -> Result<(String, i64), CloudError> {
-    let v: Value = serde_json::from_str(body)
-        .map_err(|e| CloudError::Api(format!("云响应不是 JSON: {e}")))?;
+    let v: Value =
+        serde_json::from_str(body).map_err(|e| CloudError::Api(format!("云响应不是 JSON: {e}")))?;
     if v.get("success").and_then(Value::as_bool) != Some(true) {
         return Err(api_error(&v));
     }
-    let result = v.get("result").ok_or_else(|| CloudError::Api("token 回包缺 result".into()))?;
+    let result = v
+        .get("result")
+        .ok_or_else(|| CloudError::Api("token 回包缺 result".into()))?;
     let token = result
         .get("access_token")
         .and_then(Value::as_str)
@@ -259,9 +268,11 @@ pub(crate) fn parse_token_response(body: &str) -> Result<(String, i64), CloudErr
 ///
 /// 回包形状防御式解析：`result` 为对象（`list` + `has_more`/`last_row_id`）或裸数组
 /// （has_more 以"满页"近似）——真实形状以真机验收为准（见模块头"待真机验证"）。
-pub(crate) fn parse_devices_page(body: &str) -> Result<(Vec<CloudDevice>, bool, String), CloudError> {
-    let v: Value = serde_json::from_str(body)
-        .map_err(|e| CloudError::Api(format!("云响应不是 JSON: {e}")))?;
+pub(crate) fn parse_devices_page(
+    body: &str,
+) -> Result<(Vec<CloudDevice>, bool, String), CloudError> {
+    let v: Value =
+        serde_json::from_str(body).map_err(|e| CloudError::Api(format!("云响应不是 JSON: {e}")))?;
     if v.get("success").and_then(Value::as_bool) != Some(true) {
         return Err(api_error(&v));
     }
@@ -290,15 +301,27 @@ pub(crate) fn parse_devices_page(body: &str) -> Result<(Vec<CloudDevice>, bool, 
             let device_id = d.get("id").and_then(Value::as_str)?.to_string();
             Some(CloudDevice {
                 device_id,
-                name: d.get("name").and_then(Value::as_str).unwrap_or("").to_string(),
-                model: d.get("model").and_then(Value::as_str).unwrap_or("").to_string(),
+                name: d
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                model: d
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
                 local_key: d
                     .get("local_key")
                     .and_then(Value::as_str)
                     .unwrap_or("")
                     .to_string(),
                 online: d.get("online").and_then(Value::as_bool).unwrap_or(false),
-                ip: d.get("ip").and_then(Value::as_str).unwrap_or("").to_string(),
+                ip: d
+                    .get("ip")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
                 product_id: d
                     .get("product_id")
                     .and_then(Value::as_str)
@@ -348,13 +371,19 @@ pub(crate) struct CloudClient {
 impl CloudClient {
     /// 真实客户端（reqwest）。
     pub(crate) fn new() -> Self {
-        CloudClient { sender: Box::new(ReqwestSender::new()), token: None }
+        CloudClient {
+            sender: Box::new(ReqwestSender::new()),
+            token: None,
+        }
     }
 
     /// 测试注入假 sender。
     #[cfg(test)]
     pub(crate) fn with_sender(sender: Box<dyn HttpSender>) -> Self {
-        CloudClient { sender, token: None }
+        CloudClient {
+            sender,
+            token: None,
+        }
     }
 
     /// 丢弃 token 缓存（凭证指纹变化 / token 失效重试前）。
@@ -375,13 +404,17 @@ impl CloudClient {
         let mut all: Vec<CloudDevice> = Vec::new();
         let mut cursor = String::new();
         for _page in 0..MAX_PAGES {
-            let (devices, has_more, next_cursor) =
-                match self.fetch_page_with_retry(region, access_id, access_secret, &cursor).await {
-                    Ok(page) => page,
-                    Err(e) => return (all, Some(e)),
-                };
+            let (devices, has_more, next_cursor) = match self
+                .fetch_page_with_retry(region, access_id, access_secret, &cursor)
+                .await
+            {
+                Ok(page) => page,
+                Err(e) => return (all, Some(e)),
+            };
             let stale = !devices.is_empty()
-                && devices.iter().all(|d| all.iter().any(|p| p.device_id == d.device_id));
+                && devices
+                    .iter()
+                    .all(|d| all.iter().any(|p| p.device_id == d.device_id));
             if stale {
                 // 服务端忽略游标把同一页又发了一遍——不落重复数据，按"已到末页"处理
                 tracing::warn!("涂鸦云设备清单翻页未前进（游标被服务端忽略），按末页处理");
@@ -404,11 +437,15 @@ impl CloudClient {
         access_secret: &str,
         cursor: &str,
     ) -> Result<(Vec<CloudDevice>, bool, String), CloudError> {
-        match self.fetch_page(region, access_id, access_secret, cursor).await {
+        match self
+            .fetch_page(region, access_id, access_secret, cursor)
+            .await
+        {
             Err(CloudError::Auth(msg)) if is_token_failure(&msg) => {
                 tracing::info!("涂鸦云 token 失效，重取后重试一次");
                 self.invalidate();
-                self.fetch_page(region, access_id, access_secret, cursor).await
+                self.fetch_page(region, access_id, access_secret, cursor)
+                    .await
             }
             other => other,
         }
@@ -426,10 +463,16 @@ impl CloudClient {
         let req = build_devices_request(region, access_id, access_secret, &token, &t, cursor);
         let resp = self.sender.send(req).await?;
         if resp.status == 401 || resp.status == 403 {
-            return Err(CloudError::Auth(format!("云请求被拒（HTTP {}）", resp.status)));
+            return Err(CloudError::Auth(format!(
+                "云请求被拒（HTTP {}）",
+                resp.status
+            )));
         }
         if resp.status >= 500 {
-            return Err(CloudError::Network(format!("云服务暂不可用（HTTP {}）", resp.status)));
+            return Err(CloudError::Network(format!(
+                "云服务暂不可用（HTTP {}）",
+                resp.status
+            )));
         }
         parse_devices_page(&resp.body)
     }
@@ -450,12 +493,17 @@ impl CloudClient {
         let req = build_token_request(region, access_id, access_secret, &t);
         let resp = self.sender.send(req).await?;
         if resp.status == 401 || resp.status == 403 {
-            return Err(CloudError::Auth("token 请求被拒：检查 access_id/access_secret 与区域".into()));
+            return Err(CloudError::Auth(
+                "token 请求被拒：检查 access_id/access_secret 与区域".into(),
+            ));
         }
         let (token, expire) = parse_token_response(&resp.body)
             .map_err(|e| CloudError::Auth(format!("获取 token 失败: {}", e.message())))?;
         let ttl = (expire - TOKEN_REFRESH_MARGIN_SECS).max(60) as u64;
-        self.token = Some(TokenCache { token: token.clone(), valid_until: Instant::now() + Duration::from_secs(ttl) });
+        self.token = Some(TokenCache {
+            token: token.clone(),
+            valid_until: Instant::now() + Duration::from_secs(ttl),
+        });
         Ok(token)
     }
 }

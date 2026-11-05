@@ -40,6 +40,7 @@ fn default_config_has_engine_keys_filled() {
     assert_eq!(cfg.tts.engine, "kokoro");
     assert_eq!(cfg.llm.engine, "openai");
     assert_eq!(cfg.memory.engine_id(), "graph");
+    assert_eq!(cfg.echomuse.engine, "native");
 }
 
 /// `normalize()` 幂等（load / default / merge 三条路径都可能重复调用）。
@@ -63,6 +64,10 @@ fn declared_engine_ids_match_registry_implementations() {
         (Capability::Vad, crate::plugins::vad::VAD_ENGINES),
         (Capability::Tts, crate::plugins::tts::TTS_ENGINES),
         (Capability::Llm, crate::plugins::llm::LLM_ENGINES),
+        (
+            Capability::Echomuse,
+            crate::device::echomuse::ECHOMUSE_ENGINES,
+        ),
     ];
     for (cap, specs) in tables {
         let registered: Vec<&str> = impls_of(*cap).map(|d| impl_id(d.id)).collect();
@@ -134,6 +139,7 @@ fn example_config_parses_and_normalizes() {
     assert_eq!(cfg.tts.kokoro.lang, "zh");
     assert_eq!(cfg.llm.engine, "openai");
     assert_eq!(cfg.memory.engine_id(), "graph");
+    assert_eq!(cfg.echomuse.engine, "native");
     // 指令闸门：样例里默认开启（标准行为、开机即用），且填的默认词表就是需求里那三个词
     assert!(cfg.command.enabled);
     assert_eq!(cfg.command.keywords, vec!["退下", "闭嘴", "关闭"]);
@@ -168,8 +174,15 @@ fn serialized_config_has_no_legacy_tts_keys() {
         assert!(tts.contains_key(k), "跨实现参数 {k} 应留 `[tts]` 本体");
     }
     let text = toml::to_string_pretty(&cfg).unwrap();
-    assert!(!text.contains("backend"), "{text}");
     assert!(text.contains("[tts.kokoro]"), "{text}");
+    // 旧 `backend` 键只对 tts 段禁绝；`[weather].backend` 是合法的插件后端开关
+    // （P2c），全文子串断言会误伤——收窄到解析后的 tts 表。
+    let parsed: toml::Value = toml::from_str(&text).unwrap();
+    let tts_table = parsed
+        .get("tts")
+        .and_then(toml::Value::as_table)
+        .expect("tts 段");
+    assert!(!tts_table.contains_key("backend"), "{text}");
 }
 
 /// 下行抖动缓冲护栏：设备解码队列是 **N 包 × 帧长**，`downlink_lead_ms` 超过它必须被
@@ -423,4 +436,64 @@ fn inference_gate_permits_clamped_to_at_least_one() {
     cfg.normalize();
     assert_eq!(cfg.asr.max_concurrent, 4, "合法放宽值原样保留");
     assert_eq!(cfg.tts.max_concurrent, 8);
+}
+
+// ============================================================
+// [plugins] 配置段（P3）：平台总闸 + 每插件启停
+// ============================================================
+
+#[test]
+fn plugins_section_parses_quoted_dotted_keys_and_gates_loading() {
+    let text = r#"
+        [plugins]
+        enabled = true
+        [plugins.entries."weather.official"]
+        enabled = false
+        [plugins.entries."hello.official"]
+        enabled = true
+    "#;
+    let cfg: Config = toml::from_str(text).unwrap();
+    // 缺省启用（entries 缺失的 id 放行）；显式禁用拦截；平台总闸一票否决
+    assert!(cfg.plugins.allows("hello.official"));
+    assert!(!cfg.plugins.allows("weather.official"));
+    assert!(cfg.plugins.allows("ghost.plugin"));
+    let mut off = cfg.plugins.clone();
+    off.enabled = false;
+    assert!(!off.allows("hello.official"), "平台总闸一票否决");
+    // 默认配置：全启用
+    assert!(Config::default().plugins.allows("anything.plugin"));
+    // 回写保留段（不丢 entries）
+    let round = toml::to_string_pretty(&cfg).unwrap();
+    assert!(round.contains("\"weather.official\""), "{round}");
+}
+
+#[test]
+fn plugins_section_persists_optional_artifact_pin_and_keeps_legacy_compatibility() {
+    let digest = "ab".repeat(32);
+    let text = format!(
+        "[plugins.entries.\"weather.official\"]
+enabled = true
+artifact = \"{digest}\"
+"
+    );
+    let cfg: Config = toml::from_str(&text).expect("artifact pin 应可解析");
+    let entry = cfg.plugins.entries.get("weather.official").unwrap();
+    assert_eq!(entry.artifact.as_deref(), Some(digest.as_str()));
+    assert!(entry.artifact_matches(&digest));
+    assert!(entry.artifact_matches(&digest.to_uppercase()));
+    assert!(crate::config::PluginEntryConfig::valid_artifact_pin(
+        &digest
+    ));
+    assert!(!crate::config::PluginEntryConfig::valid_artifact_pin(
+        "not-a-digest"
+    ));
+
+    let legacy = crate::config::PluginEntryConfig::default();
+    assert!(legacy.artifact.is_none());
+    assert!(legacy.artifact_matches("anything"), "旧配置缺 pin 必须放行");
+    let round = toml::to_string_pretty(&cfg).unwrap();
+    assert!(
+        round.contains(&format!("artifact = \"{digest}\"")),
+        "{round}"
+    );
 }

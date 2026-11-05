@@ -1,0 +1,14 @@
+# greeter-user：用户自建兼容插件（P1 替换演练）。
+# 与 hello.official 实现同一扩展点 demo.greeter（官方默认 vs 用户实现，可互换/可回退）；
+# 刻意不声明任何权限 → 演示宿主导入侧 deny-as-absent（kv-get 返回 none 而非报错）。
+[package]
+name = "greeter-user"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+xiaozhi-plugin-sdk = { path = "../../../server/crates/xiaozhi-plugin-sdk" }
+guest-alloc = { path = "../guest-alloc" }

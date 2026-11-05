@@ -71,8 +71,11 @@ class AdminPage : ComposeContainer(), FieldHelpHost {
     /** 配置表单（复用既有实现：同一份 [ConfigFormState] 驱动「语音流程」与「全局配置」）。 */
     val form = ConfigFormState(this)
 
-    /** 能力总览的数据源（`GET /api/plugins`，只读）。 */
+    /** 能力总览与动态槽位的数据源（`GET /api/plugins`，只读）。 */
     val plugins = PluginMetaState(this)
+
+    /** 插件管理写通道（清单仍复用 [plugins] 的同一次读取）。 */
+    val pluginManage = PluginsManageState(plugins)
 
     /** 引擎健康自检的数据源（`GET /api/health/engines`，只读，P1-6）。 */
     val engineHealth = EngineHealthState(this)
@@ -169,6 +172,7 @@ class AdminPage : ComposeContainer(), FieldHelpHost {
         form.load(this, base)
         form.loadPresets(this, base)
         plugins.load(this, base)
+        pluginManage.configureAccess(token, base)
         mcpTools.load(this, base)
         ota.load(this, base, token)
         files.configureAccess(token, base)

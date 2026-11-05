@@ -121,7 +121,11 @@ fn base_model_matches_trainer_source_profile() {
         "未能从 TRAINER_SOURCE 解析出 BASES profile，解析方式需要更新"
     );
     // 当前只支持一个底座：python 侧也必须是单臂。
-    assert_eq!(profiles.len(), 1, "train.py 的 BASES 必须只剩 minirbt-h288 一臂");
+    assert_eq!(
+        profiles.len(),
+        1,
+        "train.py 的 BASES 必须只剩 minirbt-h288 一臂"
+    );
     let (name, (hub, lr, epochs)) = profiles.into_iter().next().unwrap();
     assert_eq!(name, BASE_MODEL.name);
     assert_eq!(hub, BASE_MODEL.hub);

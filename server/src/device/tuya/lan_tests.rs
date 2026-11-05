@@ -47,7 +47,10 @@ fn protocol_failures_map_to_unsupported() {
     ] {
         let f = classify(&err);
         assert_eq!(f.kind, "unsupported", "{err:?} 应归 unsupported");
-        assert!(f.advice.contains("local_key") || f.advice.contains("协议"), "{err:?} 建议动作应指向同步/协议");
+        assert!(
+            f.advice.contains("local_key") || f.advice.contains("协议"),
+            "{err:?} 建议动作应指向同步/协议"
+        );
     }
 }
 

@@ -56,6 +56,9 @@ object AdminNav {
         // 独立成一级菜单（2026-10）：此前它藏在工作流右上的「全局设置」里，和流程节点挤同一个左菜单，
         // 用户分不清"改某个阶段"和"改整套部署"的区别。
         NavDescriptor("settings", 55, "全局配置", GROUP_CONFIG),
+        // 插件管理（P2e/P3）：wasm 插件上传/卸载/动作 + 扩展点解析（运行时槽位的静态入口；
+        // 插件注册的 nav.main 项经 PluginSlots 合并为独立「插件」组，不进这张编译期表）
+        NavDescriptor("plugins", 57, "插件", GROUP_CONFIG),
         // 文件（服务端存储目录：新建/上传/删除；EchoMuse 自定义唤醒词模型放 oww-models/）
         NavDescriptor("files", 60, "文件", GROUP_STORAGE),
     )

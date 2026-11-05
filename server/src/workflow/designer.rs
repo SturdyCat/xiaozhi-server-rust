@@ -104,6 +104,16 @@ const PLUGINS: &[(&str, &str, &str, &[&str])] = &[
     ),
 ];
 
+/// wasm **观察者挂钩**（P2d）可绑定的位置：v1 = 会话已接线的三个 hook 位。
+/// 语义 = 旁路观察：收到 `{session_id, device_id, text?}` 上下文事件，返回的效果
+/// **异步执行**（fire-and-forget），不阻塞对话轮、不可改写对话流、永不打断轮次。
+pub const OBSERVER_POSITIONS: &[&str] = &["start", "link.nlu.llm", "end"];
+
+/// 是否静态已接线插件（观察者预过滤用：会话侧剔除"静态不可识别且未装载"的绑定）。
+pub fn is_static_plugin(id: &str) -> bool {
+    PLUGINS.iter().any(|x| x.0 == id)
+}
+
 pub fn default_config() -> WorkflowConfig {
     let ids = [
         ("wakeup.greeting", "start"),
@@ -137,6 +147,17 @@ pub fn parse_or_default(value: &Value) -> Result<WorkflowConfig, String> {
     serde_json::from_value(value.clone()).map_err(|e| format!("workflow 格式错误: {e}"))
 }
 pub fn compile(value: &Value) -> Result<CompiledWorkflow, String> {
+    compile_with_observers(value, &[])
+}
+
+/// 带观察者目录的编译：`observers` = 已装载 wasm 插件 `(id, 标题)`（feature 由调用方
+/// 决定来源，未编入 = 空表 → 只认静态表，行为与 `compile` 一致）。
+/// 观察者绑定规则：可绑 [`OBSERVER_POSITIONS`] 任一位；`on_error` 仅 `continue`
+/// （旁路派发永不打断对话轮）；condition 同普通 hook（always/device_kind）。
+pub fn compile_with_observers(
+    value: &Value,
+    observers: &[(String, String)],
+) -> Result<CompiledWorkflow, String> {
     let cfg = parse_or_default(value)?;
     if cfg.version != 1 {
         return Err(format!("不支持 workflow version={}，仅支持 1", cfg.version));
@@ -157,29 +178,47 @@ pub fn compile(value: &Value) -> Result<CompiledWorkflow, String> {
         if !ids.insert(b.id.as_str()) {
             return Err(format!("重复 binding id: {}", b.id));
         }
-        let Some((_, _, owner, allowed)) = PLUGINS.iter().find(|x| x.0 == b.plugin_id) else {
-            if crate::plugins::registry::find(&b.plugin_id).is_some() {
+        // 静态插件 → 原 position/on_error 校验；wasm 观察者 → 钉死 hook 位 + continue；
+        // 其余 → 能力描述符/未知 id 报错（保存门不变）
+        let static_entry = PLUGINS.iter().find(|x| x.0 == b.plugin_id);
+        let is_observer =
+            static_entry.is_none() && observers.iter().any(|(id, _)| *id == b.plugin_id);
+        if let Some((_, _, owner, allowed)) = static_entry {
+            if allowed.is_empty() {
                 return Err(format!(
-                    "插件 {} 是能力/核心引擎描述符，不可作为 workflow binding",
+                    "插件 {} 是核心引擎描述符，不可作为 workflow binding",
                     b.plugin_id
                 ));
             }
-            return Err(format!("未知 plugin_id: {}", b.plugin_id));
-        };
-        if !positions.contains(b.position_id.as_str()) {
-            return Err(format!("非法 position_id: {}", b.position_id));
-        }
-        if allowed.is_empty() {
+            if !allowed.contains(&b.position_id.as_str()) && b.position_id != *owner {
+                return Err(format!(
+                    "插件 {} 不允许挂载到 {}",
+                    b.plugin_id, b.position_id
+                ));
+            }
+        } else if is_observer {
+            if !OBSERVER_POSITIONS.contains(&b.position_id.as_str()) {
+                return Err(format!(
+                    "wasm 观察者插件 {} 仅可绑定 hook 位 {:?}（当前 {}）",
+                    b.plugin_id, OBSERVER_POSITIONS, b.position_id
+                ));
+            }
+            if b.on_error != "continue" {
+                return Err(format!(
+                    "观察者插件 {} 的 on_error 仅支持 continue（旁路派发永不打断对话轮）",
+                    b.plugin_id
+                ));
+            }
+        } else if crate::plugins::registry::find(&b.plugin_id).is_some() {
             return Err(format!(
-                "插件 {} 是核心引擎描述符，不可作为 workflow binding",
+                "插件 {} 是能力/核心引擎描述符，不可作为 workflow binding",
                 b.plugin_id
             ));
+        } else {
+            return Err(format!("未知 plugin_id: {}", b.plugin_id));
         }
-        if !allowed.contains(&b.position_id.as_str()) && b.position_id != *owner {
-            return Err(format!(
-                "插件 {} 不允许挂载到 {}",
-                b.plugin_id, b.position_id
-            ));
+        if !positions.contains(b.position_id.as_str()) {
+            return Err(format!("非法 position_id: {}", b.position_id));
         }
         if !error_options(&b.plugin_id).contains(&b.on_error.as_str()) {
             return Err(format!(
@@ -306,7 +345,18 @@ pub fn projection(value: &Value, revision: String) -> Value {
 }
 
 pub fn projection_with_mode(value: &Value, revision: String, mode: &str) -> Value {
-    let compiled = match compile(value) {
+    projection_with_observers(value, revision, mode, &[])
+}
+
+/// 带观察者目录的投影：流程编辑器可把 wasm 观察者插件拖到 hook 位（编辑器语义
+/// 与编译器一致——同一个目录源）。observer 条目 `observer: true`，客户端可区分渲染。
+pub fn projection_with_observers(
+    value: &Value,
+    revision: String,
+    mode: &str,
+    observers: &[(String, String)],
+) -> Value {
+    let compiled = match compile_with_observers(value, observers) {
         Ok(compiled) => compiled,
         Err(error) => {
             return json!({"version":1,"valid":false,"revision":revision,"mode":mode,"error":error})
@@ -315,6 +365,20 @@ pub fn projection_with_mode(value: &Value, revision: String, mode: &str) -> Valu
     let plan: Vec<Value> = compiled.plan.iter().map(|b| json!({"plugin_id":b.plugin_id,"position_id":b.position_id,"order":b.order,"on_error":b.on_error,"condition":b.condition})).collect();
     let mut plugins: Vec<Value> = PLUGINS.iter().map(plugin_json).collect();
     plugins.extend(core_plugins_json());
+    for (id, title) in observers {
+        plugins.push(json!({
+            "id": id, "label": title,
+            "owner_position": OBSERVER_POSITIONS[0],
+            "allowed_positions": OBSERVER_POSITIONS,
+            "config_paths": [],
+            "input_type": "event", "output_type": "effects",
+            "repeatable": false,
+            "observer": true,
+            "condition_kinds": ["always", "device_kind"],
+            "on_error_options": ["continue"],
+            "order_constraints": [], "tests": [], "actions": [],
+        }));
+    }
     json!({"version":1,"revision":revision,"mode":mode,"hot":"next_session","condition_kinds":condition_json(),"positions":POSITIONS.iter().map(|(id,label,kind)| json!({"id":id,"label":label,"kind":kind})).collect::<Vec<_>>(),"plugins":plugins,"config":compiled.config,"plan":plan})
 }
 

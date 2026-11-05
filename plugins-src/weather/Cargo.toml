@@ -1,0 +1,25 @@
+# weather.official：NMC 天气查询官方默认插件（P1c 试点，方案 v4）。
+#
+# 真实插件源根 plugins-src/ 的第一个成员（P3 构建流水线从这里取源；当前以
+# tools 同款脚本产出测试夹具形态联调）。与原生 weather 共享同一份 parse.rs
+# （#[path] 单源引用——绞杀者方向：P8 反转为原生从这里取）。
+[package]
+name = "weather-official"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+serde_json = "1"
+xiaozhi-plugin-sdk = { path = "../../server/crates/xiaozhi-plugin-sdk" }
+guest-alloc = { path = "../../tools/wasm-fixtures/guest-alloc" }
+
+# 独立 workspace（仓库根无 Cargo.toml）：体积优化 profile 在本 crate 生效
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+panic = "abort"

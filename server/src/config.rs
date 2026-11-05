@@ -49,6 +49,69 @@ pub use crate::plugins::vad::VadConfig;
 pub use crate::plugins::wakeup::WakeConfig;
 pub use crate::plugins::weather::WeatherConfig;
 
+/// WASM 插件平台配置段（`[plugins]`）。热生效档位：RestartOnly（装载/引导都在启动期）。
+///
+/// 每插件条目键 = 插件 id（id 含点号，TOML 用引号键：`[plugins.entries."weather.official"]`）。
+/// 缺省启用：entries 里没有的 id 视为启用——上传落盘即意图，不需要再改配置。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(default)]
+pub struct PluginsConfig {
+    /// 平台总闸：false = 完全跳过产物装载与启动引导（宿主空表照常可启动）。
+    pub enabled: bool,
+    /// 每插件条目（键 = 插件 id）。
+    pub entries: std::collections::HashMap<String, PluginEntryConfig>,
+}
+
+impl Default for PluginsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            entries: std::collections::HashMap::new(),
+        }
+    }
+}
+
+impl PluginsConfig {
+    /// 该插件本次启动是否允许装载（平台总闸 ∧ 条目缺省启用）。
+    pub fn allows(&self, id: &str) -> bool {
+        self.enabled && self.entries.get(id).map(|e| e.enabled).unwrap_or(true)
+    }
+}
+
+/// 单插件条目。
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(default)]
+pub struct PluginEntryConfig {
+    /// false = 重启不装载、启动引导跳过该插件。
+    pub enabled: bool,
+    /// 可选的内容摘要钉版（SHA-256 小写十六进制）。缺省表示兼容旧配置，不校验摘要。
+    pub artifact: Option<String>,
+}
+
+impl Default for PluginEntryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            artifact: None,
+        }
+    }
+}
+
+impl PluginEntryConfig {
+    /// 仅接受标准 SHA-256 文本，避免拼写错误把配置变成永远无法装载的隐性禁用。
+    pub fn valid_artifact_pin(pin: &str) -> bool {
+        pin.len() == 64 && pin.bytes().all(|b| b.is_ascii_hexdigit())
+    }
+
+    /// `None` 保持 P3 之前的兼容语义：只按 enabled 判断，不增加摘要门。
+    pub fn artifact_matches(&self, digest: &str) -> bool {
+        self.artifact
+            .as_deref()
+            .map(|pin| pin.eq_ignore_ascii_case(digest))
+            .unwrap_or(true)
+    }
+}
+
 /// 标准行为默认值的版本化对齐（存量配置迁移，见 `config/defaults.rs`）。
 pub mod defaults;
 
@@ -192,6 +255,10 @@ pub struct Config {
     /// 天气预报（`[weather]`）：NMC 国家气象中心数据源与缓存配置。默认即可工作。
     #[serde(default)]
     pub weather: WeatherConfig,
+    /// WASM 插件平台（`[plugins]`）：平台总闸 + 每插件启停。缺省全启用
+    /// （上传即启用的持久意图）；禁用的产物重启不装载、启动引导跳过。
+    #[serde(default)]
+    pub plugins: PluginsConfig,
     /// Versioned plugin workflow projection. Missing/invalid workflow uses the
     /// built-in plan so legacy databases retain the original pipeline.
     #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
@@ -485,6 +552,7 @@ impl Default for Config {
             tuya: TuyaConfig::default(),
             playback: PlaybackConfig::default(),
             weather: WeatherConfig::default(),
+            plugins: PluginsConfig::default(),
             workflow: serde_json::Value::Null,
         };
         c.normalize();

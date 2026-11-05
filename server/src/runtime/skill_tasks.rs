@@ -44,7 +44,8 @@ pub(crate) fn start(engines: &Engines) -> SchedulerGuard {
             };
             let now_ms = chrono::Utc::now().timestamp_millis();
             let system_for_tick = Arc::clone(&system);
-            let result = tokio::task::spawn_blocking(move || system_for_tick.tick_due(now_ms)).await;
+            let result =
+                tokio::task::spawn_blocking(move || system_for_tick.tick_due(now_ms)).await;
             match result {
                 Ok(Ok(report)) => {
                     last_error = None;
@@ -53,7 +54,9 @@ pub(crate) fn start(engines: &Engines) -> SchedulerGuard {
                     }
                 }
                 Ok(Err(error)) => note_error(&mut last_error, format!("{error:#}")),
-                Err(error) => note_error(&mut last_error, format!("scheduler worker failed: {error}")),
+                Err(error) => {
+                    note_error(&mut last_error, format!("scheduler worker failed: {error}"))
+                }
             }
         }
     }))

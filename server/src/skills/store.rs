@@ -91,7 +91,11 @@ pub(super) fn task_row(row: &Row<'_>) -> rusqlite::Result<Value> {
         .map(|text| serde_json::from_str(&text))
         .transpose()
         .map_err(|error| {
-            rusqlite::Error::FromSqlConversionFailure(9, rusqlite::types::Type::Text, Box::new(error))
+            rusqlite::Error::FromSqlConversionFailure(
+                9,
+                rusqlite::types::Type::Text,
+                Box::new(error),
+            )
         })?;
     Ok(json!({
         "id":row.get::<_,String>(0)?, "device_id":row.get::<_,String>(1)?,

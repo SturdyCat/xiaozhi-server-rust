@@ -123,7 +123,30 @@ impl<T: Transport> Session<'_, T> {
                     let action = step.args["action"]
                         .as_str()
                         .ok_or_else(|| anyhow::anyhow!("missing tuya action"))?;
-                    result = self.engines.tuya.voice_control(name, action).await;
+                    #[cfg(feature = "wasm-plugins")]
+                    {
+                        if self.engines.host.config().tuya.engine_id() == "wasm-policy" {
+                            if let Some(host) = self.engines.wasm.as_ref() {
+                                result = self
+                                    .engines
+                                    .tuya
+                                    .voice_control_with_policy(host, name, action)
+                                    .await;
+                            } else {
+                                result = serde_json::json!({
+                                    "ok": false,
+                                    "kind": "error",
+                                    "speech": "Tuya 控制策略宿主未装载，请检查 wasm-plugins 配置。"
+                                });
+                            }
+                        } else {
+                            result = self.engines.tuya.voice_control(name, action).await;
+                        }
+                    }
+                    #[cfg(not(feature = "wasm-plugins"))]
+                    {
+                        result = self.engines.tuya.voice_control(name, action).await;
+                    }
                 }
                 _ => {
                     let system = self.engines.skill_system.clone();

@@ -74,6 +74,11 @@ pub struct Engines {
     pub hot_audio: Arc<crate::media::hot_audio::HotAudioStore>,
     /// 令牌用量计量（全局 + 按会话；`GET /api/usage`）。回答"记忆注入让 prompt 长了多少"。
     pub usage: crate::observability::usage::UsageMeter,
+    /// WASM 插件宿主（feature `wasm-plugins` 编入时创建；空注册表起步——
+    /// 装载/采用走 P3 构建流水线，扩展点解析见 `plugins::wasm::registry`）。
+    /// `None` = 未编入 feature 或初始化失败（降级关闭，不阻断核心语音服务）。
+    #[cfg(feature = "wasm-plugins")]
+    pub wasm: Option<Arc<crate::plugins::wasm::WasmHost>>,
     /// 设备 / 会话 / 最近对话的进程内注册表
     /// （`GET /api/devices`、`/api/sessions`、`/api/conversations`、`/api/stats`）。
     ///
@@ -243,10 +248,66 @@ impl Engines {
         let tuya = Arc::new(crate::device::tuya::TuyaEngine::new(&tuya_dir));
         // 装配天气/地理定位的进程级全局（不依赖 nlu feature；weather/geo 始终编译）。
         // 与 Engines 同生命周期，仅初始化一次（set_global 重复调用静默忽略）。
-        crate::plugins::weather::set_global(Arc::new(crate::plugins::weather::WeatherService::new(
+        let weather_svc = Arc::new(crate::plugins::weather::WeatherService::new(
             &config.weather,
-        )));
+        ));
+        crate::plugins::weather::set_global(weather_svc.clone());
         crate::plugins::geo::set_location_global(Arc::new(std::sync::RwLock::new(None)));
+        // WASM 插件宿主：空注册表起步（内核零插件知识 = 完整可启动）。
+        // 初始化失败只降级为 None 并 warn——可选平台故障不阻断核心语音服务。
+        #[cfg(feature = "wasm-plugins")]
+        let wasm = match crate::plugins::wasm::WasmHost::new(
+            crate::plugins::wasm::SandboxLimits::default(),
+        ) {
+            Ok(host) => Some(Arc::new(host)),
+            Err(e) => {
+                tracing::warn!("WASM 插件宿主初始化失败（平台降级为关闭）：{e:#}");
+                None
+            }
+        };
+        // 晚绑槽注入：boot 期构建的 wasm 远端引擎（asr.engine = "wasm-remote"）在
+        // recognize 调用期经 host_global() 解析宿主（构建时宿主尚未创建）。
+        #[cfg(feature = "wasm-plugins")]
+        if let Some(host) = wasm.as_ref() {
+            crate::plugins::wasm::set_host_global(std::sync::Arc::clone(host));
+        }
+        // 重启重装：数据卷 plugins/ 下全部产物逐个装载（上传即启用模型的持久面）。
+        // 坏产物只跳过并告警——单个插件故障不阻断核心语音服务启动。
+        #[cfg(feature = "wasm-plugins")]
+        if let (Some(host), Some(dir)) = (
+            wasm.as_ref(),
+            crate::plugins::wasm::artifacts::ArtifactDir::for_location(config_store.location()),
+        ) {
+            for (id, bytes) in dir.scan() {
+                // [plugins] 配置意图：禁用的产物跳过装载（上传落盘仍在，重新启用即恢复）
+                if !config.plugins.allows(&id) {
+                    tracing::info!(plugin = %id, "配置禁用（[plugins]），跳过装载");
+                    continue;
+                }
+                if let Some(entry) = config.plugins.entries.get(&id) {
+                    let digest = crate::plugins::wasm::artifacts::ArtifactDir::digest(&bytes);
+                    if !entry.artifact_matches(&digest) {
+                        tracing::warn!(
+                            plugin = %id,
+                            expected = ?entry.artifact,
+                            actual = %digest,
+                            "插件产物摘要与 [plugins.entries] 钉版不符，跳过装载"
+                        );
+                        continue;
+                    }
+                }
+                match host.load(&id, &bytes) {
+                    Ok(()) => tracing::info!(plugin = %id, "启动重装插件产物"),
+                    Err(e) => tracing::warn!(plugin = %id, "启动重装失败（跳过）：{e:#}"),
+                }
+            }
+        }
+        // weather 后端开关（[weather].backend = "wasm"）的执行载体注入；
+        // native 后端永不触碰该句柄（见 WeatherService::forecast_wasm）。
+        #[cfg(feature = "wasm-plugins")]
+        if let Some(host) = wasm.as_ref() {
+            weather_svc.set_wasm_host(Arc::clone(host));
+        }
         Arc::new(Self {
             asr: booted.asr,
             tts: tts::TtsSlot::new(config, booted.tts),
@@ -259,6 +320,8 @@ impl Engines {
             tts_cache,
             hot_audio,
             usage: crate::observability::usage::UsageMeter::new(),
+            #[cfg(feature = "wasm-plugins")]
+            wasm,
             registry: crate::device::registry::Registry::new(),
             event_bus: crate::observability::events::EventBus::new(1024),
             vad_pool: crate::plugins::vad::pool::VadPool::new(),
@@ -276,12 +339,49 @@ impl Engines {
         })
     }
 
+    /// wasm 插件产物目录（`<数据卷>/plugins/`；与 skills/tuya 同口径派生）。
+    /// `None` = 内置配置无数据卷（上传仍可装载，但不跨重启持久）。
+    #[cfg(feature = "wasm-plugins")]
+    pub fn wasm_artifact_dir(&self) -> Option<crate::plugins::wasm::artifacts::ArtifactDir> {
+        crate::plugins::wasm::artifacts::ArtifactDir::for_location(self.config_store.location())
+    }
+
+    /// 持久化当前采用产物的内容钉版；配置库失败时不影响本次热装载，但会让重启回到未钉版语义。
+    #[cfg(feature = "wasm-plugins")]
+    pub fn pin_wasm_artifact(&self, id: &str, digest: &str) -> anyhow::Result<()> {
+        let mut config = self.config_store.load()?;
+        let entry = config.plugins.entries.entry(id.to_string()).or_default();
+        entry.artifact = Some(digest.to_string());
+        self.config_store.persist(&config)
+    }
+
+    /// 卸载时一并清除持久化摘要，避免下一次上传被旧 pin 误导。
+    #[cfg(feature = "wasm-plugins")]
+    pub fn clear_wasm_artifact_pin(&self, id: &str) -> anyhow::Result<()> {
+        let mut config = self.config_store.load()?;
+        if let Some(entry) = config.plugins.entries.get_mut(id) {
+            entry.artifact = None;
+            self.config_store.persist(&config)?;
+        }
+        Ok(())
+    }
+
     /// 配置持久化落点（今天的 TOML 路径；将来 SQLite 后端为 DB 路径）。
     ///
     /// `None` = 内置默认配置启动 → `PUT /api/config` 与设备 overlay / 预设都无法持久化。
     /// overlay / presets / hot-audio 的落点派生与"能否持久化"判定都读这里。
     pub fn config_path(&self) -> Option<&str> {
         self.config_store.location()
+    }
+
+    /// 已装载 wasm 插件目录 `(id, 标题)`——workflow designer 观察者绑定的
+    /// 编译校验/投影源。未编入 feature = 空表（编译器只认静态表，行为不变）。
+    pub fn wasm_observers(&self) -> Vec<(String, String)> {
+        #[cfg(feature = "wasm-plugins")]
+        if let Some(host) = self.wasm.as_ref() {
+            return host.observers();
+        }
+        Vec::new()
     }
 
     /// 取（或按需构建）跨会话共享的 TinyBERT 分类器；未配置 / 构建失败返回 `None`
@@ -381,24 +481,28 @@ impl Engines {
             anyhow::bail!(DEV_UNAVAILABLE)
         }
         let cfg = self.live_config();
-        // 配置签名：参与 `SherpaVad::new` 的全部字段（变了即池内旧实例失效）。
+        // 策略在借出池实例前执行：失败可返回会话建立错误，且 effective controls 与插件
+        // 身份共同进入签名，避免旧策略/旧插件的 native VAD 实例跨会话复用。
+        let (effective_vad, policy_plugin) = crate::plugins::vad::prepare_engine_config(&cfg.vad)?;
         let sig = format!(
-            "{}|{}|{}|{}|{}",
-            cfg.vad.engine,
-            cfg.vad.model,
-            cfg.vad.threshold,
-            cfg.vad.min_silence_duration,
-            cfg.vad.min_speech_duration,
+            "{}|{}|{}|{}|{}|{}",
+            effective_vad.engine,
+            effective_vad.model,
+            effective_vad.threshold,
+            effective_vad.min_silence_duration,
+            effective_vad.min_speech_duration,
+            policy_plugin.as_deref().unwrap_or("native"),
         );
         #[cfg(feature = "sherpa")]
         let factory = || -> Result<Box<dyn VadEngine>> {
             Ok(Box::new(
-                SherpaVad::new(&cfg.vad).context("创建 Silero VAD 失败")?,
+                SherpaVad::new(&effective_vad).context("创建 Silero VAD 失败")?,
             ))
         };
         #[cfg(not(feature = "sherpa"))]
-        let factory =
-            || -> Result<Box<dyn VadEngine>> { Ok(Box::new(MockVad::new(cfg.vad.threshold))) };
+        let factory = || -> Result<Box<dyn VadEngine>> {
+            Ok(Box::new(MockVad::new(effective_vad.threshold)))
+        };
         self.vad_pool.acquire(sig, factory).await
     }
 }

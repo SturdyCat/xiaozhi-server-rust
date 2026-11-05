@@ -148,7 +148,10 @@ fn save_patch_with(
         }
     })?;
     // Workflow is compiled before persistence: invalid plans can never become active.
-    if let Err(error) = crate::workflow::designer::compile(&body.workflow) {
+    // 观察者目录来自当前装载的 wasm 插件（保存时严格校验；会话侧对"保存后卸载"宽松剔除）。
+    if let Err(error) =
+        crate::workflow::designer::compile_with_observers(&body.workflow, &engines.wasm_observers())
+    {
         return Err(SaveError::WorkflowInvalid {
             detail: format!("workflow 校验失败：{error}"),
         });

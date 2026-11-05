@@ -314,10 +314,19 @@ fn tuya_control_rejects_dynamic_actions_missing_name_and_unknown_args() {
         plan("tuya.control", json!({"name":"客厅插座","action":"ON"})),
         plan("tuya.control", json!({"name":"客厅插座","action":true})),
         plan("tuya.control", json!({"name":"","action":"on"})),
-        plan("tuya.control", json!({"name":"客厅插座","action":"on","device_id":"evil"})),
+        plan(
+            "tuya.control",
+            json!({"name":"客厅插座","action":"on","device_id":"evil"}),
+        ),
         // action 必须是静态字面量：插值（哪怕值恰好合法）在校验层直接拒绝。
-        plan("tuya.control", json!({"name":"客厅插座","action":"{{slots.action}}"})),
-        plan("tuya.control", json!({"name":"x".repeat(257),"action":"on"})),
+        plan(
+            "tuya.control",
+            json!({"name":"客厅插座","action":"{{slots.action}}"}),
+        ),
+        plan(
+            "tuya.control",
+            json!({"name":"x".repeat(257),"action":"on"}),
+        ),
     ] {
         assert!(validate_plan(&p).is_err(), "{p:?}");
     }

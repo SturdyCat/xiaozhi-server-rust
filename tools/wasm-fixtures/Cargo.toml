@@ -1,0 +1,19 @@
+# WASM 测试 guest 夹具（P0→P1）：给 src/plugins/wasm/tests.rs 提供真实组件。
+#
+# 真实插件源在 plugins-src/（P1+）；本目录只服务测试：
+# - hello：行为良好的演示插件（注册包/事件效果/动作/自检/kv 闭环；经 guest SDK 构建）
+# - greeter-user：用户自建兼容插件（与 hello 同扩展点，替换演练 + 无权限对照面）
+# - trap：故意作恶插件（无限循环 → fuel/epoch 陷阱；无限分配 → 内存陷阱）
+# - guest-alloc：wasm32-unknown-unknown 的极简增长式分配器（memory_grow 内联）
+#
+# 构建：./build.sh → server/tests/fixtures/wasm/*.wasm（wasm-tools component new）
+[workspace]
+resolver = "2"
+members = ["guest-alloc", "greeter-user", "hello", "trap"]
+
+# 夹具体积最小化（测试断言不依赖优化级别）
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+panic = "abort"

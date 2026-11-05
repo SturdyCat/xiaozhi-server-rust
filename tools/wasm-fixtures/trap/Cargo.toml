@@ -1,0 +1,12 @@
+# trap：故意作恶插件（fuel/epoch/内存陷阱测试）
+[package]
+name = "trap"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.63"
+guest-alloc = { path = "../guest-alloc" }

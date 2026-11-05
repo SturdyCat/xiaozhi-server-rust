@@ -61,6 +61,8 @@ fn pending_count(system: &SkillSystem) -> i64 {
         .unwrap()
 }
 
+#[path = "tests_action.rs"]
+mod action;
 #[path = "tests_calendar.rs"]
 mod calendar;
 #[path = "tests_limits.rs"]
@@ -75,5 +77,3 @@ mod results;
 mod scheduler;
 #[path = "tests_time.rs"]
 mod time;
-#[path = "tests_action.rs"]
-mod action;

@@ -3,6 +3,46 @@
 use super::*;
 
 #[test]
+fn default_engine_is_native() {
+    let cfg = TuyaConfig::default();
+    assert_eq!(cfg.engine_id(), "native");
+}
+
+#[test]
+fn normalize_converges_engine_aliases() {
+    for (raw, expected) in [
+        ("backend", "native"),
+        ("LAN", "native"),
+        (" wasm ", "wasm-policy"),
+    ] {
+        let mut cfg = TuyaConfig {
+            engine: raw.into(),
+            ..TuyaConfig::default()
+        };
+        cfg.normalize();
+        assert_eq!(cfg.engine, expected);
+        assert_eq!(cfg.engine_id(), expected);
+    }
+}
+
+#[test]
+fn serde_accepts_legacy_backend_key() {
+    let cfg: TuyaConfig = toml::from_str("backend = \"lan\"").expect("legacy backend key");
+    assert_eq!(cfg.engine_id(), "native");
+}
+
+#[test]
+fn normalize_preserves_unknown_engine_for_registry_validation() {
+    let mut cfg = TuyaConfig {
+        engine: "future".into(),
+        ..TuyaConfig::default()
+    };
+    cfg.normalize();
+    assert_eq!(cfg.engine, "future");
+    assert_eq!(cfg.engine_id(), "future");
+}
+
+#[test]
 fn normalize_trims_and_converges_region() {
     let mut cfg = TuyaConfig {
         region: " CN ".into(),

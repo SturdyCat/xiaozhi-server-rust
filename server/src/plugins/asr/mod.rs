@@ -18,11 +18,20 @@ use std::sync::Arc;
 
 use crate::config::{canonical_engine, EngineSpec};
 
-/// ASR 可选实现（`[asr].engine` 的权威表）。当前只有 SenseVoice 一条真实路径。
-pub const ASR_ENGINES: &[EngineSpec] = &[EngineSpec {
-    id: "sensevoice",
-    aliases: &[],
-}];
+/// ASR 可选实现（`[asr].engine` 的权威表）。
+/// - `sensevoice`：本地 SenseVoice INT8（推理留原生，需模型文件）；
+/// - `wasm-remote`：远端引擎变体通道（`asr.provider` 扩展点插件，utterance 级；
+///   推理发生在插件侧，宿主零模型依赖——P4a 桥/P4b 描述符）。
+pub const ASR_ENGINES: &[EngineSpec] = &[
+    EngineSpec {
+        id: "sensevoice",
+        aliases: &[],
+    },
+    EngineSpec {
+        id: "wasm-remote",
+        aliases: &[],
+    },
+];
 const DEFAULT_ASR_ENGINE: &str = "sensevoice";
 
 /// 识别引擎接口：把一段（已切分好的）单声道 f32 音频转为文本。
@@ -99,6 +108,14 @@ fn default_one() -> u32 {
 
 #[cfg(feature = "sherpa")]
 mod sensevoice;
+
+/// `asr.provider` 扩展点的 wasm 远端引擎适配器（P4a；`[asr].backend = "wasm"` 时装配）。
+#[cfg(feature = "wasm-plugins")]
+pub mod wasm_engine;
+
+#[cfg(test)]
+#[cfg(feature = "wasm-plugins")]
+mod wasm_engine_tests;
 
 /// 根据配置构造 ASR 引擎（仅 `sherpa` 一条路径；未启用 feature 直接报错）。
 pub fn build_asr(cfg: &AsrConfig) -> Result<Arc<dyn AsrEngine>> {

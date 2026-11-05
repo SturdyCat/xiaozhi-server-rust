@@ -3,6 +3,30 @@
 use super::*;
 
 #[test]
+fn engine_默认与别名规范化() {
+    let mut cfg = EchomuseConfig::default();
+    assert_eq!(cfg.engine, "native");
+    cfg.engine = "WASM".into();
+    cfg.normalize();
+    assert_eq!(cfg.engine, "wasm-policy");
+    assert_eq!(cfg.engine_id(), "wasm-policy");
+
+    cfg.engine = "future".into();
+    cfg.normalize();
+    assert_eq!(cfg.engine, "future", "未知引擎必须保留以便注册表显式报错");
+}
+
+#[test]
+fn engine_旧配置键可读且normalize幂等() {
+    let mut cfg: EchomuseConfig = toml::from_str("engine = \"wasm\"").unwrap();
+    cfg.normalize();
+    assert_eq!(cfg.engine, "wasm-policy");
+    let once = cfg.engine.clone();
+    cfg.normalize();
+    assert_eq!(cfg.engine, once);
+}
+
+#[test]
 fn welcome_默认含使用提示且normalize后仍有效() {
     let mut cfg = EchomuseConfig::default();
     cfg.normalize();

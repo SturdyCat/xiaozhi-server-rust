@@ -4,13 +4,35 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::config::{canonical_engine, EngineSpec};
+
 /// 默认欢迎语：设备接入后立刻说一次，带最基本的使用提示（怎么开始对话）。
 /// 换措辞直接改 `[echomuse].welcome`；留空 = 不说欢迎语。
 pub const DEFAULT_WELCOME: &str = "我已连接，喊我的唤醒词或按一下按键就能开始对话。";
 
+/// `[echomuse].engine` 可选实现（配置层权威表）。
+///
+/// `wasm` 是历史 WASM 控制策略写法；仅做读取兼容，序列化与 `engine_id()`
+/// 始终使用规范实现 id。EchoMuse 的 native 路径仍由宿主原生设备入口负责。
+pub const ECHOMUSE_ENGINES: &[EngineSpec] = &[
+    EngineSpec {
+        id: "native",
+        aliases: &[],
+    },
+    EngineSpec {
+        id: "wasm-policy",
+        aliases: &["wasm"],
+    },
+];
+const DEFAULT_ECHOMUSE_ENGINE: &str = "native";
+
 /// `[echomuse]` 配置段：EchoMuse 设备入口开关与凭据。
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct EchomuseConfig {
+    /// 设备入口实现：`native`（宿主原生控制面）或 `wasm-policy`（WASM 控制策略元数据）。
+    /// 旧值 `wasm` 仍可读；两者均为 RestartOnly，改动需重启服务端。
+    #[serde(default = "default_engine")]
+    pub engine: String,
     /// 总开关。默认 **true**：EchoMuse 设备入口是「开机即用」的标准能力（mDNS 广播 +
     /// `/em/*` 路由就绪，设备刷机后即连）；不用 EchoMuse 设备的用户可显式改为 false——
     /// 关闭时不挂路由、不广播 mDNS，行为与没有这个入口完全一致。
@@ -50,6 +72,10 @@ pub struct EchomuseConfig {
 }
 
 /// `[echomuse].plain_port` 默认值：官方 controller 明文端口。
+fn default_engine() -> String {
+    DEFAULT_ECHOMUSE_ENGINE.to_string()
+}
+
 fn default_plain_port() -> u16 {
     8767
 }
@@ -70,6 +96,7 @@ fn default_true() -> bool {
 impl Default for EchomuseConfig {
     fn default() -> Self {
         EchomuseConfig {
+            engine: default_engine(),
             enabled: true,
             token: String::new(),
             ble_proxy: false,
@@ -81,11 +108,17 @@ impl Default for EchomuseConfig {
 }
 
 impl EchomuseConfig {
-    /// 规范化（幂等；与各能力配置同口径：trim 一次）。
+    /// 规范化（幂等）：引擎别名收敛，其余字符串 trim。
     pub fn normalize(&mut self) {
+        self.engine = canonical_engine(&self.engine, ECHOMUSE_ENGINES, DEFAULT_ECHOMUSE_ENGINE);
         self.token = self.token.trim().to_string();
         self.welcome = self.welcome.trim().to_string();
         self.music_dir = self.music_dir.trim().to_string();
+    }
+
+    /// 规范化后的实现 id（未知值原样小写，交由注册表 fail-loud 校验）。
+    pub fn engine_id(&self) -> String {
+        canonical_engine(&self.engine, ECHOMUSE_ENGINES, DEFAULT_ECHOMUSE_ENGINE)
     }
 }
 

@@ -9,7 +9,10 @@ fn initial_skill_json_is_visible_editable_configuration() {
     assert!(config.enabled && !config.bert_enabled);
     assert_eq!(config.bert_threshold, 0.75);
     for intent in &config.intents {
-        assert!(intent.templates.len() >= 2, "each class needs distinct split examples");
+        assert!(
+            intent.templates.len() >= 2,
+            "each class needs distinct split examples"
+        );
         if intent.action.kind == "plan" {
             let plan = intent.action.plan.as_ref().unwrap();
             crate::skills::validate_plan(plan).unwrap();
@@ -46,7 +49,12 @@ fn seed_domains_follow_executor_and_device_skills_call_firmware_tools() {
     let config = NluConfig::default();
     for intent in &config.intents {
         if intent.name.starts_with("reminder_") || intent.name == "weather_query" {
-            assert_eq!(intent.domain, Domain::Server, "{} 应归服务端域", intent.name);
+            assert_eq!(
+                intent.domain,
+                Domain::Server,
+                "{} 应归服务端域",
+                intent.name
+            );
         } else if intent.name == "iot_device_on" || intent.name == "iot_device_off" {
             // iot 域语音开关：服务端执行的 plan 能力组合（tuya.control），非固件直调。
             assert_eq!(intent.domain, Domain::Iot, "{} 应归 IoT 域", intent.name);
@@ -74,7 +82,11 @@ fn seed_domains_follow_executor_and_device_skills_call_firmware_tools() {
     assert_eq!(volume.templates[0], "音量调到{volume}");
     assert!(config.slots.iter().any(|s| s.name == "volume"));
     // iot 开放槽位：values 空（任意设备名），与 task/delay 同模式。
-    let device_name = config.slots.iter().find(|s| s.name == "device_name").unwrap();
+    let device_name = config
+        .slots
+        .iter()
+        .find(|s| s.name == "device_name")
+        .unwrap();
     assert!(device_name.values.is_empty() && !device_name.optional);
 }
 

@@ -18,13 +18,14 @@
 //!   更危险的是"labels 没变就照样采用"——模板与 action 可能同批被改，模型是拿旧模板训的。
 //! - `Io`/`Persist`（SQLite busy、磁盘抖动）→ 重试 200/400/800ms，仍失败 → `adopt_io_error`。
 
-use super::{
-    data_dir, load_candidate, push_log, run_build, Artifact, BuildStart, BASE_MODEL, ORIGIN_BOOTSTRAP,
-};
 /// 槽位句柄只有单测会直接碰（等待逻辑已搬去 `wait`）；`pub(super)` 是为了让
 /// `bootstrap_tests` 的 `use super::*` 仍然拿得到，同时不产生未使用导入警告。
 #[cfg(test)]
 pub(super) use super::job;
+use super::{
+    data_dir, load_candidate, push_log, run_build, Artifact, BuildStart, BASE_MODEL,
+    ORIGIN_BOOTSTRAP,
+};
 
 use crate::{
     gateway::ws::config::{save_patch_strict, SaveError, SaveOutcome},

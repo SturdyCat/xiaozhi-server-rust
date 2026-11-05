@@ -52,8 +52,8 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Router;
 use futures_util::{SinkExt, StreamExt};
-use tower::util::ServiceExt;
 use tokio::sync::{mpsc, watch};
+use tower::util::ServiceExt;
 
 use super::auth_ok;
 
@@ -108,7 +108,9 @@ pub(super) fn parse_rpc_frame(v: &serde_json::Value) -> Result<RpcRequest, Strin
         .ok_or("rpc 帧缺少 method")?
         .to_uppercase();
     if !RPC_METHODS.contains(&method.as_str()) {
-        return Err(format!("不支持的 method {method}（仅 GET/POST/PUT/DELETE）"));
+        return Err(format!(
+            "不支持的 method {method}（仅 GET/POST/PUT/DELETE）"
+        ));
     }
     let path = v
         .get("path")
@@ -152,10 +154,7 @@ pub(super) fn parse_rpc_frame(v: &serde_json::Value) -> Result<RpcRequest, Strin
 
 /// 把一条 rpc 文本帧（已是 JSON 对象）交给路由表执行，返回 rpc_result 帧。
 /// 内部带 [`RPC_TIMEOUT_SECS`] 超时；路由表未注入/执行失败按 `status:0` 处理。
-pub(super) async fn execute_rpc(
-    router: Arc<Router<()>>,
-    frame: &serde_json::Value,
-) -> String {
+pub(super) async fn execute_rpc(router: Arc<Router<()>>, frame: &serde_json::Value) -> String {
     let (id, timeout, req) = match parse_rpc_frame(frame) {
         Ok(ok) => ok,
         Err(reason) => return rpc_error_frame(id_of(frame), &reason),
@@ -209,8 +208,7 @@ fn id_of(frame: &serde_json::Value) -> u64 {
 
 /// `status:0` 的 rpc_result 错误帧（非 HTTP 失败：帧非法/超时/路由未注入）。
 fn rpc_error_frame(id: u64, error: &str) -> String {
-    serde_json::json!({ "type": "rpc_result", "id": id, "status": 0, "error": error })
-        .to_string()
+    serde_json::json!({ "type": "rpc_result", "id": id, "status": 0, "error": error }).to_string()
 }
 
 // ---- 帧构造（纯函数，测试直驱） ----

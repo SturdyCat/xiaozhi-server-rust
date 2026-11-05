@@ -245,8 +245,10 @@ tasks.matching { it.name == "check" || it.name.startsWith("packLocalJSBundle") }
 // 模型唯一路径：删除4个启发式/旧关键词状态与1个死选项列表，新增1个只读技能目录快照。
 // 服务器出口定位：OpsState.GeoState 新增7项 stateVar（resolved/domestic/ip/region/source/note/scopeNote）。
 // 在途 tuya 集成（TuyaState/TuyaDetailPage 等）实测 +28 stateVar、+2 stateListOf，随本次一并入账。
-// 台账实测 452→487，列表 47→49，legacy 0 不变。
-val expectedStateVarCalls = 487
+// P2e wasm 插件槽位：PluginMetaState.wasmSlots 快照（`GET /api/plugins` 的 wasm 键），+1 stateVar。
+// P3 管理台插件页：PluginsManageState（uploading/uploadResult→resultText/busy），+3 stateVar。
+// 台账实测 452→491，列表 47→49，legacy 0 不变。
+val expectedStateVarCalls = 491
 val expectedStateListCalls = 49
 val bridgeWhitelist = emptySet<String>()
 val verifyComposeStateMigration by tasks.registering {
