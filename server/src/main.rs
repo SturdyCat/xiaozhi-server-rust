@@ -111,7 +111,8 @@ async fn run(config: Config, config_store: Arc<dyn ConfigStore>, dev_mode: bool)
     // 到期动作任务（skills_tasks.action）例外：scheduler 经 device_cmds 向在线设备
     // 直推一次工具调用，离线/失败降级为文字提醒（见 runtime/skill_tasks 模块注释）。
     // UI 开发模式可检验任务 CRUD，但不启动生产调度或伪造设备播报。
-    let _skill_tasks = (!dev_mode).then(|| crate::runtime::skill_tasks::start(&engines));
+    let _skill_tasks = (!dev_mode && !cfg!(feature = "pure-base"))
+        .then(|| crate::runtime::skill_tasks::start(&engines));
     // 延迟/事件聚合（P1-1）：进程最早的订阅者——spawn 越早，broadcast 环形缓冲越不丢
     // 早期事件（LAGGED 只告警；聚合口径是近似值，见 app/metrics 模块注释）。
     tokio::spawn(crate::observability::metrics::subscriber(
@@ -132,10 +133,13 @@ async fn run(config: Config, config_store: Arc<dyn ConfigStore>, dev_mode: bool)
         }
         None => tracing::warn!("配置库路径不可见（location() == None）：配置将无法持久化"),
     }
-    // 发音人目录：读盘缓存/离线兜底 + 配置了控制台会话时后台刷新一次（失败非致命）
-    crate::device::voices::init();
-    if !dev_mode {
-        crate::device::voices::spawn_startup_probe(engines.clone());
+    // 发音人目录：读盘缓存/离线兜底 + 配置了控制台会话时后台刷新一次（失败非致命）。
+    // pure-base 不启动外部目录探测，避免把可选业务后台带入纯底座进程。
+    if !cfg!(feature = "pure-base") {
+        crate::device::voices::init();
+        if !dev_mode {
+            crate::device::voices::spawn_startup_probe(engines.clone());
+        }
     }
     // 唤醒问候语的音频复用是否可用（"为什么重启后又要重新合成"的第一现场）：
     // 只有加载了配置文件才有落盘目录（与 PUT /api/config 的持久化前提同源）。
@@ -183,11 +187,10 @@ async fn run(config: Config, config_store: Arc<dyn ConfigStore>, dev_mode: bool)
     tracing::info!("xiaozhi-server-rust 监听于 {addr}");
     // 首启自举：监听**就绪之后**才起（bind 失败就没必要训练），且不 await——
     // 健康检查必须立刻可响应，训练是几十秒到几十分钟的后台任务。
-    // 只在 production 跑：dev-admin 没有真实引擎。
+    // NLU 训练是系统模型运行时能力，纯底座也保留其编排与候选管理；
+    // 业务技能/设备插件仍不会因此自动出现。
     if !dev_mode {
         // 可观测性：自举会在 30s 后自己开始训练并**可能自动启用**模型。
-        // "全新部署时先关掉语义模型" 与 "从未配置过" 在配置上不可区分
-        //（两者都是 `bert_enabled=false` + 空路径），所以不猜用户意图，只把后果说出来。
         tracing::info!(
             "首启自举已挂起：模型产物缺失时将在 30s 后自动训练并尝试启用；\
              不希望自动启用请设 NLU_BOOTSTRAP=off（或 build-only 只训练不启用）"
@@ -218,6 +221,7 @@ async fn run(config: Config, config_store: Arc<dyn ConfigStore>, dev_mode: bool)
     // 广播端口跟随实际监听：`[echomuse].plain_port`（默认 8767，官方明文 controller
     // 端口——上游固件 tcp_peer() 只认远端 8767/8770 的连接为 controller）额外监听
     // 成功则指向专用端口；绑定失败或 plain_port=0 时回退主端口（/em/* 两边都在）。
+    #[cfg(not(feature = "pure-base"))]
     if config.echomuse.enabled && !dev_mode {
         let mdns_port = match crate::device::echomuse::listen::dedicated_port(&config.echomuse) {
             Some(p) => crate::device::echomuse::listen::spawn_dedicated(engines.clone(), p)
@@ -237,13 +241,13 @@ async fn run(config: Config, config_store: Arc<dyn ConfigStore>, dev_mode: bool)
     // 宣告 `bluetooth_proxy`（Dot 2 当 BLE 代理）。见
     // docs/research/emx-integration-analysis.md §4.1.1 / §4.1.2。
     #[cfg(feature = "esp_home")]
-    if config.esp_home.enabled && !dev_mode {
+    if config.esp_home.enabled && !dev_mode && !cfg!(feature = "pure-base") {
         crate::device::esp_home::spawn(config.esp_home.clone(), engines.clone());
     }
     // Tuya IoT 设备集成 worker（常驻）：定时云同步 + 60s 错峰在线轮询 + 5min 局域网发现。
     // 每 tick 重读 [tuya].enabled（热生效），关闭时本 tick 空转；dev 模式不起
     // （无真机、避免 UDP/TCP 副作用；管理面路由仍挂载，可验证 UI）。
-    if !dev_mode {
+    if !dev_mode && !cfg!(feature = "pure-base") {
         crate::device::tuya::worker::spawn(engines.clone());
     }
     // 管理客户端发现（常驻、无配置项）：广播 `_xiaozhi-admin._tcp`，macApp 等

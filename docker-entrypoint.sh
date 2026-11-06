@@ -3,7 +3,7 @@
 #
 # 职责：
 #   1. 若启用自动下载且检测到关键模型文件缺失，则从 k2-fsa/sherpa-onnx 官方
-#      GitHub Release 拉取**整包 tar.bz2** 并解压到 $XIAOZHI_MODELS_DIR（默认 /data/models）
+#      GitHub Release 拉取**整包 tar.bz2**并解压到 $XIAOZHI_MODELS_DIR（默认 /data/models）
 #      ——单请求拿全（Kokoro 含 espeak-ng-data/dict 共 365 个文件），不做逐文件下载。
 #   2. exec 真正的服务器进程，把参数透传下去（保证能收到 SIGTERM 等信号）。
 #
@@ -28,11 +28,13 @@
 #                       tokens.txt/espeak-ng-data/lexicon-zh.txt/lexicon-us-en.txt/dict）
 #   - Silero VAD      : silero_vad.onnx（服务端 ASR 切段用，sherpa 自己解析）
 #
-# 设备语音门模型（`oww/silero_vad.onnx`，EchoMuse 专用）**不在这里下载**：
-# 它只在 `[echomuse].enabled=true` 时由服务端（server 进程）按官方源补一份，见
-# `server/src/device/echomuse/oww.rs`。没开 EchoMuse 的部署不为它下任何字节。
-
 set -eu
+
+# Fail early on a malformed release image instead of masking it as a model/network error.
+if [ ! -x /app/server ]; then
+  echo "[entrypoint] error: /app/server is missing or not executable" >&2
+  exit 1
+fi
 
 MODELS_DIR="${XIAOZHI_MODELS_DIR:-/data/models}"
 AUTO="${XIAOZHI_AUTO_DOWNLOAD_MODELS:-missing}"

@@ -93,6 +93,7 @@ impl std::fmt::Display for DefaultValue {
 }
 
 /// 一条默认值变更声明。
+#[derive(Clone, Copy)]
 pub struct DefaultChange {
     /// 点分路径（如 `wakeup.enabled`），与 `/api/config` 的 JSON 结构一一对应。
     pub path: &'static str,
@@ -113,10 +114,10 @@ pub struct DefaultsBatch {
 /// v1：**标准行为默认开启**（开机即用，不想要可显式关）。
 ///
 /// 覆盖范围 = 全部"标准体验"开关，不是只改唤醒问候语：唤醒问候、指令闸门、
-/// 技能级联、人格档案、记忆、EchoMuse 入口、LLM 回声。`[aiui].enabled` 与
+/// 技能级联、人格档案、记忆、EchoMuse 入口（纯底座排除）、LLM 回声。`[aiui].enabled` 与
 /// `[nlu].bert_enabled` **不在其内**——前者缺凭据即启动失败（fatal_if_enabled），
 /// 后者缺 ONNX 模型文件即校验失败，都不是"开箱即用"的默认项。
-pub const STANDARD_BEHAVIOR_ON: &[DefaultChange] = &[
+const STANDARD_BEHAVIOR_ON_FULL: &[DefaultChange] = &[
     DefaultChange {
         path: "wakeup.enabled",
         from: DefaultValue::Bool(false),
@@ -171,6 +172,22 @@ pub const STANDARD_BEHAVIOR_ON: &[DefaultChange] = &[
         to: DefaultValue::Bool(true),
         note: "LLM 对话（关闭时退化为 ASR 原话回声）",
     },
+];
+
+/// 默认对齐集合：纯底座不把 EchoMuse 业务段对齐为 enabled=true，即使复用普通构建生成的数据库。
+#[cfg(not(feature = "pure-base"))]
+pub const STANDARD_BEHAVIOR_ON: &[DefaultChange] = STANDARD_BEHAVIOR_ON_FULL;
+
+#[cfg(feature = "pure-base")]
+pub const STANDARD_BEHAVIOR_ON: &[DefaultChange] = &[
+    STANDARD_BEHAVIOR_ON_FULL[0],
+    STANDARD_BEHAVIOR_ON_FULL[1],
+    STANDARD_BEHAVIOR_ON_FULL[2],
+    STANDARD_BEHAVIOR_ON_FULL[3],
+    STANDARD_BEHAVIOR_ON_FULL[4],
+    STANDARD_BEHAVIOR_ON_FULL[5],
+    STANDARD_BEHAVIOR_ON_FULL[6],
+    STANDARD_BEHAVIOR_ON_FULL[8],
 ];
 
 /// 全部批次（按版本升序）。新增批次只允许**追加**。

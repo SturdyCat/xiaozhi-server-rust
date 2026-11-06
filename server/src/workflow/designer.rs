@@ -78,6 +78,7 @@ pub struct CompiledWorkflow {
     pub plan: Vec<CompiledBinding>,
 }
 
+#[cfg(not(feature = "pure-base"))]
 const PLUGINS: &[(&str, &str, &str, &[&str])] = &[
     ("nlu.model", "模型意图", "nlu", &["nlu"]),
     ("skill.gate", "模型门控（兼容）", "nlu", &["nlu"]),
@@ -111,32 +112,60 @@ pub const OBSERVER_POSITIONS: &[&str] = &["start", "link.nlu.llm", "end"];
 
 /// 是否静态已接线插件（观察者预过滤用：会话侧剔除"静态不可识别且未装载"的绑定）。
 pub fn is_static_plugin(id: &str) -> bool {
-    PLUGINS.iter().any(|x| x.0 == id)
+    static_plugin(id).is_some()
+}
+
+fn static_plugin(
+    id: &str,
+) -> Option<&'static (
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static [&'static str],
+)> {
+    #[cfg(feature = "pure-base")]
+    {
+        let _ = id;
+        None
+    }
+    #[cfg(not(feature = "pure-base"))]
+    {
+        PLUGINS.iter().find(|x| x.0 == id)
+    }
 }
 
 pub fn default_config() -> WorkflowConfig {
-    let ids = [
-        ("wakeup.greeting", "start"),
-        ("soul.profile", "link.nlu.llm"),
-        ("memory.recall", "link.nlu.llm"),
-        ("nlu.model", "nlu"),
-        ("memory.writeback", "end"),
-    ];
-    WorkflowConfig {
+    #[cfg(feature = "pure-base")]
+    return WorkflowConfig {
         version: 1,
-        bindings: ids
-            .into_iter()
-            .enumerate()
-            .map(|(i, (p, pos))| Binding {
-                id: format!("default-{i}"),
-                plugin_id: p.into(),
-                position_id: pos.into(),
-                enabled: true,
-                order: i as i32,
-                condition: Condition::Always,
-                on_error: error_options(p)[0].into(),
-            })
-            .collect(),
+        bindings: Vec::new(),
+    };
+
+    #[cfg(not(feature = "pure-base"))]
+    {
+        let ids = [
+            ("wakeup.greeting", "start"),
+            ("soul.profile", "link.nlu.llm"),
+            ("memory.recall", "link.nlu.llm"),
+            ("nlu.model", "nlu"),
+            ("memory.writeback", "end"),
+        ];
+        WorkflowConfig {
+            version: 1,
+            bindings: ids
+                .into_iter()
+                .enumerate()
+                .map(|(i, (p, pos))| Binding {
+                    id: format!("default-{i}"),
+                    plugin_id: p.into(),
+                    position_id: pos.into(),
+                    enabled: true,
+                    order: i as i32,
+                    condition: Condition::Always,
+                    on_error: error_options(p)[0].into(),
+                })
+                .collect(),
+        }
     }
 }
 
@@ -180,7 +209,7 @@ pub fn compile_with_observers(
         }
         // 静态插件 → 原 position/on_error 校验；wasm 观察者 → 钉死 hook 位 + continue；
         // 其余 → 能力描述符/未知 id 报错（保存门不变）
-        let static_entry = PLUGINS.iter().find(|x| x.0 == b.plugin_id);
+        let static_entry = static_plugin(&b.plugin_id);
         let is_observer =
             static_entry.is_none() && observers.iter().any(|(id, _)| *id == b.plugin_id);
         if let Some((_, _, owner, allowed)) = static_entry {
@@ -314,6 +343,7 @@ fn condition_json() -> Value {
         {"kind":"confidence","label":"置信度","fields":[{"key":"min","label":"最低值","type":"number","required":true},{"key":"max","label":"最高值","type":"number","required":false}]}
     ])
 }
+#[cfg(not(feature = "pure-base"))]
 fn plugin_json((id, label, owner, allowed): &(&str, &str, &str, &[&str])) -> Value {
     let runtime = !allowed.is_empty();
     let config_paths = match *id {
@@ -325,6 +355,17 @@ fn plugin_json((id, label, owner, allowed): &(&str, &str, &str, &[&str])) -> Val
     };
     json!({"id":id,"label":label,"alias_of":if safety_gate(id) && *id != "nlu.model" { Some("nlu.model") } else { None },"owner_position":owner,"allowed_positions":if runtime { *allowed } else { &[] as &[&str] },"config_paths":config_paths,"input_type":"event","output_type":"event","repeatable":false,"order_constraints":[],"tests":[],"actions":[],"condition_kinds":if runtime { condition_kinds(id) } else { &[] as &[&str] },"on_error_options":if runtime { error_options(id) } else { &[] as &[&str] }})
 }
+fn static_plugins_json() -> Vec<Value> {
+    #[cfg(feature = "pure-base")]
+    {
+        Vec::new()
+    }
+    #[cfg(not(feature = "pure-base"))]
+    {
+        PLUGINS.iter().map(plugin_json).collect()
+    }
+}
+
 fn core_plugins_json() -> Vec<Value> {
     use crate::plugins::registry::{Capability, REGISTRY};
     REGISTRY.iter().filter_map(|plugin| {
@@ -363,7 +404,7 @@ pub fn projection_with_observers(
         }
     };
     let plan: Vec<Value> = compiled.plan.iter().map(|b| json!({"plugin_id":b.plugin_id,"position_id":b.position_id,"order":b.order,"on_error":b.on_error,"condition":b.condition})).collect();
-    let mut plugins: Vec<Value> = PLUGINS.iter().map(plugin_json).collect();
+    let mut plugins = static_plugins_json();
     plugins.extend(core_plugins_json());
     for (id, title) in observers {
         plugins.push(json!({
@@ -382,5 +423,8 @@ pub fn projection_with_observers(
     json!({"version":1,"revision":revision,"mode":mode,"hot":"next_session","condition_kinds":condition_json(),"positions":POSITIONS.iter().map(|(id,label,kind)| json!({"id":id,"label":label,"kind":kind})).collect::<Vec<_>>(),"plugins":plugins,"config":compiled.config,"plan":plan})
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "pure-base")))]
 mod tests;
+
+#[cfg(all(test, feature = "pure-base"))]
+mod pure_base_tests;

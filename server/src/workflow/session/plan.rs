@@ -139,5 +139,5 @@ impl<'a, T: Transport> Session<'a, T> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "pure-base")))]
 mod tests;

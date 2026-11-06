@@ -198,11 +198,16 @@ fn standard_behaviors_default_on() {
         "echomuse.enabled",
         "llm.enabled",
     ] {
-        assert!(paths.contains(&must), "标准行为 {must} 未纳入默认开启清单");
+        let pure_base_device = must == "echomuse.enabled" && cfg!(feature = "pure-base");
+        assert_eq!(
+            paths.contains(&must),
+            !pure_base_device,
+            "标准行为 {must} 的纯底座纳入状态不正确"
+        );
         assert_eq!(
             get_path(&defaults, must),
-            Some(&json!(true)),
-            "{must} 代码默认值必须为 true"
+            Some(&json!(!pure_base_device)),
+            "{must} 代码默认值必须符合当前构建边界"
         );
     }
     // 需要凭据/模型文件的开关不在其内：缺了就启动失败，不能当"开箱即用"默认

@@ -23,6 +23,6 @@
 
 ## 可配置插件工作流（当前实现）
 
-`designer` 提供版本 1 的 workflow 编译与投影。SQLite 配置缺少 `workflow` 时使用兼容默认计划；保存前必须通过同一编译器，非法配置不会写入。核心 ASR/VAD/LLM/TTS/AIUI 引擎描述符仅用于只读元数据，不可作为任意 binding；当前可编排项仅为已接线的唤醒、人格、记忆、指令/NLU hooks。
+`designer` 提供版本 1 的 workflow 编译与投影。普通构建的 SQLite 配置缺少 `workflow` 时使用兼容默认计划；**纯底座构建**缺少 `workflow` 时使用空计划，不投影或接受静态业务绑定，仅允许运行期已装载的 WASM 观察者挂到已接线 hook。保存前必须通过同一编译器，非法配置不会写入。核心 ASR/VAD/LLM/TTS/AIUI 引擎描述符仅用于只读元数据，不可作为任意 binding；普通构建当前可编排项为已接线的唤醒、人格、记忆、指令/NLU hooks。
 
 条件只声明真实可执行子集：`always`、`text_contains{text,case_sensitive?}`、`device_kind{value}`；模型门控 `nlu.model` 的 `confidence{min,max?}` 只用本轮唯一真实分类后取得的有限分数；普通上下文无可信置信度时 fail closed，不伪造默认分数。`command.gate`、`nlu.rules`、`skill.gate` 仅为兼容别名，不提供规则识别，多别名共存也只分类/执行一次且不扩大旧目录作用域。P2d 起 wasm 插件可绑定为**观察者挂钩**（仅 `start`/`link.nlu.llm`/`end` 三个已接线 hook 位，`on_error` 恒 `continue`）：会话以 `hook.<position>` 事件旁路派发（payload 含 session/device/text），效果 fire-and-forget 异步执行——不阻塞对话轮、不回灌、不可改写对话流；保存时按当前装载目录严格校验（`compile_with_observers`），会话侧对未装载绑定宽松剔除+告警（缺插件不炸会话）。模型门控的 `on_error` 固定为 `stop`；上下文 hook 可使用 `continue`。工作流修改为 `next_session`，会话固定编译快照，不在句间重排。时钟任务走稳定[技能系统](<../skills/AGENTS.md>)，提醒投递不重新注入 ASR/NLU。

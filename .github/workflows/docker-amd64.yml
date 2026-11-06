@@ -66,6 +66,19 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Check pure-base release inputs
+        # Static guard: the published image must compile the WASM host with the
+        # model/audio/NLU runtime, but may not copy a prebuilt business component.
+        # NLU training intentionally uses the documented host Docker socket.
+        run: |
+          set -eu
+          grep -Eq -- '--features sherpa,nlu,wasm-plugins,pure-base' Dockerfile
+          if grep -Eq 'COPY[[:space:]].*(\.wasm|plugins-src)' Dockerfile docker-compose.yml; then
+            echo 'pure-base release inputs contain a prebuilt business WASM artifact' >&2
+            exit 1
+          fi
+          grep -Fq '/var/run/docker.sock:/var/run/docker.sock' docker-compose.yml
+
       - name: Check ACR secrets presence
         # 安全诊断：只判断 secret 是否注入，不打印值（避免泄露）。
         # 若此处报未配置 → 到仓库 Settings → Secrets and variables → Actions 添加；
@@ -113,7 +126,8 @@ jobs:
           tags: |
             ${{ env.ACR_REGISTRY }}/${{ env.ACR_NAMESPACE }}/${{ env.IMAGE_NAME }}:${{ inputs.tag }}
             ${{ env.ACR_REGISTRY }}/${{ env.ACR_NAMESPACE }}/${{ env.IMAGE_NAME }}:sha-${{ steps.meta.outputs.short_sha }}
-          # GHA 16GB/4vCPU 放宽档；不传即 Dockerfile 默认值 = ACR 校准档（见文件头与 Dockerfile 说明）
+          # GHA 16GB/4vCPU 放宽档；Dockerfile 负责以 sherpa + nlu + wasm-plugins + pure-base
+          # 编译模型/音频运行时、NLU 训练/推理与 WASM 宿主；不传即 Dockerfile 默认值 = ACR 校准档。
           build-args: |
             CARGO_BUILD_JOBS=4
             GRADLE_XMX=2048m

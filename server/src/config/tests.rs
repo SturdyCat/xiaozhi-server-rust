@@ -43,6 +43,20 @@ fn default_config_has_engine_keys_filled() {
     assert_eq!(cfg.echomuse.engine, "native");
 }
 
+#[test]
+fn pure_base_device_defaults_are_inert() {
+    let mut cfg = Config::default();
+    assert_eq!(cfg.echomuse.enabled, !cfg!(feature = "pure-base"));
+    assert_eq!(cfg.tuya.enabled, !cfg!(feature = "pure-base"));
+
+    // normalize also protects a pure-base binary opening a normal-build DB.
+    cfg.echomuse.enabled = true;
+    cfg.tuya.enabled = true;
+    cfg.normalize();
+    assert_eq!(cfg.echomuse.enabled, !cfg!(feature = "pure-base"));
+    assert_eq!(cfg.tuya.enabled, !cfg!(feature = "pure-base"));
+}
+
 /// `normalize()` 幂等（load / default / merge 三条路径都可能重复调用）。
 #[test]
 fn normalize_is_idempotent() {

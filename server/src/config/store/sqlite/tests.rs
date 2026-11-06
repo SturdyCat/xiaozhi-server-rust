@@ -207,7 +207,8 @@ fn align_defaults_migrates_legacy_document() {
     assert_eq!(loaded.wakeup.greeting, "我在");
     assert!(loaded.command.enabled && loaded.nlu.enabled);
     assert!(loaded.memory.enabled && loaded.memory.recall_enabled);
-    assert!(loaded.echomuse.enabled && loaded.llm.enabled);
+    assert_eq!(loaded.echomuse.enabled, !cfg!(feature = "pure-base"));
+    assert!(loaded.llm.enabled);
     // 版本已推进 + 留了一条可回滚的历史
     let ver: i64 = store
         .conn()
@@ -342,7 +343,7 @@ fn align_defaults_fills_new_sections_automatically() {
     );
     // 补进来的是当前代码默认值；用户已有值原样保留；版本本来就最新，保持不变
     let loaded = store.load().unwrap();
-    assert!(loaded.tuya.enabled);
+    assert_eq!(loaded.tuya.enabled, !cfg!(feature = "pure-base"));
     assert_eq!(loaded.tuya.access_id, "");
     assert_eq!(loaded.server.port, 9000, "用户已有值不得被补全覆盖");
     let ver: i64 = store
@@ -405,9 +406,10 @@ fn align_defaults_repairs_null_section() {
         report.summary()
     );
     let loaded = store.load().unwrap();
-    assert!(
+    assert_eq!(
         loaded.tuya.enabled,
-        "null 段被补成当前默认（enabled 默认开）"
+        !cfg!(feature = "pure-base"),
+        "null 段被补成当前构建默认值"
     );
     let _ = std::fs::remove_file(&path);
 }

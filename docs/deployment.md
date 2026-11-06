@@ -4,6 +4,19 @@
 
 ## 9. Docker 部署细节
 
+### Pure-base 发布镜像
+
+发布镜像由根目录 [`Dockerfile`](<../Dockerfile>) 构建，Rust 服务端使用
+`sherpa,nlu,wasm-plugins,pure-base` features：
+
+- `sherpa` 提供真实 ASR/TTS/VAD 模型与音频运行时；
+- `wasm-plugins` 编译 WASM Component 宿主与 WIT 契约；
+- `pure-base` 保持发布进程为底座装配，镜像内不预置 WASM 业务 artifact。
+
+WASM 宿主本身随 `/app/server` 发布；业务组件必须通过明确的运行期插件管理流程提供，
+不会从 Docker build context 或镜像层自动带入；运行期 artifact 仍由数据卷与插件管理流程提供。
+NLU 训练沿用 compose 显式挂载的宿主 Docker socket，训练脚本作为服务端编译期源码输入保留。
+
 ### 模型自动下载
 
 容器入口（`docker-entrypoint.sh`）启动时检测关键模型文件（`silero_vad.onnx`、`SenseVoiceSmall/tokens.txt`、`Kokoro/model.int8.onnx`）：
@@ -11,7 +24,7 @@
 - **缺失则自动下载**到挂载的 `/data/models`（从官方 GitHub Release 拉整包 tar.bz2 本地解压，幂等 + 断点续传）。
 - 默认直连原始地址；compose 配置 `GITHUB_PROXY` 才走代理。下载地址可用 `SENSEVOICE_URL` / `KOKORO_URL` / `SILERO_VAD_URL` 覆盖为完整直链（内网镜像）。
 - 行为开关 `XIAOZHI_AUTO_DOWNLOAD_MODELS`：`missing`（默认）/ `force` / `off`。
-- **设备语音门模型不在入口脚本里下载**：它只在 `[echomuse].enabled=true` 时由 server 进程按官方源（openWakeWord v0.5.1 的 `silero_vad.onnx`，Silero v5，输入/输出两段 sha256 都按上游 `controller/Dockerfile` 钉住）补一份到 `/data/models/oww/silero_vad.onnx`；未启用 EchoMuse 的部署不会为它下任何字节。失败只告警，不影响 ASR/TTS，只让「安装 VAD」接口 500。`OWW_VAD_URL` 可覆盖为内网镜像，`XIAOZHI_OWW_VAD_PATH` 指向别处时不再自动下载。它与 `SILERO_VAD_URL`（服务端 ASR 切段用）用途不同，服务端读取时会把它转成设备要求的 typed 字段布局。
+- 入口只准备共享的模型/音频运行时文件；不拉取插件 artifact，也不执行训练任务。
 
 > 不手动预置模型也能直接 `docker compose up`。离线/内网环境：先 `SENSEVOICE_URL=<内网镜像> ./server/scripts/download_models.sh /host/data/models` 预置再挂载，或设 `XIAOZHI_AUTO_DOWNLOAD_MODELS=off`。
 
@@ -19,13 +32,13 @@
 
 构建期固定 `RUSTFLAGS="-C target-cpu=x86-64-v2"`（见 `Dockerfile`），兼容 N5105（Tremont，无 AVX）。**不要用 `native`**——会在构建机嵌入部署机不支持的 AVX 指令，运行时 `SIGILL` 崩溃。
 
-### 真实引擎（`sherpa` feature）本地依赖
+### 真实模型/音频与 NLU 运行时（`sherpa,nlu,wasm-plugins,pure-base`）本地依赖
 
 1. 系统 `libopus`；2. 网络（构建期原生库下载）；3. 本地模型文件：
 
 ```bash
 ./server/scripts/download_models.sh /host/data/models     # 裸机部署时手动下载
-cd server && ~/.cargo/bin/cargo run --release --features sherpa -- --config-db /host/data/data.db
+cd server && ~/.cargo/bin/cargo run --release --features sherpa,nlu,wasm-plugins,pure-base -- --config-db /host/data/data.db
 ```
 
 ## 构建与故障边界
@@ -36,7 +49,7 @@ cd server && ~/.cargo/bin/cargo run --release --features sherpa -- --config-db /
 - 镜像发布两条来源**互斥**：阿里云 ACR「源代码自动构建」（push 即建 amd64 `latest`）与 [GitHub Actions 手动构建](<../.github/workflows/docker-amd64.yml>)（仅 linux/amd64，推 `registry.cn-hangzhou.aliyuncs.com/notip-com-cn/xiaozhi-server-rust`，需仓库 secrets `ACR_USERNAME`/`ACR_PASSWORD`）。同一 tag 只能由其中一处产出——启用 GHA 产出 `latest` 时先到 ACR 控制台关闭该仓库的自动构建规则（或改其输出 tag）。
 - Rust 镜像版本与[锁文件](<../server/Cargo.lock>)同步，不随意降级；[构建目标](<../Dockerfile>)固定 x86-64-v2，不用 native，以免在 N5105 上 SIGILL。
 - dummy main 依赖缓存之后必须 touch 源码并 cargo clean 本 crate；不能删强制重编步骤，否则可能运行占位二进制、零日志 exit 0。不要用二进制 grep 哨兵作为产物断言。
-- [compose](<../docker-compose.yml>)使用可写目录卷 `./server-data:/data`；不要 :ro 或退回单文件配置挂载。配置、模型、固件、预设与热句落盘需保持持久化。
+- [compose](<../docker-compose.yml>)使用可写目录卷 `./server-data:/data`；不要 :ro 或退回单文件配置挂载。配置、模型、插件 artifact、预设与热句落盘需保持持久化；NLU 训练另按 compose 显式挂载宿主 Docker socket，训练依赖由独立镜像提供。
 - 模型下载行为与地址以[入口脚本](<../docker-entrypoint.sh>)为准：显式完整 URL 不再套代理；失败中止启动，允许缺模型只用于有意识的诊断，不代表真实引擎可用。
 - 模型包必须对应[配置样例](<../server/config.example.toml>)路径，使用 model.int8.onnx；Kokoro 中文需要双语整包及词典数据，不选仅英文包。
 - 保存配置失败先看启动记录的配置来源与挂载属主/权限，不把“无外部来源导致 400”误判成热刷新问题。

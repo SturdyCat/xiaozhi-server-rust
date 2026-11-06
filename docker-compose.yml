@@ -1,18 +1,19 @@
 # xiaozhi-server-rust 部署编排
 #
 # 用法：
-    #   1. （可选）手动预置模型：  ./scripts/download_models.sh ./server-data
+#   1. （可选）手动预置模型：  ./server/scripts/download_models.sh ./server-data/models
 #      —— 不预置也没关系：容器首次启动会自动检测缺失并下载到挂载的 ./server-data，
 #         之后文件已存在即跳过（见 docker-entrypoint.sh + 下方 XIAOZHI_AUTO_DOWNLOAD_MODELS）。
-#   2. 准备配置：  cp server/config.example.toml server-data/config.toml   # 按需修改 token / api_key / 模型路径
-#      （不手动准备也行：入口脚本检测到容器内无配置时，会用内置示例自动生成）
+#   2. 配置通过管理台/API 写入 server-data/data.db；config.example.toml 仅作字段参考。
+#      空库首启直接使用底座默认配置，不自动启用 EchoMuse/Tuya 等业务插件。
 #   3. 构建启动：  docker compose up -d --build
 #   4. 查看日志：  docker compose logs -f xiaozhi
 #   5. 停止：      docker compose down
 #
 # 说明：
 #   - 镜像由 Dockerfile 三阶段构建：web 阶段构建 Kuikly H5 管理页（client 工程）+
-#     Rust 阶段编译 server（--features sherpa），运行时同源托管管理页与 /api。
+#     Rust 阶段编译 server（--features sherpa,wasm-plugins,pure-base），运行时同源托管管理页
+#     与 /api；WASM 宿主随二进制交付，但镜像不预置任何业务组件。
 #     浏览器访问 http://<host>:8000/ 即管理后台（配置页读写 SQLite 配置库 data.db）。
 #   - 运行时需挂载模型目录；模型目录必须可写（不要挂 :ro）：
 #     入口脚本会在缺失时写入 ./server-data 并持久化。
@@ -35,22 +36,15 @@ services:
     # TTS 合成线程 [tts].num_threads=4 会在这 3.5 核配额内由内核调度，
     # 合成吞吐 ≈ 3.5 核，不会占满整机（等价 --cpus=3.5，见 docker compose config 核对）。
     cpus: "3.5"
-    # host 网络（EchoMuse controller 官方同款要求）：
-    #   - mDNS 广播（_xiaozhi._tcp / _emcontroller._tcp）与设备直连
-    #     在 docker 端口映射的 NAT 后面无法工作，必须共享宿主网络栈；
-    #   - 服务监听 [server].port（默认 8000），host 网络下直接就是
-    #     宿主端口，浏览器访问 http://<host>:8000/、设备连
-    #     ws://<host>:8000/，不再有 ports 映射（改端口只改 [server].port）；
-    #   - macOS/Windows 的 Docker Desktop 不支持 host 网络，请改用
-    #     Linux 宿主部署，或在桌面系统上直跑二进制。
+    # host 网络：服务监听 [server].port（默认 8000），host 网络下直接就是宿主端口，
+    # 浏览器访问 http://<host>:8000/，设备连 ws://<host>:8000/，不再有 ports 映射。
+    # macOS/Windows 的 Docker Desktop 不支持 host 网络，请改用 Linux 宿主部署，
+    # 或在桌面系统上直跑二进制；改端口只改 [server].port。
     network_mode: host
     environment:
       # 配置库文件（与 memory 同卷；空库首启以内置默认启动并落库）。
       XIAOZHI_CONFIG_DB: /data/data.db
-      # 可选：日志过滤（EnvFilter 语法，如 debug）。默认不设，用 main.rs 内置过滤
-      # （info，ort::logging 会话初始化明细压到 warn 不刷屏）；就算这里写 info，
-      # 也会自动追加 ort::logging=warn 降噪底座。要 ort 全量明细需显式写
-      # debug,ort::logging=debug（见 main.rs resolved_log_filter）。
+      # 可选：日志过滤（EnvFilter 语法，如 debug）。默认不设，用 main.rs 内置过滤。
       # RUST_LOG: debug
       # 自动下载模型：missing(默认，缺失才下) | force(强制重下) | off(不下载)
       # 模型从 k2-fsa/sherpa-onnx 官方 GitHub Release 下载整包 tar.bz2 并解压覆盖。
@@ -60,22 +54,16 @@ services:
       GITHUB_PROXY: "https://tvv.tw/"
       # 下载地址可被 SENSEVOICE_URL/KOKORO_URL/SILERO_VAD_URL 覆盖为完整直链
       # （内网镜像，显式 URL 不会被二次套代理），需要时自行添加。
-      # 设备语音门模型（oww/silero_vad.onnx）不在这里下载：仅当 [echomuse].enabled=true
-      # 时由 server 进程按官方源补一份，可用 OWW_VAD_URL 覆盖为内网镜像。
     volumes:
       # ★ 唯一数据卷：宿主 ./server-data ↔ 容器 /data，**内部分目录**各司其职：
       #   /data/models/SenseVoiceSmall 等   模型（首启缺失时入口脚本自动下载，持久化）
-      #   /data/models/oww/silero_vad.onnx  下发到 EchoMuse 设备的语音门模型（启用 echomuse 时自动下载）
       #   /data/data.db                     配置+记忆共用的 SQLite 库（配置唯一真源：
       #                                管理页「保存配置」写 cfg_documents；空库首启自举默认配置）
-      #   /data/firmware/<功能>/<型号>/<板型|_>/
-      #                             ESP32 固件 OTA 托管（按「功能 + 型号」分目录，
-      #                               /api/ota/firmware 上传；设备经 /api/ota 按同功能同型号匹配并自升级）
+      #   /data/plugins/<id>.wasm             运行期上传的插件 artifact（默认目录为空；
+      #                                         不随镜像预置，重启由 WASM 宿主扫描重装）
       # ⚠️ 必须是**可写**挂载（勿加 :ro）。目录挂载支持原子 rename——
       #   旧版「单文件 bind mount → rename EBUSY → 回退原地写」的问题自此布局起不存在。
       - ./server-data:/data
-      # NLU 模型训练（POST /api/nlu/model/build）在**宿主** docker 里跑一个临时训练容器：
-      #   挂入宿主 docker.sock，服务端只 docker run 专用训练镜像（--rm，--cpus/--memory
-      #   限核限内存）。依赖在镜像构建期装好（tools/nlu-trainer/Dockerfile，阿里云 ACR
-      #   构建发布 registry.../notip-com-cn/nlu-trainer），服务端缺失时只 pull。
+      # NLU 模型训练（POST /api/nlu/model/build）在宿主 Docker 中运行临时训练容器；
+      # 服务器仍只提供训练编排/状态与候选管理，训练依赖由独立镜像提供。
       - /var/run/docker.sock:/var/run/docker.sock

@@ -60,7 +60,7 @@ fn default_engine() -> String {
 }
 
 fn default_true() -> bool {
-    true
+    !cfg!(feature = "pure-base")
 }
 
 fn default_region() -> String {
@@ -87,6 +87,11 @@ impl Default for TuyaConfig {
 impl TuyaConfig {
     /// 规范化（幂等）：引擎别名/区域白名单收敛 + 同步周期下限（0 = 仅手动，其余 ≥60s）。
     pub fn normalize(&mut self) {
+        // A pure-base binary must remain inert even when reusing a database
+        // created by a normal build with `[tuya].enabled = true`.
+        if cfg!(feature = "pure-base") {
+            self.enabled = false;
+        }
         self.engine = canonical_engine(&self.engine, TUYA_ENGINES, DEFAULT_TUYA_ENGINE);
         self.region = self.region.trim().to_ascii_lowercase();
         if !REGIONS.contains(&self.region.as_str()) {

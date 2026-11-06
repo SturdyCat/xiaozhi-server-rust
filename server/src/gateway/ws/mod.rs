@@ -136,6 +136,35 @@ pub(super) fn json_ok(body: serde_json::Value) -> Response {
     json_response(StatusCode::OK, body)
 }
 
+#[cfg(feature = "pure-base")]
+async fn pure_base_gate(req: axum::extract::Request, next: axum::middleware::Next) -> Response {
+    let path = req.uri().path();
+    let blocked = path == "/em"
+        || path.starts_with("/em/")
+        || path == "/api/tuya"
+        || path.starts_with("/api/tuya/")
+        || path == "/api/echomuse"
+        || path.starts_with("/api/echomuse/")
+        || path == "/api/memory"
+        || path.starts_with("/api/memory/")
+        || path == "/api/soul"
+        || path.starts_with("/api/soul/")
+        || path == "/api/skills"
+        || path.starts_with("/api/skills/")
+        || path == "/api/skill-tasks"
+        || path.starts_with("/api/skill-tasks/")
+        || path == "/api/ota"
+        || path.starts_with("/api/ota/")
+        || path == "/api/tts/voices"
+        || path.starts_with("/api/tts/voices/")
+        || path == "/api/firmware"
+        || path.starts_with("/api/firmware/");
+    if blocked {
+        return (StatusCode::NOT_FOUND, "业务插件未安装").into_response();
+    }
+    next.run(req).await
+}
+
 /// 构造 Axum 路由：API（健康检查 / WebSocket）之外，其余路径静态托管
 /// `config.server.admin_dir` 指向的管理页面（h5App 构建产物，含 index.html）。
 /// 该目录不存在时，`/` 及以下返回友好提示而非崩溃。
@@ -256,17 +285,19 @@ pub fn router(engines: Arc<Engines>) -> Router {
         .merge(crate::device::voices::router())
         // 服务端数据目录文件管理（/api/files/*）：管理台文件页数据源 + EchoMuse
         // 自定义唤醒词模型上传通道（oww-models/）；通用存储管理，不受 [echomuse] 开关影响
-        .merge(crate::gateway::files::router())
-        // EchoMuse 设备入口（Echo Dot 2 / emOS）：`[echomuse].enabled=true` 才生效
-        // （路由内部自检开关，关闭时返回 404；挂载本身零行为变化）。
+        .merge(crate::gateway::files::router());
+
+    // pure-base 保留通用文件/配置/工作流路由，但不把任何 EchoMuse/Tuya
+    // 设备路由挂进 Axum 表；因此这些业务在该构建中是不可达的，而非仅返回 disabled。
+    #[cfg(not(feature = "pure-base"))]
+    let api = api
+        // EchoMuse 设备入口（Echo Dot 2 / emOS）
         .merge(crate::device::echomuse::routes::em_routes())
-        // EchoMuse 管理面（/api/echomuse/*，经 auth_ok 鉴权）：registry 全表 + 认领 + 下行指令
+        // EchoMuse 管理面（/api/echomuse/*，经 auth_ok 鉴权）
         .merge(crate::device::echomuse::admin::admin_routes())
-        // EchoMuse 蓝牙代理管理面（/api/echomuse/devices/{id}/ble/*，同 gate 鉴权）：
-        // 广播采集查询 + GATT 直驱；`[echomuse].ble_proxy=false` 时统一 404。
+        // EchoMuse 蓝牙代理管理面（/api/echomuse/devices/{id}/ble/*）
         .merge(crate::device::echomuse::ble::ble_routes())
-        // Tuya IoT 设备管理面（/api/tuya/*，经 auth_ok 鉴权 + [tuya].enabled 闸门）：
-        // 凭证/同步状态、设备目录、DP 控制与重命名；`[tuya].enabled=false` 时统一 404。
+        // Tuya IoT 设备管理面（/api/tuya/*）
         .merge(crate::device::tuya::api::routes());
 
     // WASM 插件统一动作端点 + 扩展点首选（feature 门控；未编入 = 路由不存在，
@@ -303,6 +334,9 @@ pub fn router(engines: Arc<Engines>) -> Router {
     } else {
         api.fallback(admin_missing)
     };
+
+    #[cfg(feature = "pure-base")]
+    let app = app.layer(axum::middleware::from_fn(pure_base_gate));
 
     let app = app.with_state(engines);
     // 管理台 WS 通道的 RPC 复用打的就是这份路由表（tower oneshot）：

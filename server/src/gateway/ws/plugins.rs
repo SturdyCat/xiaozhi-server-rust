@@ -57,6 +57,11 @@ pub(super) async fn list_plugins(State(engines): State<Arc<Engines>>) -> Respons
 /// ⚠️ 只读投影：不改变任何运行期行为（与本文件其余端点同一契约）。
 // pub(super)：plugins_tests（兄弟模块）直驱纯函数做契约回归（与 list_plugins 同可见性口径）
 pub(super) fn device_plugins_json(cfg: &crate::config::Config) -> serde_json::Value {
+    // Keep the projection empty in pure-base, even for a config loaded from a
+    // normal-build database. This prevents clients from discovering device UI.
+    if cfg!(feature = "pure-base") {
+        return serde_json::json!([]);
+    }
     let echomuse = cfg.echomuse.enabled;
     let tuya = cfg.tuya.enabled;
     let row = |id: &str, label: &str, registered: bool, section: &str, note: &str| {

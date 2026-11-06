@@ -90,7 +90,7 @@ fn default_music_dir() -> String {
 }
 
 fn default_true() -> bool {
-    true
+    !cfg!(feature = "pure-base")
 }
 
 impl Default for EchomuseConfig {
@@ -110,6 +110,11 @@ impl Default for EchomuseConfig {
 impl EchomuseConfig {
     /// 规范化（幂等）：引擎别名收敛，其余字符串 trim。
     pub fn normalize(&mut self) {
+        // A pure-base binary must remain inert even when reusing a database
+        // created by a normal build with `[echomuse].enabled = true`.
+        if cfg!(feature = "pure-base") {
+            self.enabled = false;
+        }
         self.engine = canonical_engine(&self.engine, ECHOMUSE_ENGINES, DEFAULT_ECHOMUSE_ENGINE);
         self.token = self.token.trim().to_string();
         self.welcome = self.welcome.trim().to_string();

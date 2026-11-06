@@ -88,8 +88,9 @@
 #   若重新启用，须先确认其构建机支持 BuildKit，否则在 RUN --mount 处解析报错。
 # 三个阶段：
 #   web    —— Gradle 构建 Kuikly H5 管理页（client 工程：shared 业务包 + h5App 壳）
-#   build  —— 编译 Rust server（--features sherpa,nlu，真实 ASR/TTS 引擎 + BERT NLU）
-#   运行时 —— debian-slim：同源托管 管理页(/) + /api + /api/ws，模型缺失由入口脚本自下载
+#   build  —— 编译 Rust server（--features sherpa,nlu,wasm-plugins,pure-base，模型/音频运行时 + NLU 训练/推理 + WASM 宿主）
+#   运行时 —— debian-slim：同源托管 管理页(/) + /api + /api/ws，模型缺失由入口脚本按需下载
+#   运行镜像只包含底座运行时与 WASM 宿主，不预置业务 WASM 组件；NLU 训练经受限的宿主 Docker 编排。
 #
 # 运行镜像内浏览器访问 `http://<host>:8000/` 即管理页，`/api/config` 读写 SQLite 配置库（data.db），
 # `/api/ws` 供设备（xiaozhi-esp32）WebSocket 接入；静态页与 API 同源，无 CORS 问题。
@@ -206,11 +207,10 @@ RUN --mount=type=cache,target=/home/gradle/.gradle \
  && test -f apps/h5App/web/em/static/adapter.js
 
 # ---- Rust 构建阶段 ----
-# rust:1.92-bookworm = 满足 ort 2.0.0-rc.14（nlu 特性）的 rustc ≥ 1.92 最低要求
-# （rust:1.90 会报「ort requires rustc 1.92」直接构建失败）。
+# rust:1.95-bookworm = 满足 WASM 宿主（wasmtime 48）所需的 rustc 版本。
 # 保持 Debian（非 alpine）：sherpa-onnx 预编译原生库与 audiopus/libopus 按 glibc 链接，
 # 与 xiaoya 的 musl 静态方案不通用，勿照搬。
-FROM rust:1.92-bookworm AS build
+FROM rust:1.95-bookworm AS build
 
 # pkg-config + libopus-dev：audiopus_sys 需要（libopus 编译/链接）
 RUN apt-get update \
@@ -226,8 +226,8 @@ WORKDIR /app
 #   代价：总时长 ≈ web + build（原先并行取 max），换峰值内存永不同时出现。
 COPY --from=web /src/client/apps/h5App/web/index.html /tmp/.web-stage-done
 
-# 🚨 rustc 并行度上限（ACR 档默认 2，勿删）：cargo 默认 `-j=CPU 核数`，本依赖树含 ort-sys /
-#   tokenizers / sherpa-onnx-sys（自带 C++/protobuf codegen），单 rustc 峰值 1.5–2.5GB，
+# 🚨 rustc 并行度上限（ACR 档默认 2，勿删）：cargo 默认 `-j=CPU 核数`，本依赖树含
+#   wasmtime/cranelift / sherpa-onnx-sys（自带 C++/protobuf codegen），单 rustc 峰值 1.5–2.5GB，
 #   -j4 就能吃掉 8GB 机器的全部内存。2 = 实测能过 ACR 构建机的档位（慢一点，但不会中断）；
 #   GHA（16GB/4vCPU）经 build-args 传 4 对齐核数——上方串行屏障保证与 web 峰值错开，
 #   4 路 rustc 并发（最坏 ~10GB）16GB 放得下。ARG 对本阶段后续 RUN 即环境变量，cargo 直读。
@@ -250,7 +250,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     mkdir -p src \
  && echo 'fn main() {}' > src/main.rs \
- && cargo build --release --features sherpa,nlu --locked \
+ && cargo build --release --features sherpa,nlu,wasm-plugins,pure-base --locked \
  && rm -rf src
 
 # 真实源码（bin-only crate：入口即 src/main.rs，无 lib.rs）
@@ -258,10 +258,9 @@ COPY server/src ./src
 # 编译期内嵌资源：bench_api 样本经 include_bytes!（src/app/bench_api/../../../test_assets）
 # 在编译期读 /app/test_assets/，缺了 cargo 直接编译失败（ACR 2026-10-21 实测）。
 COPY server/test_assets ./test_assets
-# NLU 训练逻辑随服务版本发布；专用训练镜像只提供 Python/ML 依赖。
-# Cargo 清单在 /app，源码四级相对路径对应 /tools，与本地 server/../tools 同构。
+# NLU build code embeds this script at compile time; keep the source available to Cargo.
+# The release compose may grant the explicitly documented host Docker socket for training.
 COPY tools/nlu-trainer/train.py /tools/nlu-trainer/train.py
-
 # ⚠️ 强制重编译本 crate ——「容器零日志 exit 0」事故的根因所在，勿简化这条 RUN。
 #   ① 根因（mtime 陷阱）：COPY 保留构建上下文里文件的 mtime（ACR clone 代码的时刻），它早于
 #      上一步 dummy 在容器内的编译时刻 → cargo 指纹判定「源码比产物旧 = 没改过」，真源码被
@@ -276,7 +275,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     find src -type f -exec touch {} + \
  && cargo clean -p xiaozhi-server-rust --release \
- && cargo build --release --features sherpa,nlu --locked \
+ && cargo build --release --features sherpa,nlu,wasm-plugins,pure-base --locked \
  && strip target/release/xiaozhi-server-rust
 
 # ---- 运行阶段 ----
@@ -288,21 +287,15 @@ FROM debian:bookworm-slim AS runtime
 ENV TZ=Asia/Shanghai
 
 # libopus0：运行期动态链接（audiopus）；curl/bzip2：entrypoint 缺模型时按需下载解包。
-# docker CLI：NLU 模型训练走宿主 docker（/var/run/docker.sock 由 compose 挂入），
-#   只 run 专用训练镜像（依赖在镜像构建期装好，见 tools/nlu-trainer/Dockerfile）；
-#   只装 CLI 不装 daemon（静态二进制，避免 docker.io 全家桶拖大 slim 镜像）。
-# ONNX Runtime 1.22.1 动态库：nlu 特性下 ort 以 load-dynamic 运行时 dlopen——
-#   构建期 ort-sys 不再静态链 onnxruntime/onnx（否则与 sherpa-onnx-sys 的静态 onnx
-#   对象符号重复，ld 报 duplicate symbol）。1.22.1 的 C API(22) 满足 ort rc.14 的最低
-#   API 17，向下兼容。GitHub Release 已不附 Linux 包，改从 NuGet 取（包内
-#   runtimes/linux-x64/native/，未带版本号文件名恰可直接作 ORT_DYLIB_PATH）；
-#   nupkg 含全平台（~128MB）但只解出 Linux 两件，镜像实际只增 ~21MB。
+# docker CLI：NLU 模型训练由 compose 显式挂载的宿主 Docker socket 承载，只运行专用训练镜像。
+# ONNX Runtime 1.22.1 动态库：nlu 特性下 ort 以 load-dynamic 运行时 dlopen，
+#   只解出 Linux native 库供候选模型测试/推理使用。
 RUN apt-get update \
  && apt-get install -y --no-install-recommends libopus0 ca-certificates curl bzip2 unzip tzdata \
  && rm -rf /var/lib/apt/lists/* \
  && curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-27.3.1.tgz \
-      | tar xz --strip-components=1 -C /usr/local/bin docker/docker \
- && curl -fsSL -o /tmp/ort.nupkg \
+       | tar xz --strip-components=1 -C /usr/local/bin docker/docker \
+  && curl -fsSL -o /tmp/ort.nupkg \
       https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/1.22.1/microsoft.ml.onnxruntime.1.22.1.nupkg \
  && unzip -j /tmp/ort.nupkg 'runtimes/linux-x64/native/*' -d /usr/local/lib \
  && rm /tmp/ort.nupkg \
@@ -316,7 +309,15 @@ COPY --from=web /src/client/apps/h5App/web /app/web
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
 # 内置配置示例：字段说明参照（配置真源为 SQLite data.db；示例不再作为首启配置生成）
 COPY server/config.example.toml /app/config.example.toml
-RUN chmod +x /app/docker-entrypoint.sh
+# Release smoke checks: the binary/entrypoint must be present, and no prebuilt WASM
+# business artifact may enter the image. The host is compiled into /app/server;
+# runtime plugin installation remains an explicit deployment operation.
+RUN chmod +x /app/docker-entrypoint.sh \
+ && test -x /app/server \
+ && if find /app -type f -name '*.wasm' -print -quit | grep -q .; then \
+      echo 'base-only image must not contain a prebuilt WASM artifact' >&2; \
+      exit 1; \
+    fi
 
 # 数据卷：模型持久化挂载点（entrypoint 缺失时自动下载到此；必须可写，勿 :ro 挂载）
 RUN mkdir -p /data
@@ -326,21 +327,16 @@ VOLUME ["/data"]
 #   XIAOZHI_CONFIG_DB：配置库文件（/data 内；空库首启以内置默认启动并落库）
 #   XIAOZHI_ADMIN_DIR：管理页静态目录覆盖（见 main.rs load_config），指向上方 /app/web
 #   XIAOZHI_AUTO_DOWNLOAD_MODELS：missing(默认,缺失才下) | force | off
-#   （模型统一从 HuggingFace 直连下载，无需代理；SENSEVOICE_URL/KOKORO_URL/SILERO_VAD_URL 可覆盖为内网镜像地址）
-#   OWW_VAD_URL 只被 server 进程读取：下发到 EchoMuse 设备的语音门模型（Silero v5，
-#   官方来源 openWakeWord v0.5.1 release），且仅在 [echomuse].enabled=true 时下载。
-# 注意：镜像不内置 RUST_LOG 默认值（保持代码单一默认源）：
-#   main.rs 无论 RUST_LOG 是否设置都会保证 ort::logging=warn 降噪底座
-#   （resolved_log_filter），只有显式写 ort 目标指令（如 debug,ort::logging=debug）
-#   才见 ONNX Runtime 会话初始化明细。需要调业务级别时在 compose 的
-#   environment 里按需设置 RUST_LOG。
+#   （SenseVoice/Kokoro/Silero VAD 从 sherpa-onnx Release 下载；SENSEVOICE_URL/
+#   KOKORO_URL/SILERO_VAD_URL 可覆盖为内网镜像地址。）
+# 注意：镜像不内置 RUST_LOG 默认值（保持代码单一默认源），需要调业务级别时在 compose
+#   的 environment 里按需设置 RUST_LOG。
 ENV XIAOZHI_CONFIG_DB=/data/data.db \
     XIAOZHI_ADMIN_DIR=/app/web \
     XIAOZHI_AUTO_DOWNLOAD_MODELS=missing \
     ORT_DYLIB_PATH=/usr/local/lib/libonnxruntime.so
-# 8000 = 主端口（[server].port）；8767 = EchoMuse 控制器专用端口（[echomuse].plain_port）。
 # host 网络部署（docker-compose 默认）下 EXPOSE 仅作文档，监听端口即宿主端口。
-EXPOSE 8000 8767
+EXPOSE 8000
 
 # 健康检查：curl 已随运行层安装；/api/health 不依赖模型就绪，start-period 20s 足够。
 # 端口读服务启动时落盘的 /data/.runtime_port（见 main.rs），改 [server].port 无需同步这里；

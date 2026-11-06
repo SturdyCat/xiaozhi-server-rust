@@ -24,6 +24,9 @@ esp_home = ["dep:esphome-native-api"]
 # 精选 feature 子集（非 default）：不需要 async/cranelift 之外的引擎、cache、GC、threads。
 # 48.x 线：rustc 下限 1.95，本仓库工具链满足；50.x 尚年轻，暂不追新。
 wasm-plugins = ["dep:wasmtime"]
+# 纯底座运行时：保留通用语音/工作流/模型与 WASM 宿主，但不装配或暴露
+# EchoMuse/Tuya 业务面。与 wasm-plugins 可同时启用。
+pure-base = []
 
 [dependencies]
 axum = { version = "0.8.4", features = ["ws"] }
