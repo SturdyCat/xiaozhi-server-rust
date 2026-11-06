@@ -245,9 +245,7 @@ fn cloned(value: &Value) -> Value {
 
 /// Raw tinymix speaker control index, not a percent (upstream volumeMax=127).
 pub(crate) fn volume_level(body: &Value) -> Option<u64> {
-    body.get("level")
-        .and_then(Value::as_u64)
-        .filter(|v| *v <= 127)
+    crate::device::capabilities::shared::parse_volume_level(body).map(u64::from)
 }
 
 /// Dropping an old/aborted control task must never remove a replacement session.

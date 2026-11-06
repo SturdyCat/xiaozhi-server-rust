@@ -58,6 +58,12 @@ pub use crate::plugins::weather::WeatherConfig;
 pub struct PluginsConfig {
     /// 平台总闸：false = 完全跳过产物装载与启动引导（宿主空表照常可启动）。
     pub enabled: bool,
+    /// 严格完整性模式：true 时未配置 artifact SHA-256 pin 的产物不装载/不引导。
+    /// 默认 false 保持 P3 以前的旧配置兼容语义。
+    pub require_artifact_pin: bool,
+    /// Ed25519 公钥（标准 base64）；配置后每个启用条目都必须提供 attestation。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attestation_public_key: Option<String>,
     /// 每插件条目（键 = 插件 id）。
     pub entries: std::collections::HashMap<String, PluginEntryConfig>,
 }
@@ -66,6 +72,8 @@ impl Default for PluginsConfig {
     fn default() -> Self {
         Self {
             enabled: true,
+            require_artifact_pin: false,
+            attestation_public_key: None,
             entries: std::collections::HashMap::new(),
         }
     }
@@ -86,6 +94,8 @@ pub struct PluginEntryConfig {
     pub enabled: bool,
     /// 可选的内容摘要钉版（SHA-256 小写十六进制）。缺省表示兼容旧配置，不校验摘要。
     pub artifact: Option<String>,
+    /// 可选的 Ed25519 detached attestation（标准 base64，签名覆盖 artifact 摘要文本）。
+    pub attestation: Option<String>,
 }
 
 impl Default for PluginEntryConfig {
@@ -93,6 +103,7 @@ impl Default for PluginEntryConfig {
         Self {
             enabled: true,
             artifact: None,
+            attestation: None,
         }
     }
 }

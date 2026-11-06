@@ -10,6 +10,8 @@
 
 use std::path::{Path, PathBuf};
 
+use base64::Engine;
+use ring::signature;
 use sha2::{Digest, Sha256};
 
 /// 单产物大小上限（组件实际 ~40-160KB；8MB 足够容纳带嵌入资源的插件）。
@@ -38,6 +40,20 @@ impl ArtifactDir {
     pub fn digest(bytes: &[u8]) -> String {
         let digest = Sha256::digest(bytes);
         digest.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    /// 验证 detached Ed25519 attestation：签名覆盖摘要的 ASCII 文本。
+    /// 空配置保持兼容；只有同时配置公钥和条目签名时才启用密码学 admission。
+    pub fn verify_attestation(public_key: &str, signature_b64: &str, digest: &str) -> bool {
+        let Ok(public_key) = base64::engine::general_purpose::STANDARD.decode(public_key) else {
+            return false;
+        };
+        let Ok(signature_bytes) = base64::engine::general_purpose::STANDARD.decode(signature_b64)
+        else {
+            return false;
+        };
+        let key = signature::UnparsedPublicKey::new(&signature::ED25519, public_key);
+        key.verify(digest.as_bytes(), &signature_bytes).is_ok()
     }
 
     /// 读取已落盘产物并计算摘要；缺失或不可读时返回 None。

@@ -289,11 +289,14 @@ backend = "native"                   # 技能查询后端：native = 内置 reqw
 
 [plugins]
 enabled = true                       # WASM 插件平台总闸：false = 完全跳过装载与启动引导
+require_artifact_pin = false          # 严格完整性 admission：true = 未配置 artifact SHA-256 的产物不装载/不引导
+# attestation_public_key = "<base64-ed25519-public-key>" # 配置后每个启用插件都必须有签名
 
 [plugins.entries."weather.official"]
 enabled = true                       # 每插件启停（键 = 插件 id；缺省启用——上传落盘即意图）。
                                      # 禁用 = 重启不装载、启动引导跳过；改后需重启
 # artifact = "<sha256>"              # 可选内容钉版；摘要不符的落盘产物重启时跳过
+# attestation = "<base64-signature>"  # Ed25519 签名，覆盖 artifact 摘要文本
                                      # 上传采用会自动回写真实摘要；缺省兼容旧配置放行
 
 [wakeup]

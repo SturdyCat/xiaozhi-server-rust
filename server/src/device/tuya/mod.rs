@@ -137,7 +137,10 @@ fn assemble(data_dir: &Path) -> TuyaEngine {
         writable: Arc::new(Mutex::new(HashMap::new())),
         inflight: Mutex::new(HashMap::new()),
         poll: Mutex::new(HashMap::new()),
-        sync_state: Mutex::new(SyncState { syncing: false, last_start: None }),
+        sync_state: Mutex::new(SyncState {
+            syncing: false,
+            last_start: None,
+        }),
         unregistered: Mutex::new(Vec::new()),
         cred_fp: Mutex::new(String::new()),
     }

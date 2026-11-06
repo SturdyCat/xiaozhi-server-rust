@@ -1,6 +1,6 @@
 # WASM 插件平台（方案 v4 实施）
 
-> 状态：**P0 + P1 + P2(a–e) + P3（配置门/上传 UI/摘要钉版）+ P4a/P4b/P4c/P4d + P5a/P5b + P6a + P7a–P7g + P8a/P8b 已实施**（远端签名校验、P8 原生路径收口仍待）；Tuya native command consumer 已接入现有 worker，见 P5b；分发模型已按用户方向反转，见 §分发。
+> 状态：**P0 + P1 + P2(a–e) + P3（配置门/上传 UI/摘要钉版）+ P4a/P4b/P4c/P4d + P5a/P5b + P6a + P7a–P7g + P8a/P8b/P8c 已实施**（CI provenance attestation 生成与验证、服务端 Ed25519 artifact admission、P8 native 路径收口已补；native 数据面按兼容性要求保留）；Tuya native command consumer 已接入现有 worker，见 P5b；分发模型已按用户方向反转，见 §分发。
 > 概念蓝本：DeepSeek Harness（"Everything is a Plugin"，cordis 插件框架）；
 > 本仓库现状与源码：`server/wit/plugin.wit`、`server/src/plugins/wasm/`、`tools/wasm-fixtures/`。
 
@@ -14,6 +14,20 @@
    协议编排、配置模板）；**密集计算（模型推理）一律原生**——模型工件由调度构建流水线
    （NLU 模式：Docker 训练/转换 → 候选验证 → 显式采用）产出，宿主原生引擎服务执行。
    张量计算永不越过 wasm 边界（与"帧级不进 wasm"同一铁律的张量级推广）。
+
+### 1.1 设备公共能力层（P9 规划）
+
+“系统能力”在本项目语境中指**接入硬件提供的公共能力**，不是服务器自身提供重启/音量。EchoMuse、Xiaozhi ESP、ESPHome 等设备适配器可以实现同一能力，业务技能和业务插件通过公共 native 模块复用，避免重复实现。
+
+三层边界：
+
+- **项目底座**：连接/协议、会话、MCP、配置、WASM 宿主、权限审计和原生数据面适配器。
+- **设备公共能力层**：能力 ID、参数边界、设备能力发现、adapter 路由和统一错误分类；当前首个共享 helper 位于 `server/src/device/capabilities/`。
+- **业务插件/技能层**：天气、Tuya 场景、自动化和策略差异；只引用公共能力，不复制音量、生命周期、状态等设备控制逻辑。
+
+性能规则：PCM、帧 VAD、模型推理、EchoMuse WS/keepalive/PTY、Tuya LAN worker 等 hot path 直接 native，不强制经过 WASM。只有低频、可审计且确有替换需求的 control path 才允许 `业务 WASM → host effect → 设备公共能力层`；WASM 不是公共设备能力的必经层。
+
+P9a/P9b/P9c 首批落地：`server/src/device/capabilities/` 已提供稳定 `device.*` capability ID、跨设备音量量化/整数边界 helper 与 native `CapabilityRegistry`；ESPHome adapter 与 EchoMuse runtime 共用 helper，旧入口和协议保持不变。registry 仅路由低频 native action，WASM 不是必经层。P9 architecture guard 已覆盖 EchoMuse/推理/分句/Tuya LAN hot path 不调用 WASM 及 capability registry native-owned，首批 helper/registry/alias/adapter matrix **7 passed**，架构守卫 **7 passed**。
 
 ## 2. 概念来源映射（DSH → 本仓库）
 
@@ -177,12 +191,12 @@ P2 在 `/api/plugins` 投影合并两清单；P4+ 按域迁移（provider 绑定
 | P0 | WIT 契约 + 沙箱宿主 + 扩展点解析/回退 + waterfall + hello/trap 冒烟 | ✅ 已实施 |
 | P1 | guest SDK crate（`xiaozhi-plugin-sdk`，含分配失败→Err）+ weather 试点 + 用户插件替换演练 | ✅ 已实施（P1a SDK/kv/替换演练；P1b http 回灌；P1c weather.official 全瀑布回放）——生产接线（skills 事件桥 + backend 开关）随 P2 |
 | P2 | `/api/plugins` 投影合并 + 统一动作端点 + 客户端槽位合并（PluginSlots.kt）+ 事件队列 | ✅ 已实施（P2a–P2d 服务端全量 + P2e 客户端 PluginSlots 槽位合并/纯模型回归；余：插件面板动作执行 UI 与配置编辑） |
-| P3 | ~~构建流水线~~ → **分发与引导落地**（P2b 上传/验证/采用/重启重装 + Docker 启动引导 + builder 镜像；P3 `[plugins]` 配置段总闸/每插件启停、raw 直传配置门、artifact SHA-256 钉版与 ConfigStore 持久化） | 🚧 已实施；builder-image CI 含组件校验与 digest 清单，余：远端签名校验 |
+| P3 | ~~构建流水线~~ → **分发与引导落地**（P2b 上传/验证/采用/重启重装 + Docker 启动引导 + builder 镜像；P3 `[plugins]` 配置段总闸/每插件启停、raw 直传配置门、artifact SHA-256 钉版与 ConfigStore 持久化） | ✅ 已实施；builder-image CI 含组件校验、digest 清单与 provenance attestation |
 | P4 | asr/tts/llm/vad.provider **绑定与策略**插件化（推理留原生） | ✅ P4a/P4b/P4c/P4d 已实施（ASR utterance 级远端变体；TTS/LLM/VAD 为控制策略包装器，native PCM/HTTP/SSE/逐帧 VAD 数据面保持原生） |
 | P5 | tuya 连接器插件化（lan-socket 宿主服务） | ✅ P5a 控制策略 wrapper + P5b typed lan-socket effect/有界 queue + native consumer 已实施（worker drain、真实 Tuya LAN 执行、KV 结果回写） |
 | P6 | echomuse 插件化（宿主保留 WS/keepalive/hub/PTY） | ✅ P6a 会话入口策略 wrapper 已实施（device.echomuse；native 承载/音频/PTY 保留） |
 | P7 | 其余域（nlu/唤醒/echo 的**策略与目录**；skills 域；prompt/soul/memory.policy；**debug 域**：节点测试/日志流/测试台独立成插件——用户方向 2026-11-04） | 🚧 P7a 天气缓存粒度统一、P7b prompt.soul、P7c wakeup.strategy、P7d debug.policy、P7e skill.policy、P7f memory.policy、P7g nlu.catalog 有界策略桥已实施；其余策略/目录域待做 |
-| P8 | 收口：删原生路径、架构测试白名单归零、本文档归档实测数据 | 🚧 P8a bridge 依赖守卫 + P8b native 数据面归属证据已实施；原生路径删除与白名单归零待继续 |
+| P8 | 收口：删原生路径、架构测试白名单归零、本文档归档实测数据 | ✅ P8a bridge 依赖守卫 + P8b native 数据面归属证据 + P8c 删除门槛矩阵 + 显式 policy/fallback guard 已实施；native 数据面不删除，按兼容性保留 |
 
 ## 10. P0/P1a 验证证据
 
@@ -206,7 +220,7 @@ P2 在 `/api/plugins` 投影合并两清单；P4+ 按域迁移（provider 绑定
 | 重启重装 | assemble 扫描数据卷 `plugins/*.wasm` 逐个装载（坏件跳过不阻断启动） | P2a/P2b 已交付 |
 | 开发态 | 改插件源 → `./build.sh` 只重建 guest（独立 crate）；测试经 `ensure_fixture` 按需重建（缺失/源更新），git 忽略产物 | 已生效 |
 
-后续（P3 未完成项）：远端签名校验。builder 镜像 CI 已由 `.github/workflows/plugin-builder.yml` 覆盖组件校验与 digest 清单。`[plugins.entries."<id>"]` 已支持
+服务端 admission 已支持 Ed25519 detached signature：`[plugins].attestation_public_key` 配置标准 base64 公钥，条目 `attestation` 签名覆盖 artifact SHA-256 摘要文本；缺签名或校验失败在 WASM load/bootstrap 前 fail-closed。builder 镜像 CI 已由 `.github/workflows/plugin-builder.yml` 覆盖组件校验、digest 清单，以及 GitHub provenance attestation 的生成与 `gh attestation verify` 验证。`[plugins.entries."<id>"]` 已支持
 `enabled` 与可选 `artifact`（SHA-256 内容钉版）：上传采用经 ConfigStore 持久回写，重启重装
 严格跳过摘要不符产物；缺省 `artifact` 保持旧配置兼容放行。**debug 域（节点测试/日志流/测试台）
 也独立成插件**（P7）。
@@ -339,7 +353,7 @@ P2 在 `/api/plugins` 投影合并两清单；P4+ 按域迁移（provider 绑定
 - `wakeup_prepare` 仅把 native `[wakeup].greeting` 规范化后的有界目录（最多 64 条、每条最多 256 bytes）和 `persist` 元数据交给 `wakeup.strategy`；插件只能返回目录索引与 `route:"native"`，不能注入任意文本、PCM、TTS 参数、缓存键或音频。
 - 原生 `WakeGreeting` 仍负责目录、随机/快照语义；会话沿用 `speak_canned`、`HotAudioKey`、TTS、内存/磁盘缓存和下行链路。策略失败、缺插件或非法索引不影响对话，调用方保留原生问候路径。
 - hello 夹具声明 `wakeup.strategy` 并返回索引 0；bridge 测试覆盖成功回环、缺插件 fail-closed、空目录拒绝。默认未装载扩展点时不调用桥，native 路径零行为变化。
-- P7b/P7c bridge 回归 **22 passed**；当前默认全量 **1244 passed / 6 ignored**、wasm-plugins 全量 **1338 passed / 6 ignored**，guest SDK **5 passed**。
+- P7b/P7c bridge 回归 **22 passed**；当前默认全量 **1276 passed / 6 ignored**、wasm-plugins 全量 **1375 passed / 6 ignored**，guest SDK **5 passed**。P9 native capability registry/action alias 回归 **6 passed**，P9 architecture guards **7 passed**。
 
 ### P7d（`debug.policy` 有界调试控制策略，2026-11-05）
 
@@ -378,13 +392,29 @@ P2 在 `/api/plugins` 投影合并两清单；P4+ 按域迁移（provider 绑定
 - hello fixture 增加 `nlu.catalog` 回环，bridge 测试覆盖目录过滤和候选上限；新增回归 **2 passed**。
   该 seam 只控制目录呈现，不改变 native NLU/model-only 识别路径。
 
-### P8a（WASM bridge 架构守卫，2026-11-05）
+### P8a/P8b（WASM bridge 架构守卫与 native 所有权证据，2026-11-05）
 
 - 新增外置 `plugins::wasm::tests::architecture` 回归，扫描 bridge/policy 源文件，禁止直接依赖
   `device`、`gateway`、`workflow`、`runtime`、`TcpStream` 或 `reqwest` 等 native 数据面符号。
 - 同时固定策略返回 `route:"native"` 契约，确保 WASM 只做有界控制面决策；Tuya LAN、EchoMuse WS/PTY、
   PCM/VAD、HTTP/SSE、技能执行和记忆存储仍由 native 承担。
-- P8a 架构守卫新增回归 **3 passed**；同时保留 Tuya/EchoMuse/memory native 所有权标记，未删除任何原生路径，避免破坏固件兼容。
+- P8a/P8b 架构守卫新增回归 **5 passed**；同时保留 Tuya/EchoMuse/memory native 所有权标记，并守卫重启重装前的 artifact SHA-256 pin，未删除任何原生路径，避免破坏固件兼容。
+- 新增 `[plugins].require_artifact_pin` 严格 admission 开关：默认 `false` 保持旧配置兼容；设为 `true` 时，未配置 artifact SHA-256 pin 的产物不装载、不引导。
+- 新增 Ed25519 detached attestation admission：`[plugins].attestation_public_key` + 条目 `attestation`，签名覆盖摘要文本；公钥启用后缺签名、非法 base64 或校验失败均在 runtime load 与 bootstrap host.load 前拒绝。
+
+### P8c（native 路径删除门槛矩阵，2026-11-05）
+
+在没有达到以下证据前，不删除任何 native 路径：
+
+| 域 | 当前 native 所有权 | 删除前必须具备的证据 | 当前状态 |
+|---|---|---|---|
+| Tuya LAN | `device/tuya/wasm.rs` + 现有 worker | consumer 全链路、per-device 串行、错误分类和固件回归 | 保留 native，证据已有，待最终归档 |
+| EchoMuse | `device/echomuse/runtime.rs` / routes | WS、keepalive、hub、PTY、音频和设备状态回归 | 保留 native，P6a 仅策略化入口 |
+| Memory | `plugins/memory/*` | graph/store/rag 存储、抽取、召回和 prompt 注入回归 | 保留 native，P7f 仅预算策略 |
+| NLU | `plugins/nlu/*` | model-only 识别、拒识、目录过滤和技能执行回归 | 保留 native，P7g 不接收 utterance |
+
+P8c 当前建立删除门槛并明确不删除 native 数据面；架构守卫、native ownership 与显式 policy/fallback 测试必须继续通过，默认 feature
+和 ESP 固件协议兼容性不得改变。
 
 ### P3a（`[plugins]` 配置段：总闸 + 每插件启停，2026-11-04）
 

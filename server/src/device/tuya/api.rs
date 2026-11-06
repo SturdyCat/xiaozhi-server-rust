@@ -271,7 +271,12 @@ pub(crate) fn cloud_proxy_call(v: &Value) -> Result<CloudProxyCall, String> {
         "DELETE" => "DELETE",
         other => return Err(format!("method 只支持 GET/POST/DELETE（收到 {other}）")),
     };
-    let path = v.get("path").and_then(Value::as_str).unwrap_or("").trim().to_string();
+    let path = v
+        .get("path")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
     if !path.starts_with("/v1.") {
         return Err("path 必须以 /v1. 开头（涂鸦 OpenAPI 路径，如 /v1.0/devices）".into());
     }
@@ -289,7 +294,11 @@ pub(crate) fn cloud_proxy_call(v: &Value) -> Result<CloudProxyCall, String> {
                 let val = &map[*k];
                 let rendered = val.to_string();
                 let text = val.as_str().unwrap_or(&rendered);
-                format!("{}={}", encode_query_component(k), encode_query_component(text))
+                format!(
+                    "{}={}",
+                    encode_query_component(k),
+                    encode_query_component(text)
+                )
             })
             .collect();
         path_query = format!("{}?{}", path_query, pairs.join("&"));
@@ -303,7 +312,11 @@ pub(crate) fn cloud_proxy_call(v: &Value) -> Result<CloudProxyCall, String> {
         }
         _ => String::new(),
     };
-    Ok(CloudProxyCall { method, path_query, body_json })
+    Ok(CloudProxyCall {
+        method,
+        path_query,
+        body_json,
+    })
 }
 
 /// query 键/值的最小 URL 编码（涂鸦 query 值实践中是 id/游标/分页数，普通字符直通）。
@@ -322,8 +335,7 @@ fn encode_query_component(text: &str) -> String {
 
 /// 代理回包响应体：云回包原样透传（调试所见即所得），外层带 HTTP 状态。
 pub(crate) fn cloud_proxy_payload(status: u16, raw_body: &str) -> Value {
-    let body: Value =
-        serde_json::from_str(raw_body).unwrap_or(Value::String(raw_body.to_string()));
+    let body: Value = serde_json::from_str(raw_body).unwrap_or(Value::String(raw_body.to_string()));
     json!({ "status": status, "body": body })
 }
 
@@ -611,7 +623,14 @@ async fn cloud_proxy(
     }
     let mut client = engines.tuya.cloud.lock().await;
     match client
-        .proxy_request(&cfg.region, &cfg.access_id, &cfg.access_secret, call.method, &call.path_query, &call.body_json)
+        .proxy_request(
+            &cfg.region,
+            &cfg.access_id,
+            &cfg.access_secret,
+            call.method,
+            &call.path_query,
+            &call.body_json,
+        )
         .await
     {
         Ok(resp) => json_ok(cloud_proxy_payload(resp.status, &resp.body)),
@@ -621,7 +640,10 @@ async fn cloud_proxy(
                 super::cloud::CloudError::Network(_) => "network",
                 super::cloud::CloudError::Api(_) => "api",
             };
-            json_error(StatusCode::BAD_GATEWAY, cloud_proxy_error(kind, &e.message()))
+            json_error(
+                StatusCode::BAD_GATEWAY,
+                cloud_proxy_error(kind, &e.message()),
+            )
         }
     }
 }

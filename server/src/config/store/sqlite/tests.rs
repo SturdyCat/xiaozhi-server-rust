@@ -405,6 +405,9 @@ fn align_defaults_repairs_null_section() {
         report.summary()
     );
     let loaded = store.load().unwrap();
-    assert!(loaded.tuya.enabled, "null 段被补成当前默认（enabled 默认开）");
+    assert!(
+        loaded.tuya.enabled,
+        "null 段被补成当前默认（enabled 默认开）"
+    );
     let _ = std::fs::remove_file(&path);
 }

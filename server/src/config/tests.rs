@@ -468,6 +468,26 @@ fn plugins_section_parses_quoted_dotted_keys_and_gates_loading() {
 }
 
 #[test]
+fn plugins_section_supports_explicit_strict_artifact_pin_admission() {
+    let cfg: Config = toml::from_str(
+        r#"[plugins]
+require_artifact_pin = true
+[plugins.entries."signed.plugin"]
+artifact = "{}"
+"#,
+    )
+    .unwrap();
+    assert!(cfg.plugins.require_artifact_pin);
+    assert_eq!(
+        cfg.plugins.entries["signed.plugin"].artifact.as_deref(),
+        Some("{}")
+    );
+    assert!(cfg.plugins.entries["signed.plugin"].attestation.is_none());
+    assert!(!Config::default().plugins.require_artifact_pin);
+    assert!(Config::default().plugins.attestation_public_key.is_none());
+}
+
+#[test]
 fn plugins_section_persists_optional_artifact_pin_and_keeps_legacy_compatibility() {
     let digest = "ab".repeat(32);
     let text = format!(

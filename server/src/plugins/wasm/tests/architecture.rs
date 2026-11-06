@@ -44,3 +44,70 @@ fn native_data_plane_ownership_markers_remain_present_before_cleanup() {
     assert!(echomuse.contains("hub_remove_session") || echomuse.contains("session"));
     assert!(memory.contains("MemoryProvider") || memory.contains("GraphMemory"));
 }
+
+#[test]
+fn runtime_keeps_artifact_integrity_gate_before_wasm_load() {
+    let runtime = include_str!("../../../runtime/mod.rs");
+    assert!(runtime.contains("artifact_matches"));
+    assert!(runtime.contains("ArtifactDir::digest"));
+    assert!(runtime.contains("continue;"));
+    let bootstrap = include_str!("../bootstrap.rs");
+    assert!(bootstrap.contains("require_artifact_pin"));
+    assert!(bootstrap.contains("verify_attestation"));
+    assert!(bootstrap.contains("host.load"));
+}
+
+#[test]
+fn registry_selection_keeps_wasm_policy_explicit_without_native_fallback() {
+    let selection = include_str!("../../../plugins/registry/impls/selection.rs");
+    for predicate in [
+        "cfg.tuya.engine_id() == \"wasm-policy\"",
+        "cfg.echomuse.engine_id() == \"wasm-policy\"",
+        "cfg.vad.engine_id() == \"wasm-policy\"",
+        "cfg.tts.engine_id() == \"wasm-policy\"",
+        "cfg.llm.engine_id() == \"wasm-policy\"",
+    ] {
+        assert!(
+            selection.contains(predicate),
+            "missing explicit selection predicate: {predicate}"
+        );
+    }
+}
+
+#[test]
+fn device_capability_registry_stays_native_and_wasm_optional() {
+    let registry = include_str!("../../../device/capabilities/registry.rs");
+    assert!(!registry.contains("plugins::wasm"));
+    assert!(!registry.contains("WasmHost"));
+    assert!(registry.contains("DeviceCapabilityAdapter"));
+}
+
+#[test]
+fn native_hot_paths_do_not_dispatch_wasm() {
+    for (name, source) in [
+        (
+            "echomuse/runtime.rs",
+            include_str!("../../../device/echomuse/runtime.rs"),
+        ),
+        (
+            "echomuse/transport.rs",
+            include_str!("../../../device/echomuse/transport.rs"),
+        ),
+        ("tuya/lan.rs", include_str!("../../../device/tuya/lan.rs")),
+        (
+            "workflow/pipeline/inference.rs",
+            include_str!("../../../workflow/pipeline/inference.rs"),
+        ),
+        (
+            "workflow/pipeline/splitter.rs",
+            include_str!("../../../workflow/pipeline/splitter.rs"),
+        ),
+    ] {
+        for forbidden in ["crate::plugins::wasm", "WasmHost", "dispatch_wasm"] {
+            assert!(
+                !source.contains(forbidden),
+                "native hot path {name} must not dispatch WASM via {forbidden}"
+            );
+        }
+    }
+}

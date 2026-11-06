@@ -28,7 +28,10 @@ pub struct CloudResponse {
 
 /// HTTP 发送抽象：真实实现走 reqwest；测试用假 sender 脚本应答。
 pub trait HttpSender: Send + Sync {
-    fn send<'a>(&'a self, req: CloudRequest) -> Pin<Box<dyn Future<Output = Result<CloudResponse, CloudError>> + Send + 'a>>;
+    fn send<'a>(
+        &'a self,
+        req: CloudRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<CloudResponse, CloudError>> + Send + 'a>>;
 }
 
 /// reqwest 实现（10s 超时；rustls，与项目依赖栈一致）。
@@ -52,7 +55,9 @@ impl HttpSender for ReqwestSender {
         req: CloudRequest,
     ) -> Pin<Box<dyn Future<Output = Result<CloudResponse, CloudError>> + Send + 'a>> {
         Box::pin(async move {
-            let mut r = self.client.request(req.method.parse().unwrap_or(reqwest::Method::GET), &req.url);
+            let mut r = self
+                .client
+                .request(req.method.parse().unwrap_or(reqwest::Method::GET), &req.url);
             for (k, v) in &req.headers {
                 r = r.header(k, v);
             }
@@ -62,7 +67,10 @@ impl HttpSender for ReqwestSender {
             match r.send().await {
                 Ok(resp) => {
                     let status = resp.status().as_u16();
-                    let body = resp.text().await.map_err(|e| CloudError::Network(format!("读取云响应失败: {e}")))?;
+                    let body = resp
+                        .text()
+                        .await
+                        .map_err(|e| CloudError::Network(format!("读取云响应失败: {e}")))?;
                     Ok(CloudResponse { status, body })
                 }
                 Err(e) => {

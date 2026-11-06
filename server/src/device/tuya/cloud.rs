@@ -34,8 +34,8 @@
 
 use std::time::{Duration, Instant};
 
-pub use super::cloud_transport::{CloudRequest, CloudResponse, HttpSender};
 use super::cloud_transport::ReqwestSender;
+pub use super::cloud_transport::{CloudRequest, CloudResponse, HttpSender};
 
 use hmac::Hmac;
 // hmac 0.13：`new_from_slice` 来自 digest 树的 KeyInit，`update`/`finalize` 来自
@@ -117,10 +117,7 @@ pub(crate) fn sha256_hex_lower(data: &str) -> String {
     use sha2::Digest;
     let mut hash = Sha256::new();
     hash.update(data.as_bytes());
-    hash.finalize()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    hash.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// 涂鸦官方 v1.0 签名（与 tuya-connector-python `_calculate_sign` 逐字节一致）。
@@ -201,7 +198,15 @@ pub(crate) fn build_devices_request(
     last_row_key: &str,
 ) -> CloudRequest {
     let path_query = devices_path_query(last_row_key);
-    let sign = official_sign(access_secret, access_id, access_token, t, "GET", &path_query, "");
+    let sign = official_sign(
+        access_secret,
+        access_id,
+        access_token,
+        t,
+        "GET",
+        &path_query,
+        "",
+    );
     CloudRequest {
         method: "GET",
         url: format!("{}{}", region_host(region), path_query),
@@ -228,7 +233,15 @@ pub(crate) fn build_proxy_request(
     body_json: &str,
     t: &str,
 ) -> CloudRequest {
-    let sign = official_sign(access_secret, access_id, access_token, t, method, path_query, body_json);
+    let sign = official_sign(
+        access_secret,
+        access_id,
+        access_token,
+        t,
+        method,
+        path_query,
+        body_json,
+    );
     let mut headers = vec![
         ("client_id".into(), access_id.to_string()),
         ("access_token".into(), access_token.to_string()),
@@ -279,9 +292,11 @@ pub(crate) fn parse_token_response(body: &str) -> Result<(String, i64), CloudErr
 /// 真实形状（2026-11-03 cn 区真机验证）：`result.{devices[], has_more, last_row_key,
 /// total}`。防御式兼容旧文档形状 `result.list`/`last_row_id` 与裸数组（满页近似
 /// has_more）。
-pub(crate) fn parse_devices_page(body: &str) -> Result<(Vec<CloudDevice>, bool, String), CloudError> {
-    let v: Value = serde_json::from_str(body)
-        .map_err(|e| CloudError::Api(format!("云响应不是 JSON: {e}")))?;
+pub(crate) fn parse_devices_page(
+    body: &str,
+) -> Result<(Vec<CloudDevice>, bool, String), CloudError> {
+    let v: Value =
+        serde_json::from_str(body).map_err(|e| CloudError::Api(format!("云响应不是 JSON: {e}")))?;
     if v.get("success").and_then(Value::as_bool) != Some(true) {
         return Err(api_error(&v));
     }
@@ -470,14 +485,30 @@ impl CloudClient {
         let token = self.ensure_token(region, access_id, access_secret).await?;
         let bearer = if is_token_path { String::new() } else { token };
         let resp = self
-            .send_proxy_once(region, access_id, access_secret, &bearer, static_method, path_query, body_json)
+            .send_proxy_once(
+                region,
+                access_id,
+                access_secret,
+                &bearer,
+                static_method,
+                path_query,
+                body_json,
+            )
             .await?;
         if resp_body_code(&resp.body).map_or(false, |c| c == 1010 || c == 1011) {
             tracing::info!("调试代理遇 token 失效，重取后重试一次");
             self.invalidate();
             let fresh = self.ensure_token(region, access_id, access_secret).await?;
             return self
-                .send_proxy_once(region, access_id, access_secret, &fresh, static_method, path_query, body_json)
+                .send_proxy_once(
+                    region,
+                    access_id,
+                    access_secret,
+                    &fresh,
+                    static_method,
+                    path_query,
+                    body_json,
+                )
                 .await;
         }
         Ok(resp)

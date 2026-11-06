@@ -229,7 +229,11 @@ fn fill_missing_fills_absent_and_null_keys() {
         vec!["a.added".to_string(), "b".to_string(), "c".to_string()],
         "补全清单必须可读"
     );
-    assert_eq!(get_path(&doc, "a.kept"), Some(&json!(42)), "用户已有值不得覆盖");
+    assert_eq!(
+        get_path(&doc, "a.kept"),
+        Some(&json!(42)),
+        "用户已有值不得覆盖"
+    );
     assert_eq!(get_path(&doc, "a.added.deep"), Some(&json!(true)));
     assert_eq!(get_path(&doc, "b.x"), Some(&json!(1)));
     assert_eq!(get_path(&doc, "c"), Some(&json!([1, 2])));

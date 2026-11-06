@@ -320,7 +320,12 @@ fn fill_object(doc: &mut Value, defaults: &Value, prefix: &str, filled: &mut Vec
             filled.push(path);
         } else if dval.is_object() {
             // 两边都是对象才下钻；库内是标量/数组而默认是对象 → 类型不匹配，跳过不动
-            fill_object(doc_obj.get_mut(key).expect("键刚检查过存在"), dval, &path, filled);
+            fill_object(
+                doc_obj.get_mut(key).expect("键刚检查过存在"),
+                dval,
+                &path,
+                filled,
+            );
         }
     }
 }

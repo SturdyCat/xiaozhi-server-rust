@@ -56,6 +56,7 @@
 - **connector.tuya 控制策略（P5a）**：`[tuya].engine = "wasm-policy"` 经 `connector.tuya.prepare` 选择有限候选索引；WASM 不接收 local_key、IP、云凭证、原始 DP/报文或 socket。native `TuyaEngine` 继续负责 rustuya LAN 会话、set→status 回读、DP cache、互斥、超时和错误归类；策略缺失/结果非法 fail-closed，默认 `native` 零行为变化。
 - **typed lan-socket effect（P5b）**：WIT 提供 `effect-lan-status`/`effect-lan-set-dp`，仅传不透明设备句柄、数字 DP 与有界 JSON；`lan-socket` 权限门 + `LanSocketQueue` 有界 drain，队列满/非法值显式失败；命令带仅宿主内部的 `plugin_id` 路由元数据（不跨 WIT），native Tuya consumer 已由 `device/tuya/worker.rs` drain，复用真实 rustuya 数据面并将有界结果回写插件 KV；原始 socket/密钥/报文不跨边界。
 - **device.echomuse 会话入口策略（P6a）**：`[echomuse].engine = "wasm-policy"` 仅经 `device.echomuse.prepare` 选择受限欢迎文案；WS/keepalive/hub、bounded-turn、PCM、BLE、shell/PTY、鉴权和设备状态全部留 native，缺策略或非法结果显式终止入口，默认 `native` 零行为变化。
+- **设备公共能力边界（P9 规划）**：重启、音量、设备状态等属于接入硬件提供的公共能力，不是服务器自身系统能力。跨 EchoMuse/Xiaozhi ESP/ESPHome 复用的 capability ID、参数校验和纯 helper 位于 `server/src/device/capabilities/`；业务插件/技能应复用 native 公共模块，不能重复实现。WASM 只在低频、可替换 control path 中可选介入，PCM/VAD/推理/WS/keepalive/PTY/Tuya LAN 等 hot path 不经 WASM。
 - 验证：`cargo test --features wasm-plugins`（默认 feature 零影响）；阶段与证据见[WASM 插件平台](<../../../docs/designs/wasm-plugin-platform.md>) §9–10。
 
 

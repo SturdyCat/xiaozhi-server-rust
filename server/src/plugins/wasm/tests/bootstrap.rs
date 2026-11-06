@@ -50,6 +50,7 @@ fn ensure_plugin_skips_when_artifact_present() {
         &entry,
         &repo_root(),
         false,
+        None,
     )
     .expect("应跳过");
     assert!(!built);
@@ -77,6 +78,27 @@ fn artifact_digest_is_stable_and_detects_tampering() {
 }
 
 #[test]
+fn artifact_attestation_rejects_malformed_or_wrong_signature() {
+    let digest = ArtifactDir::digest(b"wasm-bytes");
+    assert!(!ArtifactDir::verify_attestation(
+        "not-base64",
+        "not-base64",
+        &digest
+    ));
+    // RFC 8032 test vector 1: prove the positive Ed25519 path over an exact message.
+    assert!(ArtifactDir::verify_attestation(
+        "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=",
+        "5VZDAMNgrHKQhuLMgG6CioSHfx645dl02HPgZSJJAVVfuIIVkKM7rMYeOXAc+bRr0lv18FlbviRlUUFDjnoQCw==",
+        "",
+    ));
+    assert!(!ArtifactDir::verify_attestation(
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+        &digest,
+    ));
+}
+
+#[test]
 fn ensure_plugin_degrades_without_docker() {
     let dir = std::env::temp_dir().join(format!("xz-boot-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -100,6 +122,7 @@ fn ensure_plugin_degrades_without_docker() {
         &entry,
         &repo_root(),
         false,
+        None,
     )
     .unwrap_err();
     let msg = format!("{err:#}");

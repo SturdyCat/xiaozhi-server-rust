@@ -285,6 +285,10 @@ impl Engines {
                     continue;
                 }
                 if let Some(entry) = config.plugins.entries.get(&id) {
+                    if config.plugins.require_artifact_pin && entry.artifact.is_none() {
+                        tracing::warn!(plugin = %id, "严格完整性模式要求 artifact SHA-256 pin，跳过未钉版产物");
+                        continue;
+                    }
                     let digest = crate::plugins::wasm::artifacts::ArtifactDir::digest(&bytes);
                     if !entry.artifact_matches(&digest) {
                         tracing::warn!(
@@ -294,6 +298,20 @@ impl Engines {
                             "插件产物摘要与 [plugins.entries] 钉版不符，跳过装载"
                         );
                         continue;
+                    }
+                    if let Some(public_key) = config.plugins.attestation_public_key.as_deref() {
+                        let Some(attestation) = entry.attestation.as_deref() else {
+                            tracing::warn!(plugin = %id, "已配置 attestation 公钥但插件缺少签名，跳过装载");
+                            continue;
+                        };
+                        if !crate::plugins::wasm::artifacts::ArtifactDir::verify_attestation(
+                            public_key,
+                            attestation,
+                            &digest,
+                        ) {
+                            tracing::warn!(plugin = %id, "插件 artifact attestation 校验失败，跳过装载");
+                            continue;
+                        }
                     }
                 }
                 match host.load(&id, &bytes) {

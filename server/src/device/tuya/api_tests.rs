@@ -68,9 +68,14 @@ fn status_payload_carries_unregistered_devices() {
         discovered_at_ms: super::store::now_ms() - 5_000,
     }];
     let body = status_payload(true, &cfg, None, false, &found);
-    assert_eq!(body["lan_unregistered"][0]["device_id"], json!("80246244f4cfa2cd0fc8"));
+    assert_eq!(
+        body["lan_unregistered"][0]["device_id"],
+        json!("80246244f4cfa2cd0fc8")
+    );
     assert_eq!(body["lan_unregistered"][0]["ip"], json!("192.168.99.50"));
-    let age = body["lan_unregistered"][0]["age_ms"].as_i64().expect("age_ms");
+    let age = body["lan_unregistered"][0]["age_ms"]
+        .as_i64()
+        .expect("age_ms");
     assert!((0..=60_000).contains(&age), "age_ms 应在发现后一分钟内");
 }
 
@@ -215,13 +220,15 @@ fn sync_record_view_projects_age() {
 
 #[test]
 fn proxy_call_whitelists_methods_and_path_prefix() {
-    let err = cloud_proxy_call(&json!({"method": "PUT", "path": "/v1.0/devices"})).expect_err("PUT 应被拒");
+    let err = cloud_proxy_call(&json!({"method": "PUT", "path": "/v1.0/devices"}))
+        .expect_err("PUT 应被拒");
     assert!(err.contains("GET/POST/DELETE"));
 
     let err = cloud_proxy_call(&json!({"path": "/api/other"})).expect_err("非 /v1. 路径应被拒");
     assert!(err.contains("/v1."));
 
-    let call = cloud_proxy_call(&json!({"path": "/v1.0/token?grant_type=1"})).expect_err("path 内嵌 ? 应被拒");
+    let call = cloud_proxy_call(&json!({"path": "/v1.0/token?grant_type=1"}))
+        .expect_err("path 内嵌 ? 应被拒");
     let _ = call; // 恒为 Err，上面 expect_err 已断言
 }
 
@@ -234,7 +241,10 @@ fn proxy_call_defaults_to_get_and_sorts_query_keys() {
     }))
     .expect("ok");
     assert_eq!(call.method, "GET");
-    assert_eq!(call.path_query, "/v1.0/iot-01/associated-users/devices?last_row_key=ABC123&size=50");
+    assert_eq!(
+        call.path_query,
+        "/v1.0/iot-01/associated-users/devices?last_row_key=ABC123&size=50"
+    );
     assert_eq!(call.body_json, "");
 }
 
@@ -245,7 +255,10 @@ fn proxy_call_encodes_special_query_values() {
         "query": {"name": "客厅 电源"}
     }))
     .expect("ok");
-    assert_eq!(call.path_query, "/v1.0/devices?name=%E5%AE%A2%E5%8E%85%20%E7%94%B5%E6%BA%90");
+    assert_eq!(
+        call.path_query,
+        "/v1.0/devices?name=%E5%AE%A2%E5%8E%85%20%E7%94%B5%E6%BA%90"
+    );
 }
 
 #[test]
@@ -284,5 +297,8 @@ fn proxy_error_carries_kind_without_secret() {
     let e = cloud_proxy_error("auth", "云鉴权失败（code 1004）: sign invalid");
     assert_eq!(e["kind"], "auth");
     assert_eq!(e["error"], "云鉴权失败（code 1004）: sign invalid");
-    assert!(!e["error"].to_string().contains("SUPER-SECRET-VALUE"), "消息不含 secret");
+    assert!(
+        !e["error"].to_string().contains("SUPER-SECRET-VALUE"),
+        "消息不含 secret"
+    );
 }

@@ -79,15 +79,26 @@ fn official_sign_matches_offline_golden_vector() {
     // 2026-11-03 与官方算法逐字节对拍的黄金向量（python 参照实现计算）：
     // message = aid + "" + t + "GET\n" + sha256("")小写 + "\n\n" + path?query
     let sign = official_sign("asec", "aid", "", "1700000000000", "GET", PATH_TOKEN, "");
-    assert_eq!(sign, "42AD3292C57626B9ED5B83615A5F3735CBFA4C9BC9F9F512C8A22A24BDE0C0E2");
+    assert_eq!(
+        sign,
+        "42AD3292C57626B9ED5B83615A5F3735CBFA4C9BC9F9F512C8A22A24BDE0C0E2"
+    );
 }
 
 #[test]
 fn token_request_uses_official_signing_and_headers() {
     let req = build_token_request("cn", "aid", "asec", "1700000000000");
-    assert_eq!(req.url, "https://openapi.tuyacn.com/v1.0/token?grant_type=1");
+    assert_eq!(
+        req.url,
+        "https://openapi.tuyacn.com/v1.0/token?grant_type=1"
+    );
     assert_eq!(req.body, "");
-    let header = |k: &str| req.headers.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+    let header = |k: &str| {
+        req.headers
+            .iter()
+            .find(|(n, _)| n == k)
+            .map(|(_, v)| v.clone())
+    };
     assert_eq!(header("client_id").as_deref(), Some("aid"));
     assert_eq!(header("access_token").as_deref(), Some(""));
     assert_eq!(header("t").as_deref(), Some("1700000000000"));
@@ -110,7 +121,12 @@ fn devices_request_uses_sorted_query_and_official_signing() {
         req.url,
         "https://openapi.tuyaeu.com/v1.0/iot-01/associated-users/devices?last_row_key=row-9&size=50"
     );
-    let header = |k: &str| req.headers.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+    let header = |k: &str| {
+        req.headers
+            .iter()
+            .find(|(n, _)| n == k)
+            .map(|(_, v)| v.clone())
+    };
     assert_eq!(header("access_token").as_deref(), Some("tok"));
     assert_eq!(
         header("sign").as_deref(),
@@ -123,7 +139,10 @@ fn devices_first_page_has_size_only() {
     let pq = devices_path_query("");
     assert_eq!(pq, "/v1.0/iot-01/associated-users/devices?size=50");
     let sign = official_sign("asec", "aid", "tok", "1700000000001", "GET", &pq, "");
-    assert_eq!(sign, "DBAFB409120A180DF90C1321611DEE26AA345BA7240BB4756D162A2E7DC7D225");
+    assert_eq!(
+        sign,
+        "DBAFB409120A180DF90C1321611DEE26AA345BA7240BB4756D162A2E7DC7D225"
+    );
 }
 
 #[test]
@@ -318,10 +337,11 @@ fn network_failure_classified_as_network() {
 fn cursor_loop_is_bounded_when_server_repeats_page() {
     // 服务端忽略游标：每页都回同样的 d1 + has_more=true → stale 判定终止（≤ MAX_PAGES 次请求）
     let page = ok(r#"{"success":true,"result":{"devices":[{"id":"d1","local_key":"k1"}],"has_more":true,"last_row_key":"d1"}}"#.into());
-    let script: Vec<Result<CloudResponse, CloudError>> =
-        std::iter::once(ok(r#"{"success":true,"result":{"access_token":"tok","expire_time":7200}}"#.into()))
-            .chain(std::iter::repeat(page).take(MAX_PAGES as usize))
-            .collect();
+    let script: Vec<Result<CloudResponse, CloudError>> = std::iter::once(ok(
+        r#"{"success":true,"result":{"access_token":"tok","expire_time":7200}}"#.into(),
+    ))
+    .chain(std::iter::repeat(page).take(MAX_PAGES as usize))
+    .collect();
     let sender = FakeSender::new(script);
     let mut client = CloudClient::with_sender(Box::new(sender));
     let (devices, err) = tokio::runtime::Runtime::new()
@@ -341,20 +361,40 @@ fn proxy_get_forwards_with_signature_headers() {
     ]));
     let mut client = CloudClient::with_sender(Box::new(sender.clone()));
     let rt = tokio::runtime::Runtime::new().expect("rt");
-    let resp = rt.block_on(client.proxy_request("cn", "aid", "asec", "GET", "/v1.0/devices/d1/status", ""))
+    let resp = rt
+        .block_on(client.proxy_request("cn", "aid", "asec", "GET", "/v1.0/devices/d1/status", ""))
         .expect("proxy ok");
     assert_eq!(resp.body, r#"{"success":true,"result":{"online":true}}"#);
 
     let reqs = sender.requests();
     assert_eq!(reqs.len(), 2, "token → 业务请求");
-    assert_eq!(reqs[1].url, "https://openapi.tuyacn.com/v1.0/devices/d1/status");
+    assert_eq!(
+        reqs[1].url,
+        "https://openapi.tuyacn.com/v1.0/devices/d1/status"
+    );
     assert_eq!(reqs[1].method, "GET");
-    let header = |r: &CloudRequest, k: &str| r.headers.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+    let header = |r: &CloudRequest, k: &str| {
+        r.headers
+            .iter()
+            .find(|(n, _)| n == k)
+            .map(|(_, v)| v.clone())
+    };
     assert_eq!(header(&reqs[1], "access_token").as_deref(), Some("tok"));
-    assert_eq!(header(&reqs[1], "sign_method").as_deref(), Some("HMAC-SHA256"));
+    assert_eq!(
+        header(&reqs[1], "sign_method").as_deref(),
+        Some("HMAC-SHA256")
+    );
     // 签名可复算：官方公式对同一输入确定（t 取自请求头）
     let t = header(&reqs[1], "t").expect("t");
-    let expect = official_sign("asec", "aid", "tok", &t, "GET", "/v1.0/devices/d1/status", "");
+    let expect = official_sign(
+        "asec",
+        "aid",
+        "tok",
+        &t,
+        "GET",
+        "/v1.0/devices/d1/status",
+        "",
+    );
     assert_eq!(header(&reqs[1], "sign").as_deref(), Some(expect.as_str()));
 }
 
@@ -367,7 +407,15 @@ fn proxy_post_signs_and_sends_same_body() {
     let mut client = CloudClient::with_sender(Box::new(sender.clone()));
     let rt = tokio::runtime::Runtime::new().expect("rt");
     let body = r#"{"commands":[{"code":"switch_1","value":true}]}"#;
-    let resp = rt.block_on(client.proxy_request("cn", "aid", "asec", "POST", "/v1.0/devices/d1/commands", body))
+    let resp = rt
+        .block_on(client.proxy_request(
+            "cn",
+            "aid",
+            "asec",
+            "POST",
+            "/v1.0/devices/d1/commands",
+            body,
+        ))
         .expect("proxy ok");
     assert!(resp.body.contains("success"));
 
@@ -375,10 +423,23 @@ fn proxy_post_signs_and_sends_same_body() {
     let req = &reqs[1];
     assert_eq!(req.method, "POST");
     assert_eq!(req.body, body, "签名与发送必须是同一串 body");
-    let header = |k: &str| req.headers.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+    let header = |k: &str| {
+        req.headers
+            .iter()
+            .find(|(n, _)| n == k)
+            .map(|(_, v)| v.clone())
+    };
     assert_eq!(header("Content-Type").as_deref(), Some("application/json"));
     let t = header("t").expect("t");
-    let expect = official_sign("asec", "aid", "tok", &t, "POST", "/v1.0/devices/d1/commands", body);
+    let expect = official_sign(
+        "asec",
+        "aid",
+        "tok",
+        &t,
+        "POST",
+        "/v1.0/devices/d1/commands",
+        body,
+    );
     assert_eq!(header("sign").as_deref(), Some(expect.as_str()));
 }
 
@@ -392,15 +453,25 @@ fn proxy_retries_once_on_stale_token() {
     ]));
     let mut client = CloudClient::with_sender(Box::new(sender.clone()));
     let rt = tokio::runtime::Runtime::new().expect("rt");
-    let resp = rt.block_on(client.proxy_request("cn", "aid", "asec", "GET", "/v1.0/devices", ""))
+    let resp = rt
+        .block_on(client.proxy_request("cn", "aid", "asec", "GET", "/v1.0/devices", ""))
         .expect("proxy ok after retry");
     assert!(resp.body.contains("success"));
 
     let reqs = sender.requests();
     assert_eq!(reqs.len(), 4, "token → 1010 → 重取 token → 重试");
-    let header = |r: &CloudRequest, k: &str| r.headers.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+    let header = |r: &CloudRequest, k: &str| {
+        r.headers
+            .iter()
+            .find(|(n, _)| n == k)
+            .map(|(_, v)| v.clone())
+    };
     assert_eq!(header(&reqs[1], "access_token").as_deref(), Some("tok-a"));
-    assert_eq!(header(&reqs[3], "access_token").as_deref(), Some("tok-b"), "重试必须换新 token");
+    assert_eq!(
+        header(&reqs[3], "access_token").as_deref(),
+        Some("tok-b"),
+        "重试必须换新 token"
+    );
 }
 
 #[test]
@@ -412,14 +483,28 @@ fn proxy_token_path_signs_without_access_token() {
     ]));
     let mut client = CloudClient::with_sender(Box::new(sender.clone()));
     let rt = tokio::runtime::Runtime::new().expect("rt");
-    let resp = rt.block_on(client.proxy_request("cn", "aid", "asec", "GET", "/v1.0/token?grant_type=1", ""))
+    let resp = rt
+        .block_on(client.proxy_request("cn", "aid", "asec", "GET", "/v1.0/token?grant_type=1", ""))
         .expect("proxy ok");
     assert!(resp.body.contains("tok-x"));
 
     let reqs = sender.requests();
-    let header = |r: &CloudRequest, k: &str| r.headers.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
-    assert_eq!(header(&reqs[1], "access_token").as_deref(), Some(""), "token 端点 access_token 头留空");
+    let header = |r: &CloudRequest, k: &str| {
+        r.headers
+            .iter()
+            .find(|(n, _)| n == k)
+            .map(|(_, v)| v.clone())
+    };
+    assert_eq!(
+        header(&reqs[1], "access_token").as_deref(),
+        Some(""),
+        "token 端点 access_token 头留空"
+    );
     let t = header(&reqs[1], "t").expect("t");
     let expect = official_sign("asec", "aid", "", &t, "GET", "/v1.0/token?grant_type=1", "");
-    assert_eq!(header(&reqs[1], "sign").as_deref(), Some(expect.as_str()), "签名字符串不含 token 段");
+    assert_eq!(
+        header(&reqs[1], "sign").as_deref(),
+        Some(expect.as_str()),
+        "签名字符串不含 token 段"
+    );
 }

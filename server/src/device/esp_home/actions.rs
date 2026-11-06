@@ -10,6 +10,7 @@
 //! `mute_state`，没有对应的 `mute_set`。因此静音在实体表里是只读 `binary_sensor`，
 //! 不做"点了没反应"的假 `switch`。
 
+use crate::device::capabilities::shared::quantize_volume;
 use crate::device::echomuse::{hub_ctl, hub_live, hub_status, ControlOut};
 
 /// 设备遥测快照（**每一项都可为 `None`**：设备尚未上报该字段）。
@@ -95,28 +96,5 @@ pub fn set_volume(level: u8) -> bool {
 /// 把 ESPHome `number` 命令的浮点值转成设备的整数档位（四舍五入并夹到 0..127）。
 ///
 /// 单独抽出便于测试：HA 可能发 `0.4` / `126.6` / 负数（滑块边界抖动）。
-pub fn quantize_volume(value: f32) -> u8 {
-    if !value.is_finite() {
-        return 0;
-    }
-    value.round().clamp(0.0, 127.0) as u8
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn quantize_volume_rounds_and_clamps() {
-        assert_eq!(quantize_volume(0.0), 0);
-        assert_eq!(quantize_volume(0.4), 0);
-        assert_eq!(quantize_volume(0.5), 1);
-        assert_eq!(quantize_volume(63.6), 64);
-        assert_eq!(quantize_volume(127.0), 127);
-        // 边界外（HA 滑块抖动 / 异常值）一律夹紧，不 panic、不溢出。
-        assert_eq!(quantize_volume(200.0), 127);
-        assert_eq!(quantize_volume(-5.0), 0);
-        assert_eq!(quantize_volume(f32::NAN), 0);
-        assert_eq!(quantize_volume(f32::INFINITY), 0);
-    }
-}
+/// 兼容旧 ESPHome adapter API；实际实现统一位于设备公共能力层。
+pub use crate::device::capabilities::shared::quantize_volume;

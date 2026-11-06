@@ -15,7 +15,7 @@
 | EchoMuse 设备入口（Echo Dot 2 / emOS 直连） | [EchoMuse 说明](<echomuse.md>)、[模块指引](<../server/src/device/echomuse/AGENTS.md>)、[手动安装 emOS](<emos-manual-install.md>)（脚本 `tools/emos_install.py`）、[上游 Dot 2 交互/控制文档整理](<echomuse/>) |
 | 会话、推理闸门与分段延迟 | [会话](<../server/src/workflow/session/AGENTS.md>)、[推理](<../server/src/workflow/pipeline/inference/AGENTS.md>)、[指标](<../server/src/observability/metrics/AGENTS.md>) |
 | HTTP、配置更新与观测接口 | [网关](<../server/src/gateway/ws/AGENTS.md>)、[配置端点](<../server/src/gateway/ws/config/AGENTS.md>) |
-| 插件、注册表与能力维护 | [插件层](<../server/src/plugins/AGENTS.md>)（含[注册表](<../server/src/plugins/registry/AGENTS.md>)、[LLM](<../server/src/plugins/llm/AGENTS.md>)、[TTS](<../server/src/plugins/tts/AGENTS.md>)） |
+| 插件、注册表与能力维护 | [插件层](<../server/src/plugins/AGENTS.md>)（含[注册表](<../server/src/plugins/registry/AGENTS.md>)、[LLM](<../server/src/plugins/llm/AGENTS.md>)、[TTS](<../server/src/plugins/tts/AGENTS.md>)）；[WASM 插件平台与设备公共能力三层架构](<designs/wasm-plugin-platform.md>)、[设备公共能力模块](<../server/src/device/capabilities/mod.rs>) |
 | 人格与记忆 | [人格](<../server/src/plugins/soul/AGENTS.md>)、[记忆](<../server/src/plugins/memory/AGENTS.md>) |
 | MCP、OTA、音色探测与文件管理 | [MCP](<../server/src/workflow/mcp/AGENTS.md>)、[OTA](<../server/src/device/firmware/AGENTS.md>)、[音色](<../server/src/device/voices/AGENTS.md>)、[文件管理](<../server/src/gateway/files/AGENTS.md>) |
 | NLU 动态技能、模型构建与效果验收 | [模型唯一识别与完整默认技能清单](<model-only-skills.md>)、[稳定技能能力/持久任务](<../server/src/skills/AGENTS.md>)、[构建/候选测试契约](<../server/src/gateway/ws/nlu_build/AGENTS.md>)、[2026-11-01 真实验证及发布边界](<nlu-model-validation-20261101.md>)、[2026-11-02 构建修复与同输入对照](<nlu-model-validation-20261102.md>) |
@@ -61,7 +61,7 @@ docs/
 | 文档 | 内容 |
 |---|---|
 | [插件架构统一](<designs/plugin-architecture-unification.md>) | 改造前盘点、描述符与宿主、LLM 护栏、配置约定、管理页与分期实施 |
-| [WASM 插件平台](<designs/wasm-plugin-platform.md>) | 方案 v4：DSH 概念映射、控制面/数据面分离铁律、WIT 契约、沙箱预算、扩展点回退与 P0–P8 阶段 |
+| [WASM 插件平台](<designs/wasm-plugin-platform.md>) | 方案 v4：DSH 概念映射、控制面/数据面分离铁律、WIT 契约、沙箱预算、扩展点回退、P0–P8 阶段与 P9 设备公共能力三层架构（底座 → `device.*` capability → 业务插件；hot path native 直连，WASM 仅低频可选） |
 | [人格与图记忆](<designs/soul-and-graph-memory-plan.md>) | 集成背景、上游尽调、人格档案、记忆数据流、界面与提示词调研 |
 | [管理台界面设计与验收记录](<designs/admin-ui-design.md>) | 管理页信息架构、配置与上下文页面、健康和记忆的前端验收 |
 | [三项缺口设计](<designs/gap-implementation-design.md>) | 推理并发闸门、TTFA 分段指标、残句定时 flush 的设计与实施记录 |

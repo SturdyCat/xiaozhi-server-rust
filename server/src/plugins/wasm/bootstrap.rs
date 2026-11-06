@@ -61,6 +61,7 @@ pub fn ensure_plugin(
     entry: &BootstrapEntry,
     repo_root: &Path,
     docker_available: bool,
+    attestation: Option<(&str, &str)>,
 ) -> Result<bool> {
     // 已采用（上传或上次引导）→ 无事可做
     if artifacts.path().join(format!("{}.wasm", entry.id)).exists() {
@@ -112,6 +113,12 @@ pub fn ensure_plugin(
     // 与上传同门：先验证后采用（写盘 + 装载）
     host.validate(&entry.id, &bytes)
         .context("构建产物隔离验证失败（未采用）")?;
+    if let Some((public_key, signature)) = attestation {
+        let digest = ArtifactDir::digest(&bytes);
+        if !ArtifactDir::verify_attestation(public_key, signature, &digest) {
+            anyhow::bail!("构建产物 artifact attestation 校验失败（未采用）");
+        }
+    }
     host.load(&entry.id, &bytes).context("构建产物装载失败")?;
     artifacts
         .save(&entry.id, &bytes)
@@ -146,12 +153,42 @@ pub async fn ensure_defaults(
             tracing::info!(plugin = %entry.id, "配置禁用（[plugins]），跳过引导");
             continue;
         }
+        let entry_config = plugins_cfg.entries.get(&entry.id);
+        if plugins_cfg.require_artifact_pin
+            && entry_config
+                .and_then(|config| config.artifact.as_deref())
+                .is_none()
+        {
+            tracing::warn!(plugin = %entry.id, "严格完整性模式要求 artifact SHA-256 pin，跳过未钉版引导");
+            continue;
+        }
+        if plugins_cfg.attestation_public_key.is_some()
+            && entry_config
+                .and_then(|config| config.attestation.as_deref())
+                .is_none()
+        {
+            tracing::warn!(plugin = %entry.id, "已配置 attestation 公钥但插件缺少签名，跳过引导");
+            continue;
+        }
+        let attestation = plugins_cfg
+            .attestation_public_key
+            .as_deref()
+            .and_then(|public_key| {
+                entry_config
+                    .and_then(|config| config.attestation.as_deref())
+                    .map(|signature| (public_key.to_owned(), signature.to_owned()))
+            });
         let result = tokio::task::spawn_blocking({
             let host = Arc::clone(host);
             let artifacts = artifacts.clone();
             let entry = entry.clone();
             let repo = repo_root.clone();
-            move || ensure_plugin(&host, &artifacts, &entry, &repo, docker)
+            move || {
+                let attestation = attestation
+                    .as_ref()
+                    .map(|(public_key, signature)| (public_key.as_str(), signature.as_str()));
+                ensure_plugin(&host, &artifacts, &entry, &repo, docker, attestation)
+            }
         })
         .await;
         match result {

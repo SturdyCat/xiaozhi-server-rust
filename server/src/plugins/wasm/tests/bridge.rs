@@ -506,6 +506,7 @@ fn assemble_skips_artifact_with_mismatched_persisted_pin() {
         PluginEntryConfig {
             enabled: true,
             artifact: Some("00".repeat(32)),
+            attestation: None,
         },
     );
     store.persist(&cfg).expect("persist");

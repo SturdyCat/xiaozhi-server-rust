@@ -106,6 +106,8 @@ tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots", "url"
 hmac = "0.13.0"
 sha2 = "0.11.0"
 base64 = "0.23.1"
+# WASM artifact attestation：Ed25519 detached signature verification（默认关闭，配置公钥后启用）。
+ring = "0.17.14"
 httpdate = "1.0.3"
 rustls = { version = "0.23.18", default-features = false, features = ["std", "ring"] }
 webpki-roots = "0.26"

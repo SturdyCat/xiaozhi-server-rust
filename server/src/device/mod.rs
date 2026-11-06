@@ -1,6 +1,7 @@
 //! 设备管理：EchoMuse 设备控制面、Tuya IoT 设备集成、固件 OTA、局域网管理客户端发现、
 //! 进程内设备/会话注册表、发音人目录服务。
 
+pub mod capabilities;
 pub mod discovery;
 pub mod echomuse;
 /// ESPHome Native API 桥（可选 feature `esp_home`）：把 Dot 2 暴露为标准 ESPHome 节点。

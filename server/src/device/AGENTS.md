@@ -9,6 +9,7 @@
 - **外部 SDK 集成约定**（2026-11-03 起）：第三方云 SDK 一律封装为 Rust 客户端 + 管理面代理端点（服务端负责签名/转发、回包原样透传、错误码三归类），联调、调逻辑、修 bug 都打本服务端代理，不写临时脚本、不把凭证外泄到工具层；签名口径与黄金向量进 Rust 测试钉死。
 - 局域网发现 `discovery.rs`：常驻 mDNS `_xiaozhi-admin._tcp` 广播，macApp 免手填 IP；发现是辅助，失败只告警、不阻断。
 - 进程内设备/会话/用量注册 `registry/mod.rs`：重启清零，长期对话由记忆留存。
+- **设备公共能力层** `capabilities/`：承载跨 EchoMuse/Xiaozhi ESP/ESPHome 复用的 capability ID、参数边界和纯 helper；业务技能/插件复用此层，不能复制音量、生命周期、状态逻辑。PCM、VAD、推理、WS/keepalive、PTY、Tuya LAN worker 等 hot path 保持 native，WASM 仅可选用于低频 control path。
 
 ## 上级入口
 
