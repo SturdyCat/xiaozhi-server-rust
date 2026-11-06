@@ -105,21 +105,8 @@ async fn run(config: Config, config_store: Arc<dyn ConfigStore>, dev_mode: bool)
     // 启动期解析服务器出口 IP 作为默认定位（仅国内写入；非 dev 与 dev 都跑）。
     // 失败只 warn，绝不阻塞启动。
     tokio::spawn(crate::plugins::geo::resolve_location());
-    // WASM 默认插件引导（feature 门控，后台跑）：数据卷缺产物 → Docker 构建 → 验证 → 采用。
-    // 产物不入库（用户方向）；任何失败只告警并提示管理界面上传替代，不阻断启动。
-    #[cfg(feature = "wasm-plugins")]
-    tokio::spawn({
-        let engines = engines.clone();
-        async move {
-            if let (Some(host), Some(artifacts)) =
-                (engines.wasm.as_ref(), engines.wasm_artifact_dir())
-            {
-                let plugins_cfg = engines.config.plugins.clone();
-                crate::plugins::wasm::bootstrap::ensure_defaults(host, &artifacts, &plugins_cfg)
-                    .await;
-            }
-        }
-    });
+    // WASM 插件仅由管理界面上传发布（上传即启用，重启经数据卷 plugins/ 扫描重装）；
+    // 不再做服务端 Docker 自动构建（用户方向 2026-11-06：简化部署、底座与插件解耦）。
     // 定时任务只生成持久 outbox；真正音频由设备会话串行投递，不走 ASR/NLU 注入。
     // 到期动作任务（skills_tasks.action）例外：scheduler 经 device_cmds 向在线设备
     // 直推一次工具调用，离线/失败降级为文字提醒（见 runtime/skill_tasks 模块注释）。

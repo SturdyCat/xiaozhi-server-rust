@@ -51,10 +51,6 @@ fn runtime_keeps_artifact_integrity_gate_before_wasm_load() {
     assert!(runtime.contains("artifact_matches"));
     assert!(runtime.contains("ArtifactDir::digest"));
     assert!(runtime.contains("continue;"));
-    let bootstrap = include_str!("../bootstrap.rs");
-    assert!(bootstrap.contains("require_artifact_pin"));
-    assert!(bootstrap.contains("verify_attestation"));
-    assert!(bootstrap.contains("host.load"));
 }
 
 #[test]

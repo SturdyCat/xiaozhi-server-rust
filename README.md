@@ -129,7 +129,7 @@ curl http://127.0.0.1:8000/api/health              # => {"status":"ok",...}
 │   ├── config.example.toml      # 配置字段权威说明
 │   ├── crates/xiaozhi-plugin-sdk # guest 侧插件 SDK（独立 crate）
 │   └── tests/mock_client.py    # 场景化协议联调（多轮 + abort + 唤醒问候）
-├── tools/                         # plugin-builder 镜像 / wasm-fixtures 测试夹具源 / NLU 训练器
+├── tools/                         # wasm-fixtures 测试夹具源（本地按需构建）/ NLU 训练器
 └── client/                        # Kuikly 多端管理台
     ├── shared/commonMain/       # 管理台 + 配置页（跨端共用）
     ├── shared/macosArm64Main/   # macOS 壳 + 测试台（仅 macOS 编译）
@@ -144,7 +144,7 @@ curl http://127.0.0.1:8000/api/health              # => {"status":"ok",...}
 - ASR 为离线逐段识别（SenseVoice），逐字流式需换 Zipformer `OnlineRecognizer`。
 - RAG 召回为词法检索（零 embedding）；本地 ONNX 语义检索列为后续可选增强。
 - iOS/Android/OHOS 宿主已就位但未启用语音测试台（原生桥接当前仅 macOS 编译）。
-- WASM 插件平台默认关闭（`wasm-plugins` feature）；测试夹具按需本地构建、产物不入库，启动引导构建需要 Docker 或管理台上传产物。
+- WASM 插件平台默认关闭（`wasm-plugins` feature）；测试夹具由 `tools/wasm-fixtures/build.sh` 本地按需构建、产物不入库（`gitignore`）；wasm 插件发布走管理界面上传已构建组件，重启经数据卷扫描重装即注册，服务端不做 Docker 自动构建。
 
 ---
 

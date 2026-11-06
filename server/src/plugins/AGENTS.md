@@ -41,7 +41,7 @@
 
 ## WASM 插件平台（P0–P7g/P5b，feature 门控）
 
-`wasm/` 与静态注册表并存（绞杀者迁移，P4 起逐域替换）：控制面插件化（注册/槽位/策略/效果），**模型推理与帧级计算铁律留原生**。契约唯一源是 `server/wit/plugin.wit`（宿主 bindgen 与 guest SDK 同源）；guest 侧统一走 [xiaozhi-plugin-sdk](<../../crates/xiaozhi-plugin-sdk/AGENTS.md>)（独立 crate，不进 server 依赖图）；改契约必须双侧同步重建测试夹具。测试夹具**按需本地构建、产物不入库**（`ensure_fixture`：缺失/源更新自动重建，git 忽略）：hello/trap/greeter-user 源在 [tools/wasm-fixtures](<../../../tools/wasm-fixtures/AGENTS.md>)（测试件），weather 源在 [plugins-src](<../../../plugins-src/AGENTS.md>)（真实插件源根）。生产分发：管理界面上传已构建组件（JSON `POST /api/plugins/upload` 或管理台桥 raw 通道 `POST /api/plugins/upload/raw?id=<id>`——共享 `adopt_bytes` 管线：大小上限→**[plugins] 配置门**（禁用 id 403）→隔离验证→采用→热装载→重启重装）或启动引导（缺产物 → Docker 构建，`bootstrap.rs` + `plugins-src/manifest.toml` 数据表）。
+`wasm/` 与静态注册表并存（绞杀者迁移，P4 起逐域替换）：控制面插件化（注册/槽位/策略/效果），**模型推理与帧级计算铁律留原生**。契约唯一源是 `server/wit/plugin.wit`（宿主 bindgen 与 guest SDK 同源）；guest 侧统一走 [xiaozhi-plugin-sdk](<../../crates/xiaozhi-plugin-sdk/AGENTS.md>)（独立 crate，不进 server 依赖图）；改契约必须双侧同步重建测试夹具。测试夹具**按需本地构建、产物不入库**（`ensure_fixture`：缺失/源更新自动重建，git 忽略）：hello/trap/greeter-user 源在 [tools/wasm-fixtures](<../../../tools/wasm-fixtures/AGENTS.md>)（测试件），weather 源在 [plugins-src](<../../../plugins-src/AGENTS.md>)（真实插件源根）。生产分发：管理界面上传已构建组件（JSON `POST /api/plugins/upload` 或管理台桥 raw 通道 `POST /api/plugins/upload/raw?id=<id>`——共享 `adopt_bytes` 管线：大小上限→**[plugins] 配置门**（禁用 id 403）→隔离验证→采用→热装载→重启重装；重启经数据卷扫描重装即注册）。
 
 - 宿主导入面：log / now-ms / **kv-get**（P1a；未声明 `kv` 权限 → deny-as-absent，温和拒绝）。
 - 效果面：log / kv-put / **http-get**（两段式：宿主执行后**按步批量**回灌 `http.responses` 事件——一步的全部请求合成一个数组，深度按步计、上限 4；权限门校验 URL host ∈ `http-out:<host>` 白名单；HTTP 经 `HttpFetcher` 抽象，测试注入脚本实现零真实网络）。

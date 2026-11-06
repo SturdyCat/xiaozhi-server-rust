@@ -3,7 +3,6 @@
 //! ## 分层（文件即职责）
 //!
 //! - [`artifacts`]：产物落盘（上传即启用：save/remove/scan，重启重装）；
-//! - [`bootstrap`]：默认插件启动引导（缺产物 → Docker 构建 → 验证 → 采用；产物不入库）；
 //! - [`contract`]：WIT 契约（`server/wit/plugin.wit`）的宿主绑定 + 投影 DTO；
 //! - [`sandbox`]：沙箱三重上限（fuel / epoch / 内存）与陷阱分类；
 //! - [`instance`]：单个已装载插件（Store + bindgen 实例 + 带预算的调用包装）；
@@ -27,8 +26,6 @@
 
 #[cfg(feature = "wasm-plugins")]
 pub mod artifacts;
-#[cfg(feature = "wasm-plugins")]
-pub mod bootstrap;
 #[cfg(feature = "wasm-plugins")]
 pub mod bridge;
 #[cfg(feature = "wasm-plugins")]

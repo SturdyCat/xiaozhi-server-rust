@@ -216,11 +216,11 @@ P2 在 `/api/plugins` 投影合并两清单；P4+ 按域迁移（provider 绑定
 | 通道 | 语义 | 落点 |
 |---|---|---|
 | 管理界面上传 | `POST /api/plugins/upload`：base64 组件 → 隔离验证（self-test/注册包/契约版本）→ 采用（数据卷 `plugins/<id>.wasm` 原子写 + 热装载，先建新后替换）→ **立即生效** | P2b 已交付 |
-| 启动引导 | 数据卷缺产物 → 按 `plugins-src/manifest.toml`（数据表，内核零插件知识）调 Docker（`xiaozhi-plugin-builder` 镜像）执行插件 `build.sh` → 验证 → 采用；无 Docker 降级告警指向上传替代 | P2b 已交付（`wasm/bootstrap.rs` + `tools/plugin-builder/`） |
+| 启动引导 | **已移除（2026-11-06 简化）**：服务端不再做 Docker 自动构建，相关 `tools/plugin-builder` 镜像已删除。发布后插件一律由管理界面上传发布，重启经数据卷 `plugins/` 扫描重装即注册；测试夹具由 `tools/wasm-fixtures/build.sh` 在本地按需构建（git 忽略），不进部署链路 | 已移除 |
 | 重启重装 | assemble 扫描数据卷 `plugins/*.wasm` 逐个装载（坏件跳过不阻断启动） | P2a/P2b 已交付 |
 | 开发态 | 改插件源 → `./build.sh` 只重建 guest（独立 crate）；测试经 `ensure_fixture` 按需重建（缺失/源更新），git 忽略产物 | 已生效 |
 
-服务端 admission 已支持 Ed25519 detached signature：`[plugins].attestation_public_key` 配置标准 base64 公钥，条目 `attestation` 签名覆盖 artifact SHA-256 摘要文本；缺签名或校验失败在 WASM load/bootstrap 前 fail-closed。builder 镜像 CI 已由 `.github/workflows/plugin-builder.yml` 覆盖组件校验、digest 清单，以及 GitHub provenance attestation 的生成与 `gh attestation verify` 验证。`[plugins.entries."<id>"]` 已支持
+服务端 admission 已支持 Ed25519 detached signature：`[plugins].attestation_public_key` 配置标准 base64 公钥，条目 `attestation` 签名覆盖 artifact SHA-256 摘要文本；缺签名或校验失败在 WASM load（重启扫描与上传采用前）fail-closed。测试夹具由 `tools/wasm-fixtures/build.sh` 在本地按需构建（`ensure_fixture` 缺失/源更新自动重建），组件合法性由 wasm 测试套件的 artifact/组件校验覆盖；无独立 CI 构建步骤（随 2026-11-06 简化移除 `.github/workflows/plugin-builder.yml` 与 `tools/plugin-builder/` 构建镜像）。`[plugins.entries."<id>"]` 已支持
 `enabled` 与可选 `artifact`（SHA-256 内容钉版）：上传采用经 ConfigStore 持久回写，重启重装
 严格跳过摘要不符产物；缺省 `artifact` 保持旧配置兼容放行。**debug 域（节点测试/日志流/测试台）
 也独立成插件**（P7）。
@@ -400,7 +400,7 @@ P2 在 `/api/plugins` 投影合并两清单；P4+ 按域迁移（provider 绑定
   PCM/VAD、HTTP/SSE、技能执行和记忆存储仍由 native 承担。
 - P8a/P8b 架构守卫新增回归 **5 passed**；同时保留 Tuya/EchoMuse/memory native 所有权标记，并守卫重启重装前的 artifact SHA-256 pin，未删除任何原生路径，避免破坏固件兼容。
 - 新增 `[plugins].require_artifact_pin` 严格 admission 开关：默认 `false` 保持旧配置兼容；设为 `true` 时，未配置 artifact SHA-256 pin 的产物不装载、不引导。
-- 新增 Ed25519 detached attestation admission：`[plugins].attestation_public_key` + 条目 `attestation`，签名覆盖摘要文本；公钥启用后缺签名、非法 base64 或校验失败均在 runtime load 与 bootstrap host.load 前拒绝。
+- 新增 Ed25519 detached attestation admission：`[plugins].attestation_public_key` + 条目 `attestation`，签名覆盖摘要文本；公钥启用后缺签名、非法 base64 或校验失败均在 runtime load（重启扫描与上传采用前）拒绝。
 
 ### P8c（native 路径删除门槛矩阵，2026-11-05）
 
@@ -421,8 +421,7 @@ P8c 当前建立删除门槛并明确不删除 native 数据面；架构守卫�
 - **形状**（config.rs 聚合，非 feature 门控——配置段恒存在，执行由 feature 管）：
   `[plugins] enabled` 总闸 + `[plugins.entries."<id>"] enabled`（id 含点号用引号键）；
   **缺省启用**（上传落盘即意图，无需再改配置）；`PluginsConfig::allows(id)` = 总闸 ∧ 条目。
-- **接线**：装配扫描循环按 `allows` 过滤（禁用产物不装载、落盘保留）；启动引导
-  `ensure_defaults` 同一过滤（禁用 id 不构建）；热生效档位 RestartOnly 入 `APP_SECTION_HOT`。
+- **接线**：装配扫描循环按 `allows` 过滤（禁用产物不装载、落盘保留）；热生效档位 RestartOnly 入 `APP_SECTION_HOT`。
 - **raw 直传通道**（P3b）：`POST /api/plugins/upload/raw?id=<id>`（octet-stream，token 走查询串）
   ——管理台上传桥 `uploadPickedFile` 的原生形态（避免客户端 base64 膨胀）；采用管线抽成
   `adopt_bytes` 与 JSON 端点共享，**配置禁用 id → 403**（配置门一致性）。

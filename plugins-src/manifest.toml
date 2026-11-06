@@ -1,11 +1,10 @@
 # 官方默认插件引导表（数据，不是代码——内核零插件知识，R3）。
 #
-# 启动引导（feature wasm-plugins）：数据卷 plugins/<id>.wasm 缺失时，系统按本表
-# 调 Docker（镜像 xiaozhi-plugin-builder，见 tools/plugin-builder/）在 plugins-src/<dir>
-# 执行 build.sh → 隔离验证 → 采用（写盘+装载）。无 Docker 时降级告警，
-# 管理界面可上传已构建组件替代（POST /api/plugins/upload）。
-#
-# wasm 产物一律不入 git；本表与插件源码才是入库物。
+# 分发模型（用户方向 2026-11-04，2026-11-06 简化为纯上传）：
+# 生产装载只走管理界面上传已构建组件（POST /api/plugins/upload → 隔离验证 →
+# 采用 → 数据卷 plugins/<id>.wasm → 立即生效；重启经数据卷扫描重装即注册）。
+# 服务端不再做 Docker 自动构建；wasm 产物一律不入 git，本表与插件源码才是入库物。
+# 开发态改插件源只重建 guest（plugins-src/<dir>/build.sh），永不触发主系统构建。
 [[plugins]]
 id = "weather.official"
 dir = "weather"

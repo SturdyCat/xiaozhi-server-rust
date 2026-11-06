@@ -261,7 +261,7 @@ fn manifest_id_mismatch_rejected_and_old_instance_kept() {
 // ============================================================
 
 mod architecture;
-mod bootstrap;
+mod artifacts;
 mod bridge;
 mod extension;
 mod http;
