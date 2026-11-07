@@ -1,6 +1,6 @@
 # TinyBERT NLU 训练流水线方案（设计稿，未实施）
 
-- 状态：**方案记录，尚未实施**。当前已交付的是静态 TinyBERT 推理链路（`[nlu]` bert_* 配置、`server/src/plugins/nlu/bert.rs`、三级级联规则→TinyBERT→LLM、`nlu_test` 协议与测试台 NLU tab）；本文记录"配置界面一键重训模型"的自动化方案与待定决策。
+- 状态：**方案记录，尚未实施**。当前已交付的是静态 TinyBERT 推理链路（`[nlu]` bert_* 配置、`server/plugins/nlu/bert.rs`、三级级联规则→TinyBERT→LLM、`nlu_test` 协议与测试台 NLU tab）；本文记录"配置界面一键重训模型"的自动化方案与待定决策。
 - 背景：意图标签集因部署而异，TinyBERT 模型必须按技能定义微调 + 导出 ONNX；用户期望"在配置管理界面添加/管理 skill 后触发生成模型"，训练在远程服务器上通过 Docker 完成。
 
 ## 一、目标链路

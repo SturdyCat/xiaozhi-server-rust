@@ -29,7 +29,7 @@
 //! xiaozhi_plugin_sdk::export!(Component);
 //! ```
 //!
-//! 宿主侧绑定在 `server/src/plugins/wasm/contract.rs`（同一份 WIT）；改契约必须重建
+//! 宿主侧绑定在 `server/plugins/wasm/contract.rs`（同一份 WIT）；改契约必须重建
 //! 本 crate 与全部 guest 夹具（`tools/wasm-fixtures/build.sh`）。
 
 wit_bindgen::generate!({

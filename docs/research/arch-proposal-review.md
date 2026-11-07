@@ -614,7 +614,7 @@ v1 称"`board` 零命中"，实为**grep 失效导致的误报**。实际 `devic
 | LLM 失败已有兜底 | `workflow/session/mod.rs:99`（`FALLBACK_REPLY`） |
 | **设备队列 20 包/1.2 秒（核心坑）** | `agents.md` §5.2c全节（`:152-266`）；固件 `main/audio/audio_service.h`（`MAX_DECODE_PACKETS_IN_QUEUE`） |
 | 队列余量诊断已存在（缺告警） | `agents.md` §5.2c（② "设备解码队列余量最低估计……≤1 帧即报'断音'"） |
-| plugin描述符注册表 | `server/src/plugins/registry/mod.rs:396-456`（`PluginDescriptor`/`REGISTRY`/`find`/`impls_of`）、`:73-89`（`Capability` 闭枚举） |
+| plugin描述符注册表 | `server/plugins/registry/mod.rs:396-456`（`PluginDescriptor`/`REGISTRY`/`find`/`impls_of`）、`:73-89`（`Capability` 闭枚举） |
 | Wyoming 转码成本≈0 | [wyoming-provider.md](<wyoming-provider.md>) 第二部分 §5.1 |
 | Wyoming WakeWord 无接入点 | [wyoming-provider.md](<wyoming-provider.md>) 第二部分 §①.5 |
 | ASR 无热切换路径 | [wyoming-provider.md](<wyoming-provider.md>) 第二部分 §①.2（`runtime/mod.rs:47` 不可变字段）；`runtime/mod.rs`（`refresh_*` 为 `RwLock` 热替换） |

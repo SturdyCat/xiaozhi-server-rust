@@ -12,7 +12,7 @@
 
 ## 2. 当前初始命令与技能清单
 
-提醒初始种子是[可读 JSON](<../server/src/plugins/nlu/defaults.json>)；`end_session` 从保存的 `[command]` 词表导出到相同目录、训练输入和标签清单。命令词表不是执行匹配器。
+提醒初始种子是[可读 JSON](<../server/plugins/nlu/defaults.json>)；`end_session` 从保存的 `[command]` 词表导出到相同目录、训练输入和标签清单。命令词表不是执行匹配器。
 
 | 意图 | 初始例句/模板 | 槽位 | 执行及边界 |
 |---|---|---|---|

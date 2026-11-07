@@ -21,6 +21,8 @@ mod device;
 mod gateway;
 mod media;
 mod observability;
+// 插件实现独立于 server/src，仍作为同一二进制 crate 的内部模块编译。
+#[path = "../plugins/mod.rs"]
 mod plugins;
 mod runtime;
 mod serve;

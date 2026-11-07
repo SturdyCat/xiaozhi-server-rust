@@ -2,7 +2,7 @@
 
 > 状态：**P0 + P1 + P2(a–e) + P3（配置门/上传 UI/摘要钉版）+ P4a/P4b/P4c/P4d + P5a/P5b + P6a + P7a–P7g + P8a/P8b/P8c 已实施**（CI provenance attestation 生成与验证、服务端 Ed25519 artifact admission、P8 native 路径收口已补；native 数据面按兼容性要求保留）；Tuya native command consumer 已接入现有 worker，见 P5b；分发模型已按用户方向反转，见 §分发。
 > 概念蓝本：DeepSeek Harness（"Everything is a Plugin"，cordis 插件框架）；
-> 本仓库现状与源码：`server/wit/plugin.wit`、`server/src/plugins/wasm/`、`tools/wasm-fixtures/`。
+> 本仓库现状与源码：`server/wit/plugin.wit`、`server/plugins/wasm/`、`tools/wasm-fixtures/`。
 
 ## 1. 目标与总原则
 
@@ -207,7 +207,7 @@ P2 在 `/api/plugins` 投影合并两清单；P4+ 按域迁移（provider 绑定
   （含 wasm:: 17 项：hello 全链路 6、陷阱 4、扩展点/解析 3、契约/权限/瀑布 4）。
 - 夹具：`tools/wasm-fixtures/build.sh` → `server/tests/fixtures/wasm/{hello,trap}.wasm`
   （真实 wit-bindgen 0.63 guest，wasm32-unknown-unknown + wasm-tools 1.263 组件化，产物入库）。
-- 代码规模：`src/plugins/wasm/` 全部 ≤600 行（最大 registry.rs 322），测试外置 `tests.rs`。
+- 代码规模：`server/plugins/wasm/` 全部 ≤600 行（最大 registry.rs 322），测试外置 `tests.rs`。
 
 ## 11. 分发模型（用户方向，2026-11-04 反转）
 
@@ -237,7 +237,7 @@ P2 在 `/api/plugins` 投影合并两清单；P4+ 按域迁移（provider 绑定
     响应即时回显解析结果）。
 - **插件文档契约（用户要求）**：每个 `plugins-src/<插件>` 必须自带 README（`## 功能描述` +
   `## 使用方法` 两节：事件/payload、动作、配置字段、kv 键布局、权限、边界），
-  由 `server/src/plugins/plugin_docs_tests.rs` 结构检查强制（缺文档 = 测试失败；weather 已补齐模板）。
+  由 `server/plugins/plugin_docs_tests.rs` 结构检查强制（缺文档 = 测试失败；weather 已补齐模板）。
 - 测试：默认 1228（+文档契约）；wasm-plugins **1259**（+端点回环 HTTP 契约 3 项：
   合并投影/动作白名单/扩展点首选回环）。
 

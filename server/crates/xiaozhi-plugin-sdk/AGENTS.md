@@ -6,7 +6,7 @@
 
 - `src/lib.rs`：`wit_bindgen::generate!` 指向 `server/wit/plugin.wit`（唯一契约源）；guest `use xiaozhi_plugin_sdk::*` + `xiaozhi_plugin_sdk::export!(Component);`。
 - `src/fallible.rs`：**运行期载荷**的可失败分配（`try_*`：分配失败 → 显式 `Err`，业务性失败不降级；panic/abort 才是陷阱 → Degraded）。
-- `src/builder.rs`：**静态注册包**（manifest/菜单/字段/动作）的类型化构建；校验规则与宿主 `server/src/plugins/wasm/contract.rs::validate_*` 同源，规则变更双侧同步。静态数据用 expect 语义（失败=激活期 `Failed`）。
+- `src/builder.rs`：**静态注册包**（manifest/菜单/字段/动作）的类型化构建；校验规则与宿主 `server/plugins/wasm/contract.rs::validate_*` 同源，规则变更双侧同步。静态数据用 expect 语义（失败=激活期 `Failed`）。
 - 测试外置（`tests/builders.rs`，native 单元级）；guest 全链路由 `tools/wasm-fixtures` 真实组件与 server `wasm` 测试覆盖。
 
 ## 验证与契约同步

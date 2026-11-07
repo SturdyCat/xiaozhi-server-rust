@@ -1,9 +1,9 @@
 # P1 第一轮增量设计：P1-6 引擎健康自检 + P1-7 记忆多后端注册表（历史设计与实施记录）
 
 > 定位：本文是 P1 第一轮（P1-6 引擎健康自检、P1-7 记忆多后端注册表）的历史长文；方案、任务和验收映射保留原语境，不把当时“剩余工作”或可选项当作当前状态。
-> 章节分布：§0–§1.2 见[健康自检维护](<../../server/src/plugins/health/AGENTS.md>)与[记忆维护](<../../server/src/plugins/memory/AGENTS.md>)；**§1.3–§5 见本页**；§6–§8 见[管理台界面设计与验收记录](<../designs/admin-ui-design.md>)。
+> 章节分布：§0–§1.2 见[健康自检维护](<../../server/plugins/health/AGENTS.md>)与[记忆维护](<../../server/plugins/memory/AGENTS.md>)；**§1.3–§5 见本页**；§6–§8 见[管理台界面设计与验收记录](<../designs/admin-ui-design.md>)。
 > 文中形如 `agents.md §N` 或 `AGENTS.md §N` 的引用指重组前的旧长文。
-> 当前入口：[健康自检维护](<../../server/src/plugins/health/AGENTS.md>)、[记忆维护](<../../server/src/plugins/memory/AGENTS.md>)。
+> 当前入口：[健康自检维护](<../../server/plugins/health/AGENTS.md>)、[记忆维护](<../../server/plugins/memory/AGENTS.md>)。
 
 ---
 
@@ -13,10 +13,10 @@
 
 | # | 文件 | 动作 | 任务 |
 |---|---|---|---|
-| 1 | `server/src/plugins/health.rs` | 新建 | T1-1 |
-| 2 | `server/src/plugins/health/tests.rs` | 新建 | T1-1 |
-| 3 | `server/src/plugins/mod.rs` | +`pub mod health;` | T1-1 |
-| 4 | `server/src/plugins/host.rs` | 提取 `CapabilitySummary`/`capability_summary`；`capabilities_json` 改为复用 | T1-1 |
+| 1 | `server/plugins/health.rs` | 新建 | T1-1 |
+| 2 | `server/plugins/health/tests.rs` | 新建 | T1-1 |
+| 3 | `server/plugins/mod.rs` | +`pub mod health;` | T1-1 |
+| 4 | `server/plugins/host.rs` | 提取 `CapabilitySummary`/`capability_summary`；`capabilities_json` 改为复用 | T1-1 |
 | 5 | `server/src/gateway/ws/health.rs` | 新建（engines_health handler） | T1-1 |
 | 6 | `server/src/gateway/ws/health/tests.rs` | 新建 | T1-1 |
 | 7 | `server/src/gateway/ws/mod.rs` | 路由 + mod + 注释 | T1-1 |
@@ -27,22 +27,22 @@
 | 12 | `client/.../admin/AdminPage.kt` | 数据源 + 加载 + 调用点 + 跳转 lambda | T1-2 |
 | 13 | `client/.../macosArm64Main/.../AdminShell.kt` | renderConfigLayout 调用点增参 | T1-2 |
 | 14 | `client/.../admin/ConfigPage.kt` | 同上 | T1-2 |
-| 15 | `server/src/plugins/memory/config.rs` | MemoryBackend+Store、自定义 Deserialize、active()/engine_id() | T2-1 |
-| 16 | `server/src/plugins/registry/fields_context.rs` | engine 枚举元数据 + help | T2-1 |
-| 17 | `server/src/plugins/memory/tests.rs` / `server/src/config/tests.rs` | 新变体/未知值/默认回归 | T2-1 |
-| 18 | `server/src/plugins/memory/store.rs` | insert_turn_state / turn_count / message_scope_counts | T2-2 |
-| 19 | `server/src/plugins/memory/types.rs` | MemoryStats.turns + to_json | T2-2 |
-| 20 | `server/src/plugins/memory/graph.rs` | stats() 填 turns | T2-2 |
-| 21 | `server/src/plugins/memory/store/tests.rs` | 新查询测试 | T2-2 |
-| 22 | `server/src/plugins/memory/store_only.rs`（+tests.rs） | 新建 StoreOnlyMemory | T2-3 |
-| 23 | `server/src/plugins/memory/mod.rs` | mod/pub use/build_memory 分发 | T2-3 |
-| 24 | `server/src/plugins/registry/impls.rs` | sel 拆分 + MEMORY_STORE | T2-3 |
-| 25 | `server/src/plugins/registry/mod.rs` | REGISTRY+1、Memory display 改「记忆」 | T2-3 |
-| 26 | `server/src/plugins/registry/tests.rs` | 护栏 1/6 | T2-3 |
+| 15 | `server/plugins/memory/config.rs` | MemoryBackend+Store、自定义 Deserialize、active()/engine_id() | T2-1 |
+| 16 | `server/plugins/registry/fields_context.rs` | engine 枚举元数据 + help | T2-1 |
+| 17 | `server/plugins/memory/tests.rs` / `server/src/config/tests.rs` | 新变体/未知值/默认回归 | T2-1 |
+| 18 | `server/plugins/memory/store.rs` | insert_turn_state / turn_count / message_scope_counts | T2-2 |
+| 19 | `server/plugins/memory/types.rs` | MemoryStats.turns + to_json | T2-2 |
+| 20 | `server/plugins/memory/graph.rs` | stats() 填 turns | T2-2 |
+| 21 | `server/plugins/memory/store/tests.rs` | 新查询测试 | T2-2 |
+| 22 | `server/plugins/memory/store_only.rs`（+tests.rs） | 新建 StoreOnlyMemory | T2-3 |
+| 23 | `server/plugins/memory/mod.rs` | mod/pub use/build_memory 分发 | T2-3 |
+| 24 | `server/plugins/registry/impls.rs` | sel 拆分 + MEMORY_STORE | T2-3 |
+| 25 | `server/plugins/registry/mod.rs` | REGISTRY+1、Memory display 改「记忆」 | T2-3 |
+| 26 | `server/plugins/registry/tests.rs` | 护栏 1/6 | T2-3 |
 | 27 | `server/src/gateway/ws/memory.rs` | （极小）status 无结构改动，确认 turns 透出 | T2-4 |
 | 28 | `client/.../admin/ConfigContextState.kt` | memoryBackendOptions + store | T2-4 |
 | 29 | `client/.../admin/ConfigSoulMemoryCards.kt` | store 定位说明 textNote | T2-4 |
-| 30 | （可选）`server/src/plugins/memory/store/listing.rs`（+tests）、`ws/memory.rs`、`ws/mod.rs` | 记录列表/删除端点 | T2-5 |
+| 30 | （可选）`server/plugins/memory/store/listing.rs`（+tests）、`ws/memory.rs`、`ws/mod.rs` | 记录列表/删除端点 | T2-5 |
 
 ---
 
@@ -235,7 +235,7 @@ sequenceDiagram
 > 每个任务的 DoD 都含：`cargo test`（默认 + `--features sherpa` 类型检查）全绿、不破坏既有 402 个测试；前端任务另加 `:shared:compileKotlinJs` + `compileKotlinMacosArm64`。
 
 ### T1-1（P0）P1-6 服务端：探测模块 + 聚合端点
-- **文件**：新建 `server/src/plugins/health.rs` + `plugins/health/tests.rs`；新建 `server/src/gateway/ws/health.rs` + `gateway/ws/health/tests.rs`；改 `plugins/mod.rs`（+1 行）、`plugins/host.rs`（CapabilitySummary 提取）、`gateway/ws/mod.rs`（路由）
+- **文件**：新建 `server/plugins/health.rs` + `plugins/health/tests.rs`；新建 `server/src/gateway/ws/health.rs` + `gateway/ws/health/tests.rs`；改 `plugins/mod.rs`（+1 行）、`plugins/host.rs`（CapabilitySummary 提取）、`gateway/ws/mod.rs`（路由）
 - **内容**：ProbeState/ProbeReport + probe() 四类探测项 + capability 全量 match；host 聚合 helper 提取（capabilities_json 行为不变）；`GET /api/health/engines`（phase 合并 + config_section + counts + implementations[]）
 - **依赖**：无。**可与 T2-1、T2-2 并行**
 - **验收映射**：P1-6 验收 1/2/4/6

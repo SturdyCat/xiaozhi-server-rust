@@ -219,7 +219,7 @@ reply = "好的，我先退下了。"          # 模型接受后先告别，再 
 # templates 是训练语料，运行时只为模型已接受的同一技能抽取槽位，不能靠模板选技能。
 # 保存技能 -> 以保存态版本构建 -> 独立候选测试 -> 明确采用并保存启用。
 # 构建和分类测试均不执行步骤，不代表提醒已创建、到期已投递或设备已播报。
-# 初始11项时钟技能来自 server/src/plugins/nlu/defaults.json；显式 intents=[]/slots=[] 表示清空。
+# 初始11项时钟技能来自 server/plugins/nlu/defaults.json；显式 intents=[]/slots=[] 表示清空。
 # 存量同名 reply 技能原样保留，不自动升级为有副作用的 plan。
 # GET /api/skills/catalog 读取保存态有效清单，GET /api/skills/capabilities 读取稳定能力。
 [nlu]

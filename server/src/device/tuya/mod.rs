@@ -44,6 +44,8 @@ mod api_tests;
 #[cfg(test)]
 mod cloud_tests;
 #[cfg(test)]
+mod engine_tests;
+#[cfg(test)]
 mod lan_tests;
 #[cfg(test)]
 mod sync_tests;
@@ -86,6 +88,10 @@ struct PollState {
     /// 下次应轮询的时刻（首见设备按 device_id 哈希散列到 60s 内，避免整点齐发）。
     next_due: Instant,
     fails: u32,
+    /// 本轮离线事件是否已打过“标记离线”日志。listener 推送/云同步会把 DB 的
+    /// online 翻回 1，导致 `fails >= 2 && row.online` 每个周期重新成立——
+    /// 不去重就会整点刷屏。探测成功后由 [`reset_poll`] 复位，下次离线再报。
+    notified_offline: bool,
 }
 
 /// 同步闸门状态：进行中标记 + 最近一次尝试时刻（60s 最小间隔，手动/定时共用）。
@@ -334,6 +340,7 @@ impl TuyaEngine {
                             // 错峰相位：device_id 哈希散列到 0..60s，避免整点齐发
                             next_due: now + Duration::from_secs(hash_offset(&row.device_id)),
                             fails: 0,
+                            notified_offline: false,
                         });
                     entry.next_due <= now
                 })
@@ -352,26 +359,45 @@ impl TuyaEngine {
             .get_mut(device_id)
         {
             entry.fails = 0;
+            entry.notified_offline = false;
             entry.next_due = Instant::now() + POLL_INTERVAL;
         }
     }
 
     /// 轮询失败：连续 2 次才落 online=0（单次网络抖动不翻转状态）。
-    fn note_poll_failure(&self, row: &DeviceRow) {
-        let mut book = self.poll.lock().unwrap_or_else(|e| e.into_inner());
-        let entry = book
-            .entry(row.device_id.clone())
-            .or_insert_with(|| PollState {
-                next_due: Instant::now() + POLL_INTERVAL,
-                fails: 0,
-            });
-        entry.fails += 1;
-        entry.next_due = Instant::now() + POLL_INTERVAL;
-        if entry.fails >= 2 && row.online {
-            drop(book);
+    ///
+    /// “标记离线”日志**只在进入离线事件的那一轮打一次**：listener DP 推送与云
+    /// 同步会把 DB 的 online 翻回 1，若按 `row.online` 每轮判定就会反复刷同一
+    /// 条 INFO（历史刷屏根因）。离线事件以连续失败计数为准，探测成功
+    /// （[`reset_poll`]）复位。DB 写回（`mark_online(false)`）维持原口径：
+    /// 每个连续失败轮次照写，压住 listener 翻回的 online=1。
+    /// 返回本轮是否为离线事件的开始（即打日志的那轮），回归测试断言用。
+    fn note_poll_failure(&self, row: &DeviceRow) -> bool {
+        let (log_transition, persist_offline) = {
+            let mut book = self.poll.lock().unwrap_or_else(|e| e.into_inner());
+            let entry = book
+                .entry(row.device_id.clone())
+                .or_insert_with(|| PollState {
+                    next_due: Instant::now() + POLL_INTERVAL,
+                    fails: 0,
+                    notified_offline: false,
+                });
+            entry.fails += 1;
+            entry.next_due = Instant::now() + POLL_INTERVAL;
+            let due = entry.fails >= 2 && row.online;
+            let log_transition = due && !entry.notified_offline;
+            if log_transition {
+                entry.notified_offline = true;
+            }
+            (log_transition, due)
+        };
+        if log_transition {
             tracing::info!("Tuya 设备 {} 连续 2 次探测失败，标记离线", row.device_id);
+        }
+        if persist_offline {
             lan::mark_online(&self.store, &row.device_id, false, None);
         }
+        log_transition
     }
 
     /// 局域网发现一轮（Scanner UDP 6666/6667/7000）：已登记设备合并 ip/协议版本

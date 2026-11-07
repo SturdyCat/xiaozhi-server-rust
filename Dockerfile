@@ -253,8 +253,13 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
  && cargo build --release --features sherpa,nlu,wasm-plugins,pure-base --locked \
  && rm -rf src
 
-# 真实源码（bin-only crate：入口即 src/main.rs，无 lib.rs）
+# 真实源码（bin-only crate：入口即 src/main.rs，无 lib.rs）。插件源码
+# 独立放在 server/plugins/，由 src/main.rs 以 #[path] 接入同一 crate。
 COPY server/src ./src
+COPY server/plugins ./plugins
+# WASM 宿主 bindgen! 在编译期读取 server/wit/plugin.wit；容器内
+# Cargo manifest 位于 /app，因此契约必须落到 /app/wit/plugin.wit。
+COPY server/wit ./wit
 # 编译期内嵌资源：bench_api 样本经 include_bytes!（src/app/bench_api/../../../test_assets）
 # 在编译期读 /app/test_assets/，缺了 cargo 直接编译失败（ACR 2026-10-21 实测）。
 COPY server/test_assets ./test_assets
@@ -273,7 +278,7 @@ COPY tools/nlu-trainer/train.py /tools/nlu-trainer/train.py
 #      已随版本戳特性一并移除（2026-10）；「Compiling + 非 0.00s 耗时」日志即重编证据。
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    find src -type f -exec touch {} + \
+    find src plugins -type f -exec touch {} + \
  && cargo clean -p xiaozhi-server-rust --release \
  && cargo build --release --features sherpa,nlu,wasm-plugins,pure-base --locked \
  && strip target/release/xiaozhi-server-rust

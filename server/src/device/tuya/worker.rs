@@ -20,6 +20,10 @@ use crate::runtime::Engines;
 
 use super::{TuyaEngine, SCAN_INTERVAL};
 
+#[cfg(test)]
+#[path = "worker_tests.rs"]
+mod worker_tests;
+
 /// worker 心跳周期：每 tick 重读配置并检查各定时器。
 const TICK: Duration = Duration::from_secs(60);
 
@@ -28,16 +32,22 @@ pub fn spawn(engines: Arc<Engines>) {
     tokio::spawn(async move {
         let engine: Arc<TuyaEngine> = engines.tuya.clone();
         let mut scan_due_at = tokio::time::Instant::now(); // 启动先扫一轮
+        let mut last_scan_merged: Option<usize> = None; // 发现日志去重（台数没变不刷 INFO）
         loop {
             tokio::time::sleep(TICK).await;
-            tick(&engines, &engine, &mut scan_due_at).await;
+            tick(&engines, &engine, &mut scan_due_at, &mut last_scan_merged).await;
         }
     });
 }
 
 /// 一个 tick：读配置 →（enabled 时）凭证热检 + 定时同步 + 在线轮询 + 发现扫描。
 /// 任何一步失败只告警，不终止 worker（下一 tick 重来）。
-async fn tick(engines: &Engines, engine: &TuyaEngine, scan_due_at: &mut tokio::time::Instant) {
+async fn tick(
+    engines: &Engines,
+    engine: &TuyaEngine,
+    scan_due_at: &mut tokio::time::Instant,
+    last_scan_merged: &mut Option<usize>,
+) {
     let cfg = match load_config(engines).await {
         Ok(cfg) => cfg,
         Err(e) => {
@@ -72,12 +82,24 @@ async fn tick(engines: &Engines, engine: &TuyaEngine, scan_due_at: &mut tokio::t
     if online > 0 {
         tracing::debug!("[tuya] 本轮在线探测：{online} 台在线");
     }
-    // 局域网发现（启动 + 每 5 分钟）
+    // 局域网发现（启动 + 每 5 分钟）；合并台数与上轮相同只留 debug，
+    // 稳态环境每 5 分钟一条 INFO 也是刷屏（状态有变化才升 INFO）。
     if tokio::time::Instant::now() >= *scan_due_at {
         *scan_due_at = tokio::time::Instant::now() + SCAN_INTERVAL;
         let merged = engine.scan_and_merge().await;
-        tracing::info!("[tuya] 局域网发现完成：合并 {merged} 台已登记设备");
+        if scan_report_worthy(*last_scan_merged, merged) {
+            tracing::info!("[tuya] 局域网发现完成：合并 {merged} 台已登记设备");
+        } else {
+            tracing::debug!("[tuya] 局域网发现完成：合并 {merged} 台已登记设备（与上轮相同）");
+        }
+        *last_scan_merged = Some(merged);
     }
+}
+
+/// 发现结果是否值得打 INFO：合并台数与上轮不同（状态变化）才算新消息，
+/// 否则降为 debug——`worker_tests` 钉住口径。
+fn scan_report_worthy(last: Option<usize>, merged: usize) -> bool {
+    last != Some(merged)
 }
 
 /// 读最新配置（热生效唯一来源：SQLite 配置库；spawn_blocking）。

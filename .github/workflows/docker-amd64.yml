@@ -73,6 +73,12 @@ jobs:
         run: |
           set -eu
           grep -Eq -- '--features sherpa,nlu,wasm-plugins,pure-base' Dockerfile
+          # The WASM bindgen macro reads this contract during the Rust build;
+          # fail here if the Docker context contract and COPY rule drift apart.
+          grep -Fq 'COPY server/plugins ./plugins' Dockerfile
+           test -f server/plugins/mod.rs
+           grep -Fq 'COPY server/wit ./wit' Dockerfile
+          test -f server/wit/plugin.wit
           if grep -Eq 'COPY[[:space:]].*(\.wasm|plugins-src)' Dockerfile docker-compose.yml; then
             echo 'pure-base release inputs contain a prebuilt business WASM artifact' >&2
             exit 1

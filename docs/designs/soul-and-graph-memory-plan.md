@@ -1,7 +1,7 @@
 # 给 LLM 加「灵魂」与「记忆」——集成 graph-memory 图记忆 + 管理界面配置（历史设计与实施记录）
 
 > 定位：本文是人格与图记忆的历史长文。早期“没有人格 / 记忆代码”等盘点与后续实施记录属于不同时间点，不应混作当前事实；记录时点状态为 **P0（灵魂）与 P1（记忆骨架）已实现，P2/P3 未开始**。
-> 章节分布：**§0–§3、§8–§10 见本页**；§4 见[人格维护](<../../server/src/plugins/soul/AGENTS.md>)；§5 见[记忆维护](<../../server/src/plugins/memory/AGENTS.md>)；§6–§7 见[管理台界面设计与验收记录](<admin-ui-design.md>)；§11–§12 见[提示词维护](<../../server/src/plugins/prompt/AGENTS.md>)。
+> 章节分布：**§0–§3、§8–§10 见本页**；§4 见[人格维护](<../../server/plugins/soul/AGENTS.md>)；§5 见[记忆维护](<../../server/plugins/memory/AGENTS.md>)；§6–§7 见[管理台界面设计与验收记录](<admin-ui-design.md>)；§11–§12 见[提示词维护](<../../server/plugins/prompt/AGENTS.md>)。
 > 文中形如 `agents.md §N` 或 `AGENTS.md §N` 的引用指重组前的旧长文。
 > 相关主题：[插件架构统一](<plugin-architecture-unification.md>)、[P1 第一轮](<../plans/p1-round1-design.md>)、[文档总索引](<../README.md>)。
 
@@ -12,7 +12,7 @@
 > 现在已不成立——落地实况与偏差见 **§0.5**，实现文件见 §10 的更新说明。
 > 所有「现状」结论均标注了本仓库源码位置；graph-memory 结论标注了实测/源码出处。
 > 目标读者：要动手实现这件事的工程师（含 AI 编码助手）。
-> 关联：[插件维护](<../../server/src/plugins/memory/AGENTS.md>)（陷阱与约束）、[架构概览](<../architecture.md>)、[ESP 兼容与延迟计划](<../plans/esp-compat-and-latency-plan.md>)；原 `agents.md` 长文已随文档重组移除。
+> 关联：[插件维护](<../../server/plugins/memory/AGENTS.md>)（陷阱与约束）、[架构概览](<../architecture.md>)、[ESP 兼容与延迟计划](<../plans/esp-compat-and-latency-plan.md>)；原 `agents.md` 长文已随文档重组移除。
 >
 > **DSH 结论的取证方式（重要，避免复现踩空）**：`/Applications/DeepSeek Harness.app/Contents/Resources/app.asar` 是**归档文件**（121 MB，`file` 判为 `data`），**不是目录**——shell 执行 `ls .../app.asar/dsh` 报 `Not a directory`（DSH 自身工具能把该路径当虚拟目录读，普通 shell 不能）。DSH 源码在 asar **内部**的 `dsh/node_modules/`：实测 12973 个文件 / 520 个包，其中 `@deepseek-ai/*` **290 个**；读取需按 asar 头解析（`uint32 4` + `uint32 headerSize` + pickle：`uint32 payloadSize` + `uint32 jsonSize` + JSON，数据区基址 `8+headerSize`，**offset 在 JSON 里是字符串**）。`app.asar.unpacked/dsh/node_modules` 只有原生模块（node-pty 等）。
 > 本机用户级状态：`~/.dsh/profiles/desktop/`（graph-memory 已装并在跑）、`~/.dsh/graph-memory/graph-memory.db`；**`~/.openclaw/` 不存在** —— graph-memory 的 OpenClaw 半边在本机未启用，实际在跑的是 DSH 半边。
@@ -29,7 +29,7 @@
 
 ## 0.5 落地状态与偏差（2026-10 实施）
 
-> 设计（本文）→ 实现（`server/src/plugins/{prompt,soul,memory}/` + 管理页两个 tab）的映射与取舍。
+> 设计（本文）→ 实现（`server/plugins/{prompt,soul,memory}/` + 管理页两个 tab）的映射与取舍。
 > 统筹视角见 [`plugin-architecture-unification.md`](<plugin-architecture-unification.md>) §0.9。
 
 ### 已实现
@@ -91,9 +91,9 @@
 
 | 事实 | 位置 |
 |---|---|
-| `LlmConfig` 只有 `api_base/api_key/model/system_prompt/max_history/temperature/stream` | `server/src/plugins/llm/mod.rs:13-31` |
-| 请求体里 `instructions` = `cfg.system_prompt` 原文，无变量插值、无人格分层、无记忆注入 | `server/src/plugins/llm/openai.rs:128-134`（`"instructions": self.cfg.system_prompt`） |
-| 默认人格 = 一句话 `"你是一个有用且简洁的中文语音助手。"` | `server/src/plugins/llm/mod.rs:40-42` |
+| `LlmConfig` 只有 `api_base/api_key/model/system_prompt/max_history/temperature/stream` | `server/plugins/llm/mod.rs:13-31` |
+| 请求体里 `instructions` = `cfg.system_prompt` 原文，无变量插值、无人格分层、无记忆注入 | `server/plugins/llm/openai.rs:128-134`（`"instructions": self.cfg.system_prompt`） |
+| 默认人格 = 一句话 `"你是一个有用且简洁的中文语音助手。"` | `server/plugins/llm/mod.rs:40-42` |
 
 ### 1.2 多轮历史：`Vec<(String,String)>`，按**条目数**截断
 
@@ -109,7 +109,7 @@
 
 ### 1.4 工具调用面已预留，但未接通
 
-- `ToolSpec` / `ToolCall` / `LlmEvent::ToolCall` 已定义：`server/src/plugins/llm/mod.rs:68-110`。
+- `ToolSpec` / `ToolCall` / `LlmEvent::ToolCall` 已定义：`server/plugins/llm/mod.rs:68-110`。
 - `chat_stream(history, user_text, tools, on_event)`：`mod.rs:114-124`；会话当前传 `None`（`session.rs:381-384`）。→ 将来把 `gm_search` 作为工具暴露给模型，接口已经就绪。
 
 ### 1.5 配置读写与路由
@@ -334,10 +334,10 @@
 | 文件 | 改动 |
 |---|---|
 | `server/src/config.rs` | `+ pub soul: SoulConfig; + pub memory: MemoryConfig;`（并 re-export） |
-| `server/src/plugins/llm/context.rs`（新） | `ContextAssembler`（persona → memory → history → user） |
-| `server/src/plugins/llm/openai.rs` | `:130` `instructions` 改用组装结果（`chat_stream` 增加 `context` 入参或预组装后传入） |
-| `server/src/plugins/llm/mod.rs` | `LlmConfig` 保持不变（回滚兼容）；trait 签名如需扩参在此 |
-| `server/src/plugins/memory/*.rs`（新） | `MemoryProvider` + `NoopMemory` + `graph.rs`（P1 起步用 FTS5） |
+| `server/plugins/llm/context.rs`（新） | `ContextAssembler`（persona → memory → history → user） |
+| `server/plugins/llm/openai.rs` | `:130` `instructions` 改用组装结果（`chat_stream` 增加 `context` 入参或预组装后传入） |
+| `server/plugins/llm/mod.rs` | `LlmConfig` 保持不变（回滚兼容）；trait 签名如需扩参在此 |
+| `server/plugins/memory/*.rs`（新） | `MemoryProvider` + `NoopMemory` + `graph.rs`（P1 起步用 FTS5） |
 | `server/src/runtime/mod.rs` | `+ memory: Arc<dyn MemoryProvider>`、`+ memory_sig`、`refresh_memory_from_disk()` |
 | `server/src/workflow/session/mod.rs` | 关键路径前置 `recall`；回复完成后后台 `record`；`history` 语义修正 |
 | `server/src/gateway/ws/memory.rs`（新）+ `ws/mod.rs:55-71` | `/api/memory/{stats,recall,maintain,clear}` + `config_schema` 路由 |

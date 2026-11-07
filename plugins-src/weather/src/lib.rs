@@ -4,14 +4,14 @@
 // 宿主执行后按步批量回灌 `http.responses`。多步流程的上下文编码在 request-id 里
 //（回灌事件的唯一关联键；各字段以 `|` 连接——地名/req_id 约定不含 `|`，见 finish_* 注释）。
 //
-// 与原生实现（server/src/plugins/weather/）共享同一份 parse.rs（#[path] 单源；
+// 与原生实现（server/plugins/weather/）共享同一份 parse.rs（#[path] 单源；
 // 绞杀者方向：P8 反转为原生从这里取）。全站城市列表刻意不缓存（结果 kv 值上限 64KB
 // 放不下），只按城市缓存站点码与天气结果。
 
 #[global_allocator]
 static ALLOC: guest_alloc::GrowingBump = guest_alloc::GrowingBump::new();
 
-#[path = "../../../server/src/plugins/weather/parse.rs"]
+#[path = "../../../server/plugins/weather/parse.rs"]
 mod parse;
 
 use serde_json::{json, Value};

@@ -26,8 +26,8 @@ flowchart LR
 ```
 
 - [网关](<../server/src/gateway/ws/AGENTS.md>)负责路由、鉴权、协商和静态管理页托管；[会话](<../server/src/workflow/session/AGENTS.md>)负责编排，不耦合具体引擎实现。
-- [技能级联](<../server/src/plugins/skill/mod.rs>)统一编译 `[command]` + `[nlu]`：规则、轻量模型、云 LLM 三级识别只有提名权，动作与槽位白名单由目录 `resolve` 校验（`end_session` / `reply` / `mcp:<设备工具名>`）；LLM 只能调用 `execute_skill`，不能指定工具或动作。
-- [插件层](<../server/src/plugins/AGENTS.md>)按能力定义 trait/config/实现，[注册表](<../server/src/plugins/registry/AGENTS.md>)声明选择、构建、字段与热生效档位，[宿主](<../server/src/plugins/host.rs>)校验并上报状态。
+- [技能级联](<../server/plugins/skill/mod.rs>)统一编译 `[command]` + `[nlu]`：规则、轻量模型、云 LLM 三级识别只有提名权，动作与槽位白名单由目录 `resolve` 校验（`end_session` / `reply` / `mcp:<设备工具名>`）；LLM 只能调用 `execute_skill`，不能指定工具或动作。
+- [插件层](<../server/plugins/AGENTS.md>)按能力定义 trait/config/实现，[注册表](<../server/plugins/registry/AGENTS.md>)声明选择、构建、字段与热生效档位，[宿主](<../server/plugins/host.rs>)校验并上报状态。
 - [WASM 插件平台](<designs/wasm-plugin-platform.md>)（feature `wasm-plugins`，默认关闭）承载控制面策略与效果：扩展点替换/回退、有界策略桥、artifact SHA-256 钉版 + Ed25519 attestation 装载门；模型推理与帧级计算铁律留原生。
 - [设备公共能力层](<../server/src/device/capabilities/mod.rs>)提供 `device.*` capability ID、native `CapabilityRegistry` 与跨硬件 adapter 支持矩阵（音量/重启/状态，EchoMuse/ESPHome/Tuya 复用，旧 MCP/技能名称兼容）；高性能路径 native 直连，WASM 仅低频可选。
 - [Engines](<../server/src/runtime/mod.rs>)管理共享模型、VAD 池、派生缓存、运行快照和热刷新；同步推理隔离到 blocking 任务，并由共享闸门限制并发。
@@ -49,7 +49,7 @@ flowchart LR
 - [配置模块](<../server/src/config/AGENTS.md>)以 SQLite 配置库为唯一后端（`SqliteConfigStore`，路径 `XIAOZHI_CONFIG_DB` → `--config-db` → `/data/data.db`）；空库自举内置默认，文件/默认后端已移除。
 - [配置 HTTP 契约](<../server/src/gateway/ws/config/AGENTS.md>)提供部分更新、密钥 presence、revision/409 与保存影响回报；设备 overlay 只覆盖白名单会话参数，不能重建全局引擎。
 - 热生效档位由注册表字段/段元数据唯一声明。保存成功不等于所有字段立即生效，也不由文档自行分类。
-- [人格](<../server/src/plugins/soul/AGENTS.md>)默认关闭时逐字节保留旧 system_prompt；[记忆](<../server/src/plugins/memory/AGENTS.md>)默认关闭零成本，graph/store/RAG 有不同成本与存储边界。
+- [人格](<../server/plugins/soul/AGENTS.md>)默认关闭时逐字节保留旧 system_prompt；[记忆](<../server/plugins/memory/AGENTS.md>)默认关闭零成本，graph/store/RAG 有不同成本与存储边界。
 - MCP 发现和 stop 控制已存在，[MCP 说明](<../server/src/workflow/mcp/AGENTS.md>)定义抽帧/清单契约；LLM 工具调用闭环已落地——LLM 仅能以 `execute_skill` 提名技能，由技能目录白名单校验后执行，动作与槽位来自服务端配置。
 
 ## 4. 管理台、部署与验证
@@ -63,8 +63,8 @@ flowchart LR
 
 | 变更 | 阅读入口 |
 |---|---|
-| 新 ASR/TTS/LLM 实现 | [注册表规范](<../server/src/plugins/registry/AGENTS.md>)与各能力目录的 `AGENTS.md` |
-| WASM 插件 / 设备公共能力 | [WASM 插件平台](<designs/wasm-plugin-platform.md>)、[插件层](<../server/src/plugins/AGENTS.md>)、[设备公共能力模块](<../server/src/device/capabilities/mod.rs>)（hot path 保持 native 直连，WASM 仅低频可选） |
+| 新 ASR/TTS/LLM 实现 | [注册表规范](<../server/plugins/registry/AGENTS.md>)与各能力目录的 `AGENTS.md` |
+| WASM 插件 / 设备公共能力 | [WASM 插件平台](<designs/wasm-plugin-platform.md>)、[插件层](<../server/plugins/AGENTS.md>)、[设备公共能力模块](<../server/src/device/capabilities/mod.rs>)（hot path 保持 native 直连，WASM 仅低频可选） |
 | 新配置字段 / 密钥 | [配置维护](<../server/src/config/AGENTS.md>)与[HTTP 契约](<../server/src/gateway/ws/config/AGENTS.md>) |
 | 新协议消息 / 二进制布局 | [协议实现](<../server/src/workflow/protocol/protocol.rs>)、同级测试与客户端联调 |
 | 新设备工具调用 | [MCP 契约](<../server/src/workflow/mcp/AGENTS.md>)与会话响应关联 |
