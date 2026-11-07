@@ -140,6 +140,7 @@ fn presence_and_revision_keys_never_persist() {
 
 /// `[echomuse]`：`token` 已入 [`SECRET_PATHS`]（GET 打码 + 空串保留原值），
 /// `enabled` 是普通布尔字段、经管理台补丁**透传生效**（sanitize 不丢段）。
+#[cfg(not(feature = "pure-base"))]
 #[test]
 fn echomuse_token_is_secret_and_enabled_passes_through() {
     let mut current = full_test_config();

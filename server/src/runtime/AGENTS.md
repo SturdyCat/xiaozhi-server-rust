@@ -11,8 +11,8 @@
 
 ## 技能任务生命周期
 
-- `Engines.skill_system` 共享[技能系统](<../skills/AGENTS.md>)；独立持久库放配置库旁，构造懒打开且不启动任务。配置库无文件路径时以 memory.db_path 所在目录回退；不要用模型路径决定任务数据库位置。
-- [skill_tasks](<skill_tasks.rs>)每秒只将到期任务转成 outbox，阻塞 SQLite 在 `spawn_blocking`，重复错误限频；Guard 随生产服务生命周期终止 worker。设备投递由会话串行执行，不把消息发回用户 ASR 注入器。
+- `Engines.skill_system` 共享[技能系统](<../skills/AGENTS.md>)；独立持久库放配置库旁，构造懒打开且不启动任务。配置库无文件路径时以 memory.db_path 所在目录回退；不要用模型路径决定任务数据库位置。**pure-base 不装配该字段、不落 skills.db**（业务执行面门控；类型/校验层仍编译供识别链契约）。
+- [skill_tasks](<skill_tasks.rs>)每秒只将到期任务转成 outbox，阻塞 SQLite 在 `spawn_blocking`，重复错误限频；Guard 随生产服务生命周期终止 worker。设备投递由会话串行执行，不把消息发回用户 ASR 注入器。**该模块 pure-base 不编译**（main 的启动点同门控）。
 - main 只在非 dev 启动调度；开发模式可以鉴权真实任务 CRUD，但既不自动推进任务也不伪造设备音频。模型构建失败不回落规则/启发式，模型启用但不可用必须由识别入口明确报告。
 
 返回[服务端指引](<../../AGENTS.md>)。

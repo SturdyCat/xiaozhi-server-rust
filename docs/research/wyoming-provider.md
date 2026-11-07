@@ -1,6 +1,6 @@
 # Wyoming Provider 调研与评估（合并归档）
 
-> 状态：**过期调研记录（2026-10-14），提案未采纳**。当前代码无 Wyoming 实现（`server/Cargo.toml` 无相关依赖、注册表无 wyoming 描述符、无 `[asr.wyoming]` / `[tts.wyoming]` 配置段）。本记录保留供未来重启该方向时参考，不代表当前能力；当前事实以源码、测试与[插件层维护](<../../server/plugins/AGENTS.md>)为准。
+> 状态：**过期调研记录（2026-10-14），提案未采纳**。当前代码无 Wyoming 实现（`server/Cargo.toml` 无相关依赖、注册表无 wyoming 描述符、无 `[asr.wyoming]` / `[tts.wyoming]` 配置段）。本记录保留供未来重启该方向时参考，不代表当前能力；当前事实以源码、测试与[插件层维护](<../../plugins/AGENTS.md>)为准。
 > 来源：两份同日期文档合并——PM 许清楚《Wyoming 协议事实卡 + xiaozhi-server-rust 接入需求清单》（协议与生态调研，637 行）+ 架构师 高见远《Wyoming Provider 可行性评估 + 接入点设计》（对照代码现状的评估，597 行）。两部分结论互补；其中对 PCM↔Opus 转码成本的判断相反，**以第二部分代码核实结论为准**（见 §5.1）。
 > 阅读顺序：先读「结论速览」；协议字节布局、生态与竞品查第一部分；接入成本、代码影响与分期查第二部分。
 
@@ -388,7 +388,7 @@ domain 专有扩展：
 
 以下两条是从本仓库源码实测得出的、**直接决定实现形态**的事实：
 
-**约束①：`AsrEngine` / `TtsEngine` 都是同步 trait。** 来源：[plugins/asr/mod.rs](file:///Users/admin/Desktop/notip.com.cn/xiaozhi-server-rust/server/plugins/asr/mod.rs)、[plugins/tts/mod.rs](file:///Users/admin/Desktop/notip.com.cn/xiaozhi-server-rust/server/plugins/tts/mod.rs)
+**约束①：`AsrEngine` / `TtsEngine` 都是同步 trait。** 来源：[plugins/asr/mod.rs](file:///Users/admin/Desktop/notip.com.cn/xiaozhi-server-rust/plugins/asr/mod.rs)、[plugins/tts/mod.rs](file:///Users/admin/Desktop/notip.com.cn/xiaozhi-server-rust/plugins/tts/mod.rs)
 
 ```rust
 pub trait AsrEngine: Send + Sync {
@@ -500,7 +500,7 @@ pub trait TtsEngine: Send + Sync {
 
 | ID | 需求 | 为什么降到 P2 |
 |---|---|---|
-| **P2-1** | `WyomingWakeWordProvider` | 🚫 **本仓库目前根本没有唤醒词检测能力**——`server/plugins/wakeup/`（167 行）从模块文档看是「唤醒问候语」插件：`WakeConfig{enabled, greeting, persist}`，`WakeGreeting` 走 `speak_canned` 预制话术通道，**不做本地唤醒词计算**。唤醒词命中信号来自**固件主动上报**的 `{"type":"listen","state":"detect","text":"<唤醒词>"}`。为一个「不存在的能力」造 `WakeWordProvider` trait 属于**为想象中的需求造抽象**。若未来真要做，先回答：① 唤醒词在 ESP32 端还是Server 端检测？② 若在 Server 端检测，音频链路是 Opus，如何喂给 Wyoming（PCM-only）？ |
+| **P2-1** | `WyomingWakeWordProvider` | 🚫 **本仓库目前根本没有唤醒词检测能力**——`plugins/wakeup/`（167 行）从模块文档看是「唤醒问候语」插件：`WakeConfig{enabled, greeting, persist}`，`WakeGreeting` 走 `speak_canned` 预制话术通道，**不做本地唤醒词计算**。唤醒词命中信号来自**固件主动上报**的 `{"type":"listen","state":"detect","text":"<唤醒词>"}`。为一个「不存在的能力」造 `WakeWordProvider` trait 属于**为想象中的需求造抽象**。若未来真要做，先回答：① 唤醒词在 ESP32 端还是Server 端检测？② 若在 Server 端检测，音频链路是 Opus，如何喂给 Wyoming（PCM-only）？ |
 | **P2-2** | 抽出独立 `wyoming` crate | **收益远小于成本**。理由：① 现有 crates.io 的 `wyoming` crate 只有 148 SLoC、无网络层，我们 90% 的代码是 tokio TCP + serde 读写，这部分**抽出去也无法复用给别的项目**；② 独立 crate 需要处理 workspace/版本/发布/CI 全套，收益是「其他项目也能用」——但**目前只有一个消费者**；③ 与本仓库耦合点：必须依赖 `tokio`+`serde`，若将来引入 `sherpa` feature 会造成**污染**（协议库不该有推理依赖）。**建议：先在仓库内做`src/wyoming/` 模块（内部可复用、零发布成本），待出现第二个真实消费者再抽 crate。** 若架构师仍决定抽，务必**禁止**该 crate 依赖 `sherpa-onnx` / `audiopus`，只允许 `tokio`+`serde`+`thiserror`。 |
 | **P2-3** | Wyoming 作为对外服务（Server → Wyoming 服务端） | 若未来要让别的客户端用 Wyoming 访问本仓库的 SenseVoice/Kokoro，是反向工作。参考 `zaolin/wyoming-serpha-onnx` 的做法，成本可控，但当前无需求。 |
 | **P2-4** | Wyoming HTTP 网关模式 | 协议库自带 `wyoming.http.*`（Flask dev server，**未认证**），本仓库已有 `reqwest`，用 HTTP 调远端 Wyoming 服务更简单，但**首包延迟更高**。作为 P2 备选。 |
@@ -547,7 +547,7 @@ Wyoming 解决的是**「怎么和它说话」**，完全没解决**「谁来把
 
 ### 🟠 R4（中）——`WakeWordProvider` 抽象可能是「为不存在的能力造抽象」
 
-- 实测：`server/plugins/wakeup/`（167 行）是**唤醒问候语**插件（`WakeConfig{enabled, greeting, persist}` → `WakeGreeting` → `speak_canned`），**不做唤醒词检测**。
+- 实测：`plugins/wakeup/`（167 行）是**唤醒问候语**插件（`WakeConfig{enabled, greeting, persist}` → `WakeGreeting` → `speak_canned`），**不做唤醒词检测**。
 - 唤醒信号来自**固件上报**的 `listen/state=detect` 消息。
 - **盲点**：用户可能误以为仓库里已有本地唤醒词实现。若真要在 Server 端做唤醒词检测，需先回答三个问题：① 检测放在 Server 端的意义是什么（ESP32 端已能检测）？② 音频是 Opus，Wyoming 只吃 PCM，如何喂？③ `detection` 没有 score 字段，做不了门限。
 - **建议**：**P2，甚至考虑不做。**
@@ -650,9 +650,9 @@ Wyoming **设计上无认证无加密**，官方明确「不应暴露到公网�
 
 **本仓库（实测）**
 - `server/Cargo.toml`（feature gate：`default = []`，`sherpa = ["dep:sherpa-onnx", "dep:audiopus"]`）
-- `server/plugins/asr/mod.rs`（`AsrEngine` 同步 trait）
-- `server/plugins/tts/mod.rs`（`TtsEngine` 同步 trait + `TtsChunkCallback`）
-- `server/plugins/wakeup/mod.rs`（**唤醒问候语**插件，非唤醒词检测）
+- `plugins/asr/mod.rs`（`AsrEngine` 同步 trait）
+- `plugins/tts/mod.rs`（`TtsEngine` 同步 trait + `TtsChunkCallback`）
+- `plugins/wakeup/mod.rs`（**唤醒问候语**插件，非唤醒词检测）
 - `server/src/media/opus.rs`（Opus 编解码，全部 `#[cfg(feature = "sherpa")]`）
 - `server/src/workflow/downlink/`（`DownlinkPacer`，`lead_ms` 默认 240）
 - `server/src/workflow/session/mod.rs:63-71, 307-318`（`spawn_blocking` 包装同步推理）
@@ -996,7 +996,7 @@ crates/wyoming-client/
 #### 本仓库的放置形态（无论抽不抽 crate）
 
 ```
-server/plugins/wyoming/          ← 或 server/plugins/asr/wyoming.rs + tts/wyoming.rs
+plugins/wyoming/          ← 或 plugins/asr/wyoming.rs + tts/wyoming.rs
 ├── mod.rs          # 协议常量、消息类型、feature 门控注释
 ├── proto.rs        # header 编解码（= 草案 A 的全部）
 ├── client.rs       # 同步 TCP 连接 + 请求/响应配对
@@ -1009,14 +1009,14 @@ server/plugins/wyoming/          ← 或 server/plugins/asr/wyoming.rs + tts/wyo
 
 | 方案 | feature 影响 | 判断 |
 |---|---|---|
-| 放 `server/plugins/wyoming/`（**不抽 crate**） | ✅ **零 feature 影响**。Wyoming provider 无 `#[cfg(feature = "sherpa")]`（与 `tts/aiui.rs` 同款——远程实现无 feature 门槛，见 `plugins/mod.rs:21-22`：「厂商实现文件中的 `#[cfg(feature = "sherpa")]` 仅圈定本地引擎；**远程/云厂商实现无 feature 门槛**」） | ✅ |
+| 放 `plugins/wyoming/`（**不抽 crate**） | ✅ **零 feature 影响**。Wyoming provider 无 `#[cfg(feature = "sherpa")]`（与 `tts/aiui.rs` 同款——远程实现无 feature 门槛，见 `plugins/mod.rs:21-22`：「厂商实现文件中的 `#[cfg(feature = "sherpa")]` 仅圈定本地引擎；**远程/云厂商实现无 feature 门槛**」） | ✅ |
 | 抽独立 crate + 默认 feature 包含 | ⚠️ 需在 `server/Cargo.toml` 加 `wyoming = { path = "...", optional = true }`。若设为**非 optional**（默认启用），则 `default = []` 的构建会多编译 serde_json（已存在）+ 新 crate 本体（无原生依赖）⇒ **成本可忽略** | ✅ 可行 |
 | 抽独立 crate 且引入 opus | ❌ 会把 `audiopus`（需系统 libopus）传染到 crate 边界 | ⚠️ **建议 crate 内不做 opus**，opus 编解码留在 `server/src/media/`（§5.1 已证明不需要跨界） |
 | 抽 crate 且 crate 内用 tokio async | ⚠️ `server/Cargo.toml` 已有 `tokio = features=["full"]`，无冲突；但会诱使实现走 async（§6 推荐不这么做） | ⚠️ 与 §6 结论冲突 |
 
 ### 7.3 抽 / 不抽的决策
 
-**推荐：先在仓库内做（`server/plugins/wyoming/`），不立即抽 crate。**
+**推荐：先在仓库内做（`plugins/wyoming/`），不立即抽 crate。**
 
 | 判据 | 抽出 crate | 留在仓库内 |
 |---|---|---|
@@ -1099,44 +1099,44 @@ server/plugins/wyoming/          ← 或 server/plugins/asr/wyoming.rs + tts/wyo
 ### A.1 Trait 定义
 | 内容 | 位置 |
 |---|---|
-| `AsrEngine`（单方法同步） | `server/plugins/asr/mod.rs:29-31` |
-| `ASR_ENGINES`（仅 sensevoice） | `server/plugins/asr/mod.rs:22-25` |
-| `AsrConfig`（**无私有段**，7 个平铺字段） | `server/plugins/asr/mod.rs:34-58` |
-| `AsrConfig::normalize` | `server/plugins/asr/mod.rs:65-69` |
-| `TtsEngine`（流式 + 3 个默认方法） | `server/plugins/tts/mod.rs:315-358` |
-| `TtsChunkCallback`（`(u32, &[f32]) -> bool`） | `server/plugins/tts/mod.rs:311` |
-| `TTS_ENGINES`（kokoro + xfyun） | `server/plugins/tts/mod.rs:49-58` |
-| `TtsConfig`（已有 2 个私有段） | `server/plugins/tts/mod.rs:63-117`（`kokoro`:89、`xfyun`:92） |
-| `LEGACY_BODY_FIELDS` | `server/plugins/tts/mod.rs:124-133` |
-| `LlmProvider`（手动装箱 future） | `server/plugins/llm/mod.rs:163-174` |
-| `LlmEvent` | `server/plugins/llm/mod.rs:136-143` |
-| `VadEngine`（仅 `Send`，`&mut self`） | `server/plugins/vad/mod.rs:26-31` |
-| `MemoryProvider`（**async，`BoxFut`**） | `server/plugins/memory/mod.rs:69-102` |
-| `BoxFut` 定义 | `server/plugins/memory/mod.rs:61` |
-| `WakeGreeting`（**struct，非引擎**） | `server/plugins/wakeup/mod.rs:134-164` |
-| `DEFAULT_GREETING = "我在"` | `server/plugins/wakeup/mod.rs:43` |
+| `AsrEngine`（单方法同步） | `plugins/asr/mod.rs:29-31` |
+| `ASR_ENGINES`（仅 sensevoice） | `plugins/asr/mod.rs:22-25` |
+| `AsrConfig`（**无私有段**，7 个平铺字段） | `plugins/asr/mod.rs:34-58` |
+| `AsrConfig::normalize` | `plugins/asr/mod.rs:65-69` |
+| `TtsEngine`（流式 + 3 个默认方法） | `plugins/tts/mod.rs:315-358` |
+| `TtsChunkCallback`（`(u32, &[f32]) -> bool`） | `plugins/tts/mod.rs:311` |
+| `TTS_ENGINES`（kokoro + xfyun） | `plugins/tts/mod.rs:49-58` |
+| `TtsConfig`（已有 2 个私有段） | `plugins/tts/mod.rs:63-117`（`kokoro`:89、`xfyun`:92） |
+| `LEGACY_BODY_FIELDS` | `plugins/tts/mod.rs:124-133` |
+| `LlmProvider`（手动装箱 future） | `plugins/llm/mod.rs:163-174` |
+| `LlmEvent` | `plugins/llm/mod.rs:136-143` |
+| `VadEngine`（仅 `Send`，`&mut self`） | `plugins/vad/mod.rs:26-31` |
+| `MemoryProvider`（**async，`BoxFut`**） | `plugins/memory/mod.rs:69-102` |
+| `BoxFut` 定义 | `plugins/memory/mod.rs:61` |
+| `WakeGreeting`（**struct，非引擎**） | `plugins/wakeup/mod.rs:134-164` |
+| `DEFAULT_GREETING = "我在"` | `plugins/wakeup/mod.rs:43` |
 
 ### A.2 注册表与宿主
 | 内容 | 位置 |
 |---|---|
-| `Capability`（11 变体闭枚举） | `server/plugins/registry/mod.rs:73-96` |
-| `ALL_CAPABILITIES` | `server/plugins/registry/mod.rs:99-111` |
-| `HotReload` 三档 | `server/plugins/registry/mod.rs:182-189` |
-| `FieldSchema` | `server/plugins/registry/mod.rs:365-376` |
-| `Built` 闭枚举 | `server/plugins/registry/mod.rs:383-393` |
-| `PluginDescriptor`（12 字段） | `server/plugins/registry/mod.rs:396-422` |
-| `REGISTRY`（14 条描述符） | `server/plugins/registry/mod.rs:431-448` |
-| `impl_id`（`<cap>.<impl>` 拆分） | `server/plugins/registry/mod.rs:466-471` |
-| `unknown_engine_hint` | `server/plugins/registry/mod.rs:501-509` |
-| `signature_of` | `server/plugins/registry/mod.rs:512-517` |
-| `sel_*` / `sig_*` / `validate_*` / `build_*` 全集 | `server/plugins/registry/impls.rs:20-305` |
-| `ASR_SENSEVOICE`（`hot: RestartOnly`） | `server/plugins/registry/impls.rs:309-323` |
-| `TTS_KOKORO` / `TTS_XFYUN` | `server/plugins/registry/impls.rs:343-374` |
-| `WAKE_GREETING`（`build: None`） | `server/plugins/registry/impls.rs:556-570` |
-| `PluginHost::plan` | `server/plugins/host.rs:117-173` |
-| `PluginHost::boot` | `server/plugins/host.rs:182-269` |
-| `PluginHost::build_optional` | `server/plugins/host.rs:275-299` |
-| `Phase` 四档 | `server/plugins/host.rs:33-42` |
+| `Capability`（11 变体闭枚举） | `plugins/registry/mod.rs:73-96` |
+| `ALL_CAPABILITIES` | `plugins/registry/mod.rs:99-111` |
+| `HotReload` 三档 | `plugins/registry/mod.rs:182-189` |
+| `FieldSchema` | `plugins/registry/mod.rs:365-376` |
+| `Built` 闭枚举 | `plugins/registry/mod.rs:383-393` |
+| `PluginDescriptor`（12 字段） | `plugins/registry/mod.rs:396-422` |
+| `REGISTRY`（14 条描述符） | `plugins/registry/mod.rs:431-448` |
+| `impl_id`（`<cap>.<impl>` 拆分） | `plugins/registry/mod.rs:466-471` |
+| `unknown_engine_hint` | `plugins/registry/mod.rs:501-509` |
+| `signature_of` | `plugins/registry/mod.rs:512-517` |
+| `sel_*` / `sig_*` / `validate_*` / `build_*` 全集 | `plugins/registry/impls.rs:20-305` |
+| `ASR_SENSEVOICE`（`hot: RestartOnly`） | `plugins/registry/impls.rs:309-323` |
+| `TTS_KOKORO` / `TTS_XFYUN` | `plugins/registry/impls.rs:343-374` |
+| `WAKE_GREETING`（`build: None`） | `plugins/registry/impls.rs:556-570` |
+| `PluginHost::plan` | `plugins/host.rs:117-173` |
+| `PluginHost::boot` | `plugins/host.rs:182-269` |
+| `PluginHost::build_optional` | `plugins/host.rs:275-299` |
+| `Phase` 四档 | `plugins/host.rs:33-42` |
 
 ### A.3 引擎生命周期
 | 内容 | 位置 |
@@ -1186,8 +1186,8 @@ server/plugins/wyoming/          ← 或 server/plugins/asr/wyoming.rs + tts/wyo
 | `declared_engine_ids_match_registry_implementations` | `server/src/config/tests.rs:52-85` |
 | `descriptor_fields_paths_follow_convention` | `server/src/config/tests.rs:88-` |
 | `example_config_parses_and_normalizes` | `server/src/config/tests.rs:119-` |
-| `field_keys_exist_in_config` | `server/plugins/registry/tests.rs:193-` |
-| 变体数硬断言（11） | `server/plugins/registry/tests.rs:44-52` |
+| `field_keys_exist_in_config` | `plugins/registry/tests.rs:193-` |
+| 变体数硬断言（11） | `plugins/registry/tests.rs:44-52` |
 
 ### A.7 客户端
 | 内容 | 位置 |
@@ -1204,7 +1204,7 @@ server/plugins/wyoming/          ← 或 server/plugins/asr/wyoming.rs + tts/wyo
 ### A.8 网络型 Provider 先例（最关键的可抄模板）
 | 内容 | 位置 |
 |---|---|
-| **AIUI TTS（同步阻塞网络 + 流式 PCM 回调）** | `server/plugins/tts/aiui.rs:93-131` |
+| **AIUI TTS（同步阻塞网络 + 流式 PCM 回调）** | `plugins/tts/aiui.rs:93-131` |
 | ├ 模块注释「同步阻塞实现，调用方必须 `spawn_blocking`」 | `aiui.rs:13-14` |
 | ├ 「每次调用一条短连接（oneshot 语义），不持有跨请求状态」 | `aiui.rs:14` |
 | ├ `ActiveDeadline`（**活跃超时 vs 墙上时钟**） | `aiui.rs:46-74` |
@@ -1223,7 +1223,7 @@ server/plugins/wyoming/          ← 或 server/plugins/asr/wyoming.rs + tts/wyo
 | Dockerfile 恒带 `--features sherpa` | `Dockerfile`（`cargo build --release --features sherpa --locked`） |
 | `cpus: "3.5"` 限核 | `docker-compose.yml` |
 | 推理闸门/线程预算 | `server/src/runtime/mod.rs:4-17`（模块注释） |
-| TTS 4 线程默认 | `server/plugins/tts/mod.rs:281-289` |
+| TTS 4 线程默认 | `plugins/tts/mod.rs:281-289` |
 | 「文件规模 ≤ 600 行」硬约定 | `agents.md:598` |
 | §5.2b「只需改两处」 | `agents.md:149-150` |
 | §5.2b「客户端仍需 ttsRemoteEngines + 卡片字段区（P5 目标）」 | `agents.md:139` |

@@ -1,6 +1,6 @@
 # WASM 测试夹具
 
-为 `server/plugins/wasm/tests.rs` 提供真实 guest 组件。**产物不入库**（git 忽略）：测试经 `ensure_fixture` 在缺失/源更新时本地重建。
+为 `plugins/wasm/tests.rs` 提供真实 guest 组件。**产物不入库**（git 忽略）：测试经 `ensure_fixture` 在缺失/源更新时本地重建。
 
 ## 构建
 

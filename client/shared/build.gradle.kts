@@ -251,8 +251,8 @@ tasks.matching { it.name == "check" || it.name.startsWith("packLocalJSBundle") }
 // 服务器状态实时推送：GeoState 的 WS 占位三字段收敛为 liveApplied 一个"已收实时快照"标记，实测 488→489。
 // 设备管理中心（echomuse+tuya 两页合并）：TuyaSectionState 两个 stateVar，实测 489→491。
 // 设备插件注册门控：devicePluginRows 列表（device_plugins 投影），50→51。
-// 合并 origin/main(Tuya 设备中心) + HEAD(WASM 插件槽位) 实测 stateVar 491→495。
-val expectedStateVarCalls = 495
+// 设备插件纯底座总门控快照（DevicePluginNavState）新增1项，实测 495→496。
+val expectedStateVarCalls = 496
 val expectedStateListCalls = 51
 val bridgeWhitelist = emptySet<String>()
 val verifyComposeStateMigration by tasks.registering {

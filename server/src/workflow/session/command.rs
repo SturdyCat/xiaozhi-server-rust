@@ -2,13 +2,45 @@
 //! Legacy workflow IDs are aliases, never rule/heuristic recognizers. One model
 //! decision may authorize one invocation; the chat LLM has no execution path.
 use std::sync::atomic::Ordering;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::Session;
 use crate::plugins::skill::{Recognition, SkillAction, SkillInvocation};
 use crate::workflow::mcp::STOP_LISTENING_TOOL;
 use crate::workflow::protocol::Transport;
 
+/// Epoch millis（投递/任务幂等键共用的时钟口径；从 skill_plan 移入本保留模块）。
+pub(super) fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(i64::MAX as u128) as i64
+}
+
 impl<'a, T: Transport> Session<'a, T> {
+    /// Keep observing cancellation while synchronous SQLite/model work runs.
+    /// Join even after cancellation: do not detach potentially committing work.
+    pub(super) async fn skill_blocking<R, F>(&mut self, work: F) -> anyhow::Result<R>
+    where
+        R: Send + 'static,
+        F: FnOnce() -> anyhow::Result<R> + Send + 'static,
+    {
+        let mut job = tokio::task::spawn_blocking(work);
+        loop {
+            tokio::select! {
+                result = &mut job => {
+                    let result = result.map_err(|e| anyhow::anyhow!("skill worker failed: {e}"))?;
+                    anyhow::ensure!(!self.skill_cancelled(), "skill work cancelled");
+                    return result;
+                }
+                _ = tokio::time::sleep(Duration::from_millis(10)) => {
+                    self.skill_cancelled();
+                }
+            }
+        }
+    }
+
     /// true consumes this turn (including clarification and genuine failure).
     pub(super) async fn handle_skill_gate(&mut self, user_text: &str) -> bool {
         let bindings = self.model_gate_bindings(user_text, None, true);
@@ -36,9 +68,14 @@ impl<'a, T: Transport> Session<'a, T> {
                     return false;
                 }
                 if let Err(error) = self.execute_invocation(&inv, "model").await {
+                    // 纯底座不编译声明式计划执行：plan 动作的失败是普通错误，
+                    // 没有 SkillActionError 的澄清话术可提取（诚实失败，不伪造）。
+                    #[cfg(not(feature = "pure-base"))]
                     let clarification = error
                         .downcast_ref::<crate::skills::SkillActionError>()
                         .map(|error| error.speech.clone());
+                    #[cfg(feature = "pure-base")]
+                    let clarification: Option<String> = None;
                     self.note_error(format!("model-authorized skill failed: {error:#}"));
                     if let Some(clarification) = clarification {
                         if !self.skill_cancelled() {
@@ -128,9 +165,20 @@ impl<'a, T: Transport> Session<'a, T> {
                 }
             }
             SkillAction::Plan { plan } => {
-                self.execute_skill_plan(plan, inv).await?;
-                if !inv.reply.trim().is_empty() {
-                    self.speak_canned_in_turn(&inv.reply).await?;
+                // 声明式计划执行是业务管线（稳定技能系统 + 任务/outbox），
+                // pure-base 不编译：模型接受的 plan 意图在此明确失败，
+                // 走上方统一失败路径（记错 + 消费本轮），不伪造成功。
+                #[cfg(feature = "pure-base")]
+                {
+                    let _ = plan;
+                    anyhow::bail!("声明式技能计划（plan）属于 legacy-business，pure-base 未编译");
+                }
+                #[cfg(not(feature = "pure-base"))]
+                {
+                    self.execute_skill_plan(plan, inv).await?;
+                    if !inv.reply.trim().is_empty() {
+                        self.speak_canned_in_turn(&inv.reply).await?;
+                    }
                 }
             }
         }

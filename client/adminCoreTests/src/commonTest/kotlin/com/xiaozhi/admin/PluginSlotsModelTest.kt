@@ -1,11 +1,14 @@
 package com.xiaozhi.admin
 
 import com.xiaozhi.admin.contracts.AdminNav
+import com.xiaozhi.admin.contracts.DevicePluginNav
+import com.xiaozhi.admin.contracts.DevicePluginNavState
 import com.xiaozhi.admin.contracts.NavDescriptor
 import com.xiaozhi.admin.contracts.PluginSlots
 import com.xiaozhi.admin.contracts.PluginSlotSnapshot
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -106,5 +109,132 @@ class PluginSlotsModelTest {
         val both = PluginSlots.mergeNav(emptyList(), snap)
         assertEquals(2, both.size, "跨插件不同 id 都保留")
         assertEquals(listOf(9002, 9999), both.map { it.order }, "钳到 9000 带宽且升序")
+    }
+
+    // ============================================================
+    // 设备插件注册门控（GET /api/plugins 的 device_plugins 键）
+    // 空壳 → 隐藏 / 有插件 → 显示 / 不可达·旧服务端 → 保持静态基线
+    // ============================================================
+
+    /** 纯底座空壳：服务端明确下发 `device_plugins: []`（不是缺键）。 */
+    private val emptyShell = DevicePluginNavState(
+        loaded = true, declared = true, declaredIds = emptySet(), registeredIds = emptySet(),
+    )
+
+    /** 常规构建：两个设备插件都声明且都注册。 */
+    private val bothRegistered = DevicePluginNavState(
+        loaded = true, declared = true,
+        declaredIds = setOf("echomuse", "tuya"), registeredIds = setOf("echomuse", "tuya"),
+    )
+
+    /** 常规构建但用户把两个插件都关了：运行分区隐藏，配置段必须保留。 */
+    private val bothDisabled = DevicePluginNavState(
+        loaded = true, declared = true,
+        declaredIds = setOf("echomuse", "tuya"), registeredIds = emptySet(),
+    )
+
+    /** 新服务端 pure-base：静态业务页面不属于底座，动态插件入口仍可进入。 */
+    private val pureBaseShell = DevicePluginNavState(
+        loaded = true, declared = true,
+        declaredIds = emptySet(), registeredIds = emptySet(), pureBase = true,
+    )
+
+    private fun filteredGlobalIds(state: DevicePluginNavState): List<String> =
+        ConfigSections.globalGroups
+            .map { (_, sections) -> DevicePluginNav.filterItems(sections, { it.id }, state) }
+            .filter { it.isNotEmpty() }
+            .flatMap { sections -> sections.map { it.id } }
+
+    @Test
+    fun emptyShellHidesDevicePluginMenusButKeepsCoreNav() {
+        assertTrue(DevicePluginNav.isEmptyShell(emptyShell))
+        assertFalse(DevicePluginNav.showDeviceHub(emptyShell))
+        assertFalse(DevicePluginNav.showSection(emptyShell, "tuya"))
+        assertFalse(DevicePluginNav.showSection(emptyShell, "echomuse"))
+        assertFalse(DevicePluginNav.showPluginPartition(emptyShell, "tuya"))
+        // 核心导航与非插件 section 一律不动（aiui 是可选能力，待产品确认，本次不隐藏）
+        for (id in listOf("overview", "config", "settings", "plugins", "files", "aiui", "server", "ota", "mcp")) {
+            assertTrue(DevicePluginNav.showEntry(emptyShell, id), "$id 不应被隐藏")
+        }
+        assertEquals(
+            listOf("overview", "devices", "console", "config", "settings", "plugins", "files"),
+            DevicePluginNav.filterItems(AdminNav.visible(macos = false), { it.id }, emptyShell)
+                .map { it.id },
+        )
+        // 全局配置左菜单：「Tuya 接入」隐藏，「AIUI 全链路 / 服务 / OTA」等保留
+        val globalIds = filteredGlobalIds(emptyShell)
+        assertTrue(globalIds.containsAll(listOf("overview", "presets", "aiui", "server", "ota")))
+        assertFalse("tuya" in globalIds)
+        // 语音流程节点按 sectionId 过滤：EchoMuse 接入节点隐藏，主流程节点保留
+        val startNodes = PipelineWorkflow.positions.first { it.id == "start" }.nodes
+        assertEquals(
+            startNodes.filter { it.sectionId != "echomuse" }.map { it.id },
+            DevicePluginNav.filterItems(startNodes, { it.sectionId }, emptyShell).map { it.id },
+        )
+    }
+
+    @Test
+    fun pureBaseShowsOnlyCoreManagementAndDynamicPluginEntries() {
+        assertTrue(DevicePluginNav.isEmptyShell(pureBaseShell))
+        assertFalse(DevicePluginNav.showEntry(pureBaseShell, "config"))
+        assertFalse(DevicePluginNav.showEntry(pureBaseShell, "settings"))
+        assertFalse(DevicePluginNav.showEntry(pureBaseShell, "devicehub"))
+        assertFalse(DevicePluginNav.showSection(pureBaseShell, "nlu"))
+        assertTrue(DevicePluginNav.showEntry(pureBaseShell, "overview"))
+        assertTrue(DevicePluginNav.showEntry(pureBaseShell, "console"))
+        assertTrue(DevicePluginNav.showEntry(pureBaseShell, "plugins"))
+        assertTrue(DevicePluginNav.showEntry(pureBaseShell, "plugin:weather.official:weather"))
+        assertEquals(
+            listOf("overview", "devices", "console", "plugins", "files"),
+            DevicePluginNav.filterItems(AdminNav.visible(macos = false), { it.id }, pureBaseShell)
+                .map { it.id },
+        )
+        assertEquals(listOf("overview", "server"), filteredGlobalIds(pureBaseShell))
+    }
+
+    @Test
+    fun declaredPluginsShowMenusAndKeepConfigSectionsWhenDisabled() {
+        assertFalse(DevicePluginNav.isEmptyShell(bothRegistered))
+        assertTrue(DevicePluginNav.showDeviceHub(bothRegistered))
+        assertTrue(DevicePluginNav.showPluginPartition(bothRegistered, "echomuse"))
+        assertTrue(DevicePluginNav.showSection(bothRegistered, "tuya"))
+        assertEquals(
+            AdminNav.visible(macos = false),
+            DevicePluginNav.filterItems(AdminNav.visible(macos = false), { it.id }, bothRegistered),
+        )
+        assertTrue("tuya" in filteredGlobalIds(bothRegistered))
+
+        // 常规构建里用户显式关闭插件：只隐藏「设备管理」与运行分区；配置段是重新开启的
+        // 唯一入口，隐藏会造成「关掉就再也开不回来」。
+        assertFalse(DevicePluginNav.isEmptyShell(bothDisabled))
+        assertFalse(DevicePluginNav.showDeviceHub(bothDisabled))
+        assertFalse(DevicePluginNav.showPluginPartition(bothDisabled, "tuya"))
+        assertTrue(DevicePluginNav.showSection(bothDisabled, "tuya"))
+        assertTrue(DevicePluginNav.showSection(bothDisabled, "echomuse"))
+        assertTrue("tuya" in filteredGlobalIds(bothDisabled))
+        val nav = DevicePluginNav.filterItems(AdminNav.visible(macos = false), { it.id }, bothDisabled)
+        assertFalse("devicehub" in nav.map { it.id })
+    }
+
+    @Test
+    fun unknownStateKeepsStaticBaseline() {
+        val unknownStates = listOf(
+            DevicePluginNavState.UNKNOWN,                                // 加载中 / 服务端不可达
+            DevicePluginNavState(true, false, emptySet(), emptySet()),  // 旧服务端缺键
+            DevicePluginNavState(false, true, emptySet(), emptySet()),  // 回包尚未解析完成
+        )
+        for (state in unknownStates) {
+            assertTrue(DevicePluginNav.isUnknown(state))
+            assertFalse(DevicePluginNav.isEmptyShell(state), "语义未知时不能误判成空壳")
+            assertTrue(DevicePluginNav.showDeviceHub(state))
+            assertTrue(DevicePluginNav.showSection(state, "tuya"))
+            assertTrue(DevicePluginNav.showSection(state, "echomuse"))
+            assertTrue(DevicePluginNav.showPluginPartition(state, "echomuse"))
+            assertEquals(
+                AdminNav.visible(macos = false),
+                DevicePluginNav.filterItems(AdminNav.visible(macos = false), { it.id }, state),
+            )
+            assertTrue("tuya" in filteredGlobalIds(state))
+        }
     }
 }

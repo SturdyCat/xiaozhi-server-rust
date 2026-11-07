@@ -138,5 +138,5 @@ pub fn connect_welcome(client_id: &str, cfg: &EchomuseConfig) -> Option<String> 
     (!text.is_empty()).then(|| text.to_string())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "legacy-business"))]
 mod tests;

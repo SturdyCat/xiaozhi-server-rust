@@ -20,6 +20,7 @@ import com.tencent.kuikly.compose.ui.Modifier
 import com.tencent.kuikly.compose.ui.unit.Dp
 import com.tencent.kuikly.compose.ui.unit.dp
 import com.tencent.kuikly.core.pager.IPager
+import com.xiaozhi.admin.contracts.DevicePluginNav
 import com.xiaozhi.admin.contracts.IconToken
 import com.xiaozhi.admin.icons.GearIcon
 import com.xiaozhi.admin.kit.GearUiBreakpoints
@@ -126,9 +127,14 @@ fun WorkspaceMenu(form: ConfigFormState, meta: PluginMetaState) {
                 }
             }
         } else if (position != null) {
-            if (position.nodes.isEmpty()) MenuNote("暂无扩展")
+            // 设备插件驱动的流程节点（echomuse.input）：服务端明确声明零个设备插件的纯底座
+            // 空壳下不出现在左菜单；加载中/不可达/旧服务端缺键时一律保持静态基线。
+            val nodes = DevicePluginNav.filterItems(
+                position.nodes, { it.sectionId }, meta.devicePluginNav,
+            )
+            if (nodes.isEmpty()) MenuNote("暂无扩展")
             CellGroup(
-                items = position.nodes,
+                items = nodes,
                 modifier = Modifier.padding(bottom = Spacing.xs),
                 key = { it.id },
                 itemContent = { node ->
@@ -141,7 +147,7 @@ fun WorkspaceMenu(form: ConfigFormState, meta: PluginMetaState) {
                     )
                 },
             )
-            if (position.nodes.isNotEmpty()) {
+            if (nodes.isNotEmpty()) {
                 Cell(
                     title = "运行状态",
                     onClick = { form.selectWorkspaceTab(NodeWorkspaceTab.Management) },
@@ -159,7 +165,9 @@ fun WorkspaceMenu(form: ConfigFormState, meta: PluginMetaState) {
             // 单页模式兜底（`@Page("config")` 没有侧边栏）：停在全局 section 时列出它们，
             // 保证独立配置页仍能改服务 / MCP / OTA。统一管理台不会走到这里。
             CellGroup(
-                items = ConfigSections.global,
+                items = DevicePluginNav.filterItems(
+                    ConfigSections.global, { it.id }, meta.devicePluginNav,
+                ),
                 key = { it.id },
                 itemContent = { section ->
                     WorkspaceRow(
@@ -247,6 +255,10 @@ fun GlobalConfigLayout(
 @Composable
 private fun GlobalConfigMenu(form: ConfigFormState, meta: PluginMetaState) {
     for ((groupName, sections) in ConfigSections.globalGroups) {
+        // 只过滤由设备插件驱动的 section：纯底座空壳（device_plugins 明确为空数组）时隐藏；
+        // 常规构建里即使插件被关闭也保留配置段（用户要能重新开启），核心 section 恒显示。
+        val visible = DevicePluginNav.filterItems(sections, { it.id }, meta.devicePluginNav)
+        if (visible.isEmpty()) continue
         Text(
             text = groupName,
             modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.xs),
@@ -254,7 +266,7 @@ private fun GlobalConfigMenu(form: ConfigFormState, meta: PluginMetaState) {
             color = Theme.colors.mutedForeground,
         )
         CellGroup(
-            items = sections,
+            items = visible,
             // 组卡之间留一档空隙，与侧栏同一节奏（分组在视觉上断开）
             modifier = Modifier.padding(bottom = Spacing.sm),
             key = { it.id },

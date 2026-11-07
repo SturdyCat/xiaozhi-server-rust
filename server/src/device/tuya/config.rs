@@ -144,5 +144,5 @@ impl TuyaConfig {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "legacy-business"))]
 mod tests;

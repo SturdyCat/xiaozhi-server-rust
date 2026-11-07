@@ -16,6 +16,7 @@ import com.tencent.kuikly.compose.foundation.layout.padding
 import com.tencent.kuikly.compose.foundation.layout.width
 import com.tencent.kuikly.compose.ui.Modifier
 import com.tencent.kuikly.compose.ui.unit.dp
+import com.xiaozhi.admin.contracts.DevicePluginNav
 import com.xiaozhi.admin.contracts.IconToken
 import com.xiaozhi.admin.icons.GearIcon
 import com.xiaozhi.admin.kit.LocalAdminViewport
@@ -167,8 +168,12 @@ private fun WorkspaceContent(
             HintLine("ESP 与 EchoMuse 共用完整语音工作流；输入格式由设备协议协商，入口无需重复设置下行参数。")
             com.gearui.components.button.Button(text = "前往输出适配", onClick = { form.selectFlowNode("output") }, type = com.gearui.components.button.ButtonType.TEXT,
                 iconWidget = { color -> GearIcon(token = IconToken.ChevronRight, size = 16.dp, tint = color) })
-            com.gearui.components.button.Button(text = "EchoMuse 接入配置", onClick = { form.selectFlowNode("echomuse.input") }, type = com.gearui.components.button.ButtonType.TEXT,
-                iconWidget = { color -> GearIcon(token = IconToken.ChevronRight, size = 16.dp, tint = color) })
+            // 纯底座空壳（device_plugins 明确为空）时该入口指向已隐藏的流程节点，不渲染；
+            // 常规构建 / 加载中 / 旧服务端缺键时保持原样。
+            if (DevicePluginNav.showSection(meta.devicePluginNav, "echomuse")) {
+                com.gearui.components.button.Button(text = "EchoMuse 接入配置", onClick = { form.selectFlowNode("echomuse.input") }, type = com.gearui.components.button.ButtonType.TEXT,
+                    iconWidget = { color -> GearIcon(token = IconToken.ChevronRight, size = 16.dp, tint = color) })
+            }
         }
     } else if (node?.id == "memory.recall") {
         LabeledCard(title = "记忆召回") {

@@ -88,14 +88,22 @@ async fn pure_base_does_not_mount_device_routes() {
         );
     }
 
-    // NLU model build/status remains a base runtime capability, not a business plugin route.
-    let nlu = app
-        .oneshot(
-            Request::get("/api/nlu/model/build")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_ne!(nlu.status(), axum::http::StatusCode::NOT_FOUND);
+    // NLU model build/status is business behavior in the new pure-base contract;
+    // it must remain unavailable until an external plugin declares the capability.
+    for path in [
+        "/api/nlu/model/build",
+        "/api/workflow",
+        "/api/test/capabilities",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(Request::get(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::NOT_FOUND,
+            "{path}"
+        );
+    }
 }

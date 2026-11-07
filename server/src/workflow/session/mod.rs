@@ -23,6 +23,7 @@ use crate::observability::events::{TurnId, TurnTrace};
 use crate::plugins::aiui::FullChainEngine;
 use crate::plugins::asr::AsrEngine;
 use crate::plugins::skill::SkillRegistry;
+#[cfg(not(feature = "pure-base"))]
 use crate::plugins::wakeup::WakeGreeting;
 use crate::runtime::Engines;
 use crate::workflow::downlink::DownlinkPacer;
@@ -39,11 +40,15 @@ enum UtteranceDecision {
     NluStop,
 }
 
+#[cfg(not(feature = "pure-base"))]
 mod aiui;
+#[cfg(not(feature = "pure-base"))]
 mod alarm;
 mod bench;
 mod command;
+#[cfg(not(feature = "pure-base"))]
 mod delivery;
+#[cfg(not(feature = "pure-base"))]
 mod delivery_audio;
 mod hooks;
 mod mcp;
@@ -52,12 +57,15 @@ mod observe;
 mod plan;
 mod producer;
 mod reply;
+#[cfg(not(feature = "pure-base"))]
 mod skill_plan;
 mod start;
 mod utterance;
+#[cfg(not(feature = "pure-base"))]
 mod wakeup;
 
 // 上行 PCM 采样格式换算（AIUI 路径用）：下移到 app/audio/pcm（行为不变搬移）。
+#[cfg(not(feature = "pure-base"))]
 pub(crate) use crate::media::pcm::f32_to_i16_16k;
 
 // 会话入口对 `gateway::ws` 可见（网关把升级后的连接交给会话状态机）。
@@ -167,7 +175,11 @@ pub struct Session<'a, T: Transport> {
     pacer: DownlinkPacer,
     /// 会话固定目录 + 共享模型。只有真实模型的一次决策拥有技能授权。
     skills: SkillRegistry,
+    /// 本轮技能侧turn id（计划执行幂等键/防重入用）；pure-base 不编译计划执行。
+    #[cfg(not(feature = "pure-base"))]
     skill_turn_id: TurnId,
+    /// 空闲才认领 outbox（投递业务）。pure-base 保留字段与复位写入（写点多、
+    /// 语义是"轮次结束"），但投递管线未编译——该标志在纯底座恒无人读取。
     delivery_idle: bool,
     workflow: crate::workflow::designer::CompiledWorkflow,
     /// 指令要求断开本次会话（告别语已下发）：主循环收尾时主动关闭承载。
@@ -192,6 +204,9 @@ pub struct Session<'a, T: Transport> {
     /// **idle/notifying** 状态下被调用（`HandleWakeWordDetectedEvent` 在 speaking/listening
     /// 时走 `SendStartListening`）——因此每条 `detect` 都是一次真实唤醒；且本函数在会话
     /// 主循环里被 `await`，天然不会重入。
+    ///
+    /// pure-base 是空底座：问候业务（预制话术 + 三级音频复用）不编译，唤醒后静默等待。
+    #[cfg(not(feature = "pure-base"))]
     wake: WakeGreeting,
     /// 管理台注入通道（P1-2，见 `app/inject`）：`Some` = 本会话可被注入（设备 + 级联流水线），
     /// `None` = 测试台 / AIUI 全链路（不注册，HTTP 侧报"不支持"）。主循环 `select!` 消费。
@@ -241,6 +256,8 @@ impl<'a, T: Transport> Session<'a, T> {
                 break;
             }
         }
+        // 到期任务 outbox 的投递 tick：定时器本身是通用基础设施（两种构建都保留，
+        // 保持 select 形状稳定）；投递执行体属业务管线，pure-base 下该分支恒空转。
         let mut delivery_tick = tokio::time::interval(std::time::Duration::from_secs(1));
         delivery_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         while !closed && !self.close_requested {
@@ -256,6 +273,7 @@ impl<'a, T: Transport> Session<'a, T> {
                     }
                 }
                 _ = delivery_tick.tick() => {
+                    #[cfg(not(feature = "pure-base"))]
                     if self.delivery_idle && !self.is_test && self.aiui.is_none() {
                         self.deliver_pending_message().await;
                     }
@@ -432,7 +450,8 @@ impl<'a, T: Transport> Session<'a, T> {
     /// 将 VAD 切出的语音段送 ASR → 完整流水线；常规分帧与会话结束 flush 共用。
     async fn recognize_segments(&mut self, segments: Vec<Vec<f32>>) {
         let session_id = self.session_id.clone();
-        // AIUI 全链路模式：切段即轮次，识别+大模型+合成在 AIUI 云端闭环
+        // AIUI 全链路模式：仅 legacy-business 编译，切段即轮次并走云端闭环。
+        #[cfg(not(feature = "pure-base"))]
         if self.aiui.is_some() {
             self.aiui_segments(segments).await;
             return;
@@ -490,7 +509,10 @@ impl<'a, T: Transport> Session<'a, T> {
     async fn decide_user_text(&mut self, user_text: &str, turn_id: TurnId) -> UtteranceDecision {
         // Stage 1：记录（注册表观测 + 事件总线叠加层，见 observe.rs / events.rs）
         self.abort.store(false, Ordering::Relaxed); // new user turn, not a receipt
-        self.skill_turn_id = turn_id;
+        #[cfg(not(feature = "pure-base"))]
+        {
+            self.skill_turn_id = turn_id;
+        }
         self.note_user_turn(user_text);
         self.emit_message_added(turn_id, "user", user_text, None);
         // Stage 2: the only intent decision; no LLM action nomination follows.

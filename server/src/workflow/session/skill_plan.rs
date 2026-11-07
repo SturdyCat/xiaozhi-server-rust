@@ -1,42 +1,12 @@
 //! Bounded declarative actions; device identity is always the bound session.
+use super::command::now_ms;
 use super::{DeviceKind, Session};
 use crate::plugins::skill::SkillInvocation;
 use crate::skills::{SkillExecutionContext, SkillPlan, SkillStep};
 use crate::workflow::protocol::Transport;
 use std::sync::atomic::Ordering;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-
-pub(super) fn now_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
-        .min(i64::MAX as u128) as i64
-}
 
 impl<T: Transport> Session<'_, T> {
-    /// Keep observing cancellation while synchronous SQLite/model work runs.
-    /// Join even after cancellation: do not detach potentially committing work.
-    pub(super) async fn skill_blocking<R, F>(&mut self, work: F) -> anyhow::Result<R>
-    where
-        R: Send + 'static,
-        F: FnOnce() -> anyhow::Result<R> + Send + 'static,
-    {
-        let mut job = tokio::task::spawn_blocking(work);
-        loop {
-            tokio::select! {
-                result = &mut job => {
-                    let result = result.map_err(|e| anyhow::anyhow!("skill worker failed: {e}"))?;
-                    anyhow::ensure!(!self.skill_cancelled(), "skill work cancelled");
-                    return result;
-                }
-                _ = tokio::time::sleep(Duration::from_millis(10)) => {
-                    self.skill_cancelled();
-                }
-            }
-        }
-    }
-
     pub(super) fn skill_context(&self, index: usize) -> SkillExecutionContext {
         SkillExecutionContext {
             device_id: self.device_id.clone(),

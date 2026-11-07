@@ -1,16 +1,16 @@
 # 插件架构统一 —— 借鉴 DSH 插件理念 + 适合本项目的 LLM 插件 + 管理页 UI 设计（历史设计与实施记录）
 
 > 定位：本文是插件架构统一的完整历史长文。盘点描述改造前状态、设计描述目标方案、实施记录描述当时交付，均不代替当前源码、测试与维护约束。
-> 章节分布：**§0–§0.6、§1、§6–§9 见本页**；§0.7–§0.8 见[插件维护](<../../server/plugins/AGENTS.md>)；§0.9 见[人格与图记忆](<soul-and-graph-memory-plan.md>)；§0.10 与 §2–§3 见[注册表规范](<../../server/plugins/registry/AGENTS.md>)；§4 见 [LLM 维护](<../../server/plugins/llm/AGENTS.md>)；§0.11 与 §5 见[管理台界面设计与验收记录](<admin-ui-design.md>)。
+> 章节分布：**§0–§0.6、§1、§6–§9 见本页**；§0.7–§0.8 见[插件维护](<../../plugins/AGENTS.md>)；§0.9 见[人格与图记忆](<soul-and-graph-memory-plan.md>)；§0.10 与 §2–§3 见[注册表规范](<../../plugins/registry/AGENTS.md>)；§4 见 [LLM 维护](<../../plugins/llm/AGENTS.md>)；§0.11 与 §5 见[管理台界面设计与验收记录](<admin-ui-design.md>)。
 > 文中形如 `agents.md §N` 或 `AGENTS.md §N` 的引用指重组前的旧长文，不表示当前指引存在该章节。
-> 当前入口：[插件层](<../../server/plugins/AGENTS.md>)、[注册表](<../../server/plugins/registry/AGENTS.md>)、[架构概览](<../architecture.md>)。
+> 当前入口：[插件层](<../../plugins/AGENTS.md>)、[注册表](<../../plugins/registry/AGENTS.md>)、[架构概览](<../architecture.md>)。
 
 ---
 
 > 状态：**设计（未实现）**。所有「现状」结论均给出本仓库 `文件:行号`；所有 DSH 结论均给出 asar 内包名+文件
 > （取证方式见 [`soul-and-graph-memory-plan.md`](<soul-and-graph-memory-plan.md>) 文首说明：`app.asar` 是归档文件不是目录）。
 > 目标读者：要动手实现这件事的工程师（含 AI 编码助手）。
-> 关联：[插件维护](<../../server/plugins/AGENTS.md>)（陷阱与约束）、[架构概览](<../architecture.md>)、[人格与图记忆](<soul-and-graph-memory-plan.md>)（本文件的 P4 依赖它）。
+> 关联：[插件维护](<../../plugins/AGENTS.md>)（陷阱与约束）、[架构概览](<../architecture.md>)、[人格与图记忆](<soul-and-graph-memory-plan.md>)（本文件的 P4 依赖它）。
 
 ---
 

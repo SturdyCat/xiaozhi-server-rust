@@ -8,7 +8,7 @@
 ### 1.1 domain 字段落点：IntentDef 加 `Domain` 枚举字段——够
 
 ```rust
-// server/plugins/nlu/mod.rs
+// plugins/nlu/mod.rs
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Domain { #[default] Server, Device, Iot }
@@ -51,14 +51,14 @@ pub struct IntentDef {
 
 | 文件 | 改动 |
 |---|---|
-| `server/plugins/nlu/mod.rs` | 新增 `Domain` 枚举；`IntentDef` 加 `domain` 字段；文档注释更新（"意图"→"技能"） |
-| `server/plugins/nlu/defaults.json` | 11 个 reminder_* 加 `"domain":"server"`；新增 2-3 个设备域示例技能（见 §4） |
-| `server/plugins/skill/catalog.rs` | effective_catalog 注入 end_session 时 `domain: Domain::Device`；validate 无需新校验（enum 即白名单）；模块注释重定义 command 语义 |
-| `server/plugins/command/mod.rs` | 仅注释与错误文案改口（"end_session 训练词表"，归设备域）；结构不动 |
+| `plugins/nlu/mod.rs` | 新增 `Domain` 枚举；`IntentDef` 加 `domain` 字段；文档注释更新（"意图"→"技能"） |
+| `plugins/nlu/defaults.json` | 11 个 reminder_* 加 `"domain":"server"`；新增 2-3 个设备域示例技能（见 §4） |
+| `plugins/skill/catalog.rs` | effective_catalog 注入 end_session 时 `domain: Domain::Device`；validate 无需新校验（enum 即白名单）；模块注释重定义 command 语义 |
+| `plugins/command/mod.rs` | 仅注释与错误文案改口（"end_session 训练词表"，归设备域）；结构不动 |
 | `src/gateway/ws/skill_api.rs` | `catalog_json` 的 `source_semantics` 说明更新（提到 domain 与 end_session=设备域）；intents 已全量序列化，domain 自动透出，无需结构改动 |
 | `src/gateway/ws/nlu_build.rs` | `catalog_source` 升级为 `"effective_command_nlu_v2"`（L278） |
 | `src/gateway/ws/nlu_build/tests.rs`、`artifact_tests.rs`、`predict_tests.rs`、`src/gateway/ws/nlu_model/tests.rs` | fixture/断言同步（v2 字符串、新 IntentDef 构造补 domain） |
-| `server/plugins/nlu/tests.rs`、skill 目录相关测试 | 补 domain 序列化/缺省/注入用例 |
+| `plugins/nlu/tests.rs`、skill 目录相关测试 | 补 domain 序列化/缺省/注入用例 |
 
 ### 管理台（client/shared/.../admin/）
 

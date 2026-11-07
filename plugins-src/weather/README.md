@@ -8,7 +8,7 @@
 
 城市天气查询：城市名解析（含省份消歧）→ NMC 站点码 → 实时天气 / 明天 / 后天 / 近 7 天预报，
 产出与原生实现**完全同构**的结果 JSON（`ok/speech/realtime/forecast/hourly/...`）与中文语音话术。
-解析与归一化逻辑和原生 `server/plugins/weather/` 共享同一份 `parse.rs`（单源）。
+解析与归一化逻辑和原生 `plugins/weather/` 共享同一份 `parse.rs`（单源）。
 
 执行模型是**纯决策瀑布**：本插件不持有任何 I/O——宿主喂事件，插件返回效果（http-get/kv-put），
 宿主执行后按步批量回灌 `http.responses`。冷路径 3 次回灌；TTL 内热路径零出网。

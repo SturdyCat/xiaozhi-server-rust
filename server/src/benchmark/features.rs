@@ -19,10 +19,20 @@ pub(super) fn preview(cfg: &Config, action: &str, _text: &str) -> StageResult {
             if cfg.wakeup.validate().is_err() { return StageResult::error(action,"invalid_config","Invalid saved wakeup greeting configuration"); }
             json!({"enabled":cfg.wakeup.enabled,"active":cfg.wakeup.active(),"greetings":cfg.wakeup.pool(),"persist":cfg.wakeup.persist,"synthesis_tested":false})
         }
+        #[cfg(not(feature = "pure-base"))]
         "soul.preview" => match crate::plugins::soul::preview::build(cfg,"<node-test>") {
             Ok(p) => { r.text = Some(p.instructions.clone()); p.to_json() }
             Err(_) => return StageResult::error(action,"invalid_config","Invalid saved soul preset or prompt variables"),
         },
+        // pure-base 人格业务未编译：预览如实投影实际会发送的 instructions（= system_prompt）。
+        #[cfg(feature = "pure-base")]
+        "soul.preview" => {
+            let Ok(instructions) = crate::plugins::soul::instructions(cfg, "<node-test>") else {
+                return StageResult::error(action,"invalid_config","Invalid saved soul configuration");
+            };
+            r.text = Some(instructions.clone());
+            json!({"instructions": instructions, "source": "llm.system_prompt"})
+        }
         "memory.recall" | "memory.writeback.dry_run" => return StageResult::error(action,"unsupported_action","No snapshot-isolated read-only memory test adapter; use existing scoped memory preview API. This test never opens, migrates or writes a memory DB."),
         "tts.playback" => return StageResult::error(action,"unsupported_action","HTTP provider measurements cannot verify native playback; use the native diagnostic"),
         _ => return StageResult::error(action,"unsupported_action","Unknown test action_id"),

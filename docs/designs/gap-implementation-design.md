@@ -37,10 +37,10 @@
 | 文件 | 改动 | 缺口 |
 |---|---|---|
 | `server/src/runtime/mod.rs` | 挂 `inference` 字段；`refresh_tts` 成功后 `reconfigure_tts`；`//!` 预算段补闸门说明 | ① |
-| `server/plugins/asr/mod.rs` | `AsrConfig.max_concurrent`（default 1，clamp） | ① |
-| `server/plugins/tts/mod.rs` | `TtsConfig.max_concurrent`（default 1，clamp） | ① |
-| `server/plugins/llm/mod.rs` | `LlmConfig.sentence_flush_ms`（default 1500，clamp [0,60000]） | ③ |
-| `server/plugins/registry/fields.rs` | 3 条 `FieldSchema`（asr.max_concurrent / tts.max_concurrent / llm.sentence_flush_ms） | ①③ |
+| `plugins/asr/mod.rs` | `AsrConfig.max_concurrent`（default 1，clamp） | ① |
+| `plugins/tts/mod.rs` | `TtsConfig.max_concurrent`（default 1，clamp） | ① |
+| `plugins/llm/mod.rs` | `LlmConfig.sentence_flush_ms`（default 1500，clamp [0,60000]） | ③ |
+| `plugins/registry/fields.rs` | 3 条 `FieldSchema`（asr.max_concurrent / tts.max_concurrent / llm.sentence_flush_ms） | ①③ |
 | `server/src/workflow/session/mod.rs` | `asr_recognize` 加闸门参数并过闸；trace 创建/传递（必要时下移 `f32_to_i16_16k` 控行数） | ①② |
 | `server/src/workflow/session/observe.rs` | `emit_turn_latency` 辅助 | ② |
 | `server/src/workflow/session/reply.rs` | gate 透传、trace 埋点与 emit、producer 抽取后瘦身 | ①②③ |

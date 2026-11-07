@@ -15,6 +15,7 @@ import com.tencent.kuikly.compose.foundation.layout.*
 import com.tencent.kuikly.compose.ui.Alignment
 import com.tencent.kuikly.compose.ui.Modifier
 import com.tencent.kuikly.compose.ui.unit.dp
+import com.xiaozhi.admin.contracts.DevicePluginNav
 import com.xiaozhi.admin.contracts.IconToken
 import com.xiaozhi.admin.kit.GearUiBreakpoints
 import com.xiaozhi.admin.kit.LocalAdminPager
@@ -63,11 +64,11 @@ fun DeviceManagementCenter(
     val selectedTuya = tuya.devices.firstOrNull { it.deviceId == selectedTuyaId }
 
     // 设备插件注册门控（GET /api/plugins 的 device_plugins 投影）：注册后分区/菜单才出现。
-    // 旧服务端未上报该键时按已注册兜底（与侧栏门控同一口径，不闪隐）。
+    // 与侧栏共用纯契约门控：加载中/不可达/旧服务端缺键按已注册兜底（不闪隐）；
+    // 服务端明确下发 [] 的纯底座空壳按未注册处理（本页与侧栏入口一并隐藏）。
     val emRegistered = devicePluginRegistered(plugins, "echomuse")
     val tuyaRegistered = devicePluginRegistered(plugins, "tuya")
-    val noneRegistered =
-        plugins.loaded && plugins.devicePluginRows.isNotEmpty() && !emRegistered && !tuyaRegistered
+    val noneRegistered = !DevicePluginNav.showDeviceHub(plugins.devicePluginNav)
 
     // EchoMuse 实时更新（管理台 WS）；离页/切服务器释放轮询与 shell，并兜底清两路详情态
     //（TuyaDeviceDialog 自身 dispose 也会 closeDetail，这里兜防止宿主形态变化时残留）
@@ -177,7 +178,7 @@ fun DeviceManagementCenter(
 
 /** 注册门控兜底：旧服务端未上报该插件行时按已注册处理（维持合并前行为，不闪隐）。 */
 private fun devicePluginRegistered(plugins: PluginMetaState, id: String): Boolean =
-    plugins.devicePlugin(id)?.registered ?: true
+    DevicePluginNav.showPluginPartition(plugins.devicePluginNav, id)
 
 /** title 栏摘要：两路设备合计 + 在线数（涂鸦未配置/未启用时如实说，不冒充 0 台）。 */
 private fun deviceHubSummary(em: EchoMuseState, tuya: TuyaState): String {

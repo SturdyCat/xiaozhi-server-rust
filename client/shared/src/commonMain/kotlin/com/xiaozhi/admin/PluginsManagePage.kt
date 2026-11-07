@@ -198,3 +198,54 @@ fun PluginsManagePage(meta: PluginMetaState, manage: PluginsManageState, toast: 
     }
 }
 
+/**
+ * 动态插件的声明式运行页：只渲染 manifest registration 提供的描述、字段元数据和动作。
+ * 这里不复制任何业务页面；业务插件需要更丰富的界面时，应继续扩展 manifest/WASM action，
+ * 而不是把业务组件重新编回 server 或静态管理台。
+ */
+@Composable
+fun PluginRuntimePage(
+    plugin: com.xiaozhi.admin.contracts.PluginSlotPlugin,
+    manage: PluginsManageState,
+    toast: ToastState,
+) {
+    val ctx = LocalAdminPagerOrThrow()
+    Column(modifier = Modifier.fillMaxWidth()) {
+        LabeledCard(title = plugin.title) {
+            HintLine(plugin.description.ifEmpty { "该页面由插件清单声明，底座不内置业务页面。" })
+            HintLine("${plugin.id} · v${plugin.version} · ${plugin.phase}")
+            if (plugin.implements.isNotEmpty()) HintLine("扩展点：${plugin.implements.joinToString("、")}")
+            if (plugin.permissions.isNotEmpty()) HintLine("权限：${plugin.permissions.joinToString("、")}")
+        }
+        if (plugin.configFields.isNotEmpty()) {
+            LabeledCard(title = "插件配置字段") {
+                for (field in plugin.configFields) {
+                    HintLine("${field.label}（${field.key} · ${field.kind}）${field.help.takeIf { it.isNotBlank() }?.let { "：$it" } ?: ""}")
+                }
+                HintLine("字段由插件 manifest 声明；底座不会为未声明字段生成业务配置。")
+            }
+        }
+        LabeledCard(title = "插件动作") {
+            if (plugin.actions.isEmpty()) {
+                HintLine("该插件未声明管理动作。")
+            } else {
+                actionRow {
+                    for (action in plugin.actions) {
+                        Button(
+                            text = if (manage.busy == "${plugin.id}:${action.id}") "执行中…" else action.label,
+                            onClick = {
+                                manage.runAction(ctx, plugin.id, action.id) { ok, msg ->
+                                    toast.show(msg, if (ok) "ok" else "error")
+                                }
+                            },
+                            type = ButtonType.OUTLINE,
+                            size = ButtonSize.SMALL,
+                            disabled = manage.busy.isNotEmpty(),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+

@@ -88,7 +88,7 @@ sequenceDiagram
 ## 7. 任务列表（按依赖排序；⚠️ weather/geo 并行工作红线：所有追加只增不改 weather 相关行与断言）
 
 **T01 技能声明层**（P0，无依赖）
-- 文件：`server/src/skills/plan.rs`（能力元数据 + validate 分支 + action 约束）、`server/plugins/nlu/defaults.json`（2 intents + device_name 槽位）、`server/src/skills/tests_plan.rs`（追加 tuya.control 校验用例）
+- 文件：`server/src/skills/plan.rs`（能力元数据 + validate 分支 + action 约束）、`plugins/nlu/defaults.json`（2 intents + device_name 槽位）、`server/src/skills/tests_plan.rs`（追加 tuya.control 校验用例）
 - 验收：`cargo test -p server skills::`（plan 相关全部通过）
 
 **T02 tuya 语音域逻辑**（P0，无依赖）

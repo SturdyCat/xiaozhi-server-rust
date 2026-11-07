@@ -81,6 +81,7 @@ fn engines_health_json(host: &PluginHost) -> serde_json::Value {
     let live = host.config();
     let caps: Vec<serde_json::Value> = ALL_CAPABILITIES
         .iter()
+        .filter(|&&cap| !cfg!(feature = "pure-base") || cap.exposed_in_pure_base())
         .map(|&cap| {
             let s = host.capability_summary(cap);
             // 未启用的能力不跑探测：显式关闭不是错误（PRD 验收 2）。

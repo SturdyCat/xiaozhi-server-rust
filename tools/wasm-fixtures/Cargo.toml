@@ -1,4 +1,4 @@
-# WASM 测试 guest 夹具（P0→P1）：给 server/plugins/wasm/tests.rs 提供真实组件。
+# WASM 测试 guest 夹具（P0→P1）：给 plugins/wasm/tests.rs 提供真实组件。
 #
 # 真实插件源在 plugins-src/（P1+）；本目录只服务测试：
 # - hello：行为良好的演示插件（注册包/事件效果/动作/自检/kv 闭环；经 guest SDK 构建）

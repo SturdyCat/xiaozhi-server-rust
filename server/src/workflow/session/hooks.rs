@@ -132,12 +132,14 @@ impl<'a, T: Transport> Session<'a, T> {
 
     pub(super) async fn run_wake_hooks(&mut self, trigger: Option<&str>) -> anyhow::Result<()> {
         for binding in self.hook_bindings("start", trigger) {
+            // 唤醒问候是 legacy 业务绑定；pure-base 空底座只派发 WASM 观察者。
+            #[cfg(not(feature = "pure-base"))]
             if binding.plugin_id == "wakeup.greeting" {
                 let result = self.handle_wake_greeting().await;
                 hook_result(&binding, result)?;
-            } else {
-                self.dispatch_observer(&binding.plugin_id, "start", trigger);
+                continue;
             }
+            self.dispatch_observer(&binding.plugin_id, "start", trigger);
         }
         Ok(())
     }

@@ -31,6 +31,12 @@ pub(super) async fn list_plugins(State(engines): State<Arc<Engines>>) -> Respons
     body["ok"] = serde_json::json!(true);
     // 设备插件注册投影：管理台「设备管理」菜单的门控（见 [device_plugins_json]）
     body["device_plugins"] = device_plugins_json(&engines.config);
+    // UI 模式是管理台隐藏/显示静态业务入口的唯一底座信号。纯底座即使打开了
+    // 普通构建的旧 SQLite，也不能让客户端误把内置业务页当成已安装插件。
+    body["ui"] = serde_json::json!({
+        "mode": if cfg!(feature = "pure-base") { "pure-base" } else { "full" },
+        "static_business": !cfg!(feature = "pure-base"),
+    });
     // 配置来源一并带上：状态解读常需知道"这些值来自哪个文件、重启会不会丢"
     let config_path = engines.config_path();
     body["config"] = serde_json::json!({
@@ -96,6 +102,18 @@ pub(super) fn device_plugins_json(cfg: &crate::config::Config) -> serde_json::Va
 /// `GET /api/config/schema`：字段元数据（按能力聚合）。
 pub(super) async fn config_schema(State(_engines): State<Arc<Engines>>) -> Response {
     let mut body = registry::schema_json();
+    if cfg!(feature = "pure-base") {
+        // 静态 schema 不是插件注册：纯底座只把核心数据面字段交给管理台，
+        // 业务插件字段必须来自 WASM manifest/config_fields。
+        if let Some(caps) = body["capabilities"].as_array_mut() {
+            caps.retain(|cap| {
+                matches!(
+                    cap.get("id").and_then(serde_json::Value::as_str),
+                    Some("asr") | Some("vad") | Some("tts") | Some("llm")
+                )
+            });
+        }
+    }
     body["ok"] = serde_json::json!(true);
     json_ok(body)
 }

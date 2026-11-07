@@ -1,6 +1,6 @@
 //! 静态注册包构建器：manifest / registration 的类型化构建 + guest 侧前置校验。
 //!
-//! 校验规则与宿主 `server/plugins/wasm/contract.rs::validate_*` **同源**
+//! 校验规则与宿主 `plugins/wasm/contract.rs::validate_*` **同源**
 //! （规则漂移 = 双侧都该改）：形状非法在构建期报 [`Error::Invalid`]，而不是装载期
 //! 被宿主拒绝后只剩一行日志。静态数据用 expect 语义（见 crate 文档分界表）。
 //!

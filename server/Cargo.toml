@@ -8,7 +8,10 @@ license = "MIT"
 [features]
 # 默认纯 Rust 编译/单测；--dev 可运行真实管理台/API（推理明确禁用，无需模型或系统 Opus）。
 # 在有网络/模型的目标机上用 `--features sherpa` 启用真实 SenseVoice/Kokoro/Silero 引擎。
-default = []
+# 普通构建保留现有原生业务兼容面；纯底座发布必须显式 --no-default-features。
+default = ["legacy-business"]
+# 原生业务兼容层（EchoMuse/Tuya/OTA/音色及后续业务模块）。关闭后只编译底座与插件宿主。
+legacy-business = []
 sherpa = ["dep:sherpa-onnx", "dep:audiopus"]
 # TinyBERT 意图分类（技能级联第二级的语义模型实现）：需要 ONNX 运行时 + HF tokenizers。
 # ort 用 load-dynamic：运行时 dlopen libonnxruntime（镜像内 ORT_DYLIB_PATH 指路），

@@ -10,8 +10,8 @@
 
 - **每个插件目录必须自带 `README.md`**（功能描述与使用方法是插件的交付面，不是可选项）：
   必含 `## 功能描述` 与 `## 使用方法` 两节——事件/payload、动作、配置字段、kv 键布局、
-  权限与扩展点、边界限制都要写清。结构由 `server/plugins/wasm/plugin_docs_tests.rs`
+  权限与扩展点、边界限制都要写清。结构由 `plugins/wasm/plugin_docs_tests.rs`
   强制检查（新增插件缺文档 = 测试失败）。测试件（tools/wasm-fixtures）不在此列。
-- 插件 id 形如 `<域>.<名>`（`weather.official`），manifest 声明实现的扩展点与权限；宿主校验见 `server/plugins/wasm/contract.rs`。
+- 插件 id 形如 `<域>.<名>`（`weather.official`），manifest 声明实现的扩展点与权限；宿主校验见 `plugins/wasm/contract.rs`。
 - 与原生实现共享纯逻辑源时用 `#[path]` 单源引用（绞杀者方向：P8 反转为原生从这里取）。
 - 多步 http 流程的上下文编码在 request-id（`|` 分隔）；全站级大列表不进 kv（值上限 64KB）。

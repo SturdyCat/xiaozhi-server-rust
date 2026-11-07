@@ -5,7 +5,7 @@
 - 协议与 hello 见[协议说明（从上级入口导航）](<../AGENTS.md>)；下行版本跟随设备 hello，而不是服务端配置独立选版本。
 - 配置 GET 打码、PUT/POST 部分更新、revision 冲突与热生效回报，见[配置端点说明](<config/AGENTS.md>)。
 - 设备/会话/最近对话/用量/延迟是进程内观测态，重启清零；online 来自生命周期，不是心跳，也不是“今日统计”。长期原文留存属于 memory。
-- 健康接口与插件清单共用宿主 capability 聚合，不另写 fold；探测只做本地检查，不构建引擎或请求外网。`GET /api/plugins` 另附 `device_plugins[]` 设备插件注册投影（echomuse/tuya；注册=配置段启用，纯只读，键契约由 [plugins_tests](<plugins_tests.rs>) 钉死）——管理台「设备管理」菜单据此门控。
+- 健康接口与插件清单共用宿主 capability 聚合，不另写 fold；探测只做本地检查，不构建引擎或请求外网。`GET /api/plugins` 另附 `ui.mode`（pure-base/full）与 `device_plugins[]` 注册投影；pure-base 只输出核心 ASR/VAD/TTS/LLM 能力，业务能力与静态 schema 不进入管理台，动态 UI 只能来自 WASM manifest。`device_plugins[]` 保留兼容设备门控键，契约由 [plugins_tests](<plugins_tests.rs>) 钉死。
 - Kuikly NetworkModule 只用 GET/POST；保留配置 POST=PUT、overlay/preset 删除 POST 别名，不能只测 curl 的 PUT/DELETE。
 - 人格 preview 接受未保存草稿，返回完整 effective；记忆 recall 是当场验证入口，clear 必须显式 scope 或 all。
 - 固件使用[固件子路由](<../../device/firmware/http.rs>)，按功能/型号匹配；不要把统一插件 action/job 设计当成已存在路由。

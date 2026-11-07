@@ -31,7 +31,7 @@ NLU 层原来散落三类概念，现在统一为 **NLU 技能（NLU Skill）**�
 
 ## 2. effective_catalog 机制（同源目录）
 
-唯一目录入口：`crate::plugins::skill::effective_catalog(&command, &nlu)`（`server/plugins/skill/catalog.rs`）。
+唯一目录入口：`crate::plugins::skill::effective_catalog(&command, &nlu)`（`plugins/skill/catalog.rs`）。
 生产识别（`SkillRegistry`）、训练输入（`nlu_build::training_catalog`）、manifest 快照与候选映射**共用同一函数**，保证"训练标签 = 生产技能"永不漂移。
 
 1. 以保存态 `[nlu]` 配置为基（默认 JSON 只在首次缺省配置播种，不隐藏注入）；
@@ -57,7 +57,7 @@ NLU 层原来散落三类概念，现在统一为 **NLU 技能（NLU Skill）**�
 - 本次不改任何默认技能名（`end_session` 是注入名非 intent 名），旧模型标签不受影响，无需强制重训；
 - **改名 = 训练标签变更**：管理台保存改名技能时强提示"旧模型标签失效，需重新训练"（仅提示不拦截，沿用保存 → 提交训练链路）。
 
-## 3. 默认技能目录（出厂种子 `server/plugins/nlu/defaults.json`）
+## 3. 默认技能目录（出厂种子 `plugins/nlu/defaults.json`）
 
 ### 3.1 服务器域（server，服务端执行，动作 = plan → 系统能力组合）
 

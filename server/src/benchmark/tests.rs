@@ -229,12 +229,15 @@ async fn text_pipeline_explicitly_skips_audio_and_keeps_one_snapshot_during_save
     assert_eq!(llm["history"], 0);
     assert!(llm["memory"].is_null());
     assert_eq!(llm["tools"], false);
+    #[cfg(not(feature = "pure-base"))]
     assert_eq!(
         llm["instructions"],
         crate::plugins::soul::preview::build(&cfg, "<node-test>")
             .unwrap()
             .instructions
     );
+    #[cfg(feature = "pure-base")]
+    assert_eq!(llm["instructions"], cfg.llm.system_prompt.clone());
     assert_eq!(out.result.details["context"]["production_fullflow"], false);
     let tts = out.stages.iter().find(|s| s.stage == "tts").unwrap();
     assert!(tts.first_pcm_ms.is_some());

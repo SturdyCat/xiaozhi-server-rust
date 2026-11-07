@@ -19,7 +19,7 @@
 //! 不要在业务代码里直接读盘或写盘——读写一律经 [`store::ConfigStore`] 抽象
 //! （见 `main.rs::load_config_inner` 与 `server/src/config/store/AGENTS.md`）。
 //!
-//! ## 配置约定（P4，见 `server/plugins/registry/AGENTS.md`；原 `docs/plugin-architecture-unification.md` §3.3）
+//! ## 配置约定（P4，见 `plugins/registry/AGENTS.md`；原 `docs/plugin-architecture-unification.md` §3.3）
 //!
 //! 1. **`engine` 键**：每个能力段用 `engine = "<实现 id>"` 选择实现，id 即注册表描述符 id
 //!    去掉 `"<cap>."` 前缀（`[tts] engine="kokoro"` ↔ 描述符 `tts.kokoro`）；

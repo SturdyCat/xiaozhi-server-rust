@@ -207,3 +207,114 @@ object PluginSlots {
         return id.removePrefix("plugin:").substringBefore(':').takeIf { it.isNotBlank() }
     }
 }
+
+// ============================================================
+// 设备插件注册门控（GET /api/plugins 的 device_plugins 键）
+// ============================================================
+
+/**
+ * 设备插件注册投影的**三态快照**（零 Kuikly 依赖，adminCoreTests 纯 JVM 可回归）。
+ *
+ * 为什么不能只用一个布尔：同一个「空数组」在 wire 上代表两件不同的事——
+ * - **缺 `device_plugins` 键**（旧服务端 / 回包异常）→ 语义未知，必须保持编译期静态基线，
+ *   既不误删菜单，也不在加载间隙闪隐；
+ * - **明确下发 `device_plugins: []`**（`pure-base` 纯底座空壳）→ 服务端明确声明
+ *   「一个设备插件都没有」，此时才隐藏由设备插件驱动的菜单；
+ * - **明确下发非空数组**（常规构建）→ 按 `registered` 决定「设备管理」的运行分区；
+ *   **配置段始终保留**，否则用户把插件关掉后就再也找不到重新开启的入口。
+ *
+ * 唯一权威数据源是 `device_plugins[]`。`capabilities[]`（编译期 `ALL_CAPABILITIES` 注册表）
+ * 与 `/api/config/schema` 的 `app_sections`（编译期热生效档位表）在纯底座里也会原样下发，
+ * **不能**用来判断「服务端有没有插件」。
+ */
+data class DevicePluginNavState(
+    /** 本次回包是否已成功解析；false = 加载中 / 请求失败，保持静态基线。 */
+    val loaded: Boolean,
+    /** 回包是否明确含 `device_plugins` 数组（缺键 / 值非数组 = false）。 */
+    val declared: Boolean,
+    /** 服务端明确声明的设备插件 id 全集；`declared && isEmpty()` 即空壳。 */
+    val declaredIds: Set<String>,
+    /** 其中 `registered=true` 的 id。 */
+    val registeredIds: Set<String>,
+    /** `/api/plugins.ui.mode == pure-base`：静态业务 UI 不属于底座。 */
+    val pureBase: Boolean = false,
+) {
+    companion object {
+        /** 未知态：加载中 / 不可达 / 旧服务端缺键 —— 一律保持静态基线。 */
+        val UNKNOWN = DevicePluginNavState(
+            loaded = false,
+            declared = false,
+            declaredIds = emptySet(),
+            registeredIds = emptySet(),
+        )
+    }
+}
+
+/**
+ * 设备插件驱动的静态菜单门控。
+ *
+ * 只认 [DEVICE_HUB_NAV_ID] 与 [SECTION_PLUGIN_IDS] 里的 id，其余核心导航
+ * （概览 / 语音流程 / 全局配置 / 文件 / 插件）一律不动——这是「最小、可回退」的边界。
+ * 所有函数都是纯函数（不读 Kuikly 状态），因此能在 adminCoreTests 直驱回归。
+ */
+object DevicePluginNav {
+    /** 侧栏一级项「设备管理」。 */
+    const val DEVICE_HUB_NAV_ID = "devicehub"
+
+    /** 纯底座仍提供的静态运维入口；业务 UI 必须来自 WASM registration.menu。 */
+    private val PURE_BASE_NAV_IDS = setOf("overview", "devices", "console", "plugins", "files")
+
+    /** 纯底座保留的部署级配置；业务 section 不再由编译期客户端常量渲染。 */
+    private val PURE_BASE_SECTION_IDS = setOf("overview", "server")
+
+    /**
+     * 由设备插件驱动的配置 section → 插件 id。
+     * 常规构建保留配置入口以便重新启用；pure-base 直接由 [pureBase] 总门控收口。
+     */
+    val SECTION_PLUGIN_IDS: Map<String, String> = mapOf(
+        "echomuse" to "echomuse",
+        "tuya" to "tuya",
+    )
+
+    /** 语义未知：不隐藏、不闪隐（加载中 / 不可达 / 旧服务端缺键）。 */
+    fun isUnknown(state: DevicePluginNavState): Boolean = !state.loaded || !state.declared
+
+    /** 服务端明确声明零个设备插件（纯底座空壳）。缺键不算空壳。 */
+    fun isEmptyShell(state: DevicePluginNavState): Boolean =
+        !isUnknown(state) && state.declaredIds.isEmpty()
+
+    /** 侧栏「设备管理」：空壳或全部未注册时隐藏；未知态保持原有常显行为。 */
+    fun showDeviceHub(state: DevicePluginNavState): Boolean =
+        if (state.pureBase) false else if (isUnknown(state)) true else state.registeredIds.isNotEmpty()
+
+    /** 设备插件的**运行分区**（设备管理页里的设备卡 / 齿轮配置块）：按注册态逐个判定。 */
+    fun showPluginPartition(state: DevicePluginNavState, pluginId: String): Boolean =
+        if (state.pureBase) false else if (isUnknown(state)) true else pluginId in state.registeredIds
+
+    /**
+     * 配置 section 是否显示。
+     *
+     * 常规构建里即使插件被关闭（`registered=false`）也保留配置段——那是重新开启插件的唯一
+     * 入口；纯底座则只保留部署级配置，业务 section 必须由动态 WASM 菜单替代。
+     */
+    fun showSection(state: DevicePluginNavState, sectionId: String): Boolean {
+        if (state.pureBase) return sectionId in PURE_BASE_SECTION_IDS
+        if (SECTION_PLUGIN_IDS[sectionId] == null) return true
+        if (isUnknown(state) || !isEmptyShell(state)) return true
+        return false
+    }
+
+    /** 单个静态菜单项（导航 id 或配置 section id）是否可见。 */
+    fun showEntry(state: DevicePluginNavState, id: String): Boolean {
+        if (id.startsWith("plugin:")) return true
+        if (state.pureBase) return id in PURE_BASE_NAV_IDS || showSection(state, id)
+        return if (id == DEVICE_HUB_NAV_ID) showDeviceHub(state) else showSection(state, id)
+    }
+
+    /** 过滤静态菜单列表；空组由调用方跳过（与侧栏 / 全局配置菜单现有渲染一致）。 */
+    fun <T> filterItems(
+        items: List<T>,
+        idOf: (T) -> String,
+        state: DevicePluginNavState,
+    ): List<T> = items.filter { item -> showEntry(state, idOf(item)) }
+}

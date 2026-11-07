@@ -4,12 +4,16 @@
 //! **子模块可直接访问其私有字段**，因此拆分无需放宽任何可见性。
 
 use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+#[cfg(not(feature = "pure-base"))]
+use std::sync::Mutex;
 
 use crate::media::opus::OpusFrameDecoder;
 use crate::observability::events::ServerEvent;
+#[cfg(not(feature = "pure-base"))]
 use crate::plugins::aiui::{AiuiSession, FullChainEngine};
 use crate::plugins::skill::SkillRegistry;
+#[cfg(not(feature = "pure-base"))]
 use crate::plugins::wakeup::WakeGreeting;
 use crate::runtime::Engines;
 use crate::workflow::designer;
@@ -107,6 +111,7 @@ pub async fn run_session<T: Transport>(
     // AIUI 全链路会话：sn = 前缀 + 会话短 id（云端个性化/上下文绑定，≤32 字符）
     // ⚠️ AIUI 全链路刻意用**启动快照**（注册表里是 RestartOnly）：它决定整条流水线的
     // 走向，且启用时凭据缺失是致命错误（boot 即失败）；热启用会带来"半配置切换链路"的风险。
+    #[cfg(not(feature = "pure-base"))]
     let aiui = if engines.config.aiui.enabled {
         let sn = format!(
             "{}-{}",
@@ -121,6 +126,8 @@ pub async fn run_session<T: Transport>(
     } else {
         None
     };
+    #[cfg(feature = "pure-base")]
+    let aiui = None;
     // 技能目录快照：会话开始时取一次（= 注册表声明的 next_session 语义）。
     // `[command]` + `[nlu]` 统一编译为模型标签目录；共享真实分类器，
     // 没有模板规则/启发式/LLM技能回提，关闭模型仅纯聊天。
@@ -158,6 +165,8 @@ pub async fn run_session<T: Transport>(
         );
     }
     // 唤醒问候语快照：同上（next_session 语义）。数据源用每设备生效配置。
+    // pure-base 空底座不装配问候业务。
+    #[cfg(not(feature = "pure-base"))]
     let wake = WakeGreeting::new(&eff_config.wakeup);
     // 登记设备与会话（管理页「设备 / 会话 / 对话记录 / 概览」的数据源）。
     //
@@ -233,12 +242,14 @@ pub async fn run_session<T: Transport>(
         aiui,
         pacer: DownlinkPacer::new(params.downlink_lead_ms as u64),
         skills,
+        #[cfg(not(feature = "pure-base"))]
         skill_turn_id: 0,
         delivery_idle: true,
         workflow,
         close_requested: false,
         mcp_enabled: mcp,
         mcp_next_id: 1,
+        #[cfg(not(feature = "pure-base"))]
         wake,
         inject_rx: if _inject_guard.is_some() {
             Some(inject_rx)

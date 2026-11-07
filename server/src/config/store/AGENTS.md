@@ -56,7 +56,7 @@ DB 化后一次事务搞定，且天然获得历史/回滚/审计。
 
 事实链：
 
-- 本项目 `server/plugins/memory/schema.rs:25` `LATEST_VERSION = 2`，`:45` `migrate()` 读 `SELECT MAX(version) FROM _migrations`，只跑 `(applied+1)..=LATEST_VERSION`。
+- 本项目 `plugins/memory/schema.rs:25` `LATEST_VERSION = 2`，`:45` `migrate()` 读 `SELECT MAX(version) FROM _migrations`，只跑 `(applied+1)..=LATEST_VERSION`。
 - 上游 DSH 的 graph-memory 同一张 `_migrations` 编号是 **1..16**（`docs/designs/soul-and-graph-memory-plan.md:349-367`），本项目把上游 m15/m16 两层的表**重编号成了 m1/m2**。
 - 而"与 DSH 同库直读"是本仓库已立项的 P3 目标（`schema.rs` 文件头、`soul-and-graph-memory-plan.md:598`）。
 
@@ -210,7 +210,7 @@ CREATE TABLE IF NOT EXISTS cfg_presets (
 | `server/src/gateway/ws/config.rs` | `config_meta` 增加 `backend` 字段（`loaded_from` 取 backend）；新增 `db_query`（POST，token 鉴权，只读 SQL）、`db_backup`（POST，`VACUUM INTO` 生成 `xiaozhi-config-backup-<unix秒>.db`）、`db_auth_ok`、`now_ts` | ✅ 已完成 |
 | `server/src/gateway/ws/mod.rs` | 路由新增 `.route("/api/config/db/query", post(db_query))` 与 `.route("/api/config/db/backup", post(db_backup))` | ✅ 已完成 |
 | `server/src/config/overlay.rs` | `device_overlay_path`/`read_device_overlay_value`/`json_to_toml`/`presets_dir`/`preset_path` 仍被 `FileConfigStore` 复用；`overlay_allowed`/`validate_overlay`/`prune_disallowed`/`merge_overlay` **不动** | ✅ 已完成（文件后端路径保留） |
-| `server/plugins/memory/schema.rs` | **未动**（共用 `_cfg_migrations` 命名空间隔离，见 §3.1） | — |
+| `plugins/memory/schema.rs` | **未动**（共用 `_cfg_migrations` 命名空间隔离，见 §3.1） | — |
 | `docker-entrypoint.sh`、`docker-compose.yml`、`README.md`、[配置说明](<../AGENTS.md>) | 部署层已兼容：目录卷不变量；`config.toml` 退化为引导/导入源（见 §3.3 落地说明） | ✅ 已完成 |
 | `client/shared/.../admin/` | **零改动**；HTTP 契约（`/api/config`、`/api/config/meta`、`/api/config/presets` 等）保持不变 | ✅ 已完成 |
 

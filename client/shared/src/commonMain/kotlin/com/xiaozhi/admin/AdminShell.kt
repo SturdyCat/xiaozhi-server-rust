@@ -34,6 +34,7 @@ import com.tencent.kuikly.compose.ui.Modifier
 import com.tencent.kuikly.compose.ui.draw.clip
 import com.tencent.kuikly.compose.ui.unit.dp
 import com.xiaozhi.admin.contracts.AdminNav
+import com.xiaozhi.admin.contracts.DevicePluginNav
 import com.xiaozhi.admin.contracts.IconToken
 import com.xiaozhi.admin.contracts.NavDescriptor
 import com.xiaozhi.admin.contracts.PluginSlots
@@ -128,15 +129,16 @@ private fun AdminSidebar(page: AdminPage) {
             .background(Theme.colors.surface),
     ) {
         ScrollView(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            // 设备插件注册门控：两个设备插件都未注册（服务端 device_plugins 投影已加载且全 false）
-            // 时隐藏「设备管理」菜单（注册后菜单才出现）；未加载/旧服务端不隐藏，避免闪隐。
-            val hiddenNavIds = buildSet { if (!page.plugins.anyDevicePluginRegistered()) add("devicehub") }
+            // 静态导航只在服务端声明其来源时显示：pure-base 仅保留底座运维入口，
+            // 已注册 WASM 的 nav.main 入口由 PluginSlots 追加并始终允许进入。
             val groups = PluginSlots.mergeGrouped(
                 AdminNav.grouped(IS_MACOS),
                 page.plugins.wasmSlots,
             )
             for ((group, items) in groups) {
-                val visibleItems = items.filter { it.id !in hiddenNavIds }
+                val visibleItems = items.filter {
+                    DevicePluginNav.showEntry(page.plugins.devicePluginNav, it.id)
+                }
                 if (visibleItems.isEmpty()) continue
                 // CellGroup 负责：分组标题对齐、卡片圆角、行间分隔线（末行无分隔）；
                 // 组卡之间留一档空隙，分组在视觉上断开（组标题的 top 内距只管标题与卡片之间）
@@ -235,7 +237,8 @@ private fun NavDirtyDot() {
  */
 @Composable
 private fun AdminTopBar(page: AdminPage, narrow: Boolean) {
-    val editable = page.selectedSection == "config" || page.selectedSection == "settings"
+    val editable = !page.plugins.isPureBase() &&
+        (page.selectedSection == "config" || page.selectedSection == "settings")
     val globalTarget = editable && page.form.editDeviceId.isEmpty()
 
     val leftWidget: (@Composable () -> Unit)? = if (narrow) {
@@ -333,6 +336,14 @@ private fun titleOf(page: AdminPage): String {
  */
 @Composable
 private fun AdminSectionHost(page: AdminPage, viewport: AdminViewport) {
+    // API 明确声明 pure-base 后，旧编译期业务 section 不再渲染；用户入口收敛到
+    // 插件管理页，动态 plugin:<id>:<entry> 仍由下方占位/插件面板处理。
+    if (!DevicePluginNav.showEntry(page.plugins.devicePluginNav, page.selectedSection) &&
+        !page.selectedSection.startsWith("plugin:")
+    ) {
+        PluginsManagePage(meta = page.plugins, manage = page.pluginManage, toast = page.toast)
+        return
+    }
     when (page.selectedSection) {
         // 「语音流程」：轨道 + 双 Tab 工作区（T07 落地）
         "config" -> Column(modifier = Modifier.fillMaxSize()) {
@@ -409,13 +420,16 @@ private fun AdminSectionHost(page: AdminPage, viewport: AdminViewport) {
         else -> {
             val pluginId = PluginSlots.pluginIdFromNavigation(page.selectedSection)
             val plugin = pluginId?.let { page.plugins.wasmSlots?.plugin(it) }
-            Box(modifier = Modifier.fillMaxSize()) {
-                SectionPlaceholder(
-                    title = plugin?.title ?: AdminNav.label(page.selectedSection),
-                    detail = plugin?.description?.takeIf { it.isNotBlank() }
-                        ?: sectionDetail(page.selectedSection),
-                    viewport = viewport,
-                )
+            if (plugin != null) {
+                PluginRuntimePage(plugin, page.pluginManage, page.toast)
+            } else {
+                Box(modifier = Modifier.fillMaxSize()) {
+                    SectionPlaceholder(
+                        title = AdminNav.label(page.selectedSection),
+                        detail = sectionDetail(page.selectedSection),
+                        viewport = viewport,
+                    )
+                }
             }
         }
     }

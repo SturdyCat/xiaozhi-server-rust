@@ -163,12 +163,16 @@ fn example_config_parses_and_normalizes() {
     );
     // 长度闸门：样例里同样写明（漏写 = 用户不知道有这道保险），且默认值必须是 5
     assert_eq!(cfg.command.max_chars, 5);
-    // 内置默认灵魂：样例里写了 preset，且它必须是真实存在的预设（写错样例 = 每个新用户踩一次）
-    assert_eq!(cfg.soul.preset, crate::plugins::soul::presets::DEFAULT_ID);
-    assert!(
-        crate::plugins::soul::presets::get(&cfg.soul.preset).is_some(),
-        "config.example.toml 的 preset 必须是已知预设"
-    );
+    // 内置默认灵魂：样例里写了 preset，且它必须是真实存在的预设（写错样例 = 每个新用户踩一次）。
+    // pure-base 无预设表（人格业务不编译），仅保留配置形状，预设断言仅在 legacy 构建成立。
+    #[cfg(not(feature = "pure-base"))]
+    {
+        assert_eq!(cfg.soul.preset, crate::plugins::soul::presets::DEFAULT_ID);
+        assert!(
+            crate::plugins::soul::presets::get(&cfg.soul.preset).is_some(),
+            "config.example.toml 的 preset 必须是已知预设"
+        );
+    }
 }
 
 /// 回传/落盘形状：`[tts]` 只有 `engine` + 跨实现项 + `[tts.kokoro]`/`[tts.xfyun]` 子段，

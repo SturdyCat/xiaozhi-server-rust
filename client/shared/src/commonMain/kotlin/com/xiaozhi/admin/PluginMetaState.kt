@@ -2,6 +2,8 @@ package com.xiaozhi.admin
 
 import com.tencent.kuikly.core.base.PagerScope
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
+import com.xiaozhi.admin.contracts.DevicePluginNav
+import com.xiaozhi.admin.contracts.DevicePluginNavState
 import com.xiaozhi.admin.contracts.PluginSlotSnapshot
 import com.xiaozhi.admin.state.stateVar
 import com.xiaozhi.admin.state.stateListOf
@@ -43,6 +45,15 @@ class PluginMetaState(scope: PagerScope) : LoadableState(scope) {
     /** 动态 WASM 槽位；null = 旧服务端/不可达，调用方必须保留静态基线。 */
     var wasmSlots by stateVar<PluginSlotSnapshot?>(null)
 
+    /**
+     * 设备插件注册投影的**门控态**（`stateVar` 保证回包晚于首帧到达时 Compose 会重组）。
+     * 初始值 [DevicePluginNavState.UNKNOWN] = 加载中/不可达/旧服务端，保持静态基线。
+     */
+    var devicePluginNav by stateVar(DevicePluginNavState.UNKNOWN)
+
+    /** 服务端明确声明 pure-base 时，静态业务 UI 不属于底座。 */
+    fun isPureBase(): Boolean = devicePluginNav.pureBase
+
     override fun endpoint(baseUrl: String): String = "$baseUrl/api/plugins"
 
     override val errorLabel: String = "能力清单加载失败"
@@ -51,13 +62,16 @@ class PluginMetaState(scope: PagerScope) : LoadableState(scope) {
 
     /**
      * 是否至少注册了一个设备插件（「设备管理」菜单的门控）。
-     * 未加载或旧服务端未上报 `device_plugins`（空数组）时按 true 处理：
-     * 菜单不因加载间隙闪隐，旧服务端维持合并前的常显行为。
+     *
+     * 判定下沉到纯契约 [DevicePluginNav.showDeviceHub]，并显式区分三种情况：
+     * - `loaded=false`（加载中 / 服务端不可达）或 `declared=false`（旧服务端缺
+     *   `device_plugins` 键）→ 语义未知，返回 true，菜单维持合并前的常显行为（不闪隐、
+     *   不误删）；
+     * - `declared=true` 且 `declaredIds` 为空（服务端明确下发 `[]` = pure-base 纯底座空壳）
+     *   → 返回 false，隐藏「设备管理」；
+     * - 常规构建 → 按 `registered` 判定，全部关闭时同样隐藏。
      */
-    fun anyDevicePluginRegistered(): Boolean {
-        if (!loaded || devicePluginRows.isEmpty()) return true
-        return devicePluginRows.any { it.registered }
-    }
+    fun anyDevicePluginRegistered(): Boolean = DevicePluginNav.showDeviceHub(devicePluginNav)
 
     /** 解析 `capabilities[]` → 两行列表 + 计数摘要。 */
     override fun apply(data: JSONObject) {
@@ -65,11 +79,14 @@ class PluginMetaState(scope: PagerScope) : LoadableState(scope) {
         optionalRows.clear()
         // 设备插件注册投影（device_plugins[]）：它们不是语音引擎，服务端单独成数组下发。
         devicePluginRows.clear()
+        // 每次重新解析都先回到未知态：切服务器 / 回包异常时不能残留上一次的「空壳」结论。
+        devicePluginNav = DevicePluginNavState.UNKNOWN
         // `wasm` 是 P2e 增量投影；解析失败/缺失统一回静态导航，不影响能力总览。
         // Kuikly JSON → 纯契约层解析（contracts 零 Kuikly 依赖）：失败 = 静态基线回退
         wasmSlots = runCatching {
             PluginSlotSnapshot.parse(data.optJSONObject("wasm")?.toString())
         }.getOrNull()
+        val pureBase = data.optJSONObject("ui")?.optString("mode", "") == "pure-base"
         val caps = data.optJSONArray("capabilities")
         if (caps == null) {
             loadError = "能力清单为空（服务端返回异常）"
@@ -106,16 +123,28 @@ class PluginMetaState(scope: PagerScope) : LoadableState(scope) {
         if (failed > 0) parts.add("$failed 异常")
         if (disabled > 0) parts.add("$disabled 已关闭")
         summary = parts.joinToString(" · ")
-        // 设备插件注册投影（旧服务端无此键 → 保持空数组，门控按"已注册"兜底）
+        // 设备插件注册投影：`optJSONArray` 在**缺键**或值非数组时返回 null，在明确下发
+        // `[]`（pure-base 纯底座空壳）时返回长度为 0 的非 null 数组。二者必须分开：
+        //   缺键            = 旧服务端/回包异常，语义未知 → 保持静态基线（不闪隐、不误删）；
+        //   明确空数组 []    = 服务端声明「零个设备插件」→ 隐藏设备插件驱动的菜单；
+        //   明确非空数组     = 常规构建 → 按 registered 判定运行分区，配置段始终保留。
         val dps = data.optJSONArray("device_plugins")
+        val declaredIds = mutableSetOf<String>()
+        val registeredIds = mutableSetOf<String>()
         if (dps != null) {
             for (i in 0 until dps.length()) {
                 val p = dps.optJSONObject(i) ?: continue
+                val id = p.optString("id") ?: ""
+                val registered = p.optBoolean("registered", false)
+                if (id.isNotBlank()) {
+                    declaredIds += id
+                    if (registered) registeredIds += id
+                }
                 devicePluginRows.add(
                     DevicePluginRow(
-                        id = p.optString("id") ?: "",
+                        id = id,
                         label = p.optString("label") ?: "",
-                        registered = p.optBoolean("registered", false),
+                        registered = registered,
                         phase = p.optString("phase", "disabled"),
                         configSection = p.optString("config_section", ""),
                         note = p.optString("note", ""),
@@ -124,6 +153,14 @@ class PluginMetaState(scope: PagerScope) : LoadableState(scope) {
                 )
             }
         }
+        // 原子写入门控态（一次赋值），避免「行已清空但门控态还是旧值」的中间态被渲染读到。
+        devicePluginNav = DevicePluginNavState(
+            loaded = true,
+            declared = dps != null,
+            declaredIds = declaredIds.toSet(),
+            registeredIds = registeredIds.toSet(),
+            pureBase = pureBase,
+        )
         loaded = true
         loadError = ""
     }

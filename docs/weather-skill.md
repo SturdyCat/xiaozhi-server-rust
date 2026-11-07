@@ -5,7 +5,7 @@
 ## 1. 新增内容
 
 ### 技能意图 `weather_query`
-- 种子文件：`server/plugins/nlu/defaults.json`（仅首次空库播种；后续以 SQLite 保存态为准）。
+- 种子文件：`plugins/nlu/defaults.json`（仅首次空库播种；后续以 SQLite 保存态为准）。
 - 槽位：`city`（城市，可选）、`range`（时段，可选）。
 - 模板（均为单槽或字面量分隔，满足 `catalog::validate_template`「两个开放槽不能直接相邻」约束）：
   `{city}天气` / `{range}天气` / `{city}的天气` / `{range}的天气` / `查天气` / `天气怎么样` / `查一下天气` / `今天天气` / `明天天气` / `后天天气`。
@@ -18,8 +18,8 @@
 - 引用放行：`server/src/skills/results.rs` 已把 `weather.forecast` 加入「可暴露 speech 的前序步骤」白名单，使 `{{steps.0.speech}}` 合法。
 
 ### 网络与定位（不放在 skills/ 内）
-- `server/plugins/weather/{mod,parse,tests}.rs`：**唯一**发生天气 HTTP 的地方（`mod.rs` 持有 `reqwest::blocking::Client` 与按站点码的 TTL 缓存，`parse.rs` 为宽松解析纯函数）；纯 Rust 复刻国家气象中心公开接口（参考 `valenovo/china-weather-agent-skill`，但不 vendoring 任何 python 脚本——镜像 `debian:bookworm-slim` 无 python3）。
-- `server/plugins/geo/{mod,tests}.rs`：启动期解析服务器**出口 IP** 作为默认定位。仅当为**国内** IP（`myip.ipip.net`）才写入，**国外/翻墙出口直接放弃（不触发兜底）**；仅当主源请求/解析失败或城市为空才兜底 `whois.pconline.com.cn`（国内 IP 库）。
+- `plugins/weather/{mod,parse,tests}.rs`：**唯一**发生天气 HTTP 的地方（`mod.rs` 持有 `reqwest::blocking::Client` 与按站点码的 TTL 缓存，`parse.rs` 为宽松解析纯函数）；纯 Rust 复刻国家气象中心公开接口（参考 `valenovo/china-weather-agent-skill`，但不 vendoring 任何 python 脚本——镜像 `debian:bookworm-slim` 无 python3）。
+- `plugins/geo/{mod,tests}.rs`：启动期解析服务器**出口 IP** 作为默认定位。仅当为**国内** IP（`myip.ipip.net`）才写入，**国外/翻墙出口直接放弃（不触发兜底）**；仅当主源请求/解析失败或城市为空才兜底 `whois.pconline.com.cn`（国内 IP 库）。
 - 出口信息展示：`GET /api/server/geo`（`server/src/gateway/ws/registry.rs` 的 `server_geo`）返回最近一次成功解析的出口 IP 与地理信息（**含境外**，`domestic=false` 仅展示不采用）及未定位原因；管理台「概览」页的「服务器出口」卡消费该端点（`OpsState.GeoState` + `OpsOverviewPage.ServerGeoCard`）。
 - `server/src/skills/AGENTS.md` 已注明：`weather.forecast` 是本目录唯一允许联网的能力，网络实际发生在 `plugins/weather`。
 

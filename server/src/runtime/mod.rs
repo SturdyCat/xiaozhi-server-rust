@@ -109,6 +109,8 @@ pub struct Engines {
     /// store 懒开库——dev 模式装配同样安全；worker 由 main 在非 dev 模式 spawn。
     pub tuya: Arc<crate::device::tuya::TuyaEngine>,
     /// 稳定技能能力与持久任务/outbox；识别模型只有提名权，不直接操作系统。
+    /// 业务执行面（任务/投递/计划）：pure-base 不编译（会话投递与计划执行同门控）。
+    #[cfg(not(feature = "pure-base"))]
     pub skill_system: Arc<crate::skills::SkillSystem>,
     /// 推理并发闸门（缺口①）：ASR/TTS 各一把 Semaphore，包在全部 `spawn_blocking`
     /// 推理调用点外（会话 / 预取 worker / 测试台共用）；见 `app/inference` 模块注释。
@@ -127,6 +129,9 @@ pub struct Engines {
 }
 
 mod refresh;
+/// 到期技能任务 → outbox 调度器（业务面）：唯一调用点在 main.rs，
+/// 该处已按 `not(pure-base)` 门控，纯底座不编译调度 worker。
+#[cfg(not(feature = "pure-base"))]
 pub(crate) mod skill_tasks;
 mod tts;
 use refresh::decide_refresh;
@@ -227,14 +232,18 @@ impl Engines {
         ));
         // 跟随 SQLite 配置库所在卷；测试/内置存储没有 location 时再使用 memory 落点。
         // SkillSystem 懒开库，装配不写盘、不因可选技能库故障阻断核心语音服务。
-        let skill_dir = config_store
-            .location()
-            .and_then(|p| std::path::Path::new(p).parent())
-            .filter(|p| !p.as_os_str().is_empty())
-            .or_else(|| std::path::Path::new(&config.memory.db_path).parent())
-            .filter(|p| !p.as_os_str().is_empty())
-            .unwrap_or_else(|| std::path::Path::new("."));
-        let skill_system = Arc::new(crate::skills::SkillSystem::new(skill_dir.join("skills.db")));
+        // pure-base 不装配业务执行面，skills.db 不落盘。
+        #[cfg(not(feature = "pure-base"))]
+        let skill_system = {
+            let skill_dir = config_store
+                .location()
+                .and_then(|p| std::path::Path::new(p).parent())
+                .filter(|p| !p.as_os_str().is_empty())
+                .or_else(|| std::path::Path::new(&config.memory.db_path).parent())
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or_else(|| std::path::Path::new("."));
+            Arc::new(crate::skills::SkillSystem::new(skill_dir.join("skills.db")))
+        };
         // Tuya 引擎：数据落配置库同卷的 tuya/ 子目录（独立 devices.db，0600）；
         // 与 skill_dir 同一落点派生口径（location 优先，memory.db_path 兜底）。
         let tuya_dir = config_store
@@ -347,6 +356,7 @@ impl Engines {
             mcp: crate::workflow::mcp::registry::McpRegistry::new(),
             inject: crate::workflow::pipeline::inject::Injector::new(),
             device_cmds: crate::workflow::device_cmds::DeviceCmdHub::new(),
+            #[cfg(not(feature = "pure-base"))]
             skill_system,
             tuya,
             inference: crate::workflow::pipeline::inference::InferenceGates::new(config),

@@ -22,10 +22,13 @@ mod gateway;
 mod media;
 mod observability;
 // 插件实现独立于 server/src，仍作为同一二进制 crate 的内部模块编译。
-#[path = "../plugins/mod.rs"]
+#[path = "../../plugins/mod.rs"]
 mod plugins;
 mod runtime;
 mod serve;
+/// 稳定技能系统：类型/校验层（SkillPlan/SkillStep/条件校验）是识别链与保存配置的
+/// 契约，两种构建都编译；执行/持久化入口（SkillSystem 装配、任务 CRUD 路由、
+/// 到期调度、会话投递与计划执行）属业务面，pure-base 全部门控不装配。
 mod skills;
 mod workflow;
 
@@ -113,8 +116,9 @@ async fn run(config: Config, config_store: Arc<dyn ConfigStore>, dev_mode: bool)
     // 到期动作任务（skills_tasks.action）例外：scheduler 经 device_cmds 向在线设备
     // 直推一次工具调用，离线/失败降级为文字提醒（见 runtime/skill_tasks 模块注释）。
     // UI 开发模式可检验任务 CRUD，但不启动生产调度或伪造设备播报。
-    let _skill_tasks = (!dev_mode && !cfg!(feature = "pure-base"))
-        .then(|| crate::runtime::skill_tasks::start(&engines));
+    // pure-base 不编译调度模块（业务面），该绑定在纯底座构建中不存在。
+    #[cfg(not(feature = "pure-base"))]
+    let _skill_tasks = (!dev_mode).then(|| crate::runtime::skill_tasks::start(&engines));
     // 延迟/事件聚合（P1-1）：进程最早的订阅者——spawn 越早，broadcast 环形缓冲越不丢
     // 早期事件（LAGGED 只告警；聚合口径是近似值，见 app/metrics 模块注释）。
     tokio::spawn(crate::observability::metrics::subscriber(
@@ -137,6 +141,7 @@ async fn run(config: Config, config_store: Arc<dyn ConfigStore>, dev_mode: bool)
     }
     // 发音人目录：读盘缓存/离线兜底 + 配置了控制台会话时后台刷新一次（失败非致命）。
     // pure-base 不启动外部目录探测，避免把可选业务后台带入纯底座进程。
+    #[cfg(feature = "legacy-business")]
     if !cfg!(feature = "pure-base") {
         crate::device::voices::init();
         if !dev_mode {
@@ -223,7 +228,7 @@ async fn run(config: Config, config_store: Arc<dyn ConfigStore>, dev_mode: bool)
     // 广播端口跟随实际监听：`[echomuse].plain_port`（默认 8767，官方明文 controller
     // 端口——上游固件 tcp_peer() 只认远端 8767/8770 的连接为 controller）额外监听
     // 成功则指向专用端口；绑定失败或 plain_port=0 时回退主端口（/em/* 两边都在）。
-    #[cfg(not(feature = "pure-base"))]
+    #[cfg(all(not(feature = "pure-base"), feature = "legacy-business"))]
     if config.echomuse.enabled && !dev_mode {
         let mdns_port = match crate::device::echomuse::listen::dedicated_port(&config.echomuse) {
             Some(p) => crate::device::echomuse::listen::spawn_dedicated(engines.clone(), p)
@@ -249,6 +254,7 @@ async fn run(config: Config, config_store: Arc<dyn ConfigStore>, dev_mode: bool)
     // Tuya IoT 设备集成 worker（常驻）：定时云同步 + 60s 错峰在线轮询 + 5min 局域网发现。
     // 每 tick 重读 [tuya].enabled（热生效），关闭时本 tick 空转；dev 模式不起
     // （无真机、避免 UDP/TCP 副作用；管理面路由仍挂载，可验证 UI）。
+    #[cfg(feature = "legacy-business")]
     if !dev_mode && !cfg!(feature = "pure-base") {
         crate::device::tuya::worker::spawn(engines.clone());
     }

@@ -79,18 +79,22 @@ mod health;
 // pub(crate)：main.rs 在初始化 tracing 时挂载采集层 layer()。
 pub(crate) mod log_stream;
 mod mcp;
+#[cfg(not(feature = "pure-base"))]
 mod memory;
 pub(crate) mod nlu_build;
 pub(crate) use nlu_build::spawn_nlu_bootstrap;
 mod nlu_model;
+#[cfg(feature = "legacy-business")]
+mod ota;
+#[cfg(not(feature = "pure-base"))]
 mod skill_api;
 // 延迟/事件聚合（P1-1）：只读投影，数据源 observability::metrics（事件总线订阅者）
 mod metrics;
-mod ota;
 mod plugins;
 #[cfg(test)]
 mod plugins_tests;
 mod registry;
+#[cfg(not(feature = "pure-base"))]
 mod soul;
 mod usage;
 mod workflow;
@@ -99,6 +103,7 @@ use config::presets::{preset_apply, preset_delete, preset_save, presets_list};
 use config::{config_meta, db_backup, db_query, get_config, put_config};
 use health::engines_health;
 use mcp::mcp_tools;
+#[cfg(not(feature = "pure-base"))]
 use memory::{memory_clear, memory_maintain, memory_rag_reindex, memory_recall, memory_status};
 use metrics::metrics_snapshot;
 use nlu_build::{build_log_ws, build_status, start_build};
@@ -106,9 +111,11 @@ use nlu_build::{build_log_ws, build_status, start_build};
 #[cfg(test)]
 pub(crate) use bench_api::service_router as test_bench_router;
 pub(crate) use config::{config_is_persistent, config_revision};
+#[cfg(feature = "legacy-business")]
 use ota::ota;
 use plugins::{config_schema, list_plugins};
 use registry::{conversations, device_detail, device_inject, devices, server_geo, sessions, stats};
+#[cfg(not(feature = "pure-base"))]
 use soul::{soul_presets, soul_preview};
 use usage::{session_usage, usage};
 use workflow::{get_workflow, validate_workflow};
@@ -158,7 +165,15 @@ async fn pure_base_gate(req: axum::extract::Request, next: axum::middleware::Nex
         || path == "/api/tts/voices"
         || path.starts_with("/api/tts/voices/")
         || path == "/api/firmware"
-        || path.starts_with("/api/firmware/");
+        || path.starts_with("/api/firmware/")
+        || path == "/api/workflow"
+        || path.starts_with("/api/workflow/")
+        || path == "/api/test"
+        || path.starts_with("/api/test/")
+        || path == "/api/nlu"
+        || path.starts_with("/api/nlu/")
+        || path == "/api/mcp"
+        || path.starts_with("/api/mcp/");
     if blocked {
         return (StatusCode::NOT_FOUND, "业务插件未安装").into_response();
     }
@@ -211,21 +226,6 @@ pub fn router(engines: Arc<Engines>) -> Router {
         .route("/api/config/db/backup", axum::routing::post(db_backup))
         // Unified snapshot-isolated node diagnostics; legacy paths retained and admin-authenticated.
         .merge(crate::gateway::ws::bench_api::routes(&engines))
-        // 稳定技能目录与任务 CRUD；不绕过统一配置保存/鉴权，不执行候选模型。
-        .merge(skill_api::routes())
-        // 记忆：状态 / 测试召回 / 立即维护 / 清空（"记忆开了没用"的当场验证入口）
-        .route("/api/memory/status", get(memory_status))
-        .route("/api/memory/recall", axum::routing::post(memory_recall))
-        .route("/api/memory/maintain", axum::routing::post(memory_maintain))
-        .route("/api/memory/clear", axum::routing::post(memory_clear))
-        // P1-9：RAG 文档索引后台重建（仅 engine = rag 有效）
-        .route(
-            "/api/memory/rag/reindex",
-            axum::routing::post(memory_rag_reindex),
-        )
-        // 灵魂：内置预设清单 / 最终提示词预览（"人格配了之后到底发了什么"的当场验证入口）
-        .route("/api/soul/presets", get(soul_presets))
-        .route("/api/soul/preview", axum::routing::post(soul_preview))
         // 令牌用量：全局 + 单会话（回答"成本"与"上下文膨胀"）
         .route("/api/usage", get(usage))
         .route("/api/session/{id}/usage", get(session_usage))
@@ -275,21 +275,41 @@ pub fn router(engines: Arc<Engines>) -> Router {
         // 服务器全局实时日志流：macApp 连上即可实时看到全部运行日志；
         // AI/脚本客户端也可连它，一边调 /api 测试端点一边读日志观察效果。
         .route("/api/logs", get(log_stream::logs_ws))
-        // 小智固件的 OTA 引导端点（带/不带尾斜杠都注册：固件配置的 URL 以 / 结尾）。
-        // ⚠️ 所有接口必须在 /api 之下（接口规范），固件 OTA_URL 指到 /api/ota/ 即可——
-        // 该地址完全可配置，无需对齐官方服务器的 /xiaozhi/ota/ 路径。
-        .route("/api/ota", get(ota).post(ota))
-        .route("/api/ota/", get(ota).post(ota))
-        // 固件托管（上传/下载/当前版本查询）+ 发音人目录，并入同一 /api 前缀
-        .merge(crate::device::firmware::router())
-        .merge(crate::device::voices::router())
         // 服务端数据目录文件管理（/api/files/*）：管理台文件页数据源 + EchoMuse
         // 自定义唤醒词模型上传通道（oww-models/）；通用存储管理，不受 [echomuse] 开关影响
         .merge(crate::gateway::files::router());
 
+    // OTA、固件目录和音色探测属于 legacy-business，纯底座不编译也不挂载。
+    #[cfg(feature = "legacy-business")]
+    let api = api
+        .route("/api/ota", get(ota).post(ota))
+        .route("/api/ota/", get(ota).post(ota))
+        .merge(crate::device::firmware::router())
+        .merge(crate::device::voices::router());
+
+    // 业务能力路由（legacy 编译并挂载）：pure-base 不编译这些模块，
+    // 对应业务只能由运行期已装载的 WASM manifest 声明。
+    #[cfg(not(feature = "pure-base"))]
+    let api = api
+        // 灵魂：内置预设清单 / 最终提示词预览（"人格配了之后到底发了什么"的当场验证入口）
+        .route("/api/soul/presets", get(soul_presets))
+        .route("/api/soul/preview", axum::routing::post(soul_preview))
+        // 记忆：状态 / 测试召回 / 立即维护 / 清空（"记忆开了没用"的当场验证入口）
+        .route("/api/memory/status", get(memory_status))
+        .route("/api/memory/recall", axum::routing::post(memory_recall))
+        .route("/api/memory/maintain", axum::routing::post(memory_maintain))
+        .route("/api/memory/clear", axum::routing::post(memory_clear))
+        // P1-9：RAG 文档索引后台重建（仅 engine = rag 有效）
+        .route(
+            "/api/memory/rag/reindex",
+            axum::routing::post(memory_rag_reindex),
+        )
+        // 稳定技能目录与任务 CRUD；不绕过统一配置保存/鉴权，不执行候选模型。
+        .merge(skill_api::routes());
+
     // pure-base 保留通用文件/配置/工作流路由，但不把任何 EchoMuse/Tuya
     // 设备路由挂进 Axum 表；因此这些业务在该构建中是不可达的，而非仅返回 disabled。
-    #[cfg(not(feature = "pure-base"))]
+    #[cfg(all(not(feature = "pure-base"), feature = "legacy-business"))]
     let api = api
         // EchoMuse 设备入口（Echo Dot 2 / emOS）
         .merge(crate::device::echomuse::routes::em_routes())

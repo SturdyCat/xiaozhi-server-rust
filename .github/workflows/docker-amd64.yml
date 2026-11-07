@@ -72,11 +72,11 @@ jobs:
         # NLU training intentionally uses the documented host Docker socket.
         run: |
           set -eu
-          grep -Eq -- '--features sherpa,nlu,wasm-plugins,pure-base' Dockerfile
+          grep -Eq -- '--no-default-features --features sherpa,nlu,wasm-plugins,pure-base' Dockerfile
           # The WASM bindgen macro reads this contract during the Rust build;
           # fail here if the Docker context contract and COPY rule drift apart.
-          grep -Fq 'COPY server/plugins ./plugins' Dockerfile
-           test -f server/plugins/mod.rs
+          grep -Fq 'COPY plugins ./plugins' Dockerfile
+           test -f plugins/mod.rs
            grep -Fq 'COPY server/wit ./wit' Dockerfile
           test -f server/wit/plugin.wit
           if grep -Eq 'COPY[[:space:]].*(\.wasm|plugins-src)' Dockerfile docker-compose.yml; then

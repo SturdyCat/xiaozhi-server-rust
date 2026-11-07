@@ -56,7 +56,8 @@ pub const OWW_MODELS_DIR: &str = "oww-models";
 const OPTIONAL_DIRS: [&str; 1] = [OWW_MODELS_DIR];
 
 /// 单文件上传上限：与固件托管同值（模型 ~1MB，音频/文档留足余量）。
-pub const MAX_FILE_BYTES: usize = crate::device::firmware::MAX_FIRMWARE_BYTES;
+/// 通用数据目录单文件上限；固件模块关闭时文件管理仍保持可用。
+pub const MAX_FILE_BYTES: usize = 64 * 1024 * 1024;
 
 /// 受保护文件名（SQLite 配置+记忆库）：最后一段命中即受保护，任意层级同规则。
 const PROTECTED_NAMES: [&str; 3] = ["data.db", "data.db-wal", "data.db-shm"];

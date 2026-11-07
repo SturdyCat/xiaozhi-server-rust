@@ -15,8 +15,8 @@
 | EchoMuse 设备入口（Echo Dot 2 / emOS 直连） | [EchoMuse 说明](<echomuse.md>)、[模块指引](<../server/src/device/echomuse/AGENTS.md>)、[手动安装 emOS](<emos-manual-install.md>)（脚本 `tools/emos_install.py`）、[上游 Dot 2 交互/控制文档整理](<echomuse/>) |
 | 会话、推理闸门与分段延迟 | [会话](<../server/src/workflow/session/AGENTS.md>)、[推理](<../server/src/workflow/pipeline/inference/AGENTS.md>)、[指标](<../server/src/observability/metrics/AGENTS.md>) |
 | HTTP、配置更新与观测接口 | [网关](<../server/src/gateway/ws/AGENTS.md>)、[配置端点](<../server/src/gateway/ws/config/AGENTS.md>) |
-| 插件、注册表与能力维护 | [插件层](<../server/plugins/AGENTS.md>)（含[注册表](<../server/plugins/registry/AGENTS.md>)、[LLM](<../server/plugins/llm/AGENTS.md>)、[TTS](<../server/plugins/tts/AGENTS.md>)）；[WASM 插件平台与设备公共能力三层架构](<designs/wasm-plugin-platform.md>)、[设备公共能力模块](<../server/src/device/capabilities/mod.rs>) |
-| 人格与记忆 | [人格](<../server/plugins/soul/AGENTS.md>)、[记忆](<../server/plugins/memory/AGENTS.md>) |
+| 插件、注册表与能力维护 | [插件层](<../plugins/AGENTS.md>)（含[注册表](<../plugins/registry/AGENTS.md>)、[LLM](<../plugins/llm/AGENTS.md>)、[TTS](<../plugins/tts/AGENTS.md>)）；[WASM 插件平台与设备公共能力三层架构](<designs/wasm-plugin-platform.md>)、[设备公共能力模块](<../server/src/device/capabilities/mod.rs>) |
+| 人格与记忆 | [人格](<../plugins/soul/AGENTS.md>)、[记忆](<../plugins/memory/AGENTS.md>) |
 | MCP、OTA、音色探测与文件管理 | [MCP](<../server/src/workflow/mcp/AGENTS.md>)、[OTA](<../server/src/device/firmware/AGENTS.md>)、[音色](<../server/src/device/voices/AGENTS.md>)、[文件管理](<../server/src/gateway/files/AGENTS.md>) |
 | NLU 动态技能、模型构建与效果验收 | [模型唯一识别与完整默认技能清单](<model-only-skills.md>)、[稳定技能能力/持久任务](<../server/src/skills/AGENTS.md>)、[构建/候选测试契约](<../server/src/gateway/ws/nlu_build/AGENTS.md>)、[2026-11-01 真实验证及发布边界](<nlu-model-validation-20261101.md>)、[2026-11-02 构建修复与同输入对照](<nlu-model-validation-20261102.md>) |
 | 语音主流程、节点测试与公共 SVG UI | [重组与验证记录](<voice-pipeline.md>)、[节点测试样本](<node-test-samples.md>) |
