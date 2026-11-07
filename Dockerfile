@@ -75,6 +75,22 @@
 #   判断口径更新：本机可复现成功、而 ACR 报 BUILD FAILED 且无具体编译错误时，EOF 与
 #   BUILD FAILED 都算 OOM 形态，区别仅在是否整机杀；只有出现明确编译错误（Module not found /
 #   Unresolved reference / Compilation error）才属代码问题、与内存无关。
+#
+# 🚨 2026-11-07 第六次复现：**明确编译错误，既不是 OOM 也不是「漏 COPY」**，别再按内存调参：
+#   `error: couldn't read 'src/../../plugins/mod.rs': No such file or directory`
+#   --> src/main.rs:26:1（build 12/12，cargo 刚打印 Compiling 即失败，exit 101）。
+#   根因：`3802aa3` 把插件源码从 `server/plugins/` 提到仓库根 `plugins/`，main.rs 的
+#   `#[path]` 同步由 `../plugins/mod.rs` 改成 `../../plugins/mod.rs`（本地 server/src/../..
+#   = 仓库根，编译通过）；但本文件只把 COPY 的**源**从 `server/plugins` 换成 `plugins`，
+#   目标仍写 `./plugins`。容器里 Cargo manifest 在 /app（对应本地 server/）、main.rs 在
+#   /app/src，于是 `src/../../plugins` 解析到容器根 `/plugins`，而文件实际落在 `/app/plugins`，
+#   少一层 → rustc 打不开。实证：最小工程把 plugins 放 crate 根上一层可编译，放 src 同级即报同错；
+#   `find src plugins` 能跑通只证明 /app/plugins 存在，不证明 #[path] 指向的位置正确。
+#   修法：`COPY plugins /plugins`（插件目录落在 crate 根的上一层，与本地「plugins/ 与 server/
+#   平级」语义一致），find 清单同步改成 `/plugins`；源码层的 #[path] 保持不动（改它本地就编译不过）。
+#   ⛔ 与第五次同型：移动源码目录时，`#[path]` 层数 / COPY 目标 / find 清单必须同一提交内同步。
+#   判断口径补充：日志出现 `couldn't read <相对路径>` 这类明确编译错误时，先按 rustc 的
+#   `#[path]` / `include_*!` 相对层级手算容器内绝对路径，再决定改 COPY 目标还是改源码。
 # ♻️ 构建缓存（2026-10-28 起，两层正交，详见 workflow 与本文件各 RUN 的 --mount）：
 #   L1 层缓存 —— GHA workflow 以 buildx type=gha,mode=max 跨次构建复用全部 stage 的层：
 #     只改 server/ → web 阶段整段命中不重编；只改 client/ → Rust 阶段命中；
@@ -254,9 +270,14 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
  && rm -rf src
 
 # 真实源码（bin-only crate：入口即 src/main.rs，无 lib.rs）。插件源码
-# 独立放在仓库根 plugins/，由 src/main.rs 以 #[path] 接入同一 crate。
+# 独立放在仓库根 plugins/，由 src/main.rs 以 #[path = "../../plugins/mod.rs"] 接入同一 crate。
+# ⚠️ 容器内 Cargo manifest 在 /app（对应本地 server/）、main.rs 在 /app/src，故 #[path]
+#    的 ../.. 落在容器根 /：插件目录**必须** COPY 到 /plugins（crate 根的上一层，与本地
+#    「plugins/ 与 server/ 平级」语义一致；与既有 /tools/nlu-trainer/train.py 同属
+#    「容器根 / = 仓库根、/app = server/」这套映射）。⛔ 不能写 ./plugins（= /app/plugins，
+#    少一层，rustc 报 couldn't read src/../../plugins/mod.rs；详见文件头第六次复现）。
 COPY server/src ./src
-COPY plugins ./plugins
+COPY plugins /plugins
 # WASM 宿主 bindgen! 在编译期读取 server/wit/plugin.wit；容器内
 # Cargo manifest 位于 /app，因此契约必须落到 /app/wit/plugin.wit。
 COPY server/wit ./wit
@@ -276,9 +297,11 @@ COPY tools/nlu-trainer/train.py /tools/nlu-trainer/train.py
 #   ③ 不要再加「产物断言」（曾用 grep 在二进制里找哨兵串验证非 dummy）：断言依赖构建机
 #      grep 实现对二进制的匹配行为（GNU/ugrep 别名差异），ACR 上两次假阴性、越修越错，
 #      已随版本戳特性一并移除（2026-10）；「Compiling + 非 0.00s 耗时」日志即重编证据。
+#   ④ find 清单里的 /plugins 是绝对路径，与上方 COPY 目标一致；⛔ 别改回相对 `plugins`
+#      （WORKDIR=/app 下已无 /app/plugins，find 会直接报错短路，插件源码 mtime 也刷不到）。
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    find src plugins -type f -exec touch {} + \
+    find src /plugins -type f -exec touch {} + \
  && cargo clean -p xiaozhi-server-rust --release \
  && cargo build --release --no-default-features --features sherpa,nlu,wasm-plugins,pure-base --locked \
  && strip target/release/xiaozhi-server-rust
