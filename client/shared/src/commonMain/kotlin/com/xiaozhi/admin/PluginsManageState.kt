@@ -1,11 +1,13 @@
 package com.xiaozhi.admin
 
-//! 「插件」管理页状态（P3 末件）：raw 上传桥 + 卸载 + 统一动作的客户端通道。
+//! 「插件」管理页状态（P3 末件）：raw 上传桥 + 生命周期（注册/激活/禁用/移除）+ 卸载 + 统一动作的客户端通道。
 //!
 //! 清单数据复用 [PluginMetaState]（同一次 `GET /api/plugins`，`wasm` 键解析成
 //! [PluginSlotSnapshot]），本状态只持有**写通道**与 busy/结果态：
 //! - 上传：`pickUploadFile`（平台桥选 .wasm）→ `uploadPickedFile` raw 直传
-//!   `POST /api/plugins/upload/raw`（id 缺省 = 服务端从组件 manifest 探测）；
+//!   `POST /api/plugins/upload/raw`（id 缺省 = 服务端从组件 manifest 探测；成功 = staged 待注册）；
+//! - 生命周期：`register/activate/deactivate/remove` → `POST /api/plugins/{id}/{op}`
+//!   （409 = 依赖/版本冲突，错误文案就地展示）；旧服务端（无 lifecycle 投影）继续走 `unload`；
 //! - 卸载：`POST /api/plugins/{id}/unload`（注册表 + kv + 产物文件三回收）；
 //! - 动作：`POST /api/plugins/{id}/actions/{name}`（白名单在宿主）。
 //!
@@ -74,6 +76,42 @@ class PluginsManageState(private val meta: PluginMetaState) {
         }
     }
 
+    /** 注册（staged → registered）：清单投影出现，激活后才运行业务。 */
+    fun register(ctx: Pager, pluginId: String, onDone: (ok: Boolean, msg: String) -> Unit) =
+        lifecyclePost(ctx, "register", "注册", pluginId, "已注册 $pluginId", onDone)
+
+    /** 激活（registered → active）：依赖未满足时服务端 409，文案就地展示。 */
+    fun activate(ctx: Pager, pluginId: String, onDone: (ok: Boolean, msg: String) -> Unit) =
+        lifecyclePost(ctx, "activate", "激活", pluginId, "已激活 $pluginId", onDone)
+
+    /** 禁用（active → registered）：被依赖插件未停用前服务端 409（页面侧也先行禁用按钮）。 */
+    fun deactivate(ctx: Pager, pluginId: String, onDone: (ok: Boolean, msg: String) -> Unit) =
+        lifecyclePost(ctx, "deactivate", "禁用", pluginId, "已禁用 $pluginId", onDone)
+
+    /** 移除（仅 staged / registered 非运行插件）：回收注册声明与产物。 */
+    fun remove(ctx: Pager, pluginId: String, onDone: (ok: Boolean, msg: String) -> Unit) =
+        lifecyclePost(ctx, "remove", "移除", pluginId, "已移除 $pluginId", onDone)
+
+    /** 生命周期端点统一通道（`POST /api/plugins/{id}/{op}`）；成功后刷新清单。 */
+    private fun lifecyclePost(
+        ctx: Pager,
+        op: String,
+        opLabel: String,
+        pluginId: String,
+        okMsg: String,
+        onDone: (ok: Boolean, msg: String) -> Unit,
+    ) {
+        if (busy.isNotEmpty()) return
+        busy = "$op:$pluginId"
+        postJson(ctx, "$base/api/plugins/$pluginId/$op", JSONObject()) { ok, _, _, reason ->
+            busy = ""
+            val msg = reason.ifEmpty { if (ok) okMsg else "${opLabel}失败" }
+            resultText = msg
+            if (ok) meta.load(ctx, base)
+            onDone(ok, msg)
+        }
+    }
+
     /** 执行插件声明过的管理动作（payload 固定 `{}`；清单页/回退页用，现状不变）。 */
     fun runAction(
         ctx: Pager,
@@ -130,7 +168,8 @@ class PluginsManageState(private val meta: PluginMetaState) {
         if (err.isNotEmpty()) return err
         if (ok) {
             val id = obj?.optString("id", "") ?: ""
-            return if (id.isNotEmpty()) "已上传并启用：$id" else "上传成功"
+            // 生命周期契约：上传成功只进 staged（待注册），不再宣称「已启用」
+            return if (id.isNotEmpty()) "已上传，待注册：$id" else "上传成功"
         }
         return "上传失败（HTTP ${if (code > 0) code else "网络"}）"
     }

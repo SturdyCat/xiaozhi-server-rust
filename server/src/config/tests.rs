@@ -471,15 +471,19 @@ fn plugins_section_parses_quoted_dotted_keys_and_gates_loading() {
         enabled = true
     "#;
     let cfg: Config = toml::from_str(text).unwrap();
-    // 缺省启用（entries 缺失的 id 放行）；显式禁用拦截；平台总闸一票否决
+    // 生命周期语义（2026-11-07）：缺省不激活（entries 缺失 = 未激活意图）；
+    // 显式 true = 激活意图；显式 false 关闭；平台总闸一票否决。
     assert!(cfg.plugins.allows("hello.official"));
     assert!(!cfg.plugins.allows("weather.official"));
-    assert!(cfg.plugins.allows("ghost.plugin"));
+    assert!(!cfg.plugins.allows("ghost.plugin"), "缺省条目 = 未激活");
     let mut off = cfg.plugins.clone();
     off.enabled = false;
     assert!(!off.allows("hello.official"), "平台总闸一票否决");
-    // 默认配置：全启用
-    assert!(Config::default().plugins.allows("anything.plugin"));
+    // 老部署迁移判定：缺失条目在旧缺省启用时代视为 enabled（boot 自动补注册+激活一次）
+    assert!(cfg.plugins.legacy_enabled("ghost.plugin"));
+    assert!(!cfg.plugins.legacy_enabled("weather.official"));
+    // 默认配置：未激活（上传只登记 Staged，激活走端点写 true）
+    assert!(!Config::default().plugins.allows("anything.plugin"));
     // 回写保留段（不丢 entries）
     let round = toml::to_string_pretty(&cfg).unwrap();
     assert!(round.contains("\"weather.official\""), "{round}");

@@ -235,7 +235,7 @@ mod wasm_api {
                     StatusCode::BAD_REQUEST,
                     "implementation 须为插件 id 字符串或 null",
                 )
-                    .into_response()
+                    .into_response();
             }
         };
         host.set_extension_preference(&point, implementation);
@@ -247,12 +247,13 @@ mod wasm_api {
         }))
     }
 
-    /// `POST /api/plugins/upload`：上传**已构建**的 wasm 组件，验证→采用→立即生效。
+    /// `POST /api/plugins/upload`：上传**已构建**的 wasm 组件（生命周期版：**只登记
+    /// Staged，不装载**；注册/激活走 `register`/`activate` 端点）。
     ///
-    /// 分发模型（用户方向）：插件不编译进主系统、服务端零本地构建；本端点是唯一的
-    /// 生产装载入口。body：`{"id":"<插件id>","wasm_base64":"...","activate":true}`。
-    /// 流程：base64 解码 → 大小上限 → 隔离验证（manifest/api-version/注册包/self-test）
-    /// →（activate）写盘（临时文件+原子改名）+ 热装载（先建新后替换）。
+    /// 分发模型（用户方向）：插件不编译进主系统、服务端零本地构建。body：
+    /// `{"id":"<插件id>","wasm_base64":"..."}`。流程：base64 解码 → 大小上限 →
+    /// 平台总闸 → 探测 manifest + 版本升级判定（同 id：新>旧才接受）→ 落盘
+    /// （临时文件+原子改名）+ 钉版 → 登记 Staged；原 Active 条目随后原地换版本。
     pub(crate) async fn upload_plugin(
         State(engines): State<Arc<Engines>>,
         axum::Json(body): axum::Json<Value>,
@@ -273,16 +274,8 @@ mod wasm_api {
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string();
-        let activate = body
-            .get("activate")
-            .and_then(Value::as_bool)
-            .unwrap_or(true);
         if id.is_empty() || b64.is_empty() {
-            return (
-                StatusCode::BAD_REQUEST,
-                "需要 id 与 wasm_base64 字段（activate 默认 true）",
-            )
-                .into_response();
+            return (StatusCode::BAD_REQUEST, "需要 id 与 wasm_base64 字段").into_response();
         }
         let bytes = match base64::engine::general_purpose::STANDARD.decode(b64) {
             Ok(b) => b,
@@ -291,17 +284,17 @@ mod wasm_api {
                     StatusCode::BAD_REQUEST,
                     format!("wasm_base64 解码失败：{e}"),
                 )
-                    .into_response()
+                    .into_response();
             }
         };
-        // 共享采用管线（raw 端点与本端点同一实现：验证 → 采用 → 持久化）
-        adopt_bytes(&engines, &host, id, bytes, activate).await
+        // 共享采用管线（raw 端点与本端点同一实现）
+        adopt_bytes(&engines, &host, id, bytes).await
     }
 
     /// `POST /api/plugins/upload/raw[?id=<id>]`：**raw octet-stream 直传**（管理台上传桥
     /// `uploadPickedFile` 的原生通道，token 走查询串）。id 缺省时从组件 manifest
     /// **探测**（"选文件即上传"）；显式 id 则严格匹配校验。其余语义与 JSON 端点一致：
-    /// 隔离验证 → 采用 → 热装载 → 产物落盘；`[plugins]` 配置禁用的 id 明确拒绝。
+    /// 登记 Staged（不装载）；`[plugins]` 平台总闸关闭时明确拒绝。
     pub(crate) async fn upload_plugin_raw(
         State(engines): State<Arc<Engines>>,
         axum::extract::Query(query): axum::extract::Query<
@@ -340,28 +333,31 @@ mod wasm_api {
                             "error": format!("id 探测失败：{e:#}"),
                         })),
                     )
-                        .into_response()
+                        .into_response();
                 }
                 Err(e) => {
                     return (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         format!("探测任务失败：{e}"),
                     )
-                        .into_response()
+                        .into_response();
                 }
             },
         };
-        adopt_bytes(&engines, host, id, body.to_vec(), true).await
+        adopt_bytes(&engines, host, id, body.to_vec()).await
     }
 
-    /// 共享采用管线：大小上限 → `[plugins]` 配置门 → 隔离验证 → 采用（写盘+热装载）。
-    async fn adopt_bytes(
+    /// 共享采用管线（生命周期版）：大小上限 → 平台总闸 → 探测 manifest + 版本升级
+    /// 判定（同 id：新>旧才接受，保持原生命周期）→ 落盘+钉版 → 登记 Staged；
+    /// 原 Active 条目随后原地换版本（注册包刷新）。**不再热装载新插件**。
+    pub(super) async fn adopt_bytes(
         engines: &Arc<Engines>,
         host: &Arc<crate::plugins::wasm::WasmHost>,
         id: String,
         bytes: Vec<u8>,
-        activate: bool,
     ) -> Response {
+        use crate::plugins::wasm::Lifecycle;
+
         if bytes.len() > crate::plugins::wasm::artifacts::MAX_ARTIFACT_BYTES {
             return (
                 StatusCode::PAYLOAD_TOO_LARGE,
@@ -373,32 +369,45 @@ mod wasm_api {
             )
                 .into_response();
         }
-        if !engines.config.plugins.allows(&id) {
+        // 平台总闸（一票否决）；每插件 enabled 是激活意图（activate/deactivate 端点管），
+        // 不再拦上传——禁用插件允许升级产物（重启后仍按激活意图决定是否运行）。
+        if !engines.config.plugins.enabled {
             return (
                 StatusCode::FORBIDDEN,
                 axum::Json(serde_json::json!({
                     "ok": false,
-                    "error": format!("插件 {id} 被 [plugins] 配置禁用（先在配置里启用再上传）"),
+                    "error": "WASM 插件平台已被 [plugins].enabled 总闸关闭",
                 })),
             )
                 .into_response();
         }
-        // 隔离验证（不落表、不影响现有实例）；self-test 失败 → 400 带完整结果
-        let id_for_check = id.clone();
-        let validation = match tokio::task::spawn_blocking({
+        // 探测 manifest + 版本升级判定（Staged：不注册、不装载、不跑 self-test）
+        let staged = match tokio::task::spawn_blocking({
             let bytes = bytes.clone();
             let host = host.clone();
-            move || host.validate(&id_for_check, &bytes)
+            let id = id.clone();
+            move || host.stage(&id, &bytes)
         })
         .await
         {
-            Ok(Ok(results)) => results,
+            Ok(Ok(outcome)) => outcome,
+            Ok(Err(crate::plugins::wasm::StageError::VersionNotNewer { new, current })) => {
+                return (
+                    StatusCode::CONFLICT,
+                    axum::Json(serde_json::json!({
+                        "ok": false, "staged": false,
+                        "error": format!("版本不升级：新版本 {new} ≤ 现有 {current}（升级须更高版本）"),
+                        "current_version": current,
+                    })),
+                )
+                    .into_response()
+            }
             Ok(Err(e)) => {
                 return (
                     StatusCode::BAD_REQUEST,
                     axum::Json(serde_json::json!({
-                        "ok": false, "activated": false,
-                        "error": format!("隔离验证失败（未采用）：{e:#}")
+                        "ok": false, "staged": false,
+                        "error": format!("登记失败（未采用）：{e}"),
                     })),
                 )
                     .into_response()
@@ -406,108 +415,149 @@ mod wasm_api {
             Err(e) => {
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("验证任务失败：{e}"),
+                    format!("登记任务失败：{e}"),
                 )
                     .into_response()
             }
         };
 
-        let mut resp = serde_json::json!({
+        // 采用：落盘（持久意图）+ 摘要钉版
+        let digest = crate::plugins::wasm::artifacts::ArtifactDir::digest(&bytes);
+        let artifact_saved = engines
+            .wasm_artifact_dir()
+            .map(|d| d.save(&id, &bytes).is_ok())
+            .unwrap_or(false);
+        let pin_saved = if artifact_saved {
+            match engines.pin_wasm_artifact(&id, &digest) {
+                Ok(()) => true,
+                Err(e) => {
+                    tracing::warn!(plugin = %id, "产物摘要钉版写入配置库失败：{e:#}");
+                    false
+                }
+            }
+        } else {
+            false
+        };
+        let persisted = artifact_saved && pin_saved;
+        if !persisted {
+            tracing::warn!(
+                plugin = %id,
+                artifact_saved,
+                pin_saved,
+                "产物持久化不完整（本次运行有效，重启后可能跳过或丢失）"
+            );
+        }
+
+        // 原 Active 条目升级：原地换版本（注册包刷新；失败保留旧实例并回显原因）
+        let mut reload_error: Option<String> = None;
+        if staged.preserved == Some(Lifecycle::Active) {
+            match tokio::task::spawn_blocking({
+                let bytes = bytes.clone();
+                let host = host.clone();
+                let id = id.clone();
+                move || host.reload_active(&id, &bytes)
+            })
+            .await
+            {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    reload_error = Some(format!("{e:#}"));
+                    tracing::warn!(plugin = %id, "Active 升级原地换版本失败（旧实例保留）：{e:#}");
+                }
+                Err(e) => {
+                    reload_error = Some(format!("换版本任务失败：{e}"));
+                }
+            }
+        }
+        let lifecycle = host
+            .lifecycle_of(&id)
+            .map(|(lc, _)| lc.as_str().to_string())
+            .unwrap_or_else(|| "staged".to_string());
+        json_ok(serde_json::json!({
             "ok": true,
             "id": id,
-            "validation": validation,
-            "activated": false,
-        });
-        if !activate {
-            return json_ok(resp);
-        }
-        // 采用：写盘（持久意图）+ 热装载（先建新后替换；失败保留旧实例）
-        let id_for_load = id.clone();
-        let load = match tokio::task::spawn_blocking({
-            let bytes = bytes.clone();
-            let host = host.clone();
-            move || host.load(&id_for_load, &bytes)
-        })
-        .await
-        {
-            Ok(r) => r,
-            Err(e) => Err(anyhow::anyhow!("装载任务失败：{e}")),
-        };
-        match load {
-            Ok(()) => {
-                let digest = crate::plugins::wasm::artifacts::ArtifactDir::digest(&bytes);
-                let artifact_saved = engines
-                    .wasm_artifact_dir()
-                    .map(|d| d.save(&id, &bytes).is_ok())
-                    .unwrap_or(false);
-                let pin_saved = if artifact_saved {
-                    match engines.pin_wasm_artifact(&id, &digest) {
-                        Ok(()) => true,
-                        Err(e) => {
-                            tracing::warn!(plugin = %id, "产物摘要钉版写入配置库失败：{e:#}");
-                            false
-                        }
-                    }
-                } else {
-                    false
-                };
-                let persisted = artifact_saved && pin_saved;
-                if !persisted {
-                    tracing::warn!(
-                        plugin = %id,
-                        artifact_saved,
-                        pin_saved,
-                        "产物持久化不完整（本次运行有效，重启后可能跳过或丢失）"
-                    );
-                }
-                resp["activated"] = Value::Bool(true);
-                resp["sha256"] = Value::String(digest);
-                resp["persisted"] = Value::Bool(persisted);
-                resp["extensions"] = engines
-                    .wasm
-                    .as_ref()
-                    .map(|h| h.snapshot_json()["extensions"].clone())
-                    .unwrap_or(Value::Null);
-                json_ok(resp)
-            }
-            Err(e) => (
-                StatusCode::BAD_REQUEST,
-                axum::Json(serde_json::json!({
-                    "ok": false, "activated": false,
-                    "validation": validation,
-                    "error": format!("装载失败（未采用，旧实例保留）：{e:#}")
-                })),
-            )
-                .into_response(),
-        }
+            "staged": true,
+            "lifecycle": lifecycle,
+            "version": staged.version,
+            "upgraded": staged.upgraded,
+            "previous_version": staged.previous_version,
+            "sha256": digest,
+            "persisted": persisted,
+            "reload_error": reload_error,
+            "extensions": engines
+                .wasm
+                .as_ref()
+                .map(|h| h.snapshot_json()["extensions"].clone())
+                .unwrap_or(Value::Null),
+        }))
     }
 
-    /// `POST /api/plugins/{id}/unload`：卸载（卸注册表 + 回收 kv 命名空间 + 删除产物文件）。
+    /// `POST /api/plugins/{id}/unload`：**兼容别名** = deactivate + remove（生命周期版）。
+    /// Active 插件先停用（有 Active 依赖者 → 409），再移除条目/产物/标记/kv；
+    /// 响应注明新语义。客户端应改用 `deactivate`/`remove` 端点。
     pub(crate) async fn unload_plugin(
         State(engines): State<Arc<Engines>>,
         Path(plugin_id): Path<String>,
     ) -> Response {
+        use crate::plugins::wasm::{DeactivateError, RemoveError};
+
         let Some(host) = engines.wasm.as_ref() else {
             return unavailable();
         };
-        let removed = host.unload(&plugin_id);
-        let file_removed = engines
+        // ① Active → 先停用（依赖者检查）；Registered/Staged 无需停用
+        if let Err(e) = host.deactivate(&plugin_id) {
+            if let DeactivateError::Dependents(list) = e {
+                return (
+                    StatusCode::CONFLICT,
+                    axum::Json(serde_json::json!({
+                        "ok": false,
+                        "error": format!("存在 Active 依赖者，先停用：{}", list.join("、")),
+                        "dependents": list,
+                    })),
+                )
+                    .into_response();
+            }
+        }
+        // ② 移除（条目 + kv）+ 磁盘回收（产物 + 注册标记 + 摘要钉版）
+        let entry_removed = match host.remove(&plugin_id) {
+            Ok(()) => true,
+            Err(RemoveError::Active) => {
+                return (
+                    StatusCode::CONFLICT,
+                    axum::Json(serde_json::json!({
+                        "ok": false,
+                        "error": "插件仍在运行（先停用再移除）",
+                    })),
+                )
+                    .into_response();
+            }
+            Err(RemoveError::NotFound) => false,
+        };
+        let artifact_removed = engines
             .wasm_artifact_dir()
             .map(|d| d.remove(&plugin_id))
+            .unwrap_or(false);
+        let marker_removed = engines
+            .wasm_artifact_dir()
+            .map(|d| d.remove_registered_marker(&plugin_id))
             .unwrap_or(false);
         if let Err(e) = engines.clear_wasm_artifact_pin(&plugin_id) {
             tracing::warn!(plugin = %plugin_id, "插件摘要钉版清理失败：{e:#}");
         }
-        if !removed && !file_removed {
+        if !entry_removed && !artifact_removed {
             return (
                 StatusCode::NOT_FOUND,
-                format!("插件 {plugin_id} 未装载且无产物文件"),
+                format!("插件 {plugin_id} 未登记且无产物文件"),
             )
                 .into_response();
         }
         json_ok(serde_json::json!({
             "ok": true, "id": plugin_id,
-            "unloaded": removed, "artifact_removed": file_removed,
+            "removed": entry_removed || artifact_removed,
+            "entry_removed": entry_removed,
+            "artifact_removed": artifact_removed,
+            "marker_removed": marker_removed,
+            "alias": "deactivate+remove（生命周期版；请改用 deactivate/remove 端点）",
         }))
     }
 
@@ -530,10 +580,14 @@ mod wasm_api {
             }
         }
     }
+
+    /// 生命周期端点（register / activate / deactivate / remove）：见子模块文档。
+    pub(super) mod lifecycle;
 }
 
 #[cfg(feature = "wasm-plugins")]
 pub(super) use wasm_api::{
+    lifecycle::{activate_plugin, deactivate_plugin, register_plugin, remove_plugin},
     plugin_action, plugin_ui, set_extension_preference, unload_plugin, upload_plugin,
     upload_plugin_raw,
 };

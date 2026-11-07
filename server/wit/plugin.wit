@@ -30,6 +30,15 @@ interface types {
         restart-only,
     }
 
+    /// 插件间依赖声明（激活前置：被依赖插件须 Active 且版本 ≥ min-version）。
+    /// 版本比较 = 数字点分段（1.2.3；缺段补 0；非数字段在 manifest 校验期拒绝）。
+    record plugin-requirement {
+        /// 被依赖插件 id（`<域>.<名>`）
+        id: string,
+        /// 最低版本（如 "0.1"）
+        min-version: string,
+    }
+
     /// manifest：装载前免实例化即可校验的静态声明
     /// （命名 plugin-manifest：接口内 `use` 的类型名不能与同名导出函数冲突）
     record plugin-manifest {
@@ -49,6 +58,8 @@ interface types {
         implements: list<string>,
         /// 官方默认实现标记：随内核分发、不可卸载；扩展点解析的用户插件失败时回退到它
         official: bool,
+        /// 依赖的其他插件（激活前置；装载/注册不校验，激活期一次性判定）
+        requires: list<plugin-requirement>,
     }
 
     /// 菜单槽位注册（非排他槽位：nav.main / config.section / workflow.node-menu）

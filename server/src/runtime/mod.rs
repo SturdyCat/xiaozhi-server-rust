@@ -129,6 +129,9 @@ pub struct Engines {
 }
 
 mod refresh;
+/// WASM 插件生命周期引导（扫描/标记恢复/迁移/拓扑激活；feature 门控）。
+#[cfg(feature = "wasm-plugins")]
+mod wasm_boot;
 /// 到期技能任务 → outbox 调度器（业务面）：唯一调用点在 main.rs，
 /// 该处已按 `not(pure-base)` 门控，纯底座不编译调度 worker。
 #[cfg(not(feature = "pure-base"))]
@@ -280,54 +283,14 @@ impl Engines {
         if let Some(host) = wasm.as_ref() {
             crate::plugins::wasm::set_host_global(std::sync::Arc::clone(host));
         }
-        // 重启重装：数据卷 plugins/ 下全部产物逐个装载（上传即启用模型的持久面）。
-        // 坏产物只跳过并告警——单个插件故障不阻断核心语音服务启动。
+        // 生命周期引导：扫描 → 登记 Staged → 标记恢复 Registered / 老部署迁移 →
+        // enabled 按依赖拓扑激活。坏产物/坏插件只跳过自身，不阻断核心语音服务启动。
         #[cfg(feature = "wasm-plugins")]
         if let (Some(host), Some(dir)) = (
             wasm.as_ref(),
             crate::plugins::wasm::artifacts::ArtifactDir::for_location(config_store.location()),
         ) {
-            for (id, bytes) in dir.scan() {
-                // [plugins] 配置意图：禁用的产物跳过装载（上传落盘仍在，重新启用即恢复）
-                if !config.plugins.allows(&id) {
-                    tracing::info!(plugin = %id, "配置禁用（[plugins]），跳过装载");
-                    continue;
-                }
-                if let Some(entry) = config.plugins.entries.get(&id) {
-                    if config.plugins.require_artifact_pin && entry.artifact.is_none() {
-                        tracing::warn!(plugin = %id, "严格完整性模式要求 artifact SHA-256 pin，跳过未钉版产物");
-                        continue;
-                    }
-                    let digest = crate::plugins::wasm::artifacts::ArtifactDir::digest(&bytes);
-                    if !entry.artifact_matches(&digest) {
-                        tracing::warn!(
-                            plugin = %id,
-                            expected = ?entry.artifact,
-                            actual = %digest,
-                            "插件产物摘要与 [plugins.entries] 钉版不符，跳过装载"
-                        );
-                        continue;
-                    }
-                    if let Some(public_key) = config.plugins.attestation_public_key.as_deref() {
-                        let Some(attestation) = entry.attestation.as_deref() else {
-                            tracing::warn!(plugin = %id, "已配置 attestation 公钥但插件缺少签名，跳过装载");
-                            continue;
-                        };
-                        if !crate::plugins::wasm::artifacts::ArtifactDir::verify_attestation(
-                            public_key,
-                            attestation,
-                            &digest,
-                        ) {
-                            tracing::warn!(plugin = %id, "插件 artifact attestation 校验失败，跳过装载");
-                            continue;
-                        }
-                    }
-                }
-                match host.load(&id, &bytes) {
-                    Ok(()) => tracing::info!(plugin = %id, "启动重装插件产物"),
-                    Err(e) => tracing::warn!(plugin = %id, "启动重装失败（跳过）：{e:#}"),
-                }
-            }
+            wasm_boot::boot_lifecycle(&config.plugins, &dir, host, config_store.as_ref());
         }
         // weather 后端开关（[weather].backend = "wasm"）的执行载体注入；
         // native 后端永不触碰该句柄（见 WeatherService::forecast_wasm）。
@@ -392,6 +355,16 @@ impl Engines {
             self.config_store.persist(&config)?;
         }
         Ok(())
+    }
+
+    /// 持久化插件激活意图（activate/deactivate 端点与 boot 迁移共用）。
+    /// RestartOnly 总语义不变：boot 引导按它决定拓扑激活；端点已即时装载/卸载实例。
+    #[cfg(feature = "wasm-plugins")]
+    pub fn set_wasm_enabled(&self, id: &str, enabled: bool) -> anyhow::Result<()> {
+        let mut config = self.config_store.load()?;
+        let entry = config.plugins.entries.entry(id.to_string()).or_default();
+        entry.enabled = enabled;
+        self.config_store.persist(&config)
     }
 
     /// 配置持久化落点（今天的 TOML 路径；将来 SQLite 后端为 DB 路径）。

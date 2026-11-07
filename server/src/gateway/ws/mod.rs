@@ -347,6 +347,22 @@ pub fn router(engines: Arc<Engines>) -> Router {
         .route(
             "/api/plugins/{id}/ui",
             axum::routing::get(plugins::plugin_ui),
+        )
+        .route(
+            "/api/plugins/{id}/register",
+            axum::routing::post(plugins::register_plugin),
+        )
+        .route(
+            "/api/plugins/{id}/activate",
+            axum::routing::post(plugins::activate_plugin),
+        )
+        .route(
+            "/api/plugins/{id}/deactivate",
+            axum::routing::post(plugins::deactivate_plugin),
+        )
+        .route(
+            "/api/plugins/{id}/remove",
+            axum::routing::post(plugins::remove_plugin),
         );
 
     let app = if Path::new(&admin_dir).is_dir() {

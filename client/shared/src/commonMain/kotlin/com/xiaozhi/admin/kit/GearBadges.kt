@@ -105,3 +105,26 @@ fun pluginStatusBadge(phase: String, enabled: Boolean) {
         else -> statusBadge(state = "idle", text = phase)
     }
 }
+
+/**
+ * 插件生命周期徽标（`wasm.plugins[].lifecycle` × `phase`），语义沿用 [pluginStatusBadge]
+ * 的「只在偏离时打标」规则：
+ *
+ * | lifecycle | phase | 徽标 |
+ * |---|---|---|
+ * | `staged` | — | 「未注册」（idle） |
+ * | `registered` | — | 「已注册·禁用」（idle） |
+ * | `active` | `active` | 不打标（正常） |
+ * | `active` | `degraded` / `failed` | 「降级」（busy）/「异常」（error） |
+ * | 其他值 | — | 按 phase 展示（fail-closed，不猜测未知态语义） |
+ * | `null`（旧服务端） | — | 不打标（无生命周期投影，维持旧行为） |
+ */
+@Composable
+fun pluginLifecycleBadge(lifecycle: String?, phase: String) {
+    when (lifecycle) {
+        "staged" -> statusBadge(state = "idle", text = "未注册")
+        "registered" -> statusBadge(state = "idle", text = "已注册·禁用")
+        null -> Unit
+        else -> pluginStatusBadge(phase = phase, enabled = true)
+    }
+}

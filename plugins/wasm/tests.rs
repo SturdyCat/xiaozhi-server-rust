@@ -266,6 +266,7 @@ mod bridge;
 mod extension;
 mod http;
 mod lan;
+mod lifecycle;
 mod sandbox;
 mod ui;
 mod weather;
@@ -306,6 +307,7 @@ fn manifest_ok() -> contract::ManifestDto {
         permissions: vec![],
         implements: vec!["demo.greeter".into()],
         official: true,
+        requires: vec![],
     }
 }
 

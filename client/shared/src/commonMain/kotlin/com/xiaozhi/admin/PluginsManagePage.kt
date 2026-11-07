@@ -30,6 +30,7 @@ import com.tencent.kuikly.compose.ui.unit.dp
 import com.xiaozhi.admin.contracts.IconToken
 import com.xiaozhi.admin.icons.GearIcon
 import com.xiaozhi.admin.kit.actionRow
+import com.xiaozhi.admin.kit.pluginLifecycleBadge
 import com.xiaozhi.admin.kit.pluginStatusBadge
 import com.xiaozhi.admin.kit.statusBadge
 import com.xiaozhi.admin.kit.vGap
@@ -45,6 +46,10 @@ fun PluginsManagePage(meta: PluginMetaState, manage: PluginsManageState, toast: 
     val feedback = remember { mutableStateOf("") }
     // 卸载二次确认：持有待确认的插件 id（null = 关闭）
     var confirmUnload by remember { mutableStateOf<String?>(null) }
+    // 生命周期二次确认：op（register/activate/deactivate/remove）→ 插件 id（null = 关闭）
+    var confirmLifecycle by remember { mutableStateOf<Pair<String, String>?>(null) }
+    // 详情弹窗：持有插件 id（null = 关闭；内容从当前清单快照组装，零请求）
+    var detailId by remember { mutableStateOf<String?>(null) }
     val snap = meta.wasmSlots
 
     Column(modifier = Modifier.fillMaxWidth()) {
@@ -64,8 +69,9 @@ fun PluginsManagePage(meta: PluginMetaState, manage: PluginsManageState, toast: 
         // 上传入口：id 缺省 = 服务端从组件 manifest 探测（"选文件即上传"）
         LabeledCard(title = "上传插件组件") {
             HintLine(
-                "选择本地 .wasm 组件上传：服务端做隔离验证（manifest / 注册包 / 自检）后才采用；" +
-                    "失败不影响已装载插件。上传落盘为持久意图，重启自动重装。",
+                "选择本地 .wasm 组件上传：服务端做隔离验证（manifest / 注册包 / 自检）后进入" +
+                    "「待注册」状态（staged），注册并激活后才运行业务；失败不影响已装载插件。" +
+                    "上传落盘为持久意图，重启自动重装。",
             )
             SectionSummaryRow(
                 summary = feedback.value.ifEmpty {
@@ -87,11 +93,11 @@ fun PluginsManagePage(meta: PluginMetaState, manage: PluginsManageState, toast: 
             }
         }
 
-        // 已装载清单
+        // 已装载清单（含 staged / registered：上传与注册后的插件同样在列，生命周期按钮随状态渲染）
         LabeledCard(title = "已装载插件") {
             val plugins = snap?.plugins
             if (plugins.isNullOrEmpty()) {
-                HintLine("暂无已装载插件：上传组件，或检查启动引导日志（数据卷缺产物时按引导表构建）。")
+                HintLine("暂无插件：上传 .wasm 组件后进入「待注册」，注册并激活后才运行业务。")
             } else {
                 for (plugin in plugins) {
                     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -104,39 +110,104 @@ fun PluginsManagePage(meta: PluginMetaState, manage: PluginsManageState, toast: 
                         if (!plugin.official) {
                             statusBadge(state = "busy", text = "用户实现")
                         }
-                        pluginStatusBadge(phase = plugin.phase, enabled = true)
+                        // lifecycle 缺键 = 旧服务端：维持原 phase 徽标；新服务端按生命周期打标
+                        if (plugin.lifecycle == null) {
+                            pluginStatusBadge(phase = plugin.phase, enabled = true)
+                        } else {
+                            pluginLifecycleBadge(lifecycle = plugin.lifecycle, phase = plugin.phase)
+                        }
                     }
-                    HintLine("${plugin.id} · v${plugin.version}")
+                    HintLine(
+                        "${plugin.id} · v${plugin.version}" +
+                            plugin.apiVersion.takeIf { it.isNotBlank() }?.let { " · 契约 v$it" }.orEmpty(),
+                    )
                     if (plugin.description.isNotEmpty()) {
                         HintLine(plugin.description)
                     }
                     if (plugin.permissions.isNotEmpty()) {
                         HintLine("权限：" + plugin.permissions.joinToString("、"))
                     }
-                    // 动作 + 卸载（危险动作卸载走弹层二次确认；动作按钮按注册清单渲染）
+                    // 依赖门控就地提示（按钮侧同时禁用；文案解释缺什么/先停用谁）
+                    if (plugin.lifecycle == "registered" && plugin.missingRequirements.isNotEmpty()) {
+                        WarnLine(
+                            "依赖未满足：" + plugin.missingRequirements.joinToString("、") { r ->
+                                "${r.id} ≥ ${r.minVersion}（当前 ${r.currentState}）"
+                            } + "；满足后才能激活。",
+                        )
+                    }
+                    if (plugin.dependents.isNotEmpty()) {
+                        HintLine("被依赖：" + plugin.dependents.joinToString("、") + "；先停用依赖者才能禁用本插件。")
+                    }
+                    // 生命周期按钮（按状态渲染；旧服务端 lifecycle 缺键 → 维持动作 + 旧卸载通道）
                     actionRow {
-                        for (action in plugin.actions) {
-                            Button(
-                                text = if (manage.busy == "${plugin.id}:${action.id}") "执行中…" else action.label,
-                                onClick = {
-                                    manage.runAction(ctx, plugin.id, action.id) { ok, msg ->
+                        Button(
+                            text = "详情",
+                            onClick = { detailId = plugin.id },
+                            theme = ButtonTheme.DEFAULT,
+                            type = ButtonType.OUTLINE,
+                            size = ButtonSize.SMALL,
+                        )
+                        when (plugin.lifecycle) {
+                            "staged" -> {
+                                // 注册幂等无危险：直接执行（不进确认弹窗）
+                                lifecycleButton(manage, plugin.id, "register", "注册", busyLabel = "注册中…") {
+                                    manage.register(ctx, plugin.id) { ok, msg ->
                                         toast.show(msg, if (ok) "ok" else "error")
                                     }
-                                },
-                                theme = ButtonTheme.DEFAULT,
-                                type = ButtonType.OUTLINE,
-                                size = ButtonSize.SMALL,
-                                disabled = manage.busy.isNotEmpty(),
-                            )
+                                }
+                                lifecycleButton(manage, plugin.id, "remove", "移除", busyLabel = "移除中…") {
+                                    confirmLifecycle = "remove" to plugin.id
+                                }
+                            }
+                            "registered" -> {
+                                // requires 未满足 → 激活禁用（缺失原因见上方依赖提示）；激活无需确认
+                                lifecycleButton(
+                                    manage, plugin.id, "activate", "激活", busyLabel = "激活中…",
+                                    enabled = plugin.canActivate,
+                                ) {
+                                    manage.activate(ctx, plugin.id) { ok, msg ->
+                                        toast.show(msg, if (ok) "ok" else "error")
+                                    }
+                                }
+                                lifecycleButton(manage, plugin.id, "remove", "移除", busyLabel = "移除中…") {
+                                    confirmLifecycle = "remove" to plugin.id
+                                }
+                            }
+                            "active" -> {
+                                // dependents 非空 → 禁用禁用按钮 + 提示先停依赖者
+                                lifecycleButton(
+                                    manage, plugin.id, "deactivate", "禁用", busyLabel = "禁用中…",
+                                    enabled = plugin.canDeactivate,
+                                ) {
+                                    confirmLifecycle = "deactivate" to plugin.id
+                                }
+                            }
+                            null -> {
+                                // 旧服务端兼容：动作按钮按注册清单渲染 + 旧卸载端点
+                                for (action in plugin.actions) {
+                                    Button(
+                                        text = if (manage.busy == "${plugin.id}:${action.id}") "执行中…" else action.label,
+                                        onClick = {
+                                            manage.runAction(ctx, plugin.id, action.id) { ok, msg ->
+                                                toast.show(msg, if (ok) "ok" else "error")
+                                            }
+                                        },
+                                        theme = ButtonTheme.DEFAULT,
+                                        type = ButtonType.OUTLINE,
+                                        size = ButtonSize.SMALL,
+                                        disabled = manage.busy.isNotEmpty(),
+                                    )
+                                }
+                                Button(
+                                    text = if (manage.busy == "unload:${plugin.id}") "卸载中…" else "卸载",
+                                    onClick = { confirmUnload = plugin.id },
+                                    theme = ButtonTheme.DEFAULT,
+                                    type = ButtonType.OUTLINE, // GearUI 无 DANGER 型：危险意图由文案 + 弹层二次确认承载
+                                    size = ButtonSize.SMALL,
+                                    iconWidget = { color -> GearIcon(token = IconToken.Delete, size = 14.dp, tint = color) },
+                                )
+                            }
                         }
-                        Button(
-                            text = if (manage.busy == "unload:${plugin.id}") "卸载中…" else "卸载",
-                            onClick = { confirmUnload = plugin.id },
-                            theme = ButtonTheme.DEFAULT,
-                            type = ButtonType.OUTLINE, // GearUI 无 DANGER 型：危险意图由「卸载」文案 + 弹层二次确认承载
-                            size = ButtonSize.SMALL,
-                            iconWidget = { color -> GearIcon(token = IconToken.Delete, size = 14.dp, tint = color) },
-                        )
                     }
                     vGap()
                 }
@@ -195,7 +266,81 @@ fun PluginsManagePage(meta: PluginMetaState, manage: PluginsManageState, toast: 
             },
             onCancel = { confirmUnload = null },
         )
+
+        // 生命周期二次确认（注册/激活幂等无危险直接执行；remove / deactivate 必确认）
+        val lifecycleTarget = confirmLifecycle?.let { (op, id) -> op to snap?.plugin(id) }
+        val lifecyclePlugin = lifecycleTarget?.second
+        val isRemove = lifecycleTarget?.first == "remove"
+        ConfirmDialog(
+            visible = lifecyclePlugin != null,
+            title = if (isRemove) "移除插件？" else "禁用插件？",
+            message = buildString {
+                append(lifecyclePlugin?.title ?: "")
+                append("（")
+                append(lifecyclePlugin?.id ?: "")
+                append("）")
+                if (isRemove) {
+                    append("将从服务端移除并删除产物文件。仅禁用（非运行）插件可移除；")
+                    append("此操作不可撤销，重新启用需要重新上传。")
+                } else {
+                    append("将停止运行；注册声明与配置保留，之后可重新激活。")
+                    append("若其他插件依赖它，需先停用依赖者。")
+                }
+            },
+            confirmText = if (isRemove) "移除" else "禁用",
+            cancelText = "取消",
+            destructive = isRemove,
+            dismissOnOutside = false,
+            onConfirm = {
+                val target = confirmLifecycle
+                confirmLifecycle = null
+                val (op, id) = target ?: return@ConfirmDialog
+                val callback = { ok: Boolean, msg: String -> toast.show(msg, if (ok) "ok" else "error") }
+                when (op) {
+                    "deactivate" -> manage.deactivate(ctx, id, callback)
+                    "remove" -> manage.remove(ctx, id, callback)
+                }
+            },
+            onCancel = { confirmLifecycle = null },
+        )
+
+        // 详情弹窗（快照静态渲染；uiPages 从已解析的动态文档提取，仅 Active 有内容）
+        val detailTarget = detailId?.let { snap?.plugin(it) }
+        if (detailTarget != null) {
+            PluginManageDetailDialog(
+                plugin = detailTarget,
+                uiPages = meta.pluginUiDocs[detailTarget.id]?.pages
+                    ?.map { "${it.title}（${it.kind}）" }
+                    .orEmpty(),
+                onDismiss = { detailId = null },
+            )
+        }
     }
+}
+
+/**
+ * 生命周期按钮统一封装：busy 键按 `op:pluginId` 判定、全局 busy 防重入（激活等幂等动作
+ * 同样互斥，避免清单刷新与写通道并发）；[enabled]=false 渲染禁用态（依赖/被依赖门控由
+ * 调用方传入，原因文案在行内提示承载）。
+ */
+@Composable
+private fun lifecycleButton(
+    manage: PluginsManageState,
+    pluginId: String,
+    op: String,
+    label: String,
+    busyLabel: String,
+    enabled: Boolean = true,
+    onConfirm: () -> Unit,
+) {
+    Button(
+        text = if (manage.busy == "$op:$pluginId") busyLabel else label,
+        onClick = onConfirm,
+        theme = ButtonTheme.DEFAULT,
+        type = ButtonType.OUTLINE,
+        size = ButtonSize.SMALL,
+        disabled = !enabled || manage.busy.isNotEmpty(),
+    )
 }
 
 /**

@@ -47,10 +47,10 @@ fn native_data_plane_ownership_markers_remain_present_before_cleanup() {
 
 #[test]
 fn runtime_keeps_artifact_integrity_gate_before_wasm_load() {
-    let runtime = include_str!("../../../server/src/runtime/mod.rs");
-    assert!(runtime.contains("artifact_matches"));
-    assert!(runtime.contains("ArtifactDir::digest"));
-    assert!(runtime.contains("continue;"));
+    let boot = include_str!("../../../server/src/runtime/wasm_boot.rs");
+    assert!(boot.contains("artifact_matches"));
+    assert!(boot.contains("ArtifactDir::digest"));
+    assert!(boot.contains("continue;"));
 }
 
 #[test]

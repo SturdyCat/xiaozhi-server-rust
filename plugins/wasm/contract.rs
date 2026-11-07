@@ -4,7 +4,7 @@
 //! 本文件把这些 WIT 类型转成 serde DTO（`/api/plugins` 投影与内部记录用），
 //! 并提供 manifest 的装载期校验（契约主版本、id 形状、扩展点声明形状）。
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 
 wasmtime::component::bindgen!({
     // 直接指向契约文件（目录形式会被当作 deps/ 包布局解析而失败）
@@ -34,6 +34,16 @@ pub struct ManifestDto {
     pub permissions: Vec<String>,
     pub implements: Vec<String>,
     pub official: bool,
+    /// 依赖的其他插件（激活前置；装载/注册不判定）。
+    #[serde(default)]
+    pub requires: Vec<RequirementDto>,
+}
+
+/// 依赖声明投影（`requires`）。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct RequirementDto {
+    pub id: String,
+    pub min_version: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -105,8 +115,53 @@ impl From<wit::PluginManifest> for ManifestDto {
             permissions: m.permissions,
             implements: m.implements,
             official: m.official,
+            requires: m
+                .requires
+                .into_iter()
+                .map(|r| RequirementDto {
+                    id: r.id,
+                    min_version: r.min_version,
+                })
+                .collect(),
         }
     }
+}
+
+/// 数字点分段版本比较（`1.2.3`；缺段补 0；含非数字段 → None）。
+/// 供升级判定（新>旧）与依赖满足判定（运行 ≥ min）共用同一口径。
+pub fn compare_versions(a: &str, b: &str) -> Option<std::cmp::Ordering> {
+    fn segments(v: &str) -> Option<Vec<u64>> {
+        if v.is_empty() {
+            return None;
+        }
+        v.split('.')
+            .map(|seg| seg.parse::<u64>().ok())
+            .collect::<Option<Vec<_>>>()
+    }
+    let (a, b) = (segments(a)?, segments(b)?);
+    let len = a.len().max(b.len());
+    let mut order = std::cmp::Ordering::Equal;
+    for i in 0..len {
+        let (x, y) = (
+            a.get(i).copied().unwrap_or(0),
+            b.get(i).copied().unwrap_or(0),
+        );
+        order = order.then(x.cmp(&y));
+        if order != std::cmp::Ordering::Equal {
+            break;
+        }
+    }
+    Some(order)
+}
+
+/// 版本文本是否可参与比较（全数字点分段；空串拒绝）。
+fn valid_version(v: &str) -> bool {
+    compare_versions(v, "0").is_some()
+}
+
+/// `version >= min`（数字点分段；任一侧不可比较 = false）。
+pub fn version_at_least(version: &str, min: &str) -> bool {
+    compare_versions(version, min) != Some(std::cmp::Ordering::Less)
 }
 
 fn hot_str(h: wit::Hot) -> &'static str {
@@ -212,6 +267,40 @@ pub fn validate_manifest(m: &ManifestDto) -> Result<()> {
     }
     if m.title.is_empty() {
         bail!("manifest.title 不能为空（管理台清单展示需要）");
+    }
+    // 版本可比较性：manifest.version 与 requires[].min-version 都必须数字点分段
+    //（升级判定与依赖判定共用 compare_versions；写坏版本会在装载期暴露而非激活期才炸）
+    if !valid_version(&m.version) {
+        bail!(
+            "manifest.version 非法：{:?}（应为数字点分段，如 1.2.3）",
+            m.version
+        );
+    }
+    let mut seen_requires = std::collections::HashSet::new();
+    for r in &m.requires {
+        if r.id.is_empty()
+            || !r.id.split('.').all(|seg| {
+                !seg.is_empty()
+                    && seg.chars().all(|c| {
+                        c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_'
+                    })
+            })
+        {
+            bail!("manifest.requires[].id 非法：{:?}", r.id);
+        }
+        if r.id == m.id {
+            bail!("manifest.requires 自引用：{} 不能依赖自身", r.id);
+        }
+        if !seen_requires.insert(r.id.clone()) {
+            bail!("manifest.requires 重复依赖：{}", r.id);
+        }
+        if !valid_version(&r.min_version) {
+            bail!(
+                "manifest.requires[{}].min-version 非法：{:?}（数字点分段）",
+                r.id,
+                r.min_version
+            );
+        }
     }
     for p in &m.implements {
         if p.is_empty() || !p.contains('.') {

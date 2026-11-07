@@ -13,22 +13,17 @@
 //!     .build()?;
 //! ```
 
+use crate::API_VERSION;
 use crate::error::{Error, Result};
 use crate::xiaozhi::plugin::types as wit;
-use crate::API_VERSION;
 
 // ============================================================
 // manifest
 // ============================================================
 
 /// 已知权限名（与宿主 `effects::Permissions::parse` 同源；漂移双侧同步改）。
-const KNOWN_BARE_PERMISSIONS: [&str; 5] = [
-    "kv",
-    "speak",
-    "device-frames",
-    "schedule",
-    "lan-socket",
-];
+const KNOWN_BARE_PERMISSIONS: [&str; 5] =
+    ["kv", "speak", "device-frames", "schedule", "lan-socket"];
 /// 已知菜单槽位（与宿主 `contract::validate_registration` 同源）。
 pub const KNOWN_MENU_SLOTS: [&str; 3] = ["nav.main", "config.section", "workflow.node-menu"];
 /// 已知配置字段 kind（同源）。
@@ -67,6 +62,7 @@ pub struct ManifestBuilder {
     permissions: Vec<String>,
     implements: Vec<String>,
     official: bool,
+    requires: Vec<wit::PluginRequirement>,
 }
 
 impl ManifestBuilder {
@@ -88,6 +84,7 @@ impl ManifestBuilder {
             permissions: Vec::new(),
             implements: Vec::new(),
             official: false,
+            requires: Vec::new(),
         })
     }
 
@@ -141,6 +138,40 @@ impl ManifestBuilder {
         self
     }
 
+    /// 声明依赖的其他插件（激活前置：被依赖者须 Active 且版本 ≥ min-version）。
+    /// 与宿主 `contract::validate_manifest` 同源：id 形状、版本数字点分段、
+    /// 重复与自引用在构建期报错。
+    pub fn require(mut self, id: &str, min_version: &str) -> Result<Self> {
+        let id_ok = !id.is_empty()
+            && id.split('.').all(|seg| {
+                !seg.is_empty()
+                    && seg.chars().all(|c| {
+                        c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_'
+                    })
+            });
+        if !id_ok {
+            return Err(Error::Invalid(format!(
+                "依赖 id {id:?} 非法（应为 `<域>.<名>`，段内仅小写字母数字与 -/_）"
+            )));
+        }
+        if id == self.id {
+            return Err(Error::Invalid(format!("依赖 {id:?} 是自身（自引用非法）")));
+        }
+        if self.requires.iter().any(|r| r.id == id) {
+            return Err(Error::Duplicate(format!("依赖 {id:?}")));
+        }
+        if !valid_version(min_version) {
+            return Err(Error::Invalid(format!(
+                "依赖 {id:?} 的 min-version {min_version:?} 非法（数字点分段，如 1.2.3）"
+            )));
+        }
+        self.requires.push(wit::PluginRequirement {
+            id: id.to_string(),
+            min_version: min_version.to_string(),
+        });
+        Ok(self)
+    }
+
     pub fn build(self) -> Result<wit::PluginManifest> {
         if self.api_version.is_empty() {
             return Err(Error::Invalid("api-version 为空".into()));
@@ -154,8 +185,14 @@ impl ManifestBuilder {
             permissions: self.permissions,
             implements: self.implements,
             official: self.official,
+            requires: self.requires,
         })
     }
+}
+
+/// 数字点分段版本可比较性（与宿主 `contract::compare_versions` 同源；非数字段/空串非法）。
+fn valid_version(v: &str) -> bool {
+    !v.is_empty() && v.split('.').all(|seg| seg.parse::<u64>().is_ok())
 }
 
 // ============================================================

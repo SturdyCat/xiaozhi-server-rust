@@ -24,6 +24,9 @@ impl Guest for Component {
             .implements("demo.greeter")
             .expect("扩展点")
             .official(false)
+            // 依赖夹具（生命周期测试）：greeter-user 激活前置 = hello.official Active ≥0.1.0
+            .require("hello.official", "0.1.0")
+            .expect("依赖声明")
             .build()
             .expect("静态构建")
     }

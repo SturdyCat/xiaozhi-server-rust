@@ -16,20 +16,22 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 
-use super::contract::{validate_manifest, validate_registration, ManifestDto, RegistrationDto};
+use super::contract::{ManifestDto, RegistrationDto, validate_manifest, validate_registration};
 use super::effects::{
     self, Effect, HttpFetcher, LanSocketCommand, LanSocketQueue, Permissions, ReqwestFetcher,
 };
 use super::instance::LoadedPlugin;
 use super::kv::KvStore;
+use super::lifecycle::Lifecycle;
 use super::resolver::{FlatWorld, Resolution, ResolutionTable};
-use super::sandbox::{build_engine, classify_trap, EpochTicker, SandboxLimits, TrapKind};
+use super::sandbox::{EpochTicker, SandboxLimits, TrapKind, build_engine, classify_trap};
 
 /// http-get 回灌深度上限（初始事件 + 最多 N 次 `http.responses` 批量续步）。
 /// 防插件「回灌再发请求」自我循环；超限停止回灌、记错误，不判插件死刑。
 const MAX_HTTP_FEEDBACK_DEPTH: usize = 4;
 
-/// 插件运行 phase（enabled 是配置意图，由配置管线持有，不在这）
+/// 插件运行 phase（enabled 是配置意图，由配置管线持有，不在这）。
+/// 只在 lifecycle == Active 的条目上有意义；非 Active 条目统一 [`lifecycle::inactive_phase`]。
 #[derive(Debug, Clone, PartialEq)]
 pub enum Phase {
     /// 已装载并激活
@@ -50,20 +52,22 @@ impl Phase {
     }
 }
 
-struct PluginEntry {
-    manifest: ManifestDto,
-    registration: RegistrationDto,
-    permissions: Permissions,
-    phase: Phase,
-    instance: Option<LoadedPlugin>,
+/// 注册表条目（生命周期字段见 [`Lifecycle`]；phase 仅 Active 态有意义）。
+pub(super) struct PluginEntry {
+    pub(super) manifest: ManifestDto,
+    pub(super) registration: RegistrationDto,
+    pub(super) permissions: Permissions,
+    pub(super) phase: Phase,
+    pub(super) instance: Option<LoadedPlugin>,
+    pub(super) lifecycle: Lifecycle,
 }
 
 /// 宿主：引擎 + 注册表 + kv + 解析表 + http 执行器。
 pub struct WasmHost {
-    engine: wasmtime::Engine,
-    limits: SandboxLimits,
-    entries: Mutex<BTreeMap<String, PluginEntry>>,
-    kv: Arc<KvStore>,
+    pub(super) engine: wasmtime::Engine,
+    pub(super) limits: SandboxLimits,
+    pub(super) entries: Mutex<BTreeMap<String, PluginEntry>>,
+    pub(super) kv: Arc<KvStore>,
     resolver: Mutex<ResolutionTable>,
     fetcher: Arc<dyn HttpFetcher>,
     /// 受限高层 LAN 命令队列；native Tuya runtime 可按批 drain。
@@ -94,16 +98,19 @@ impl WasmHost {
     }
 
     /// 装载并激活：全链路成功才落表（新实例替换旧实例）。
+    /// 生命周期原语 = 直接置 Active（依赖判定由 [`lifecycle`](super::lifecycle)
+    /// 的 `activate_checked` 分层；boot 拓扑序与策略插件测试用本原语）。
     /// `wasm` 为组件二进制；`expected_id` 为装载请求声明的插件 id（须与 manifest 一致）。
     pub fn load(&self, expected_id: &str, wasm: &[u8]) -> Result<()> {
-        let entry = self.build_entry(expected_id, wasm)?;
+        let mut entry = self.build_entry(expected_id, wasm)?;
+        entry.lifecycle = Lifecycle::Active;
         let mut entries = self.entries.lock().expect("entries lock poisoned");
         entries.insert(expected_id.to_string(), entry);
         tracing::info!(plugin = expected_id, "插件装载并激活");
         Ok(())
     }
 
-    fn build_entry(&self, expected_id: &str, wasm: &[u8]) -> Result<PluginEntry> {
+    pub(super) fn build_entry(&self, expected_id: &str, wasm: &[u8]) -> Result<PluginEntry> {
         let mut instance = LoadedPlugin::instantiate(
             &self.engine,
             wasm,
@@ -138,6 +145,7 @@ impl WasmHost {
             permissions,
             phase: Phase::Active,
             instance: Some(instance),
+            lifecycle: Lifecycle::Active,
         })
     }
 
@@ -180,9 +188,9 @@ impl WasmHost {
                 let entry = entries
                     .get_mut(plugin_id)
                     .ok_or_else(|| anyhow::anyhow!("插件 {plugin_id} 未装载"))?;
-                let phase = entry.phase.as_str();
+                let lifecycle = entry.lifecycle.as_str();
                 let Some(instance) = entry.instance.as_mut() else {
-                    anyhow::bail!("插件 {plugin_id} 无运行实例（phase={phase}）");
+                    anyhow::bail!("插件 {plugin_id} 无运行实例（lifecycle={lifecycle}）");
                 };
                 match instance.handle_event(&ev, &pl) {
                     Ok(Ok(wit_effects)) => Ok((entry.permissions.clone(), wit_effects)),
@@ -265,9 +273,9 @@ impl WasmHost {
             if !entry.registration.actions.iter().any(|a| a.id == action_id) {
                 anyhow::bail!("插件 {plugin_id} 未声明动作 {action_id}");
             }
-            let phase = entry.phase.as_str();
+            let lifecycle = entry.lifecycle.as_str();
             let Some(instance) = entry.instance.as_mut() else {
-                anyhow::bail!("插件 {plugin_id} 无运行实例（phase={phase}）");
+                anyhow::bail!("插件 {plugin_id} 无运行实例（lifecycle={lifecycle}）");
             };
             instance.handle_action(action_id, payload)
         };
@@ -328,13 +336,16 @@ impl WasmHost {
             .set_preference(point, plugin_id);
     }
 
-    fn views(&self) -> (ResolutionTable, FlatWorld) {
+    pub(super) fn views(&self) -> (ResolutionTable, FlatWorld) {
         let entries = self.entries.lock().expect("entries lock poisoned");
         let mut world = FlatWorld::default();
         for (id, e) in entries.iter() {
+            // 只有 lifecycle == Active 且运行 phase 健康（Active）的条目参与扩展点解析；
+            // Registered/Staged 条目不提供任何能力（未激活不渲染业务的解析侧镜像）。
+            let live = e.lifecycle == Lifecycle::Active && e.phase == Phase::Active;
             world.insert(
                 id,
-                e.phase == Phase::Active,
+                live,
                 e.manifest.implements.iter().map(String::as_str).collect(),
                 e.manifest.official,
             );
@@ -345,52 +356,6 @@ impl WasmHost {
             .expect("resolver lock poisoned")
             .clone();
         (table, world)
-    }
-
-    /// 管理台/`/api/plugins` 投影（P2 与静态注册表清单合并）。
-    pub fn snapshot_json(&self) -> serde_json::Value {
-        let entries = self.entries.lock().expect("entries lock poisoned");
-        let plugins: Vec<serde_json::Value> = entries
-            .iter()
-            .map(|(id, e)| {
-                serde_json::json!({
-                    "id": id,
-                    "version": e.manifest.version,
-                    "api_version": e.manifest.api_version,
-                    "title": e.manifest.title,
-                    "description": e.manifest.description,
-                    "official": e.manifest.official,
-                    "implements": e.manifest.implements,
-                    "permissions": e.manifest.permissions,
-                    "phase": phase_json(&e.phase),
-                    "registration": {
-                        "menu": e.registration.menu,
-                        "config_fields": e.registration.config_fields,
-                        "actions": e.registration.actions,
-                        // A2UI 透传：仅 Active 插件投影 UI（Failed/Degraded = null，
-                        // 未装载无条目——未注册插件不返回业务 UI）
-                        "ui": ui_projection(e),
-                    },
-                })
-            })
-            .collect();
-        // 扩展点解析投影：对所有已声明的扩展点求值
-        let mut points: Vec<String> = Vec::new();
-        for e in entries.values() {
-            for p in &e.manifest.implements {
-                if !points.contains(p) {
-                    points.push(p.clone());
-                }
-            }
-        }
-        drop(entries);
-        let (table, world) = self.views();
-        let mut ext_map = serde_json::Map::new();
-        for p in &points {
-            ext_map.insert(p.clone(), resolution_json(&table.resolve(p, &world)));
-        }
-        let extensions = serde_json::Value::Object(ext_map);
-        serde_json::json!({ "plugins": plugins, "extensions": extensions })
     }
 
     /// kv 只读访问（调试/测试）
@@ -422,28 +387,30 @@ impl WasmHost {
         probe.manifest().map(|m| m.id)
     }
 
-    /// 已装载插件目录 `(id, 标题)`（workflow designer 的观察者绑定校验/投影源；
-    /// 未编入 feature 时 Engines 侧返回空表）。
+    /// 已装载（Active）插件目录 `(id, 标题)`（workflow designer 的观察者绑定校验/投影源；
+    /// 未编入 feature 时 Engines 侧返回空表）。非 Active 条目不参与观察者绑定。
     pub fn observers(&self) -> Vec<(String, String)> {
         self.entries
             .lock()
             .expect("entries lock poisoned")
             .values()
+            .filter(|e| e.lifecycle == Lifecycle::Active)
             .map(|e| (e.manifest.id.clone(), e.manifest.title.clone()))
             .collect()
     }
 
     /// 单个已注册插件的 JSON UI 描述只读投影（`GET /api/plugins/{id}/ui` 数据源）。
-    /// `None` = 未装载或非 Active（未注册/降级插件不返回业务 UI 的唯一守门点）。
+    /// `None` = 未登记或非 Active（未激活插件不返回业务 UI 的唯一守门点）。
     pub fn plugin_ui_json(&self, plugin_id: &str) -> Option<serde_json::Value> {
         let entries = self.entries.lock().expect("entries lock poisoned");
         let e = entries.get(plugin_id)?;
-        if e.phase != Phase::Active {
+        if e.lifecycle != Lifecycle::Active || e.phase != Phase::Active {
             return None;
         }
         Some(serde_json::json!({
             "id": plugin_id,
             "title": e.manifest.title,
+            "lifecycle": e.lifecycle.as_str(),
             "phase": e.phase.as_str(),
             "ui": super::contract::ui_json_value(e.registration.ui_json.as_deref()),
         }))
@@ -464,9 +431,9 @@ impl WasmHost {
             let entry = entries
                 .get_mut(plugin_id)
                 .ok_or_else(|| anyhow::anyhow!("插件 {plugin_id} 未装载"))?;
-            let phase = entry.phase.as_str();
+            let lifecycle = entry.lifecycle.as_str();
             let Some(instance) = entry.instance.as_mut() else {
-                anyhow::bail!("插件 {plugin_id} 无运行实例（phase={phase}）");
+                anyhow::bail!("插件 {plugin_id} 无运行实例（lifecycle={lifecycle}）");
             };
             match instance.handle_event(event, payload) {
                 Ok(Ok(wit_effects)) => Ok((entry.permissions.clone(), wit_effects)),
@@ -514,41 +481,5 @@ impl WasmHost {
                 tracing::warn!(plugin = %id, "观察者效果执行失败：{e}");
             }
         });
-    }
-}
-
-fn phase_json(p: &Phase) -> serde_json::Value {
-    match p {
-        Phase::Active => serde_json::json!({"state": "active"}),
-        Phase::Failed(e) => serde_json::json!({"state": "failed", "error": e}),
-        Phase::Degraded { kind, detail } => {
-            serde_json::json!({"state": "degraded", "trap": format!("{kind:?}"), "detail": detail})
-        }
-    }
-}
-
-/// registration.ui 的快照投影：仅 Active 插件携带解析后的 UI 描述对象；
-/// 其余 phase 投影 `null`（形状稳定，客户端按 null 与未声明同等处理）。
-fn ui_projection(e: &PluginEntry) -> serde_json::Value {
-    if e.phase == Phase::Active {
-        super::contract::ui_json_value(e.registration.ui_json.as_deref())
-    } else {
-        serde_json::Value::Null
-    }
-}
-
-fn resolution_json(r: &Resolution) -> serde_json::Value {
-    match r {
-        Resolution::Resolved(id) => serde_json::json!({"state": "resolved", "implementation": id}),
-        Resolution::Fallback {
-            official,
-            preferred,
-            reason,
-        } => serde_json::json!({
-            "state": "fallback", "implementation": official, "preferred": preferred, "reason": reason,
-        }),
-        Resolution::Unresolved(reason) => {
-            serde_json::json!({"state": "unresolved", "reason": reason})
-        }
     }
 }

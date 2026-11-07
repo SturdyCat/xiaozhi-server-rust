@@ -44,28 +44,36 @@ fn manifest_rejects_bad_shapes_guest_side() {
         .unwrap_err();
     assert!(matches!(e, xiaozhi_plugin_sdk::Error::Invalid(_)), "{e:?}");
     // http-out 空 host
-    assert!(ManifestBuilder::new("a.b", "t")
-        .expect("ok")
-        .permission("http-out:")
-        .is_err());
+    assert!(
+        ManifestBuilder::new("a.b", "t")
+            .expect("ok")
+            .permission("http-out:")
+            .is_err()
+    );
     // 重复权限
-    assert!(ManifestBuilder::new("a.b", "t")
-        .expect("ok")
-        .permission("kv")
-        .expect("kv")
-        .permission("kv")
-        .is_err());
+    assert!(
+        ManifestBuilder::new("a.b", "t")
+            .expect("ok")
+            .permission("kv")
+            .expect("kv")
+            .permission("kv")
+            .is_err()
+    );
     // 扩展点无点号 + 重复
-    assert!(ManifestBuilder::new("a.b", "t")
-        .expect("ok")
-        .implements("nodot")
-        .is_err());
-    assert!(ManifestBuilder::new("a.b", "t")
-        .expect("ok")
-        .implements("a.b")
-        .expect("ok")
-        .implements("a.b")
-        .is_err());
+    assert!(
+        ManifestBuilder::new("a.b", "t")
+            .expect("ok")
+            .implements("nodot")
+            .is_err()
+    );
+    assert!(
+        ManifestBuilder::new("a.b", "t")
+            .expect("ok")
+            .implements("a.b")
+            .expect("ok")
+            .implements("a.b")
+            .is_err()
+    );
 }
 
 // ============================================================
@@ -97,46 +105,60 @@ fn registration_happy_path() {
 #[test]
 fn registration_rejects_duplicates_and_unknown_shapes() {
     // 未知槽位
-    assert!(RegistrationBuilder::new()
-        .menu_entry("sidebar.secret", "a", "标签", "插件", 1, "settings")
-        .is_err());
+    assert!(
+        RegistrationBuilder::new()
+            .menu_entry("sidebar.secret", "a", "标签", "插件", 1, "settings")
+            .is_err()
+    );
     // 槽内重复 id
     let b = RegistrationBuilder::new()
         .menu_entry("nav.main", "a", "标签", "插件", 1, "settings")
         .expect("first");
-    assert!(b
-        .menu_entry("nav.main", "a", "标签2", "插件", 2, "settings")
-        .is_err());
+    assert!(
+        b.menu_entry("nav.main", "a", "标签2", "插件", 2, "settings")
+            .is_err()
+    );
     // 同 id 不同槽位允许（槽内唯一，不是全局唯一）
-    assert!(RegistrationBuilder::new()
-        .menu_entry("nav.main", "a", "标签", "插件", 1, "settings")
-        .expect("nav")
-        .menu_entry("config.section", "a", "标签", "插件", 1, "settings")
-        .is_ok());
+    assert!(
+        RegistrationBuilder::new()
+            .menu_entry("nav.main", "a", "标签", "插件", 1, "settings")
+            .expect("nav")
+            .menu_entry("config.section", "a", "标签", "插件", 1, "settings")
+            .is_ok()
+    );
     // 空 label
-    assert!(RegistrationBuilder::new()
-        .menu_entry("nav.main", "a", "", "插件", 1, "settings")
-        .is_err());
+    assert!(
+        RegistrationBuilder::new()
+            .menu_entry("nav.main", "a", "", "插件", 1, "settings")
+            .is_err()
+    );
 
     // 字段 key 形状 / 重复 / 非法 kind / 空 enum
-    assert!(RegistrationBuilder::new()
-        .config_field(FieldSpec::str("a.b", "标签").build())
-        .is_err());
+    assert!(
+        RegistrationBuilder::new()
+            .config_field(FieldSpec::str("a.b", "标签").build())
+            .is_err()
+    );
     let b = RegistrationBuilder::new()
         .config_field(FieldSpec::str("k", "标签").build())
         .expect("first");
-    assert!(b
-        .config_field(FieldSpec::str("k", "标签2").build())
-        .is_err());
+    assert!(
+        b.config_field(FieldSpec::str("k", "标签2").build())
+            .is_err()
+    );
     // enum 无值
-    assert!(RegistrationBuilder::new()
-        .config_field(FieldSpec::enum_("unit", "单位", &[]).build())
-        .is_err());
+    assert!(
+        RegistrationBuilder::new()
+            .config_field(FieldSpec::enum_("unit", "单位", &[]).build())
+            .is_err()
+    );
 
     // 动作空 label / 重复 id
-    assert!(RegistrationBuilder::new()
-        .action("x", "", false, "")
-        .is_err());
+    assert!(
+        RegistrationBuilder::new()
+            .action("x", "", false, "")
+            .is_err()
+    );
     let b = RegistrationBuilder::new()
         .action("x", "标题", false, "")
         .expect("first");
@@ -196,4 +218,57 @@ fn fallible_alloc_helpers_roundtrip() {
         fallible::try_push(&mut v, i, "vec 追加").expect("vec 追加");
     }
     assert_eq!(v, (0..10).collect::<Vec<u8>>());
+}
+
+// ============================================================
+// manifest.requires（生命周期依赖声明；与宿主 validate_manifest 同源）
+// ============================================================
+
+#[test]
+fn manifest_require_happy_path_and_rejections() {
+    let m = ManifestBuilder::new("greeter.usermade", "问候")
+        .expect("manifest")
+        .require("hello.official", "0.1.0")
+        .expect("require")
+        .build()
+        .expect("build");
+    assert_eq!(m.requires.len(), 1);
+    assert_eq!(m.requires[0].id, "hello.official");
+    assert_eq!(m.requires[0].min_version, "0.1.0");
+
+    let b = ManifestBuilder::new("greeter.usermade", "问候")
+        .expect("manifest")
+        .require("hello.official", "0.1")
+        .expect("first");
+    // 重复依赖
+    assert!(b.require("hello.official", "0.2").is_err());
+    // 自引用
+    assert!(
+        ManifestBuilder::new("a.plugin", "x")
+            .unwrap()
+            .require("a.plugin", "1.0")
+            .is_err()
+    );
+    // 非法 id 形状 / 非数字版本
+    assert!(
+        ManifestBuilder::new("a.plugin", "x")
+            .unwrap()
+            .require("Bad.Id", "1.0")
+            .is_err()
+    );
+    assert!(
+        ManifestBuilder::new("a.plugin", "x")
+            .unwrap()
+            .require("b.plugin", "abc")
+            .is_err()
+    );
+}
+
+#[test]
+fn manifest_default_has_no_requirements() {
+    let m = ManifestBuilder::new("solo.plugin", "独立")
+        .expect("manifest")
+        .build()
+        .expect("build");
+    assert!(m.requires.is_empty(), "无依赖声明 = 空 vec");
 }

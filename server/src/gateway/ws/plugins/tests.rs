@@ -3,11 +3,13 @@
 
 #![cfg(feature = "wasm-plugins")]
 
+mod lifecycle_tests;
+
 use std::sync::Arc;
 
-use crate::config::store::sqlite::SqliteConfigStore;
-use crate::config::store::ConfigStore;
 use crate::config::Config;
+use crate::config::store::ConfigStore;
+use crate::config::store::sqlite::SqliteConfigStore;
 use crate::runtime::Engines;
 
 struct Server {
@@ -47,12 +49,13 @@ async fn fixture() -> (String, Server, Arc<Engines>) {
 }
 
 /// 文件配置库版本（产物目录 = 库旁 plugins/）：上传/重启重装语义需要真实落盘点。
+/// 配置一律从库读（空库自举默认）——与 main.rs 生产启动同序，重启后
+/// activate/deactivate 固化的 `enabled` 语义才会被生命周期引导看到。
 /// 不预装任何插件——上传测试自建状态。
 async fn fixture_at(db_path: &std::path::Path) -> (String, Server, Arc<Engines>) {
-    let mut cfg = Config::default();
-    cfg.memory.db_path = db_path.with_file_name("memory.db").display().to_string();
     let store = SqliteConfigStore::open(db_path.to_str().unwrap()).unwrap();
-    store.persist(&cfg).unwrap();
+    let mut cfg = store.load().unwrap();
+    cfg.memory.db_path = db_path.with_file_name("memory.db").display().to_string();
     let engines = Engines::new_dev(&cfg, store).unwrap();
     serve(engines).await
 }
@@ -208,18 +211,19 @@ async fn extension_preference_roundtrip_with_reflection() {
 }
 
 // ============================================================
-// 上传即启用（P2b）：验证 → 采用 → 热装载 → 重启重装 → 卸载
+// 生命周期（2026-11-07）：上传→Staged、注册→Registered、激活→Active、
+// 升级/降级判定、卸载别名（deactivate+remove）
 // ============================================================
 
 #[tokio::test]
-async fn upload_validates_activates_and_persists_across_restart() {
+async fn upload_stages_then_register_activate_persists_across_restart() {
     let dir = std::env::temp_dir().join(format!("xz-wasm-up-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
     let db = dir.join("config.db");
     let (base, server, engines) = fixture_at(&db).await;
     let client = reqwest::Client::new();
 
-    // 上传已构建的 weather 组件（服务端零本地构建）：隔离验证全过 → 采用 + 热装载
+    // 上传已构建的 weather 组件（服务端零本地构建）：探测 manifest → 登记 Staged（不装载）
     let resp = client
         .post(format!("{base}/api/plugins/upload"))
         .json(&serde_json::json!({
@@ -229,25 +233,53 @@ async fn upload_validates_activates_and_persists_across_restart() {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 200, "合法产物应被采用");
+    assert_eq!(resp.status(), 200, "合法产物应被登记");
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["activated"], serde_json::json!(true), "{body}");
+    assert_eq!(body["staged"], serde_json::json!(true), "{body}");
+    assert_eq!(body["lifecycle"], serde_json::json!("staged"), "{body}");
+    assert_eq!(body["version"], serde_json::json!("0.1.0"), "{body}");
     assert_eq!(body["persisted"], serde_json::json!(true), "{body}");
-    assert!(
-        body["validation"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|r| r["ok"] == serde_json::json!(true)),
-        "{body}"
-    );
 
-    // 立即提供功能：清单可见 + 扩展点解析 + 动作可调（无任何构建步骤）
+    // Staged 不运行：无扩展点解析、无动作、清单不投影 registration
     let list = get_json(&client, &base, "/api/plugins").await;
+    assert!(
+        list["wasm"]["extensions"].get("skill.weather").is_none(),
+        "Staged 不参与扩展点解析：{list}"
+    );
+    let row = list["wasm"]["plugins"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == "weather.official")
+        .expect("weather row")
+        .clone();
+    assert_eq!(row["lifecycle"], serde_json::json!("staged"));
+    assert!(row["registration"].is_null(), "{row}");
+
+    // 注册 → Registered（仍不运行；激活前置满足 → 激活 → Active）
+    let resp = client
+        .post(format!("{base}/api/plugins/weather.official/register"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let resp = client
+        .post(format!("{base}/api/plugins/weather.official/activate"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "{:?}", resp.text().await.unwrap());
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["lifecycle"], serde_json::json!("active"), "{body}");
     assert_eq!(
-        list["wasm"]["extensions"]["skill.weather"]["implementation"],
+        body["extensions"]["skill.weather"]["implementation"],
         "weather.official"
     );
+    // 激活意图已持久化（enabled=true）
+    let persisted = engines.config_store.load().unwrap();
+    assert!(persisted.plugins.entries["weather.official"].enabled);
+
+    // Active 提供功能：动作可调
     let act = client
         .post(format!(
             "{base}/api/plugins/weather.official/actions/forecast"
@@ -258,21 +290,19 @@ async fn upload_validates_activates_and_persists_across_restart() {
         .unwrap();
     assert_eq!(act.status(), 200);
 
-    // 重启重装：同数据卷重建 engines（旧 host 连同 kv/epoch 线程一起销毁）
+    // 重启：标记恢复 Registered + enabled=true 按引导激活（同数据卷重建 engines）
     drop(server);
     drop(engines);
     let (base2, _server2, engines2) = fixture_at(&db).await;
     let list2 = get_json(&client, &base2, "/api/plugins").await;
-    let ids: Vec<&str> = list2["wasm"]["plugins"]
+    let row2 = list2["wasm"]["plugins"]
         .as_array()
         .unwrap()
         .iter()
-        .map(|p| p["id"].as_str().unwrap())
-        .collect();
-    assert!(
-        ids.contains(&"weather.official"),
-        "重启后应自动重装：{ids:?}"
-    );
+        .find(|p| p["id"] == "weather.official")
+        .expect("重启后应从数据卷恢复");
+    assert_eq!(row2["lifecycle"], serde_json::json!("active"), "{row2}");
+    assert!(!row2["registration"].is_null(), "{row2}");
     assert_eq!(
         engines2
             .wasm
@@ -368,7 +398,7 @@ async fn unload_removes_plugin_and_artifact() {
         .unwrap();
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["unloaded"], serde_json::json!(true), "{body}");
+    assert_eq!(body["removed"], serde_json::json!(true), "{body}");
     assert_eq!(body["artifact_removed"], serde_json::json!(true), "{body}");
     // 注册-回收：kv 命名空间清空、产物文件删除
     assert_eq!(
@@ -397,96 +427,8 @@ async fn unload_removes_plugin_and_artifact() {
 }
 
 // ============================================================
-// P3：raw 直传端点（管理台上传桥通道）+ 配置门
+// P3：raw 直传端点（管理台上传桥通道）+ 平台总闸
 // ============================================================
-
-#[tokio::test]
-async fn raw_upload_activates_component() {
-    let (base, _server, _engines) = fixture().await;
-    let client = reqwest::Client::new();
-    let bytes = fixture_bytes("greeter-user");
-    let resp = client
-        .post(format!("{base}/api/plugins/upload/raw"))
-        .query(&[("id", "greeter.usermade")])
-        .header("content-type", "application/octet-stream")
-        .body(bytes)
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 200);
-    let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["ok"], serde_json::json!(true), "{body}");
-    assert_eq!(body["activated"], serde_json::json!(true));
-    // 热装载生效：清单立即可见
-    let list = get_json(&client, &base, "/api/plugins").await;
-    let found = list["wasm"]["plugins"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|p| p["id"] == "greeter.usermade");
-    assert!(found, "上传后清单应含该插件");
-}
-
-#[tokio::test]
-async fn raw_upload_rejected_for_config_disabled_id() {
-    let mut cfg = Config::default();
-    cfg.memory.db_path = std::env::temp_dir()
-        .join(format!("xz-wasm-gate-{}", uuid::Uuid::new_v4()))
-        .join("data.db")
-        .display()
-        .to_string();
-    cfg.plugins.entries.insert(
-        "hello.official".into(),
-        crate::config::PluginEntryConfig {
-            enabled: false,
-            ..Default::default()
-        },
-    );
-    let store = SqliteConfigStore::open(":memory:").unwrap();
-    store.persist(&cfg).unwrap();
-    let engines = Engines::new_dev(&cfg, store).unwrap();
-    let app = crate::gateway::ws::router(engines.clone());
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base = format!("http://{}", listener.local_addr().unwrap());
-    let _handle = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-
-    let client = reqwest::Client::new();
-    let resp = client
-        .post(format!("{base}/api/plugins/upload/raw"))
-        .query(&[("id", "hello.official")])
-        .header("content-type", "application/octet-stream")
-        .body(fixture_bytes("hello"))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 403, "配置禁用的 id 应拒绝上传");
-    let body: serde_json::Value = resp.json().await.unwrap();
-    assert!(
-        body["error"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("配置禁用"),
-        "{body}"
-    );
-}
-
-#[tokio::test]
-async fn raw_upload_without_id_discovers_manifest_id() {
-    let (base, _server, _engines) = fixture().await;
-    let client = reqwest::Client::new();
-    // id 缺省：服务端从组件 manifest 探测（"选文件即上传"——文件名无关）
-    let resp = client
-        .post(format!("{base}/api/plugins/upload/raw"))
-        .header("content-type", "application/octet-stream")
-        .body(fixture_bytes("greeter-user"))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 200);
-    let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["id"], serde_json::json!("greeter.usermade"), "{body}");
-    assert_eq!(body["activated"], serde_json::json!(true));
-}
 
 // ============================================================
 // A2UI 最小闭环：GET /api/plugins/{id}/ui 只读投影 + 未注册不返回业务 UI

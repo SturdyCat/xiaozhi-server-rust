@@ -35,6 +35,7 @@ impl Guest for Component {
             permissions: vec![],
             implements: vec![],
             official: false,
+            requires: vec![],
         }
     }
 

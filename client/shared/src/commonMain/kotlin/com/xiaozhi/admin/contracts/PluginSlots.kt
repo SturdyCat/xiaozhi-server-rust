@@ -43,10 +43,15 @@ data class PluginSlotSnapshot(
                     title = obj.str("title") ?: id,
                     description = obj.str("description") ?: "",
                     version = obj.str("version") ?: "",
+                    apiVersion = obj.str("api_version") ?: "",
                     official = obj.bool("official"),
                     phase = obj["phase"]?.jsonObject?.str("state") ?: "unknown",
+                    lifecycle = obj.str("lifecycle"),
                     implements = obj.strings("implements"),
                     permissions = obj.strings("permissions"),
+                    requires = parseRequires(obj["requires"]?.jsonArray),
+                    dependents = obj.strings("dependents"),
+                    menu = parseMenu(registration?.get("menu")?.jsonArray),
                     actions = parseActions(registration?.get("actions")?.jsonArray),
                     configFields = parseFields(registration?.get("config_fields")?.jsonArray),
                 )
@@ -98,6 +103,39 @@ data class PluginSlotSnapshot(
             }.filter { it.isNotBlank() }
         }
 
+        private fun parseRequires(array: kotlinx.serialization.json.JsonArray?): List<PluginRequirement> {
+            if (array == null) return emptyList()
+            return array.mapNotNull { el ->
+                val row = (el as? JsonObject) ?: return@mapNotNull null
+                row.str("id")?.takeIf { it.isNotBlank() }?.let { id ->
+                    PluginRequirement(
+                        id = id,
+                        minVersion = row.str("min_version") ?: "",
+                        satisfied = row.bool("satisfied"),
+                        // JSON null / 缺键 → null = 依赖插件未激活或未装载（fail-closed 展示口径）
+                        activeVersion = row.str("active_version"),
+                    )
+                }
+            }
+        }
+
+        private fun parseMenu(array: kotlinx.serialization.json.JsonArray?): List<PluginMenuItem> {
+            if (array == null) return emptyList()
+            return array.mapNotNull { el ->
+                val row = (el as? JsonObject) ?: return@mapNotNull null
+                row.str("id")?.takeIf { it.isNotBlank() }?.let { id ->
+                    PluginMenuItem(
+                        slot = row.str("slot") ?: "",
+                        id = id,
+                        label = row.str("label") ?: id,
+                        group = row.str("group") ?: "",
+                        order = row.int("order") ?: 0,
+                        icon = row.str("icon") ?: "settings",
+                    )
+                }
+            }
+        }
+
         private fun parseActions(array: kotlinx.serialization.json.JsonArray?): List<PluginAction> {
             if (array == null) return emptyList()
             return array.mapNotNull { el ->
@@ -137,12 +175,72 @@ data class PluginSlotPlugin(
     val title: String,
     val description: String,
     val version: String,
+    /** 宿主契约版本（如 "0.1"）；旧服务端可能不下发，空串 = 未知。 */
+    val apiVersion: String,
     val official: Boolean,
+    /** `active` / `degraded` / `failed`（服务端 `phase`，只在 active 生命周期有意义）。 */
     val phase: String,
+    /**
+     * 生命周期：`staged`（待注册）| `registered`（已注册·禁用）| `active`（运行中）。
+     * **null = 旧服务端未投影**：语义等价 active（fail-open 兼容），UI 走旧 unload 通道；
+     * 新服务端只对 Active 插件投影 registration（menu/fields/actions），其余生命周期为 null。
+     */
+    val lifecycle: String?,
     val implements: List<String>,
     val permissions: List<String>,
+    /** 声明的依赖插件及其满足状态（`requires[]`；缺键 = 无声明）。 */
+    val requires: List<PluginRequirement>,
+    /** 激活中依赖本插件的其他插件 id（`dependents[]`；禁用前置条件）。 */
+    val dependents: List<String>,
+    /** 注册的菜单项全量（含 nav.main 之外的槽位；仅 Active 投影）。 */
+    val menu: List<PluginMenuItem>,
     val actions: List<PluginAction>,
     val configFields: List<PluginConfigField>,
+) {
+    /** 旧服务端（lifecycle 缺键）与显式 active 都按「可运行」处理。 */
+    val isActive: Boolean get() = lifecycle == null || lifecycle == "active"
+
+    /** 激活前置：registered 且全部依赖满足。 */
+    val canActivate: Boolean get() = lifecycle == "registered" && missingRequirements.isEmpty()
+
+    /** 禁用前置：active 且没有被其他激活插件依赖。 */
+    val canDeactivate: Boolean get() = lifecycle == "active" && dependents.isEmpty()
+
+    /** 移除前置：仅非运行（staged / registered）插件可移除。 */
+    val canRemove: Boolean get() = lifecycle != null && lifecycle != "active"
+
+    /** 未满足的依赖（激活按钮禁用依据与缺失原因清单）。 */
+    val missingRequirements: List<PluginRequirement> get() = requires.filter { !it.satisfied }
+
+    /** 状态徽标 / 详情摘要的短文案。 */
+    val lifecycleLabel: String get() = when (lifecycle) {
+        "staged" -> "待注册"
+        "registered" -> "已注册·禁用"
+        "active", null -> "运行中"
+        else -> lifecycle
+    }
+}
+
+/** 一条依赖声明（`requires[]` 一行）：满足状态由服务端按当前注册表求值下发。 */
+data class PluginRequirement(
+    val id: String,
+    val minVersion: String,
+    val satisfied: Boolean,
+    /** 依赖插件当前激活版本；null = 未激活 / 未装载。 */
+    val activeVersion: String?,
+) {
+    /** 人读的当前状态（详情弹窗缺失原因用）。 */
+    val currentState: String get() = activeVersion ?: "未激活/未装载"
+}
+
+/** 注册菜单项全量（`menu[]` 一行；详情弹窗「功能入口」用）。 */
+data class PluginMenuItem(
+    val slot: String,
+    val id: String,
+    val label: String,
+    val group: String,
+    val order: Int,
+    val icon: String,
 )
 
 data class PluginAction(val id: String, val label: String, val danger: Boolean, val help: String)
@@ -332,4 +430,93 @@ object DevicePluginNav {
         idOf: (T) -> String,
         state: DevicePluginNavState,
     ): List<T> = items.filter { item -> showEntry(state, idOf(item)) }
+}
+
+// ============================================================
+// 插件详情模型（详情弹窗的纯组装；零 Kuikly，adminCoreTests 直驱）
+// ============================================================
+
+/** 详情弹窗的一节（标题 + 行集）；行空的节由 [PluginDetailModel.from] 过滤。 */
+data class PluginDetailSection(val title: String, val lines: List<String>)
+
+/**
+ * 插件详情弹窗的内容模型：manifest 介绍 / 依赖与缺失原因 / Active 时另附
+ * registration 摘要（功能入口 = menu、配置项 = config_fields、动作用法 = actions.help）
+ * 与动态页面标题（`registration.ui`，由调用方从 [com.xiaozhi.admin.contracts.PluginUiDocument]
+ * 预提取，保持本文件与 PluginUi.kt 单向依赖）。纯数据组装，可在 adminCoreTests 回归。
+ */
+data class PluginDetailModel(
+    val title: String,
+    /** 生命周期一句话（含下一步指引）。 */
+    val lifecycleLine: String,
+    val sections: List<PluginDetailSection>,
+) {
+    companion object {
+        fun from(plugin: PluginSlotPlugin, uiPages: List<String>): PluginDetailModel {
+            val sections = mutableListOf<PluginDetailSection>()
+            val intro = buildList {
+                add(
+                    "${plugin.id} · v${plugin.version}" +
+                        plugin.apiVersion.takeIf { it.isNotBlank() }?.let { "（宿主契约 v$it）" }.orEmpty(),
+                )
+                if (plugin.description.isNotBlank()) add(plugin.description)
+                if (plugin.implements.isNotEmpty()) add("扩展点：${plugin.implements.joinToString("、")}")
+                if (plugin.permissions.isNotEmpty()) add("权限：${plugin.permissions.joinToString("、")}")
+            }
+            sections += PluginDetailSection("功能介绍", intro)
+            if (plugin.requires.isNotEmpty() || plugin.dependents.isNotEmpty()) {
+                val lines = plugin.requires.map { r ->
+                    "${r.id} ≥ ${r.minVersion} — " +
+                        if (r.satisfied) "已满足（当前 ${r.currentState}）" else "未满足（当前 ${r.currentState}）"
+                } + plugin.dependents.takeIf { it.isNotEmpty() }?.let { deps ->
+                    listOf("被依赖：${deps.joinToString("、")}（停用本插件前先停用依赖者）")
+                }.orEmpty()
+                sections += PluginDetailSection("依赖", lines)
+            }
+            if (plugin.isActive) {
+                if (plugin.menu.isNotEmpty()) {
+                    sections += PluginDetailSection(
+                        "功能入口",
+                        plugin.menu.map { "${it.label}（${it.slot.ifEmpty { "菜单" }}）" },
+                    )
+                }
+                if (plugin.configFields.isNotEmpty()) {
+                    sections += PluginDetailSection(
+                        "配置项",
+                        plugin.configFields.map { f ->
+                            "${f.label}（${f.kind}${if (f.secret) " · 密钥" else ""}）" +
+                                f.help.takeIf { it.isNotBlank() }?.let { "：$it" }.orEmpty()
+                        },
+                    )
+                }
+                if (plugin.actions.isNotEmpty()) {
+                    sections += PluginDetailSection(
+                        "动作与用法",
+                        plugin.actions.map { a ->
+                            a.label + a.help.takeIf { it.isNotBlank() }?.let { "：$it" }.orEmpty()
+                        },
+                    )
+                }
+                if (uiPages.isNotEmpty()) {
+                    sections += PluginDetailSection("动态页面", uiPages)
+                }
+            } else {
+                sections += PluginDetailSection("注册状态", listOf("尚未激活：功能入口 / 配置项 / 动作在激活后由插件注册投影下发。"))
+            }
+            return PluginDetailModel(
+                title = plugin.title,
+                lifecycleLine = lifecycleLineOf(plugin),
+                sections = sections.filter { it.lines.isNotEmpty() },
+            )
+        }
+
+        private fun lifecycleLineOf(plugin: PluginSlotPlugin): String = when (plugin.lifecycle) {
+            "staged" -> "待注册：上传已完成，注册并激活后才运行业务。"
+            "registered" -> "已注册·禁用：" +
+                if (plugin.missingRequirements.isEmpty()) "满足依赖后激活即可运行。" else "存在未满足依赖，激活不可用。"
+            "active" -> if (plugin.phase == "active") "运行中。" else "运行中（phase：${plugin.phase}）。"
+            null -> "运行中（旧服务端投影，无生命周期管理）。"
+            else -> "状态：${plugin.lifecycle}。"
+        }
+    }
 }

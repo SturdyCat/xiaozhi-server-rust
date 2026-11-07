@@ -420,10 +420,18 @@ private fun AdminSectionHost(page: AdminPage, viewport: AdminViewport) {
         else -> {
             val pluginId = PluginSlots.pluginIdFromNavigation(page.selectedSection)
             val plugin = pluginId?.let { page.plugins.wasmSlots?.plugin(it) }
-            if (plugin != null) {
-                PluginRuntimePage(plugin, page.plugins.pluginUiDocs, page.pluginManage, page.toast)
-            } else {
-                Box(modifier = Modifier.fillMaxSize()) {
+            when {
+                // 仅 active 生命周期可进运行页：staged/registered 无 registration 投影，
+                // 导航项本就不出现（menu 仅 Active 下发）；禁用瞬间停留时回插件管理页。
+                plugin != null && plugin.isActive -> PluginRuntimePage(
+                    plugin, page.plugins.pluginUiDocs, page.pluginManage, page.toast,
+                )
+                plugin != null -> PluginsManagePage(
+                    meta = page.plugins,
+                    manage = page.pluginManage,
+                    toast = page.toast,
+                )
+                else -> Box(modifier = Modifier.fillMaxSize()) {
                     SectionPlaceholder(
                         title = AdminNav.label(page.selectedSection),
                         detail = sectionDetail(page.selectedSection),
