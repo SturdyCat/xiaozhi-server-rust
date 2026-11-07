@@ -268,9 +268,17 @@ object DevicePluginNav {
     private val PURE_BASE_SECTION_IDS = setOf("overview", "server")
 
     /**
-     * 由设备插件驱动的配置 section → 插件 id。
-     * 常规构建保留配置入口以便重新启用；pure-base 直接由 [pureBase] 总门控收口。
+     * 由业务插件驱动的静态 section。底座不为这些 id 提供任何 UI；未知/未加载状态
+     * 也必须先隐藏，不能以“兼容旧服务端”为由把尚未注册的业务误显示出来。
+     * 注意口径：`nlu`（模型唯一识别链）、`audio`（下行音频参数）、`mcp`（设备工具注册表）
+     * 属底座/系统级契约，不算业务插件；pure-base 下它们由 [PURE_BASE_SECTION_IDS] 收口。
      */
+    private val BUSINESS_SECTION_IDS = setOf(
+        "presets", "command", "wakeup", "soul", "memory", "aiui",
+        "echomuse", "tuya", "ota",
+    )
+
+    /** 由设备插件驱动的配置 section → 插件 id（兼容旧配置路径）。 */
     val SECTION_PLUGIN_IDS: Map<String, String> = mapOf(
         "echomuse" to "echomuse",
         "tuya" to "tuya",
@@ -283,25 +291,32 @@ object DevicePluginNav {
     fun isEmptyShell(state: DevicePluginNavState): Boolean =
         !isUnknown(state) && state.declaredIds.isEmpty()
 
-    /** 侧栏「设备管理」：空壳或全部未注册时隐藏；未知态保持原有常显行为。 */
+    /** 侧栏「设备管理」：只有服务端明确声明并至少注册一个设备插件才显示。 */
     fun showDeviceHub(state: DevicePluginNavState): Boolean =
-        if (state.pureBase) false else if (isUnknown(state)) true else state.registeredIds.isNotEmpty()
+        !state.pureBase && !isUnknown(state) && state.registeredIds.isNotEmpty()
 
     /** 设备插件的**运行分区**（设备管理页里的设备卡 / 齿轮配置块）：按注册态逐个判定。 */
     fun showPluginPartition(state: DevicePluginNavState, pluginId: String): Boolean =
-        if (state.pureBase) false else if (isUnknown(state)) true else pluginId in state.registeredIds
+        !state.pureBase && !isUnknown(state) && pluginId in state.registeredIds
 
     /**
      * 配置 section 是否显示。
      *
-     * 常规构建里即使插件被关闭（`registered=false`）也保留配置段——那是重新开启插件的唯一
-     * 入口；纯底座则只保留部署级配置，业务 section 必须由动态 WASM 菜单替代。
+     * 业务 section（含设备插件 section）只在服务端**明确证明**其存在时出现：
+     * pure-base 只保留部署级配置；明确空壳与未知态一律隐藏业务；设备 section 还要求
+     * 对应插件 `registered=true`。「未注册就没有对应业务 UI」是本门控的唯一语义。
      */
     fun showSection(state: DevicePluginNavState, sectionId: String): Boolean {
+        // 底座只包含核心配置；任何业务 section 都必须由动态插件菜单承载。
         if (state.pureBase) return sectionId in PURE_BASE_SECTION_IDS
-        if (SECTION_PLUGIN_IDS[sectionId] == null) return true
-        if (isUnknown(state) || !isEmptyShell(state)) return true
-        return false
+        // 明确空壳没有任何业务插件；业务 section 不能因 legacy 编译期常量重新出现。
+        if (isEmptyShell(state) && sectionId in BUSINESS_SECTION_IDS) return false
+        // 首次加载、旧服务端或回包异常时，宁可隐藏业务，也不能把编译期业务误当成已安装插件。
+        if (isUnknown(state)) return sectionId !in BUSINESS_SECTION_IDS
+        // 设备业务 section 也必须有对应的注册 id；仅存在配置键或产物文件不算注册。
+        SECTION_PLUGIN_IDS[sectionId]?.let { pluginId -> return pluginId in state.registeredIds }
+        // legacy/full 构建的核心非设备 section 由其 feature 自身决定；pure-base 已在上面收口。
+        return true
     }
 
     /** 单个静态菜单项（导航 id 或配置 section id）是否可见。 */

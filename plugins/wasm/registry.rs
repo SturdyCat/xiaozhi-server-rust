@@ -367,6 +367,9 @@ impl WasmHost {
                         "menu": e.registration.menu,
                         "config_fields": e.registration.config_fields,
                         "actions": e.registration.actions,
+                        // A2UI 透传：仅 Active 插件投影 UI（Failed/Degraded = null，
+                        // 未装载无条目——未注册插件不返回业务 UI）
+                        "ui": ui_projection(e),
                     },
                 })
             })
@@ -428,6 +431,22 @@ impl WasmHost {
             .values()
             .map(|e| (e.manifest.id.clone(), e.manifest.title.clone()))
             .collect()
+    }
+
+    /// 单个已注册插件的 JSON UI 描述只读投影（`GET /api/plugins/{id}/ui` 数据源）。
+    /// `None` = 未装载或非 Active（未注册/降级插件不返回业务 UI 的唯一守门点）。
+    pub fn plugin_ui_json(&self, plugin_id: &str) -> Option<serde_json::Value> {
+        let entries = self.entries.lock().expect("entries lock poisoned");
+        let e = entries.get(plugin_id)?;
+        if e.phase != Phase::Active {
+            return None;
+        }
+        Some(serde_json::json!({
+            "id": plugin_id,
+            "title": e.manifest.title,
+            "phase": e.phase.as_str(),
+            "ui": super::contract::ui_json_value(e.registration.ui_json.as_deref()),
+        }))
     }
 
     /// 单步派发（**不执行**效果、不回灌）：调插件 → 权限门 → 返回待执行效果。
@@ -505,6 +524,16 @@ fn phase_json(p: &Phase) -> serde_json::Value {
         Phase::Degraded { kind, detail } => {
             serde_json::json!({"state": "degraded", "trap": format!("{kind:?}"), "detail": detail})
         }
+    }
+}
+
+/// registration.ui 的快照投影：仅 Active 插件携带解析后的 UI 描述对象；
+/// 其余 phase 投影 `null`（形状稳定，客户端按 null 与未声明同等处理）。
+fn ui_projection(e: &PluginEntry) -> serde_json::Value {
+    if e.phase == Phase::Active {
+        super::contract::ui_json_value(e.registration.ui_json.as_deref())
+    } else {
+        serde_json::Value::Null
     }
 }
 

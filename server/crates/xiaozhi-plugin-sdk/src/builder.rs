@@ -162,12 +162,13 @@ impl ManifestBuilder {
 // registration
 // ============================================================
 
-/// registration 构建器（菜单/配置字段/动作；重复与形状错误在 push 时报）。
+/// registration 构建器（菜单/配置字段/动作/UI 描述；重复与形状错误在 push 时报）。
 #[derive(Default)]
 pub struct RegistrationBuilder {
     menu: Vec<wit::MenuEntry>,
     config_fields: Vec<wit::FieldSchema>,
     actions: Vec<wit::ActionDesc>,
+    ui_json: Option<String>,
 }
 
 impl RegistrationBuilder {
@@ -260,9 +261,33 @@ impl RegistrationBuilder {
             menu: self.menu,
             config_fields: self.config_fields,
             actions: self.actions,
+            ui_json: self.ui_json,
         }
     }
+
+    /// 声明通用 JSON UI 描述（A2UI 最小闭环）：整份 UI 描述文本——组件树 +
+    /// actions/config bindings 等在 JSON 内自组织；宿主只校验并透传投影。
+    /// 校验规则与宿主 `contract::validate_ui_json` 同源（漂移双侧同步改）：
+    /// 必须是单个 JSON 对象且不超大小上限，构建期 fail fast。
+    pub fn ui_json(mut self, json: &str) -> Result<Self> {
+        if json.len() > MAX_UI_JSON_BYTES {
+            return Err(Error::Invalid(format!(
+                "UI 描述 {} 字节超上限 {MAX_UI_JSON_BYTES}",
+                json.len()
+            )));
+        }
+        let parsed: serde_json::Value = serde_json::from_str(json)
+            .map_err(|e| Error::Invalid(format!("UI 描述不是合法 JSON：{e}")))?;
+        if !parsed.is_object() {
+            return Err(Error::Invalid("UI 描述顶层必须是 JSON 对象".into()));
+        }
+        self.ui_json = Some(json.to_string());
+        Ok(self)
+    }
 }
+
+/// UI 描述大小上限（与宿主 `contract::MAX_UI_JSON_BYTES` 同源；漂移双侧同步改）。
+const MAX_UI_JSON_BYTES: usize = 256 * 1024;
 
 // ============================================================
 // 配置字段

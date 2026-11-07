@@ -421,7 +421,7 @@ private fun AdminSectionHost(page: AdminPage, viewport: AdminViewport) {
             val pluginId = PluginSlots.pluginIdFromNavigation(page.selectedSection)
             val plugin = pluginId?.let { page.plugins.wasmSlots?.plugin(it) }
             if (plugin != null) {
-                PluginRuntimePage(plugin, page.pluginManage, page.toast)
+                PluginRuntimePage(plugin, page.plugins.pluginUiDocs, page.pluginManage, page.toast)
             } else {
                 Box(modifier = Modifier.fillMaxSize()) {
                     SectionPlaceholder(

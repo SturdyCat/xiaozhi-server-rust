@@ -27,6 +27,9 @@ kotlin {
             kotlin.include("com/xiaozhi/admin/contracts/AdminNav.kt")
             // P2e：wasm 插件槽位投影 + 导航合并（零 Kuikly 依赖，PluginSlotsModelTest 回归）
             kotlin.include("com/xiaozhi/admin/contracts/PluginSlots.kt")
+            // A2UI 最小闭环：插件 registration.ui 动态文档解析模型（零 Kuikly 依赖，
+            // PluginUiModelTest 回归 fail-closed 规则；引用 contracts/PluginSlots.kt 的声明类型）
+            kotlin.include("com/xiaozhi/admin/contracts/PluginUi.kt")
             kotlin.include("com/xiaozhi/admin/EchoMuseWakeWord.kt")
             kotlin.include("com/xiaozhi/admin/FilesModel.kt")
             // 时间展示口径（formatEpochSeconds 的格式契约）：依赖 kotlinx-datetime，

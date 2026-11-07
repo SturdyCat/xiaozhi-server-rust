@@ -65,7 +65,7 @@ class PluginsManageState(private val meta: PluginMetaState) {
     fun unload(ctx: Pager, pluginId: String, onDone: (ok: Boolean, msg: String) -> Unit) {
         if (busy.isNotEmpty()) return
         busy = "unload:$pluginId"
-        postJson(ctx, "$base/api/plugins/$pluginId/unload", JSONObject()) { ok, _, reason ->
+        postJson(ctx, "$base/api/plugins/$pluginId/unload", JSONObject()) { ok, _, _, reason ->
             busy = ""
             val msg = reason.ifEmpty { if (ok) "已卸载 $pluginId" else "卸载失败" }
             resultText = msg
@@ -74,20 +74,35 @@ class PluginsManageState(private val meta: PluginMetaState) {
         }
     }
 
-    /** 执行插件声明过的管理动作（payload 固定 `{}`；带参动作随插件面迭代放开）。 */
+    /** 执行插件声明过的管理动作（payload 固定 `{}`；清单页/回退页用，现状不变）。 */
     fun runAction(
         ctx: Pager,
         pluginId: String,
         actionId: String,
         onDone: (ok: Boolean, msg: String) -> Unit,
     ) {
+        runAction(ctx, pluginId, actionId, JSONObject()) { ok, msg, _ -> onDone(ok, msg) }
+    }
+
+    /**
+     * 执行插件声明过的管理动作（payload 由调用方组装：动态 UI 页面含 input 时传该页
+     * 全部输入值对象，无输入页传空对象）；[onDone] 的 `rawBody` 是服务端回包原文
+     * （动态 UI 的 `result` 节点展示用）。
+     */
+    fun runAction(
+        ctx: Pager,
+        pluginId: String,
+        actionId: String,
+        payload: JSONObject,
+        onDone: (ok: Boolean, msg: String, rawBody: String) -> Unit,
+    ) {
         if (busy.isNotEmpty()) return
         busy = "$pluginId:$actionId"
-        postJson(ctx, "$base/api/plugins/$pluginId/actions/$actionId", JSONObject()) { ok, _, reason ->
+        postJson(ctx, "$base/api/plugins/$pluginId/actions/$actionId", payload) { ok, _, data, reason ->
             busy = ""
             val msg = reason.ifEmpty { if (ok) "已执行 $actionId" else "动作失败" }
             resultText = msg
-            onDone(ok, msg)
+            onDone(ok, msg, data.toString())
         }
     }
 
@@ -96,7 +111,7 @@ class PluginsManageState(private val meta: PluginMetaState) {
         ctx: Pager,
         url: String,
         body: JSONObject,
-        onDone: (ok: Boolean, code: Int?, reason: String) -> Unit,
+        onDone: (ok: Boolean, code: Int?, data: JSONObject, reason: String) -> Unit,
     ) {
         val s = ++seq
         val (b, path) = splitAdminUrl(url)
@@ -105,7 +120,7 @@ class PluginsManageState(private val meta: PluginMetaState) {
             val reason = data.text("error").takeIf { it.isNotEmpty() }
                 ?: data.text("message").takeIf { it.isNotEmpty() }
                 ?: message
-            onDone(ok, status.takeIf { it > 0 }, reason)
+            onDone(ok, status.takeIf { it > 0 }, data, reason)
         }
     }
 

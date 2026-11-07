@@ -144,6 +144,40 @@ fn registration_rejects_duplicates_and_unknown_shapes() {
 }
 
 // ============================================================
+// JSON UI 描述（A2UI 最小闭环；规则与宿主 validate_ui_json 同源）
+// ============================================================
+
+#[test]
+fn ui_json_happy_path_carried_into_registration() {
+    let descriptor = r#"{"a2ui":"0.1","pages":[{"id":"cfg","tree":{"type":"form"}}]}"#;
+    let reg = RegistrationBuilder::new()
+        .action("greet", "打招呼", false, "问候")
+        .expect("action")
+        .ui_json(descriptor)
+        .expect("合法 UI 描述")
+        .build();
+    assert_eq!(reg.ui_json.as_deref(), Some(descriptor));
+}
+
+#[test]
+fn ui_json_rejects_bad_shapes_guest_side() {
+    // 非法 JSON
+    let e = RegistrationBuilder::new()
+        .ui_json("not json")
+        .err()
+        .expect("应拒绝");
+    assert!(matches!(e, xiaozhi_plugin_sdk::Error::Invalid(_)), "{e:?}");
+    // 顶层非对象
+    assert!(RegistrationBuilder::new().ui_json("[]").is_err());
+    assert!(RegistrationBuilder::new().ui_json("null").is_err());
+    // 超大小上限
+    let big = format!(r#"{{"pad":"{}"}}"#, " ".repeat(256 * 1024));
+    assert!(RegistrationBuilder::new().ui_json(&big).is_err());
+    // 未声明是合法默认（menu/fields 兼容面不受影响）
+    assert_eq!(RegistrationBuilder::new().build().ui_json, None);
+}
+
+// ============================================================
 // 可失败分配
 // ============================================================
 

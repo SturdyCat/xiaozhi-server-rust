@@ -67,12 +67,21 @@ pub struct ActionDescDto {
     pub help: String,
 }
 
+/// 插件声明的 JSON UI 页面（A2UI 最小闭环）。宿主只透传：`schema_json` 校验为
+/// 单个 JSON 对象后按 `schema` 键原样投影，不解释、不渲染。
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct RegistrationDto {
     pub menu: Vec<MenuEntryDto>,
     pub config_fields: Vec<FieldSchemaDto>,
     pub actions: Vec<ActionDescDto>,
+    /// 通用 JSON UI 描述（A2UI 最小闭环）：`Some(文本)` 必须是单个 JSON 对象；
+    /// 宿主只校验并透传投影（组件树 / actions / config bindings 由插件自组织）。
+    pub ui_json: Option<String>,
 }
+
+/// UI 描述大小上限（与 guest SDK builder 同源；漂移双侧同步改）：
+/// 防 manifest 膨胀拖累清单投影。
+pub const MAX_UI_JSON_BYTES: usize = 256 * 1024;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct TestResultDto {
@@ -148,6 +157,7 @@ impl From<wit::Registration> for RegistrationDto {
                     help: a.help,
                 })
                 .collect(),
+            ui_json: r.ui_json,
         }
     }
 }
@@ -269,5 +279,46 @@ pub fn validate_registration(reg: &RegistrationDto) -> Result<()> {
             bail!("动作 id 重复：{:?}", a.id);
         }
     }
+    validate_ui_json(reg.ui_json.as_deref())
+}
+
+/// UI 描述校验（A2UI 透传管道的守门）：可选字段；`Some` 时必须是
+/// 「单个 JSON 对象」文本且不超大小上限。规则与 guest SDK
+/// `RegistrationBuilder::ui_json` 同源（漂移双侧同步改）。
+fn validate_ui_json(ui_json: Option<&str>) -> Result<()> {
+    let Some(text) = ui_json else {
+        return Ok(());
+    };
+    if text.len() > MAX_UI_JSON_BYTES {
+        bail!("UI 描述超上限：{} > {MAX_UI_JSON_BYTES} 字节", text.len());
+    }
+    let parsed: serde_json::Value =
+        serde_json::from_str(text).map_err(|e| anyhow!("UI 描述不是合法 JSON：{e}"))?;
+    if !parsed.is_object() {
+        bail!(
+            "UI 描述顶层必须是 JSON 对象（得到 {}）",
+            json_type_name(&parsed)
+        );
+    }
     Ok(())
+}
+
+fn json_type_name(v: &serde_json::Value) -> &'static str {
+    match v {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "bool",
+        serde_json::Value::Number(_) => "number",
+        serde_json::Value::String(_) => "string",
+        serde_json::Value::Array(_) => "array",
+        serde_json::Value::Object(_) => "object",
+    }
+}
+
+/// UI 描述的只读投影（`/api/plugins` registration.ui 与
+/// `GET /api/plugins/{id}/ui` 共用同一出口）：文本解析为 JSON 对象；
+/// 未声明 → `null`（装载期已校验，此处只为投影兜底）。
+pub fn ui_json_value(ui_json: Option<&str>) -> serde_json::Value {
+    ui_json
+        .and_then(|text| serde_json::from_str(text).ok())
+        .unwrap_or(serde_json::Value::Null)
 }

@@ -16,6 +16,9 @@ publish = false
 
 [dependencies]
 wit-bindgen = "0.63"
+# UI 页面 schema 的 guest 侧校验（与宿主 contract::validate_ui_pages 同源：
+# 单个 JSON 对象 + 大小上限，构建期 fail fast）。wasm32-unknown-unknown 支持 std。
+serde_json = "1"
 
 # 注意：不放 [profile]——本 crate 作为路径依赖构建时 profile 由顶层 workspace 决定
 # （tools/wasm-fixtures 已有同款体积优化 profile）；本地 cargo test 也需要 unwind。

@@ -43,6 +43,7 @@ impl Guest for Component {
             menu: vec![],
             config_fields: vec![],
             actions: vec![],
+            ui_json: None,
         }
     }
 

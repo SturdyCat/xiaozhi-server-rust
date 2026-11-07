@@ -343,6 +343,10 @@ pub fn router(engines: Arc<Engines>) -> Router {
         .route(
             "/api/plugins/{id}/unload",
             axum::routing::post(plugins::unload_plugin),
+        )
+        .route(
+            "/api/plugins/{id}/ui",
+            axum::routing::get(plugins::plugin_ui),
         );
 
     let app = if Path::new(&admin_dir).is_dir() {

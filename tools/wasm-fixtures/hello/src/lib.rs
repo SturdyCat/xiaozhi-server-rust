@@ -93,6 +93,52 @@ impl Guest for Component {
                 "读回 kv 里最近一次 demo.kv 事件载荷",
             )
             .expect("静态构建")
+            // A2UI 最小闭环夹具面：整份 JSON UI 描述（嵌套组件树 + actions/config
+            // bindings；宿主只透传不解释树，fail-closed 在客户端渲染层）。
+            // 端点测试 `gateway/ws/plugins/tests.rs` 与 `wasm/tests/ui.rs` 依赖此声明的形状。
+            .ui_json(
+                r#"{
+                    "a2ui": "0.1",
+                    "pages": [
+                        {
+                            "id": "hello-config",
+                            "title": "Hello 配置",
+                            "kind": "config",
+                            "tree": {
+                                "type": "card",
+                                "title": "问候配置",
+                                "child": {
+                                    "type": "column",
+                                    "children": [
+                                        {"type": "field", "key": "greeting"},
+                                        {"type": "hint", "text": "greeting 作为动作 greet 的默认称呼"}
+                                    ]
+                                }
+                            },
+                            "bindings": {"config": ["greeting"]}
+                        },
+                        {
+                            "id": "hello-test",
+                            "title": "Hello 连通性测试",
+                            "kind": "test",
+                            "tree": {
+                                "type": "card",
+                                "title": "连通性测试",
+                                "child": {
+                                    "type": "column",
+                                    "children": [
+                                        {"type": "input", "id": "name", "label": "称呼", "placeholder": "例：小明"},
+                                        {"type": "actions", "actions": ["greet"]},
+                                        {"type": "result"}
+                                    ]
+                                }
+                            },
+                            "bindings": {"actions": ["greet"]}
+                        }
+                    ]
+                }"#,
+            )
+            .expect("静态构建")
             .build()
     }
 

@@ -68,6 +68,52 @@ impl Guest for Component {
                 "事件通道全流程查询；动作仅做参数提示",
             )
             .expect("静态构建")
+            // A2UI 嵌套组件树：config 页（source/cache_secs 字段）+ test 页
+            //（input city → actions → result；forecast 动作原样回显参数）。
+            // 宿主只校验「单个 JSON 对象 + 大小上限」后透传，树形状由客户端渲染层把关。
+            .ui_json(
+                r#"{
+                    "a2ui": "0.1",
+                    "pages": [
+                        {
+                            "id": "weather-config",
+                            "title": "天气配置",
+                            "kind": "config",
+                            "tree": {
+                                "type": "card",
+                                "title": "数据源与缓存",
+                                "child": {
+                                    "type": "column",
+                                    "children": [
+                                        {"type": "field", "key": "source"},
+                                        {"type": "field", "key": "cache_secs"}
+                                    ]
+                                }
+                            },
+                            "bindings": {"config": ["source", "cache_secs"]}
+                        },
+                        {
+                            "id": "weather-test",
+                            "title": "天气查询测试",
+                            "kind": "test",
+                            "tree": {
+                                "type": "card",
+                                "title": "连通性测试",
+                                "child": {
+                                    "type": "column",
+                                    "children": [
+                                        {"type": "input", "id": "city", "label": "城市", "placeholder": "例：杭州"},
+                                        {"type": "actions", "actions": ["forecast"]},
+                                        {"type": "result"}
+                                    ]
+                                }
+                            },
+                            "bindings": {"actions": ["forecast"]}
+                        }
+                    ]
+                }"#,
+            )
+            .expect("静态构建")
             .build()
     }
 

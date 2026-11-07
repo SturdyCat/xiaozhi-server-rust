@@ -37,6 +37,19 @@
 | `source` | str | `https://www.nmc.cn` | 数据源根地址（当前为 schema 展示，config-read 导入随 P2 契约扩展生效） |
 | `cache_secs` | int | `600` | 结果缓存 TTL 秒（同上） |
 
+### 页面描述（`registration.ui-json`，A2UI 0.1 嵌套组件树）
+
+`register()` 经 SDK `RegistrationBuilder::ui_json` 声明两页（宿主只校验「单个 JSON 对象 +
+大小上限」后透传，树由客户端基础组件库渲染）：
+
+| 页 | 树形状 | 绑定 |
+|---|---|---|
+| `weather-config`（config） | card「数据源与缓存」→ column[field(`source`), field(`cache_secs`)] | `config: [source, cache_secs]` |
+| `weather-test`（test） | card「连通性测试」→ column[input(`city`)，actions(["forecast"])，result] | `actions: [forecast]` |
+
+test 页调用 `forecast` 动作时，页面内 `input` 的值以 `{"city":"<输入>"}` 作为动作 payload
+（无 input 的页面 payload 为 `{}`，与清单页动作调用同口径）；forecast 动作原样回显参数，正好演示 input→动作→result 闭环。
+
 ### kv 键布局（插件隔离命名空间内）
 
 | 键 | 值 | 语义 |

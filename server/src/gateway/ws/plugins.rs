@@ -10,6 +10,9 @@
 //!   仍走技能系统（MCP/plan），不在这里做第二套分发。
 //! - `POST /api/plugins/extensions/{point}/preference`：扩展点首选实现（排他解析表；
 //!   v1 进程内态，P3 接配置管线持久化）。
+//! - `GET /api/plugins/{id}/ui`：单个已注册插件的 JSON UI 页面只读投影（A2UI 最小
+//!   闭环：配置/测试页由插件 registration.ui 声明，宿主透传；未装载 404——未注册
+//!   插件不返回业务 UI）。
 //!
 //! ⚠️ 只读/受控投影：不改变静态能力运行期行为，不做自动表单布局。
 
@@ -142,6 +145,34 @@ mod wasm_api {
             "WASM 插件平台不可用（初始化失败已降级关闭，见服务日志）",
         )
             .into_response()
+    }
+
+    /// `GET /api/plugins/{id}/ui`：单个已注册插件的 JSON UI 页面只读投影
+    /// （配置/测试页等，由插件 registration.ui 声明，宿主透传不解释）。
+    /// 未装载的插件 404——**未注册插件不返回业务 UI** 的唯一守门点（A2UI 消费方
+    /// 以此为契约：只渲染 200 响应里的页面）。
+    pub(crate) async fn plugin_ui(
+        State(engines): State<Arc<Engines>>,
+        Path(plugin_id): Path<String>,
+    ) -> Response {
+        let Some(host) = engines.wasm.as_ref() else {
+            return unavailable();
+        };
+        // wasm 注册表快照持锁；投影是纯内存读，不必 spawn_blocking
+        match host.plugin_ui_json(&plugin_id) {
+            Some(mut body) => {
+                body["ok"] = serde_json::json!(true);
+                json_ok(body)
+            }
+            None => (
+                StatusCode::NOT_FOUND,
+                axum::Json(serde_json::json!({
+                    "ok": false,
+                    "error": format!("插件 {plugin_id} 未装载（未注册插件不返回业务 UI）"),
+                })),
+            )
+                .into_response(),
+        }
     }
 
     /// `POST /api/plugins/{id}/actions/{name}`：统一动作（白名单在宿主内：未声明动作拒绝）。
@@ -503,5 +534,6 @@ mod wasm_api {
 
 #[cfg(feature = "wasm-plugins")]
 pub(super) use wasm_api::{
-    plugin_action, set_extension_preference, unload_plugin, upload_plugin, upload_plugin_raw,
+    plugin_action, plugin_ui, set_extension_preference, unload_plugin, upload_plugin,
+    upload_plugin_raw,
 };

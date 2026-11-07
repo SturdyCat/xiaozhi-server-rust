@@ -5,6 +5,8 @@ import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.xiaozhi.admin.contracts.DevicePluginNav
 import com.xiaozhi.admin.contracts.DevicePluginNavState
 import com.xiaozhi.admin.contracts.PluginSlotSnapshot
+import com.xiaozhi.admin.contracts.PluginUiDocument
+import com.xiaozhi.admin.contracts.PluginUiSlots
 import com.xiaozhi.admin.state.stateVar
 import com.xiaozhi.admin.state.stateListOf
 
@@ -44,6 +46,14 @@ class PluginMetaState(scope: PagerScope) : LoadableState(scope) {
 
     /** 动态 WASM 槽位；null = 旧服务端/不可达，调用方必须保留静态基线。 */
     var wasmSlots by stateVar<PluginSlotSnapshot?>(null)
+
+    /**
+     * 动态插件 UI 文档（`registration.ui` 投影的解析结果，见 [PluginUiSlots]）。
+     * key = 插件 id；插件缺席（未声明 / 非 Active / 解析未通过）= 该插件运行页走
+     * 声明式回退，不伪造动态 UI。与 [wasmSlots] 同一段文本、同一次拉取解析
+     * （不发第二个请求），fail-closed 绑定同一份注册声明白名单。
+     */
+    var pluginUiDocs by stateVar<Map<String, PluginUiDocument>>(emptyMap())
 
     /**
      * 设备插件注册投影的**门控态**（`stateVar` 保证回包晚于首帧到达时 Compose 会重组）。
@@ -86,6 +96,14 @@ class PluginMetaState(scope: PagerScope) : LoadableState(scope) {
         wasmSlots = runCatching {
             PluginSlotSnapshot.parse(data.optJSONObject("wasm")?.toString())
         }.getOrNull()
+        // 动态 UI 文档：与 wasmSlots 同一段 wasm 文本、绑定同一份快照做声明白名单。
+        // 失败/缺键 → 空表（各插件运行页走声明式回退），不影响能力总览。
+        pluginUiDocs = runCatching {
+            PluginUiSlots.parse(
+                data.optJSONObject("wasm")?.toString(),
+                wasmSlots,
+            )
+        }.getOrDefault(emptyMap())
         val pureBase = data.optJSONObject("ui")?.optString("mode", "") == "pure-base"
         val caps = data.optJSONArray("capabilities")
         if (caps == null) {

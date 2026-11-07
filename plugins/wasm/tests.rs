@@ -267,6 +267,7 @@ mod extension;
 mod http;
 mod lan;
 mod sandbox;
+mod ui;
 mod weather;
 
 // 契约校验 / 权限门 / waterfall（纯逻辑）

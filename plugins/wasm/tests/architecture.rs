@@ -36,8 +36,8 @@ fn policy_sources_keep_native_route_contract_explicit() {
 
 #[test]
 fn native_data_plane_ownership_markers_remain_present_before_cleanup() {
-    let tuya = include_str!("../../../src/device/tuya/wasm.rs");
-    let echomuse = include_str!("../../../src/device/echomuse/runtime.rs");
+    let tuya = include_str!("../../../server/src/device/tuya/wasm.rs");
+    let echomuse = include_str!("../../../server/src/device/echomuse/runtime.rs");
     let memory = include_str!("../../memory/mod.rs");
     assert!(tuya.contains("drain_wasm_commands"));
     assert!(tuya.contains("set_dp"));
@@ -47,7 +47,7 @@ fn native_data_plane_ownership_markers_remain_present_before_cleanup() {
 
 #[test]
 fn runtime_keeps_artifact_integrity_gate_before_wasm_load() {
-    let runtime = include_str!("../../../src/runtime/mod.rs");
+    let runtime = include_str!("../../../server/src/runtime/mod.rs");
     assert!(runtime.contains("artifact_matches"));
     assert!(runtime.contains("ArtifactDir::digest"));
     assert!(runtime.contains("continue;"));
@@ -72,7 +72,7 @@ fn registry_selection_keeps_wasm_policy_explicit_without_native_fallback() {
 
 #[test]
 fn device_capability_registry_stays_native_and_wasm_optional() {
-    let registry = include_str!("../../../src/device/capabilities/registry.rs");
+    let registry = include_str!("../../../server/src/device/capabilities/registry.rs");
     assert!(!registry.contains("plugins::wasm"));
     assert!(!registry.contains("WasmHost"));
     assert!(registry.contains("DeviceCapabilityAdapter"));
@@ -83,23 +83,23 @@ fn native_hot_paths_do_not_dispatch_wasm() {
     for (name, source) in [
         (
             "echomuse/runtime.rs",
-            include_str!("../../../src/device/echomuse/runtime.rs"),
+            include_str!("../../../server/src/device/echomuse/runtime.rs"),
         ),
         (
             "echomuse/transport.rs",
-            include_str!("../../../src/device/echomuse/transport.rs"),
+            include_str!("../../../server/src/device/echomuse/transport.rs"),
         ),
         (
             "tuya/lan.rs",
-            include_str!("../../../src/device/tuya/lan.rs"),
+            include_str!("../../../server/src/device/tuya/lan.rs"),
         ),
         (
             "workflow/pipeline/inference.rs",
-            include_str!("../../../src/workflow/pipeline/inference.rs"),
+            include_str!("../../../server/src/workflow/pipeline/inference.rs"),
         ),
         (
             "workflow/pipeline/splitter.rs",
-            include_str!("../../../src/workflow/pipeline/splitter.rs"),
+            include_str!("../../../server/src/workflow/pipeline/splitter.rs"),
         ),
     ] {
         for forbidden in ["crate::plugins::wasm", "WasmHost", "dispatch_wasm"] {

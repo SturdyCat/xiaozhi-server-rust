@@ -199,17 +199,21 @@ fun PluginsManagePage(meta: PluginMetaState, manage: PluginsManageState, toast: 
 }
 
 /**
- * 动态插件的声明式运行页：只渲染 manifest registration 提供的描述、字段元数据和动作。
- * 这里不复制任何业务页面；业务插件需要更丰富的界面时，应继续扩展 manifest/WASM action，
- * 而不是把业务组件重新编回 server 或静态管理台。
+ * 动态插件的声明式运行页：**优先消费插件 `registration.ui` 动态文档**（通用 UI 壳，
+ * 见 [PluginUiDocumentContent]；仅 Active 插件由宿主投影，未装载/降级一律缺席）；
+ * 插件未声明 / 解析失败时回退到既有声明式页面——只渲染 manifest registration 提供的
+ * 描述、字段元数据和动作。这里不复制任何业务页面；业务插件需要更丰富的界面时，
+ * 应继续扩展 manifest/WASM action，而不是把业务组件重新编回 server 或静态管理台。
  */
 @Composable
 fun PluginRuntimePage(
     plugin: com.xiaozhi.admin.contracts.PluginSlotPlugin,
+    uiDocs: Map<String, com.xiaozhi.admin.contracts.PluginUiDocument>,
     manage: PluginsManageState,
     toast: ToastState,
 ) {
     val ctx = LocalAdminPagerOrThrow()
+    val doc = uiDocs[plugin.id]
     Column(modifier = Modifier.fillMaxWidth()) {
         LabeledCard(title = plugin.title) {
             HintLine(plugin.description.ifEmpty { "该页面由插件清单声明，底座不内置业务页面。" })
@@ -217,31 +221,38 @@ fun PluginRuntimePage(
             if (plugin.implements.isNotEmpty()) HintLine("扩展点：${plugin.implements.joinToString("、")}")
             if (plugin.permissions.isNotEmpty()) HintLine("权限：${plugin.permissions.joinToString("、")}")
         }
-        if (plugin.configFields.isNotEmpty()) {
-            LabeledCard(title = "插件配置字段") {
-                for (field in plugin.configFields) {
-                    HintLine("${field.label}（${field.key} · ${field.kind}）${field.help.takeIf { it.isNotBlank() }?.let { "：$it" } ?: ""}")
+        if (doc != null) {
+            // 动态文档模式：布局/引用全部由插件声明，节点已在解析期按注册声明 fail-closed
+            PluginUiDocumentContent(doc, plugin, manage, toast)
+            PluginUiDocFooter()
+        } else {
+            // 声明式回退：插件未声明 ui / 非 Active（宿主投影 null）/ 文档解析未通过
+            if (plugin.configFields.isNotEmpty()) {
+                LabeledCard(title = "插件配置字段") {
+                    for (field in plugin.configFields) {
+                        HintLine("${field.label}（${field.key} · ${field.kind}）${field.help.takeIf { it.isNotBlank() }?.let { "：$it" } ?: ""}")
+                    }
+                    HintLine("字段由插件 manifest 声明；底座不会为未声明字段生成业务配置。")
                 }
-                HintLine("字段由插件 manifest 声明；底座不会为未声明字段生成业务配置。")
             }
-        }
-        LabeledCard(title = "插件动作") {
-            if (plugin.actions.isEmpty()) {
-                HintLine("该插件未声明管理动作。")
-            } else {
-                actionRow {
-                    for (action in plugin.actions) {
-                        Button(
-                            text = if (manage.busy == "${plugin.id}:${action.id}") "执行中…" else action.label,
-                            onClick = {
-                                manage.runAction(ctx, plugin.id, action.id) { ok, msg ->
-                                    toast.show(msg, if (ok) "ok" else "error")
-                                }
-                            },
-                            type = ButtonType.OUTLINE,
-                            size = ButtonSize.SMALL,
-                            disabled = manage.busy.isNotEmpty(),
-                        )
+            LabeledCard(title = "插件动作") {
+                if (plugin.actions.isEmpty()) {
+                    HintLine("该插件未声明管理动作。")
+                } else {
+                    actionRow {
+                        for (action in plugin.actions) {
+                            Button(
+                                text = if (manage.busy == "${plugin.id}:${action.id}") "执行中…" else action.label,
+                                onClick = {
+                                    manage.runAction(ctx, plugin.id, action.id) { ok, msg ->
+                                        toast.show(msg, if (ok) "ok" else "error")
+                                    }
+                                },
+                                type = ButtonType.OUTLINE,
+                                size = ButtonSize.SMALL,
+                                disabled = manage.busy.isNotEmpty(),
+                            )
+                        }
                     }
                 }
             }

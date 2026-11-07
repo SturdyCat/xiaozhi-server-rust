@@ -94,6 +94,12 @@ interface types {
         menu: list<menu-entry>,
         config-fields: list<field-schema>,
         actions: list<action-desc>,
+        /// 通用 JSON UI 描述（A2UI 最小闭环，可选）：整份 UI 描述文本——组件树 +
+        /// actions/config bindings 等由插件在 JSON 内自组织，宿主是**透传管道**：
+        /// 只校验「单个 JSON 对象」与大小上限（validate_registration）并原样投影到
+        /// /api/plugins 与 GET /api/plugins/{id}/ui；不解释、不渲染、不做自动布局。
+        /// 仅 Active 插件投影；未注册插件不返回业务 UI。
+        ui-json: option<string>,
     }
 
     /// 候选验证自检结果

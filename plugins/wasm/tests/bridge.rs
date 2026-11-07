@@ -97,6 +97,14 @@ fn backend_switch_routes_service_to_wasm() {
     // [weather].backend = "wasm"：WeatherService 分发进事件桥（真实服务级开关）
     let (fetcher, host) = weather_host(true);
     let mut cfg = WeatherConfig::default();
+    // 默认后端随构建模式：full 默认 native（对存量配置零影响）；pure-base 未编译
+    // 原生 NMC 客户端，唯一真实后端是已注册 WASM 插件，默认值即 wasm。
+    #[cfg(feature = "pure-base")]
+    assert_eq!(
+        cfg.backend, "wasm",
+        "pure-base 默认后端是 wasm（native 未编译）"
+    );
+    #[cfg(not(feature = "pure-base"))]
     assert_eq!(cfg.backend, "native", "默认后端是 native（零影响）");
     cfg.backend = "wasm".into();
     let svc = crate::plugins::weather::WeatherService::new(&cfg);
@@ -114,17 +122,23 @@ fn backend_switch_routes_service_to_wasm() {
 
 #[test]
 fn backend_switch_without_host_reports_explicitly() {
-    // wasm 后端 + 宿主句柄缺失（初始化失败的装配形态）→ 明确报错，不回退 native
+    // wasm 后端 + 宿主句柄缺失（初始化失败的装配形态）→ 明确报错，不回退 native。
+    // 错误措辞随构建模式：full 报「未初始化」（宿主注入失败）；pure-base 报「未注册」
+    //（底座视角缺的是插件本身）。
     let mut cfg = WeatherConfig::default();
     cfg.backend = "wasm".into();
     let svc = crate::plugins::weather::WeatherService::new(&cfg);
     let result = svc.forecast("杭州", "", "");
     assert_eq!(result["ok"], serde_json::json!(false), "{result}");
+    #[cfg(feature = "pure-base")]
+    let expected = "未注册";
+    #[cfg(not(feature = "pure-base"))]
+    let expected = "未初始化";
     assert!(
         result["speech"]
             .as_str()
             .unwrap_or_default()
-            .contains("未初始化"),
+            .contains(expected),
         "{}",
         result
     );
@@ -398,11 +412,16 @@ fn backend_unknown_value_rejected() {
     let svc = crate::plugins::weather::WeatherService::new(&cfg);
     let result = svc.forecast("杭州", "", "");
     assert_eq!(result["ok"], serde_json::json!(false), "{result}");
+    // full 区分未知后端；pure-base 没有 native 分支，任何非 wasm 值统一显式拒绝。
+    #[cfg(feature = "pure-base")]
+    let expected = "只能使用已注册的 WASM 插件";
+    #[cfg(not(feature = "pure-base"))]
+    let expected = "未知天气后端";
     assert!(
         result["speech"]
             .as_str()
             .unwrap_or_default()
-            .contains("未知天气后端"),
+            .contains(expected),
         "{}",
         result
     );

@@ -17,7 +17,7 @@ import kotlin.test.assertTrue
  *   ConfigWorkspaceViews.kt:257-261（globalGroups 分组过滤 + 空组跳过）、
  *   ConfigWorkspaceViews.kt:132-134（start 位置节点按 sectionId 过滤）三处入口的调用链；
  * - 先用前置断言证明静态基线里**确实存在**待隐藏项，再断言空壳下「不含」，
- *   并用「UNKNOWN / 常规构建下同一套过滤必须含这些项」做反例，
+ *   并用「明确注册 / 未知态均按注册门控」做反例，
  *   避免「对本来就不含目标项的集合断言不含」这类恒真测试；
  * - 用「静态基线 - 白名单」做严格相等，任何连带隐藏核心项都会让断言失败。
  *
@@ -91,12 +91,14 @@ class DevicePluginNavPenetrationTest {
     }
 
     @Test
-    fun emptyShellHidesExactlyThreePluginItemsAndKeepsEverythingElse() {
-        // 严格相等：等于「静态基线 - 白名单」，任何连带隐藏核心项都会让断言失败。
+    fun emptyShellHidesBusinessItemsAndKeepsCoreManagement() {
+        // 严格相等：空壳只保留底座入口，所有业务 section 均须由插件声明。
         assertEquals(staticSidebarIds - "devicehub", sidebarIds(emptyShell))
-        assertEquals(staticGlobalIds - "tuya", globalMenuIds(emptyShell))
+        assertEquals(listOf("overview", "server"), globalMenuIds(emptyShell))
         assertEquals(
-            staticStartNodes.filter { it.sectionId != "echomuse" }.map { it.id },
+            staticStartNodes
+                .filter { it.sectionId != "echomuse" && it.sectionId != "wakeup" }
+                .map { it.id },
             startNodeIds(emptyShell),
         )
         // 显式点名核心项仍在（验收口径）；注意 echomuse 配置段本就不在全局配置菜单里，
@@ -106,43 +108,45 @@ class DevicePluginNavPenetrationTest {
                 listOf("overview", "config", "settings", "plugins", "files"),
             ),
         )
-        assertTrue(
-            globalMenuIds(emptyShell).containsAll(
-                listOf("overview", "presets", "aiui", "server", "ota"),
-            ),
-        )
         assertFalse("devicehub" in sidebarIds(emptyShell))
         assertFalse("tuya" in globalMenuIds(emptyShell))
+        assertFalse("ota" in globalMenuIds(emptyShell))
+        assertFalse("aiui" in globalMenuIds(emptyShell))
+        assertFalse("presets" in globalMenuIds(emptyShell))
         assertFalse("echomuse.input" in startNodeIds(emptyShell))
     }
 
     @Test
-    fun counterExampleUnknownAndNormalBuildsKeepAllPluginItems() {
-        // 反例 1：UNKNOWN 态下同一套过滤三项全在（证明上面的「不含」不是恒真）。
-        assertTrue("devicehub" in sidebarIds(unknown))
-        assertTrue("tuya" in globalMenuIds(unknown))
-        assertTrue("echomuse.input" in startNodeIds(unknown))
-        // 反例 2：常规构建全注册，三项全在。
+    fun registeredBuildsExposeOnlyRegisteredPluginItems() {
+        // 未知态 fail-closed：服务端尚未证明插件存在时不显示业务入口。
+        assertFalse("devicehub" in sidebarIds(unknown))
+        assertFalse("tuya" in globalMenuIds(unknown))
+        assertFalse("echomuse.input" in startNodeIds(unknown))
+        // 明确注册后，动态/兼容入口才可见。
         assertTrue("devicehub" in sidebarIds(bothRegistered))
         assertTrue("tuya" in globalMenuIds(bothRegistered))
         assertTrue("echomuse.input" in startNodeIds(bothRegistered))
-        // 常规构建全关：只隐藏设备管理的运行分区，配置段与配置入口必须保留
-        //（否则「关掉插件就再也找不到重新开启的入口」）。
+        // 常规构建全关：未注册即不显示任何对应业务 UI。
         assertFalse("devicehub" in sidebarIds(bothDisabled))
-        assertTrue("tuya" in globalMenuIds(bothDisabled))
-        assertTrue("echomuse.input" in startNodeIds(bothDisabled))
+        assertFalse("tuya" in globalMenuIds(bothDisabled))
+        assertFalse("echomuse.input" in startNodeIds(bothDisabled))
     }
 
     @Test
-    fun whiteListIsStrictlyLimitedToDevicehubEchomuseTuya() {
-        // 白名单严格性：空壳下除这三项外，所有静态导航 id / 配置 section id / 流程 sectionId
-        // 的 showEntry 都必须为 true，避免「隐藏插件菜单」误伤核心导航与配置段。
-        val gated = setOf("devicehub", "echomuse", "tuya")
+    fun gatingIsStrictlyLimitedToBusinessSections() {
+        // 白名单严格性：空壳下除「设备管理 + 业务 section」外，所有静态导航 id / 配置
+        // section id / 流程 sectionId 的 showEntry 都必须为 true，避免误伤核心导航。
+        val gated = setOf(
+            "devicehub", "presets", "command", "wakeup", "soul", "memory",
+            "aiui", "echomuse", "tuya", "ota",
+        )
         val allIds = staticSidebarIds + staticGlobalIds + staticStartNodes.map { it.sectionId }
         for (id in allIds.distinct()) {
             assertEquals(id !in gated, DevicePluginNav.showEntry(emptyShell, id), "空壳下 $id 的门控判定")
         }
+        // 系统级契约（nlu 识别链 / 下行音频 / MCP 工具注册表）不属于业务插件。
         assertTrue(DevicePluginNav.showEntry(emptyShell, "mcp"))
         assertTrue(DevicePluginNav.showEntry(emptyShell, "audio"))
+        assertTrue(DevicePluginNav.showEntry(emptyShell, "nlu"))
     }
 }

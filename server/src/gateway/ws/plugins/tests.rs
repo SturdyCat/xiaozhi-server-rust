@@ -487,3 +487,89 @@ async fn raw_upload_without_id_discovers_manifest_id() {
     assert_eq!(body["id"], serde_json::json!("greeter.usermade"), "{body}");
     assert_eq!(body["activated"], serde_json::json!(true));
 }
+
+// ============================================================
+// A2UI 最小闭环：GET /api/plugins/{id}/ui 只读投影 + 未注册不返回业务 UI
+// ============================================================
+
+#[tokio::test]
+async fn plugin_ui_endpoint_serves_active_descriptor_and_404_for_unregistered() {
+    let (base, _server, _engines) = fixture().await;
+    let client = reqwest::Client::new();
+
+    // 已装载（Active）插件：整份 UI 描述对象透传（解析后，非转义字符串）
+    let resp = client
+        .get(format!("{base}/api/plugins/hello.official/ui"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["ok"], serde_json::json!(true), "{body}");
+    assert_eq!(body["id"], serde_json::json!("hello.official"));
+    assert_eq!(body["phase"], serde_json::json!("active"));
+    assert_eq!(body["ui"]["a2ui"], serde_json::json!("0.1"), "{body}");
+    assert_eq!(body["ui"]["pages"].as_array().map(Vec::len), Some(2));
+    assert_eq!(
+        body["ui"]["pages"][0]["bindings"]["config"][0],
+        serde_json::json!("greeting")
+    );
+    // 嵌套组件树（0.1 超集）：config 页 card→column[field,hint]；
+    // test 页 card→column[input(name), actions(id 数组), result]
+    assert_eq!(
+        body["ui"]["pages"][0]["tree"]["type"],
+        serde_json::json!("card"),
+        "{body}"
+    );
+    let children = &body["ui"]["pages"][1]["tree"]["child"]["children"];
+    assert_eq!(children[0]["type"], serde_json::json!("input"), "{body}");
+    assert_eq!(children[0]["id"], serde_json::json!("name"));
+    assert_eq!(
+        children[1]["actions"],
+        serde_json::json!(["greet"]),
+        "actions 是动作 id 字符串数组：{body}"
+    );
+    assert_eq!(children[2]["type"], serde_json::json!("result"));
+
+    // 未装载的插件：404，绝不返回任何业务 UI（A2UI 消费方契约）
+    let resp = client
+        .get(format!("{base}/api/plugins/ghost.plugin/ui"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["ok"], serde_json::json!(false));
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("未装载"),
+        "{body}"
+    );
+
+    // 清单投影同源：registration.ui 只对 Active 插件携带解析后的描述
+    let list = get_json(&client, &base, "/api/plugins").await;
+    let hello = list["wasm"]["plugins"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == "hello.official")
+        .expect("hello in list");
+    assert!(hello["registration"]["ui"].is_object(), "{hello}");
+    assert_eq!(
+        hello["registration"]["ui"]["a2ui"],
+        serde_json::json!("0.1")
+    );
+    // 未声明 UI 的插件：ui 键恒在（形状稳定），值为 null
+    let usermade = list["wasm"]["plugins"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == "greeter.usermade")
+        .expect("usermade in list");
+    assert!(
+        usermade["registration"]["ui"].is_null(),
+        "未声明 UI 应投影 null：{usermade}"
+    );
+}
