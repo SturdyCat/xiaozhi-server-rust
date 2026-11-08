@@ -32,6 +32,8 @@ import com.tencent.kuikly.compose.ui.unit.dp
 import com.xiaozhi.admin.contracts.IconToken
 import com.xiaozhi.admin.contracts.PluginDetailModel
 import com.xiaozhi.admin.contracts.PluginSlotPlugin
+import com.xiaozhi.admin.kit.HintLine
+import com.xiaozhi.admin.kit.LabeledCard
 import com.xiaozhi.admin.kit.LocalAdminPager
 import com.xiaozhi.admin.kit.LocalAdminSpacing
 import com.xiaozhi.admin.kit.LocalAdminViewport

@@ -8,6 +8,8 @@ import com.gearui.theme.Theme
 import com.tencent.kuikly.compose.foundation.layout.fillMaxWidth
 import com.tencent.kuikly.compose.foundation.layout.padding
 import com.tencent.kuikly.compose.ui.Modifier
+import com.xiaozhi.admin.kit.HintLine
+import com.xiaozhi.admin.kit.LabeledCard
 import com.xiaozhi.admin.kit.labeledIntField
 
 /**

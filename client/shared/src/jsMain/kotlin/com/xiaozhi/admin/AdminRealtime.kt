@@ -45,25 +45,47 @@ class BrowserWsSocket(
 
     private val ws = WebSocket(url)
 
+    /** CONNECTING 期到达的发送请求：浏览器在 open 前 `ws.send` 会直接抛异常，
+     *  必须缓冲到 [ws.onopen] 按序冲刷——页面首帧即发的 rpc（如 plugins.load）正是撞这里。 */
+    private val pendingSends = mutableListOf<String>()
+    private var opened = false
+    private var closed = false
+
     init {
         // 只消费文本帧（服务端契约全为 JSON 文本；二进制帧不进共享层）
-        ws.onopen = { onOpenCb() }
+        ws.onopen = {
+            opened = true
+            if (pendingSends.isNotEmpty()) {
+                val queued = pendingSends.toList()
+                pendingSends.clear()
+                for (text in queued) ws.send(text)
+            }
+            onOpenCb()
+        }
         ws.onmessage = { event -> (event.data as? String)?.let(onTextCb) }
         ws.onclose = { reportClosed() }
         ws.onerror = { reportClosed() }
     }
 
     override fun send(text: String) {
+        // 已判死连接不再入队（共享层会经 onClosed 走重连，新 socket 重新发送）。
+        if (closed) return
+        if (!opened) {
+            pendingSends.add(text)
+            return
+        }
         ws.send(text)
     }
 
     override fun close() {
+        closed = true
         ws.close() // 浏览器随后触发 onclose → onClosed 一次（共享层据此收尾）
     }
 
     private fun reportClosed() {
         if (closedReported) return
         closedReported = true
+        closed = true
         onClosedCb()
     }
 }

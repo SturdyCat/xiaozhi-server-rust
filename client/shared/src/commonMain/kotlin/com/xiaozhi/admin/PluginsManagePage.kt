@@ -5,8 +5,8 @@ package com.xiaozhi.admin
 //! 数据源：[PluginMetaState]（`GET /api/plugins` 的 `wasm` 键快照，同一次拉取）；
 //! 写通道：[PluginsManageState]（raw 上传桥 / unload / 统一动作）。组件复用 kit 与
 //! OtaCard 同款零件（LabeledCard / HintLine / WarnLine / SectionSummaryRow /
-//! pluginStatusBadge / ConfirmDialog），颜色走语义 token；服务端无 `wasm` 键时明确
-//! 提示平台不可用，不伪造空清单。
+//! pluginStatusBadge / ConfirmDialog），颜色走语义 token。插件管理入口和清单卡片
+//! 永远保留；服务端没有插件时只显示空清单，不把缺少 `wasm` 投影误报成平台不可用。
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -18,18 +18,18 @@ import com.gearui.components.button.ButtonSize
 import com.gearui.components.button.ButtonTheme
 import com.gearui.components.button.ButtonType
 import com.gearui.components.dialog.ConfirmDialog
-import com.gearui.foundation.primitives.Text
-import com.gearui.theme.Theme
 import com.tencent.kuikly.compose.foundation.layout.Column
-import com.tencent.kuikly.compose.foundation.layout.Row
 import com.tencent.kuikly.compose.foundation.layout.fillMaxWidth
-import com.tencent.kuikly.compose.foundation.layout.padding
-import com.tencent.kuikly.compose.ui.Alignment
 import com.tencent.kuikly.compose.ui.Modifier
 import com.tencent.kuikly.compose.ui.unit.dp
 import com.xiaozhi.admin.contracts.IconToken
 import com.xiaozhi.admin.icons.GearIcon
+import com.xiaozhi.admin.kit.HintLine
+import com.xiaozhi.admin.kit.LabeledCard
+import com.xiaozhi.admin.kit.SectionSummaryRow
+import com.xiaozhi.admin.kit.WarnLine
 import com.xiaozhi.admin.kit.actionRow
+import com.xiaozhi.admin.kit.listRow
 import com.xiaozhi.admin.kit.pluginLifecycleBadge
 import com.xiaozhi.admin.kit.pluginStatusBadge
 import com.xiaozhi.admin.kit.statusBadge
@@ -56,13 +56,6 @@ fun PluginsManagePage(meta: PluginMetaState, manage: PluginsManageState, toast: 
         if (meta.loadError.isNotEmpty()) {
             LabeledCard(title = "插件平台") {
                 WarnLine(meta.loadError + "（确认服务端地址可达后点「刷新清单」）", error = true)
-            }
-        } else if (snap == null) {
-            LabeledCard(title = "插件平台不可用") {
-                WarnLine(
-                    "服务端未启用 WASM 插件平台：需要以 `wasm-plugins` feature 构建的服务端" +
-                        "（旧版本服务端没有该能力）。平台可用时这里会列出已装载插件、扩展点解析与上传入口。",
-                )
             }
         }
 
@@ -97,16 +90,15 @@ fun PluginsManagePage(meta: PluginMetaState, manage: PluginsManageState, toast: 
         LabeledCard(title = "已装载插件") {
             val plugins = snap?.plugins
             if (plugins.isNullOrEmpty()) {
-                HintLine("暂无插件：上传 .wasm 组件后进入「待注册」，注册并激活后才运行业务。")
+                // 加载中不得宣判「暂无插件」：快照晚于首帧到达，清单为空只在加载完成后成立。
+                if (meta.loading) {
+                    HintLine("正在获取插件清单…")
+                } else {
+                    HintLine("暂无插件：上传 .wasm 组件后进入「待注册」，注册并激活后才运行业务。")
+                }
             } else {
                 for (plugin in plugins) {
-                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = plugin.title,
-                            modifier = Modifier.weight(1f),
-                            style = Theme.typography.bodyMedium,
-                            color = Theme.colors.foreground,
-                        )
+                    listRow(title = plugin.title) {
                         if (!plugin.official) {
                             statusBadge(state = "busy", text = "用户实现")
                         }
@@ -221,13 +213,7 @@ fun PluginsManagePage(meta: PluginMetaState, manage: PluginsManageState, toast: 
                 HintLine("暂无已声明的扩展点。")
             } else {
                 for ((point, state) in extensions) {
-                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = point,
-                            modifier = Modifier.weight(1f),
-                            style = Theme.typography.bodyMedium,
-                            color = Theme.colors.foreground,
-                        )
+                    listRow(title = point) {
                         when (state.state) {
                             "resolved" -> statusBadge(state = "ok", text = state.implementation)
                             "fallback" -> statusBadge(state = "busy", text = "回退：${state.implementation}")

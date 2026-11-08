@@ -5,21 +5,17 @@ import com.gearui.components.alert.Alert
 import com.gearui.components.alert.AlertStatus
 import com.gearui.components.button.Button
 import com.gearui.components.button.ButtonType
-import com.gearui.primitives.composite.Card
 import com.gearui.foundation.layout.Spacing
 import com.gearui.foundation.primitives.Text
 import com.gearui.theme.Theme
-import com.tencent.kuikly.compose.foundation.layout.Arrangement
-import com.tencent.kuikly.compose.foundation.layout.Box
 import com.tencent.kuikly.compose.foundation.layout.Column
-import com.tencent.kuikly.compose.foundation.layout.Row
 import com.tencent.kuikly.compose.foundation.layout.fillMaxWidth
 import com.tencent.kuikly.compose.foundation.layout.padding
-import com.tencent.kuikly.compose.ui.Alignment
 import com.tencent.kuikly.compose.ui.Modifier
 import com.tencent.kuikly.compose.ui.unit.dp
 import com.xiaozhi.admin.contracts.IconToken
 import com.xiaozhi.admin.icons.GearIcon
+import com.xiaozhi.admin.kit.LabeledCard
 import com.xiaozhi.admin.kit.actionRow
 
 /**
@@ -192,41 +188,6 @@ internal fun LocalAdminPagerOrThrow(): com.tencent.kuikly.core.pager.Pager =
     requireNotNull(com.xiaozhi.admin.kit.LocalAdminPager.current) {
         "LocalAdminPager 未提供：配置卡片必须在 AdminScopeHost 内渲染"
     }
-
-/**
- * 带标题的卡片壳（`Card` + 标题行）：所有 section 卡片共用的最小外壳。
- *
- * 旧 DSL 的 `groupedCard(title, withDivider)` 在这里只有"卡片 + 标题"两层，
- * 内部分隔线交给各组自己用 `dividerH()`（Compose 版见 `kit/GearLayout.kt`）。
- */
-@Composable
-fun LabeledCard(
-    title: String,
-    modifier: Modifier = Modifier,
-    trailing: (@Composable () -> Unit)? = null,
-    content: @Composable () -> Unit,
-) {
-    Card(modifier = modifier.fillMaxWidth().padding(bottom = Spacing.lg)) {
-        Column(modifier = Modifier.fillMaxWidth().padding(Spacing.lg)) {
-            Row(
-                // 标题行与正文之间留 md（12dp）：卡片标题是"区块名"，与首行内容要有一档
-                // 可感知的呼吸感；sm（8dp）在标题+长正文时视觉上贴在一起。
-                modifier = Modifier.fillMaxWidth().padding(bottom = Spacing.md),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Text(
-                    text = title,
-                    modifier = Modifier.weight(1f),
-                    style = Theme.typography.titleSmall,
-                    color = Theme.colors.foreground,
-                )
-                if (trailing != null) Box(Modifier.padding(start = Spacing.sm)) { trailing() }
-            }
-            content()
-        }
-    }
-}
 
 /** 未注册 section：明确报错而不是留白（"新加 section 忘了写内容"会表现成空页）。 */
 @Composable

@@ -2,6 +2,8 @@ package com.xiaozhi.admin
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import com.xiaozhi.admin.kit.HintLine
+import com.xiaozhi.admin.kit.LabeledCard
 
 /**
  * 「固件与 OTA」section（`ota`）—— 配置页里的**固件维护面入口**。

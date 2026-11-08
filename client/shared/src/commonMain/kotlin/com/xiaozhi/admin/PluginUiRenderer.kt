@@ -27,12 +27,9 @@ import com.gearui.components.button.Button
 import com.gearui.components.button.ButtonSize
 import com.gearui.components.button.ButtonType
 import com.gearui.components.dialog.ConfirmDialog
-import com.gearui.foundation.layout.Spacing
-import com.gearui.foundation.primitives.Text
 import com.gearui.theme.Theme
 import com.tencent.kuikly.compose.foundation.layout.Column
 import com.tencent.kuikly.compose.foundation.layout.fillMaxWidth
-import com.tencent.kuikly.compose.foundation.layout.padding
 import com.tencent.kuikly.compose.ui.Modifier
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import com.xiaozhi.admin.contracts.PluginAction
@@ -41,7 +38,10 @@ import com.xiaozhi.admin.contracts.PluginSlotPlugin
 import com.xiaozhi.admin.contracts.PluginUiDocument
 import com.xiaozhi.admin.contracts.PluginUiNode
 import com.xiaozhi.admin.contracts.PluginUiPage
+import com.xiaozhi.admin.kit.HintLine
+import com.xiaozhi.admin.kit.LabeledCard
 import com.xiaozhi.admin.kit.actionRow
+import com.xiaozhi.admin.kit.bodyLine
 import com.xiaozhi.admin.kit.labeledField
 
 /**
@@ -162,12 +162,7 @@ private fun PluginUiNodeView(
                 PluginUiNodeView(child, plugin, manage, inputValues, onInput, lastResult, onAction)
             }
         }
-        is PluginUiNode.Text -> Text(
-            text = node.text,
-            modifier = Modifier.fillMaxWidth().padding(top = Spacing.sm),
-            style = Theme.typography.bodyMedium,
-            color = Theme.colors.foreground,
-        )
+        is PluginUiNode.Text -> bodyLine(node.text)
         is PluginUiNode.Hint -> HintLine(node.text)
         is PluginUiNode.Field -> PluginUiFieldRow(node.field)
         is PluginUiNode.Form -> {
@@ -226,19 +221,12 @@ private fun PluginUiResultView(result: PluginUiActionResult?) {
         HintLine("该页尚未执行动作；动作完成后此处显示最近一次调用结果与回包原文。")
         return
     }
-    Text(
+    bodyLine(
         text = (if (result.ok) "成功" else "失败") + " · " + result.actionId + "：" + result.message,
-        modifier = Modifier.fillMaxWidth().padding(top = Spacing.sm),
-        style = Theme.typography.bodyMedium,
         color = if (result.ok) Theme.colors.foreground else Theme.colors.destructive,
     )
     if (result.rawBody.isNotEmpty()) {
-        Text(
-            text = "回包原文：${result.rawBody}",
-            modifier = Modifier.fillMaxWidth().padding(top = Spacing.xs),
-            style = Theme.typography.caption,
-            color = Theme.colors.mutedForeground,
-        )
+        HintLine("回包原文：${result.rawBody}")
     }
 }
 

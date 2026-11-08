@@ -5,6 +5,7 @@ import com.gearui.foundation.primitives.ScrollView
 import com.tencent.kuikly.compose.foundation.layout.Column
 import com.tencent.kuikly.compose.foundation.layout.fillMaxWidth
 import com.tencent.kuikly.compose.ui.Modifier
+import com.xiaozhi.admin.kit.LabeledCard
 
 /** Official panel order: firmware, emOS, wake-word assets. No duplicate assets tab. */
 @Composable

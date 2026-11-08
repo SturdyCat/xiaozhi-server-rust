@@ -220,6 +220,24 @@ class PluginSlotsModelTest {
     }
 
     @Test
+    fun pluginsNavVisibleBeforeWasmParse() {
+        // wasm 快照解析前（wasmSlots=null，加载中 / 解析失败 / 旧服务端）：静态「插件」
+        // 管理入口必须可见——它是底座运维面，不依赖任何插件注册，也不依赖 wasm 投影解析成功。
+        for (state in listOf(
+            DevicePluginNavState.UNKNOWN,
+            DevicePluginNavState(true, false, emptySet(), emptySet()),
+            DevicePluginNavState(false, true, emptySet(), emptySet()),
+        )) {
+            assertTrue(DevicePluginNav.showEntry(state, "plugins"), "未知态下 plugins 导航必须可见")
+        }
+        assertTrue(DevicePluginNav.showEntry(pureBaseShell, "plugins"), "pure-base 保留插件管理入口")
+        // 无动态快照时合并函数不得改动静态分组（插件项仍在「配置」组内）。
+        val groups = PluginSlots.mergeGrouped(AdminNav.grouped(macos = false), null)
+        assertEquals(AdminNav.grouped(macos = false), groups)
+        assertTrue(groups.any { (_, items) -> items.any { it.id == "plugins" } })
+    }
+
+    @Test
     fun unknownStateHidesUnregisteredBusinessUi() {
         val unknownStates = listOf(
             DevicePluginNavState.UNKNOWN,                                // 加载中 / 服务端不可达
