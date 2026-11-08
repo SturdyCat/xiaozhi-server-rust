@@ -1,84 +1,81 @@
-// xiaozhi 插件契约 v0.1（唯一契约源，方案 v4 / docs/designs/wasm-plugin-platform.md）
+// xiaozhi 插件契约 v0.2（唯一契约源，方案 v5 / docs/designs/wasm-plugin-platform.md）
 //
-// 执行模型：插件是「纯决策函数 + 效果列表」——宿主喂事件/动作，插件同步返回 effects，
-// 宿主在权限校验后异步执行。插件不持有任何 I/O 句柄：候选验证可确定性重放、审计单一入口。
+// 设计原则（用户 2026-11-08 定）：
+//   1. 宿主不含任何业务。宿主只提供「插件管理 + 菜单 / 数据 / 服务」三类底层能力，
+//      不解释任何业务语义；新增业务只能靠上传插件，不得改宿主或重新编译。
+//   2. 协议语义在插件侧。宿主只做连接管理、HTTP 报文分帧、WS 帧分帧与事件路由；
+//      TCP/UDP 交给插件原始字节。
+//   3. 宿主不认识扩展点名字。implements / subscriptions / endpoints / provides 全部由
+//      manifest 声明，宿主按字符串做通用路由与排他解析。
+//   4. 入站一律事件驱动；出站一律声明式效果（宿主执行、结果回灌）。
 //
-// 版本化：包名 `xiaozhi:plugin@<主.次>`；manifest.api-version 主版本与宿主不符 → 拒绝激活
-// （官方默认实现兜底，见 resolver）。v0.1 刻意只导入 log/now 两个宿主服务（kv/http 由
-// effects 声明式表达），后续阶段按效果执行器落地节奏扩展 import 面。
+// 版本化：包名 `xiaozhi:plugin@<主.次>`；manifest.api-version 主版本与宿主不符 → 拒绝激活。
+// v0.2 为破坏性升级：handle-event 改类型化信封，新增 net / config / events / services /
+// timer / system 六个宿主服务；v0.1 的 lan-status / lan-set-dp 仅作 legacy 保留到阶段三。
 
-package xiaozhi:plugin@0.1.0;
+package xiaozhi:plugin@0.2.0;
 
-/// 宿主服务（插件可 import 的同步、无副作用或可审计服务）
-interface host {
-    /// 结构化日志；level ∈ debug|info|warn|error，宿主自动附加插件 id
-    log: func(level: string, message: string);
-    /// 单调时钟（毫秒）。纯决策插件不应自己造时间
-    now-ms: func() -> u64;
-    /// 读插件隔离 kv（P1：缓存读回，如天气站点码/最近结果）。
-    /// 需要 `kv` 权限：未声明 → deny-as-absent（返回 none + 宿主告警审计），
-    /// 不抛错——插件把它当「没有缓存」处理即可。写入走 kv-put 效果。
-    kv-get: func(key: string) -> option<list<u8>>;
-}
-
-/// 契约类型（manifest / 注册包 / 效果）
+/// 契约类型（manifest / 注册包 / 事件 / 效果）
 interface types {
-    /// 配置字段热生效档位（与静态注册表 registry::HotReload 同义）
+    /// 配置字段热生效档位
     enum hot {
         live,
         next-session,
         restart-only,
     }
 
-    /// 插件间依赖声明（激活前置：被依赖插件须 Active 且版本 ≥ min-version）。
-    /// 版本比较 = 数字点分段（1.2.3；缺段补 0；非数字段在 manifest 校验期拒绝）。
+    /// 插件间依赖声明（激活前置：被依赖插件须 Active 且版本 ≥ min-version）
     record plugin-requirement {
-        /// 被依赖插件 id（`<域>.<名>`）
+        /// 被依赖插件 id
         id: string,
         /// 最低版本（如 "0.1"）
         min-version: string,
     }
 
-    /// manifest：装载前免实例化即可校验的静态声明
-    /// （命名 plugin-manifest：接口内 `use` 的类型名不能与同名导出函数冲突）
-    record plugin-manifest {
-        /// 插件 id，全局唯一（`<域>.<名>`，如 `weather.official`）
-        id: string,
-        /// 插件版本（semver 建议，不做强校验）
-        version: string,
-        /// 宿主契约版本（如 "0.1"）；主版本不匹配 → 拒绝激活
-        api-version: string,
-        /// 展示标题（管理台卡片，zh）
-        title: string,
-        /// 一句话能力描述
-        description: string,
-        /// 申请的权限（v0.1 仅声明与审计：http-out / kv / speak / device-frames / schedule）
-        permissions: list<string>,
-        /// 实现的扩展点（排他解析，如 "asr.provider"）
-        implements: list<string>,
-        /// 官方默认实现标记：随内核分发、不可卸载；扩展点解析的用户插件失败时回退到它
-        official: bool,
-        /// 依赖的其他插件（激活前置；装载/注册不校验，激活期一次性判定）
-        requires: list<plugin-requirement>,
+    /// 事件订阅声明。宿主只做 topic 匹配与顶层键值过滤，不解释语义。
+    record subscription {
+        /// 精确 topic，或尾部通配 `<prefix>.*`；禁止中间通配
+        topic: string,
+        /// 可选过滤：单个 JSON 对象，宿主只做顶层键值精确匹配
+        filter-json: option<string>,
     }
 
-    /// 菜单槽位注册（非排他槽位：nav.main / config.section / workflow.node-menu）
-    record menu-entry {
-        slot: string,
-        /// 槽内唯一 id
-        id: string,
-        label: string,
-        /// 分组（相邻展示；config.section 固定挂「插件」组）
-        group: string,
-        /// 组内排序（小在前）
-        order: u16,
-        /// v1 图标只能取宿主 IconToken 白名单名；非法值在注册校验时拒绝
-        icon: string,
+    /// 监听协议
+    enum protocol {
+        http,
+        tcp,
+        udp,
+        ws,
     }
 
-    /// 配置字段元数据（形状对齐静态注册表 FieldSchema / `/api/config/schema` 投影）
-    record field-schema {
-        /// TOML 路径片段（`[plugins.<id>.config]` 段内）
+    /// 端点声明：插件要宿主替它监听什么。
+    /// 绑定失败：required=true → 激活失败；false → Degraded 且端点不投影。
+    record endpoint-spec {
+        /// 插件内唯一名
+        name: string,
+        protocol: protocol,
+        /// 绑定地址；"0.0.0.0" 或 "127.0.0.1"
+        bind: string,
+        /// 0 = 宿主分配临时端口（推荐）；非 0 需要权限 `net:listen:<port>`
+        port: u16,
+        /// http / ws 专用路径前缀；"/" 表示全部
+        path: option<string>,
+        /// 绑定失败是否阻断激活
+        required: bool,
+    }
+
+    /// 资源配额；未声明字段用宿主默认值
+    record resource-limits {
+        fuel-per-call: u64,
+        epoch-ms-per-call: u64,
+        memory-bytes: u64,
+        max-connections: u16,
+        max-queued-events: u16,
+        max-open-files: u16,
+    }
+
+    /// 配置字段元数据（形状对齐 /api/config/schema）
+    record config-field {
         key: string,
         label: string,
         /// str|password|int|float|bool|enum|path|dir|text
@@ -91,7 +88,37 @@ interface types {
         enum-values: list<string>,
     }
 
-    /// 管理动作（管理台按钮与语音工具共用同一实现：一次操作、双调用方）
+    /// 服务方法声明（schema 只是给管理台与调用方的提示，宿主不校验内容）
+    record service-method {
+        name: string,
+        request-schema-json: string,
+        response-schema-json: string,
+    }
+
+    /// 服务声明：插件向其他插件 / 宿主暴露的调用面
+    record service-decl {
+        /// `<域>.<名>`，全局唯一
+        name: string,
+        version: string,
+        methods: list<service-method>,
+    }
+
+    /// 菜单槽位注册。slot 由插件自定义（如 nav.main / config.section），
+    /// 宿主只按约定渲染已知槽位，未知槽位原样透传给管理台。
+    record menu-entry {
+        slot: string,
+        /// 槽内唯一 id
+        id: string,
+        label: string,
+        /// 分组（相邻展示）
+        group: string,
+        /// 组内排序（小在前）
+        order: u16,
+        /// 图标名；未知值管理台回落默认图标
+        icon: string,
+    }
+
+    /// 管理动作（管理台按钮与语音工具共用同一实现）
     record action-desc {
         id: string,
         label: string,
@@ -100,24 +127,61 @@ interface types {
         help: string,
     }
 
-    /// 注册包：激活时一次性收集，随插件启停整体增删（等价 DSH slots 的注册-回收语义）
+    /// 注册包：激活时一次性收集，随插件启停整体增删
     record registration {
         menu: list<menu-entry>,
-        config-fields: list<field-schema>,
+        config-fields: list<config-field>,
         actions: list<action-desc>,
-        /// 通用 JSON UI 描述（A2UI 最小闭环，可选）：整份 UI 描述文本——组件树 +
-        /// actions/config bindings 等由插件在 JSON 内自组织，宿主是**透传管道**：
-        /// 只校验「单个 JSON 对象」与大小上限（validate_registration）并原样投影到
-        /// /api/plugins 与 GET /api/plugins/{id}/ui；不解释、不渲染、不做自动布局。
-        /// 仅 Active 插件投影；未注册插件不返回业务 UI。
+        /// 通用 JSON UI 描述（A2UI 最小闭环，可选）：宿主是透传管道，
+        /// 只校验「单个 JSON 对象」与大小上限，不解释、不渲染。
         ui-json: option<string>,
+        /// 运行时补充的服务声明（manifest.provides 是静态首选）
+        services: list<service-decl>,
     }
 
-    /// 候选验证自检结果
+    /// manifest：装载前免实例化即可校验的静态声明
+    record plugin-manifest {
+        /// 插件 id，全局唯一（`<域>.<名>`）
+        id: string,
+        version: string,
+        /// 宿主契约版本（"0.2"）；主版本不匹配 → 拒绝激活
+        api-version: string,
+        title: string,
+        description: string,
+        /// 申请的权限（见 host 各接口文档）
+        permissions: list<string>,
+        /// 实现的扩展点（排他解析，如 "asr.provider"）。宿主不校验白名单。
+        implements: list<string>,
+        /// 官方默认实现标记
+        official: bool,
+        /// 依赖的其他插件（激活期一次性判定）
+        requires: list<plugin-requirement>,
+        /// 事件订阅
+        subscriptions: list<subscription>,
+        /// 要宿主监听的端点
+        endpoints: list<endpoint-spec>,
+        /// 资源配额
+        resources: resource-limits,
+        /// 配置命名空间，必须等于 id
+        config-namespace: string,
+        /// 提供的服务声明（静态首选）
+        provides: list<service-decl>,
+    }
+
+    /// 自检结果
     record test-result {
         name: string,
         ok: bool,
         detail: string,
+    }
+
+    /// 事件信封。payload 编码由 topic 约定：
+    /// io.tcp.data 为原始字节，其余为 UTF-8 JSON。
+    record event {
+        topic: string,
+        /// 关联键：宿主回灌时原样带回（HTTP 请求 id、连接 id 等）
+        correlation-id: option<string>,
+        payload: list<u8>,
     }
 
     // ---------- 效果（声明式；宿主逐效果过权限门后异步执行） ----------
@@ -133,22 +197,31 @@ interface types {
         value: list<u8>,
     }
 
-    record effect-http-get {
-        /// 插件自定义请求 id：宿主回灌事件 payload.id 原样带回（多请求并发对账）
-        request-id: string,
-        /// 绝对 http(s) URL。权限门校验其 host ∈ `http-out:<host>` 白名单
-        url: string,
+    record effect-kv-delete {
+        key: string,
     }
 
-    /// 受限 Tuya LAN 状态读取：device-handle 是宿主分配的不透明句柄，绝不携带
-    /// local_key、IP、凭证、原始报文或 socket 句柄。
+    /// 出站 HTTP：全方法 + 头 + 体。宿主执行后回灌 `http.response` 事件，
+    /// payload 形如 `{"id","status","headers","body","error"}`（body 为 base64）。
+    /// 权限门校验 URL 的 host ∈ `http-out:<host>` 白名单。
+    record effect-http-request {
+        /// 插件自定义请求 id：回灌事件 correlation-id 原样带回
+        request-id: string,
+        method: string,
+        url: string,
+        headers: list<tuple<string, string>>,
+        body: list<u8>,
+        timeout-ms: u32,
+    }
+
+    /// legacy（阶段三随 native Tuya 删除）：受限 LAN 状态读取。
+    /// device-handle 是宿主分配的不透明句柄，绝不携带 local_key / IP / 凭证 / 原始报文。
     record effect-lan-status {
         request-id: string,
         device-handle: string,
     }
 
-    /// 受限 Tuya LAN DP 写入：value-json 只承载已校验的 JSON 值，实际 set→status
-    /// 回读、互斥、超时和错误归类均由 native connector 执行。
+    /// legacy（阶段三随 native Tuya 删除）：受限 LAN DP 写入。
     record effect-lan-set-dp {
         request-id: string,
         device-handle: string,
@@ -156,42 +229,144 @@ interface types {
         value-json: string,
     }
 
-    /// v0.x 效果面：log + kv + http-get + lan-socket。speak / device-frames /
-    /// schedule 的效果变体在对应宿主服务落地时加入；未接线的宿主服务返回 Unsupported。
-    /// lan-socket 只允许上述高层操作，禁止原始 socket/帧/密钥越过边界。
-    ///
-    /// http-get 的两段式瀑布（P1b/P1c）：宿主执行请求后**回灌事件** `http.responses`
-    /// （按步批量：一步产生的全部请求合成一个事件），payload 为 JSON 数组，元素形如
-    /// `{"id":"<request-id>","status":<u16>,"body":"...","error":null|"..."}`。
-    /// （status=0 + error 非空 = 网络/权限失败，非 2xx 也原样回灌，由插件决策降级；
-    /// request-id 是插件侧唯一的关联键——多步流程把上下文编码进 id。）
-    /// 回灌**步数**（非请求数）宿主侧有上限（防插件自我循环），超限停止回灌并告警。
     variant effect {
         log(effect-log),
         kv-put(effect-kv-put),
-        http-get(effect-http-get),
+        kv-delete(effect-kv-delete),
+        http-request(effect-http-request),
         lan-status(effect-lan-status),
         lan-set-dp(effect-lan-set-dp),
     }
 }
 
+/// 宿主服务：核心（日志 / 时钟 / kv / 配置 / 事件 / 服务）
+interface host-core {
+    use types.{config-field, service-decl};
+
+    /// 结构化日志；level ∈ debug|info|warn|error，宿主自动附加插件 id
+    log: func(level: string, message: string);
+    /// 墙上时钟（毫秒）
+    now-ms: func() -> u64;
+    /// 单调时钟（毫秒）
+    monotonic-ms: func() -> u64;
+
+    /// 插件隔离 kv。需 `kv` 权限；未声明 → deny-as-absent（返回 none + 审计）
+    kv-get: func(key: string) -> option<list<u8>>;
+    /// 同步写 kv（需 `kv` 权限）。大批量写请用 kv-put 效果
+    kv-put: func(key: string, value: list<u8>) -> result<_, string>;
+    kv-delete: func(key: string) -> bool;
+    /// 列前缀下的键（不含插件前缀）
+    kv-keys: func(prefix: string) -> list<string>;
+
+    /// 读非密配置：只允许 manifest 已声明的 key；secret 字段返回 none
+    config-get: func(key: string) -> option<string>;
+    /// 读密配置：仅当字段 secret=true 返回明文；每次调用写审计
+    config-secret: func(key: string) -> option<string>;
+    /// 写配置：key 必须已声明；kind / enum / required 由宿主校验
+    config-set: func(key: string, value-json: string) -> result<_, string>;
+
+    /// 发布事件。插件只能发布 `<plugin-id>.*`；false = 至少一个订阅者队列满（背压）
+    publish: func(topic: string, payload: list<u8>) -> result<bool, string>;
+
+    /// 同步调用服务（其他插件或宿主核心服务）。宿主做深度 ≤4、5s 超时、自调用拒绝
+    call-service: func(service: string, method: string, payload: list<u8>) -> result<list<u8>, string>;
+    /// 服务是否存在，返回 `owner@version`
+    discover-service: func(service: string) -> option<string>;
+}
+
+/// 宿主服务：网络（监听 / 收发 / UDP / mDNS / HTTP 响应）
+interface host-net {
+    use types.{endpoint-spec};
+
+    /// 运行时注册监听器；manifest.endpoints 是首选路径。返回不透明端点句柄
+    listen: func(spec: endpoint-spec) -> result<u64, string>;
+    unlisten: func(endpoint-handle: u64) -> result<_, string>;
+
+    /// 出站写（TCP / WS）。返回实际入队字节数
+    net-send: func(connection-id: u64, payload: list<u8>) -> result<u64, string>;
+    net-close: func(connection-id: u64, reason: string) -> result<_, string>;
+    /// 对端地址 `ip:port`
+    net-peer: func(connection-id: u64) -> option<string>;
+
+    /// UDP 出站
+    udp-send: func(socket-handle: u64, peer: string, payload: list<u8>) -> result<u64, string>;
+    /// 加入组播组（SSDP 等）
+    udp-join-multicast: func(socket-handle: u64, group: string) -> result<_, string>;
+
+    /// HTTP 响应：宿主按请求 id 关联，超时（5s）返回 504
+    http-respond: func(request-id: string, status: u16, headers: list<tuple<string, string>>, body: list<u8>) -> result<_, string>;
+
+    /// mDNS 广播。service-type 形如 `_name._tcp.local.`
+    mdns-advertise: func(service-type: string, instance: string, port: u16, txt: list<tuple<string, string>>) -> result<u64, string>;
+    mdns-unadvertise: func(handle: u64) -> result<_, string>;
+}
+
+/// 宿主服务：定时器
+interface host-timer {
+    /// 到期投递 `host.timer.fired`，payload `{"timer_id":N,"kind":"timeout|interval"}`
+    set-timeout: func(delay-ms: u64) -> result<u64, string>;
+    set-interval: func(interval-ms: u64) -> result<u64, string>;
+    clear-timer: func(timer-id: u64) -> result<_, string>;
+}
+
+/// 宿主服务：系统事实与插件私有文件
+interface host-system {
+    record session-info {
+        id: string,
+        device-id: string,
+        phase: string,
+        started-at-ms: u64,
+    }
+
+    record device-info {
+        id: string,
+        online: bool,
+        last-seen-ms: u64,
+        client-id: string,
+    }
+
+    record server-facts {
+        version: string,
+        data-dir: string,
+        started-at-ms: u64,
+    }
+
+    list-sessions: func() -> list<session-info>;
+    get-session: func(session-id: string) -> option<session-info>;
+    list-devices: func() -> list<device-info>;
+    get-device: func(device-id: string) -> option<device-info>;
+    server-info: func() -> server-facts;
+    data-dir: func() -> string;
+
+    /// 插件私有文件根：`<data-dir>/plugins/<id>/`；拒绝 `..` 与绝对路径
+    fs-read: func(path: string) -> result<list<u8>, string>;
+    fs-write: func(path: string, bytes: list<u8>) -> result<_, string>;
+    fs-list: func(dir: string) -> result<list<string>, string>;
+    fs-delete: func(path: string) -> result<bool, string>;
+    fs-stat: func(path: string) -> option<u64>;
+}
+
 /// 插件 world：guest 实现全部导出
 world plugin {
-    import host;
+    import host-core;
+    import host-net;
+    import host-timer;
+    import host-system;
 
     export lifecycle: interface {
-        use types.{plugin-manifest, registration, effect, test-result};
+        use types.{plugin-manifest, registration, event, effect, test-result};
 
         /// 静态声明。装载后、激活前调用一次
         manifest: func() -> plugin-manifest;
-        /// 注册包收集。激活时调用一次；崩溃/超时 → 激活失败走回退
+        /// 注册包收集。激活时调用一次；崩溃/超时 → 激活失败
         register: func() -> registration;
-        /// 事件步进（连接器帧、turn hook、timer）。ok = 待执行效果列表；
-        /// 开放形状载荷用 JSON 字符串（两端 serde），后续阶段收紧
-        handle-event: func(event: string, payload: string) -> result<list<effect>, string>;
-        /// 管理动作（管理台/语音工具双调用方）
+        /// 事件步进。宿主按订阅路由投递；返回待执行效果
+        handle-event: func(ev: event) -> result<list<effect>, string>;
+        /// 管理动作（管理台 / 语音工具双调用方）
         handle-action: func(action-id: string, payload: string) -> result<string, string>;
-        /// 候选验证自检；任一 fail → 验证不过、不采用
+        /// 服务调用入口（其他插件或宿主 call-service 的目标）
+        handle-service: func(service: string, method: string, payload: list<u8>) -> result<list<u8>, string>;
+        /// 自检；任一 fail → 注册不通过
         self-test: func() -> result<list<test-result>, string>;
     }
 }

@@ -29,9 +29,17 @@ pub mod artifacts;
 #[cfg(feature = "wasm-plugins")]
 pub mod bridge;
 #[cfg(feature = "wasm-plugins")]
+pub mod config_store;
+#[cfg(feature = "wasm-plugins")]
 pub mod contract;
 #[cfg(feature = "wasm-plugins")]
 pub mod effects;
+#[cfg(feature = "wasm-plugins")]
+pub mod event_bus;
+#[cfg(feature = "wasm-plugins")]
+pub mod fs;
+#[cfg(feature = "wasm-plugins")]
+pub mod host_api;
 #[cfg(feature = "wasm-plugins")]
 pub mod instance;
 #[cfg(feature = "wasm-plugins")]
@@ -39,11 +47,19 @@ pub mod kv;
 #[cfg(feature = "wasm-plugins")]
 pub mod lifecycle;
 #[cfg(feature = "wasm-plugins")]
+pub mod mdns;
+#[cfg(feature = "wasm-plugins")]
+pub mod net;
+#[cfg(feature = "wasm-plugins")]
 pub mod registry;
 #[cfg(feature = "wasm-plugins")]
 pub mod resolver;
 #[cfg(feature = "wasm-plugins")]
 pub mod sandbox;
+#[cfg(feature = "wasm-plugins")]
+pub mod services;
+#[cfg(feature = "wasm-plugins")]
+pub mod timers;
 #[cfg(feature = "wasm-plugins")]
 pub mod waterfall;
 
@@ -81,3 +97,11 @@ pub fn host_global() -> Option<std::sync::Arc<WasmHost>> {
 /// 本宿主实现的契约主版本（与 `server/wit/plugin.wit` 的包版本主段一致）。
 /// manifest.api-version 主段不等于它 → 拒绝激活（见 [`registry::WasmHost::load`]）。
 pub const CONTRACT_MAJOR_VERSION: u32 = 0;
+
+/// 本宿主实现的契约次版本（`0.2.0` 的次段）：**只增不改**，插件声明次版本高于宿主即拒装。
+pub const CONTRACT_MINOR_VERSION: u32 = 2;
+
+/// 契约版本字符串（日志 / `/api/plugins/contract` 投影用）。
+pub fn contract_version() -> String {
+    format!("{CONTRACT_MAJOR_VERSION}.{CONTRACT_MINOR_VERSION}.0")
+}

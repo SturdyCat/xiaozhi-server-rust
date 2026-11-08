@@ -11,7 +11,7 @@ static ALLOC: guest_alloc::GrowingBump = guest_alloc::GrowingBump::new();
 use serde_json::{json, Value};
 use xiaozhi_plugin_sdk::builder::{FieldSpec, ManifestBuilder, RegistrationBuilder};
 use xiaozhi_plugin_sdk::exports::lifecycle::Guest;
-use xiaozhi_plugin_sdk::xiaozhi::plugin::{host, types};
+use xiaozhi_plugin_sdk::xiaozhi::plugin::{host_core as host, types};
 
 /// 插件 id：必须与上传请求 id、manifest.toml 登记项完全一致。
 const PLUGIN_ID: &str = "soul.official";
@@ -88,7 +88,9 @@ impl Guest for Component {
             .build()
     }
 
-    fn handle_event(event: String, payload: String) -> Result<Vec<types::Effect>, String> {
+    fn handle_event(ev: types::Event) -> Result<Vec<types::Effect>, String> {
+        let event = ev.topic.clone();
+        let payload = String::from_utf8_lossy(&ev.payload).to_string();
         host::log("debug", &format!("{} event={}", PLUGIN_ID, event));
         match event.as_str() {
             "prompt.soul.prepare" => {
@@ -120,6 +122,18 @@ impl Guest for Component {
             e if e.starts_with("hook.") => Ok(vec![]),
             other => Err(format!("未知事件：{other}")),
         }
+    }
+
+    fn handle_service(
+        service: String,
+        method: String,
+        payload: Vec<u8>,
+    ) -> Result<Vec<u8>, String> {
+        // 未声明服务的插件一律显式拒绝（宿主 call-service 会拿到这条消息）
+        Err(format!(
+            "{PLUGIN_ID} 未提供服务 {service}.{method}（{} 字节载荷）",
+            payload.len()
+        ))
     }
 
     fn handle_action(action_id: String, payload: String) -> Result<String, String> {

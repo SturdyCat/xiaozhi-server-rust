@@ -17,7 +17,7 @@ mod parse;
 use serde_json::{json, Value};
 use xiaozhi_plugin_sdk::builder::{FieldSpec, ManifestBuilder, RegistrationBuilder};
 use xiaozhi_plugin_sdk::exports::lifecycle::Guest;
-use xiaozhi_plugin_sdk::xiaozhi::plugin::{host, types};
+use xiaozhi_plugin_sdk::xiaozhi::plugin::{host_core as host, types};
 
 /// 数据源（对齐原生默认 source；config-read 导入随 P2 契约扩展后可配置化）。
 const SOURCE: &str = "https://www.nmc.cn";
@@ -117,12 +117,26 @@ impl Guest for Component {
             .build()
     }
 
-    fn handle_event(event: String, payload: String) -> Result<Vec<types::Effect>, String> {
+    fn handle_event(ev: types::Event) -> Result<Vec<types::Effect>, String> {
+        let event = ev.topic.clone();
+        let payload = String::from_utf8_lossy(&ev.payload).to_string();
         match event.as_str() {
             "weather.forecast" => on_forecast(&payload),
             "http.responses" => on_responses(&payload),
             other => Err(format!("未知事件：{other}")),
         }
+    }
+
+    fn handle_service(
+        service: String,
+        method: String,
+        payload: Vec<u8>,
+    ) -> Result<Vec<u8>, String> {
+        // 未声明服务的插件一律显式拒绝（宿主 call-service 会拿到这条消息）
+        Err(format!(
+            "本插件未提供服务 {service}.{method}（{} 字节载荷）",
+            payload.len()
+        ))
     }
 
     fn handle_action(action_id: String, payload: String) -> Result<String, String> {
@@ -452,9 +466,13 @@ fn finish_fail(req_id: &str, speech: &str) -> Vec<types::Effect> {
 }
 
 fn http_get(id: &str, url: &str) -> types::Effect {
-    types::Effect::HttpGet(types::EffectHttpGet {
+    types::Effect::HttpRequest(types::EffectHttpRequest {
         request_id: id.to_string(),
+        method: "GET".to_string(),
         url: url.to_string(),
+        headers: vec![],
+        body: vec![],
+        timeout_ms: 0,
     })
 }
 

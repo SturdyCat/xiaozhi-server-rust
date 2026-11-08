@@ -112,9 +112,13 @@ fn http_url_gate_parses_hosts_strictly() {
     let ok = |url: &str| {
         enforce_permissions(
             &perms,
-            vec![Effect::HttpGet {
+            vec![Effect::HttpRequest {
                 request_id: "t".into(),
+                method: "GET".into(),
                 url: url.into(),
+                headers: Vec::new(),
+                body: Vec::new(),
+                timeout_ms: 0,
             }],
         )
         .is_ok()

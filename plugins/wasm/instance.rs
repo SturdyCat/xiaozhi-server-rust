@@ -2,16 +2,21 @@
 //!
 //! 每次导出调用前重置 fuel/epoch 预算（[`super::sandbox::arm_call_budget`]），
 //! 陷阱经 [`super::sandbox::classify_trap`] 归类后浮出给 registry 决定 phase。
-//! v0 单实例串行（调用方持锁）；P1 按性能预算引入无状态实例池。
+//!
+//! 四个宿主服务（`host-core` / `host-net` / `host-timer` / `host-system`）全部在
+//! [`StoreData`] 上实现，一律**先过权限门，再委托 [`HostContext`]**——本文件不含任何
+//! 网络/文件/存储逻辑，也不认识任何业务概念。
 
 use anyhow::Result;
 use wasmtime::component::{Component, Linker};
 use wasmtime::Store;
 
 use super::contract::xiaozhi;
-use super::contract::{ManifestDto, Plugin, RegistrationDto, TestResultDto};
+use super::contract::{
+    ManifestDto, Plugin, ProtocolDto, RegistrationDto, TestResultDto,
+};
 use super::effects::Permissions;
-use super::kv::KvStore;
+use super::host_api::HostContext;
 use super::sandbox::{arm_call_budget, SandboxLimits};
 use wasmtime::component::HasSelf;
 
@@ -22,21 +27,35 @@ fn call_err(e: wasmtime::Error) -> anyhow::Error {
     anyhow::Error::msg(e)
 }
 
+fn denied(plugin_id: &str, what: &str, perm: &str) -> String {
+    format!("插件 {plugin_id} 未声明 `{perm}` 权限，拒绝 {what}")
+}
+
 /// Store 数据：宿主服务 trait 的实现载体 + 插件上下文。
 ///
-/// `kv`/`permissions` 是宿主导入（kv-get）的执行依据：权限在 manifest 解析后
-/// 由 registry 注入（见 [`LoadedPlugin::set_permissions`]），此前 kv-get 一律拒绝。
+/// 权限在 manifest 解析后由 registry 注入（见 [`LoadedPlugin::set_permissions`]），
+/// 此前所有受限能力一律拒绝（默认拒绝，不做「温和降级」）。
 pub struct StoreData {
     pub plugin_id: String,
     budget: super::sandbox::MemoryBudget,
-    kv: std::sync::Arc<KvStore>,
+    ctx: std::sync::Arc<HostContext>,
     permissions: Permissions,
+}
+
+impl StoreData {
+    fn pid(&self) -> &str {
+        &self.plugin_id
+    }
 }
 
 // types 接口无宿主函数，但 bindgen 仍生成空 Host trait：需要显式空 impl
 impl xiaozhi::plugin::types::Host for StoreData {}
 
-impl xiaozhi::plugin::host::Host for StoreData {
+// ============================================================
+// host-core：日志 / 时钟 / kv / 配置 / 事件 / 服务
+// ============================================================
+
+impl xiaozhi::plugin::host_core::Host for StoreData {
     fn log(&mut self, level: String, message: String) {
         match level.as_str() {
             "warn" => tracing::warn!(plugin = %self.plugin_id, "{message}"),
@@ -47,6 +66,13 @@ impl xiaozhi::plugin::host::Host for StoreData {
     }
 
     fn now_ms(&mut self) -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0)
+    }
+
+    fn monotonic_ms(&mut self) -> u64 {
         static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
         START
             .get_or_init(std::time::Instant::now)
@@ -55,7 +81,7 @@ impl xiaozhi::plugin::host::Host for StoreData {
     }
 
     /// 读插件隔离 kv。未声明 `kv` 权限 → **deny-as-absent**（none + 审计告警）：
-    /// 插件把它当「没有缓存」处理，而不是装载失败或运行期报错（温和拒绝形态）。
+    /// 插件把它当「没有缓存」处理，而不是装载失败或运行期报错。
     fn kv_get(&mut self, key: String) -> Option<Vec<u8>> {
         if !self.permissions.kv {
             tracing::warn!(
@@ -64,7 +90,395 @@ impl xiaozhi::plugin::host::Host for StoreData {
             );
             return None;
         }
-        self.kv.get(&self.plugin_id, &key)
+        self.ctx.kv.get(&self.plugin_id, &key)
+    }
+
+    fn kv_put(&mut self, key: String, value: Vec<u8>) -> std::result::Result<(), String> {
+        if !self.permissions.kv {
+            return Err(denied(&self.plugin_id, "kv-put", "kv"));
+        }
+        self.ctx
+            .kv
+            .put(&self.plugin_id, &key, &value)
+            .map_err(|e| e.to_string())
+    }
+
+    fn kv_delete(&mut self, key: String) -> bool {
+        if !self.permissions.kv {
+            tracing::warn!(plugin = %self.plugin_id, key = %key, "kv-delete 未声明 kv 权限（deny）");
+            return false;
+        }
+        self.ctx.kv.delete(&self.plugin_id, &key)
+    }
+
+    fn kv_keys(&mut self, prefix: String) -> Vec<String> {
+        if !self.permissions.kv {
+            return Vec::new();
+        }
+        self.ctx.kv.keys(&self.plugin_id, &prefix)
+    }
+
+    fn config_get(&mut self, key: String) -> Option<String> {
+        if !self.permissions.config {
+            tracing::warn!(plugin = %self.plugin_id, key = %key, "config-get 未声明 config 权限");
+            return None;
+        }
+        self.ctx.config.get(&self.plugin_id, &key)
+    }
+
+    fn config_secret(&mut self, key: String) -> Option<String> {
+        if !self.permissions.config {
+            tracing::warn!(plugin = %self.plugin_id, key = %key, "config-secret 未声明 config 权限");
+            return None;
+        }
+        tracing::info!(plugin = %self.plugin_id, key = %key, "config-secret 读取（审计）");
+        self.ctx.config.get_secret(&self.plugin_id, &key)
+    }
+
+    fn config_set(&mut self, key: String, value_json: String) -> std::result::Result<(), String> {
+        if !self.permissions.config {
+            return Err(denied(&self.plugin_id, "config-set", "config"));
+        }
+        self.ctx
+            .config
+            .set(&self.plugin_id, &key, &value_json)
+            .map_err(|e| e.to_string())
+    }
+
+    fn publish(
+        &mut self,
+        topic: String,
+        payload: Vec<u8>,
+    ) -> std::result::Result<bool, String> {
+        if !self.permissions.publish {
+            return Err(denied(&self.plugin_id, "publish", "pub"));
+        }
+        if !super::event_bus::publish_allowed(&self.plugin_id, &topic) {
+            return Err(format!(
+                "插件 {} 只能发布 `{}.*` 命名空间下的 topic（请求：{topic}）",
+                self.plugin_id, self.plugin_id
+            ));
+        }
+        Ok(self.ctx.bus.publish(&super::event_bus::Envelope {
+            topic,
+            correlation_id: None,
+            payload,
+        }))
+    }
+
+    fn call_service(
+        &mut self,
+        service: String,
+        method: String,
+        payload: Vec<u8>,
+    ) -> std::result::Result<Vec<u8>, String> {
+        if !self.permissions.services {
+            return Err(denied(&self.plugin_id, "call-service", "services"));
+        }
+        self.ctx
+            .services
+            .invoke(&self.plugin_id, &service, &method, &payload)
+            .map_err(|e| format!("{e:#}"))
+    }
+
+    fn discover_service(&mut self, service: String) -> Option<String> {
+        self.ctx.services.discover(&service)
+    }
+}
+
+// ============================================================
+// host-net：socket 监听 / 出站 / HTTP 应答 / mDNS
+// ============================================================
+
+impl xiaozhi::plugin::host_net::Host for StoreData {
+    fn listen(
+        &mut self,
+        spec: xiaozhi::plugin::types::EndpointSpec,
+    ) -> std::result::Result<u64, String> {
+        if !self.permissions.net {
+            return Err(denied(&self.plugin_id, "listen", "net"));
+        }
+        let dto = super::contract::EndpointSpecDto {
+            name: spec.name,
+            protocol: match spec.protocol {
+                xiaozhi::plugin::types::Protocol::Http => ProtocolDto::Http,
+                xiaozhi::plugin::types::Protocol::Tcp => ProtocolDto::Tcp,
+                xiaozhi::plugin::types::Protocol::Udp => ProtocolDto::Udp,
+                xiaozhi::plugin::types::Protocol::Ws => ProtocolDto::Ws,
+            },
+            bind: spec.bind,
+            port: spec.port,
+            path: spec.path,
+            required: spec.required,
+        };
+        self.ctx
+            .net
+            .listen(&self.plugin_id, &dto)
+            .map(|(id, port)| {
+                tracing::info!(
+                    plugin = %self.plugin_id, endpoint = id, port,
+                    protocol = dto.protocol.as_str(), "插件端点已绑定"
+                );
+                id
+            })
+            .map_err(|e| format!("{e:#}"))
+    }
+
+    fn unlisten(&mut self, endpoint_handle: u64) -> std::result::Result<(), String> {
+        self.ctx
+            .net
+            .unlisten(&self.plugin_id, endpoint_handle)
+            .map_err(|e| format!("{e:#}"))
+    }
+
+    fn net_send(
+        &mut self,
+        connection_id: u64,
+        payload: Vec<u8>,
+    ) -> std::result::Result<u64, String> {
+        self.ctx
+            .net
+            .send(&self.plugin_id, connection_id, &payload)
+            .map_err(|e| format!("{e:#}"))
+    }
+
+    fn net_close(&mut self, connection_id: u64, reason: String) -> std::result::Result<(), String> {
+        self.ctx
+            .net
+            .close(&self.plugin_id, connection_id, &reason)
+            .map_err(|e| format!("{e:#}"))
+    }
+
+    fn net_peer(&mut self, connection_id: u64) -> Option<String> {
+        self.ctx.net.peer(connection_id)
+    }
+
+    fn udp_send(
+        &mut self,
+        socket_handle: u64,
+        peer: String,
+        payload: Vec<u8>,
+    ) -> std::result::Result<u64, String> {
+        if !self.permissions.net {
+            return Err(denied(&self.plugin_id, "udp-send", "net"));
+        }
+        self.ctx
+            .net
+            .udp_send(&self.plugin_id, socket_handle, &peer, &payload)
+            .map_err(|e| format!("{e:#}"))
+    }
+
+    fn udp_join_multicast(
+        &mut self,
+        socket_handle: u64,
+        group: String,
+    ) -> std::result::Result<(), String> {
+        if !self.permissions.net {
+            return Err(denied(&self.plugin_id, "udp-join-multicast", "net"));
+        }
+        self.ctx
+            .net
+            .udp_join_multicast(&self.plugin_id, socket_handle, &group)
+            .map_err(|e| format!("{e:#}"))
+    }
+
+    fn http_respond(
+        &mut self,
+        request_id: String,
+        status: u16,
+        headers: Vec<(String, String)>,
+        body: Vec<u8>,
+    ) -> std::result::Result<(), String> {
+        self.ctx
+            .net
+            .respond_http(
+                &self.plugin_id,
+                &request_id,
+                status,
+                headers,
+                body,
+            )
+            .map_err(|e| format!("{e:#}"))
+    }
+
+    fn mdns_advertise(
+        &mut self,
+        service_type: String,
+        instance: String,
+        port: u16,
+        txt: Vec<(String, String)>,
+    ) -> std::result::Result<u64, String> {
+        if !self.permissions.mdns {
+            return Err(denied(&self.plugin_id, "mdns-advertise", "mdns"));
+        }
+        self.ctx
+            .mdns
+            .advertise(&self.plugin_id, &service_type, &instance, port, &txt)
+            .map_err(|e| format!("{e:#}"))
+    }
+
+    fn mdns_unadvertise(&mut self, handle: u64) -> std::result::Result<(), String> {
+        self.ctx
+            .mdns
+            .unadvertise(&self.plugin_id, handle)
+            .map_err(|e| format!("{e:#}"))
+    }
+}
+
+// ============================================================
+// host-timer
+// ============================================================
+
+impl xiaozhi::plugin::host_timer::Host for StoreData {
+    fn set_timeout(&mut self, delay_ms: u64) -> std::result::Result<u64, String> {
+        if !self.permissions.timer {
+            return Err(denied(&self.plugin_id, "set-timeout", "timer"));
+        }
+        self.ctx
+            .timers
+            .set_timeout(&self.plugin_id, delay_ms)
+            .map_err(|e| format!("{e:#}"))
+    }
+
+    fn set_interval(&mut self, interval_ms: u64) -> std::result::Result<u64, String> {
+        if !self.permissions.timer {
+            return Err(denied(&self.plugin_id, "set-interval", "timer"));
+        }
+        self.ctx
+            .timers
+            .set_interval(&self.plugin_id, interval_ms)
+            .map_err(|e| format!("{e:#}"))
+    }
+
+    fn clear_timer(&mut self, timer_id: u64) -> std::result::Result<(), String> {
+        self.ctx
+            .timers
+            .clear(&self.plugin_id, timer_id)
+            .map_err(|e| format!("{e:#}"))
+    }
+}
+
+// ============================================================
+// host-system：会话/设备/服务端事实 + 插件私有文件
+// ============================================================
+
+impl xiaozhi::plugin::host_system::Host for StoreData {
+    fn list_sessions(&mut self) -> Vec<xiaozhi::plugin::host_system::SessionInfo> {
+        self.ctx
+            .facts
+            .sessions()
+            .into_iter()
+            .map(|s| xiaozhi::plugin::host_system::SessionInfo {
+                id: s.id,
+                device_id: s.device_id,
+                phase: s.phase,
+                started_at_ms: s.started_at_ms,
+            })
+            .collect()
+    }
+
+    fn get_session(
+        &mut self,
+        session_id: String,
+    ) -> Option<xiaozhi::plugin::host_system::SessionInfo> {
+        self.ctx
+            .facts
+            .session(&session_id)
+            .map(|s| xiaozhi::plugin::host_system::SessionInfo {
+                id: s.id,
+                device_id: s.device_id,
+                phase: s.phase,
+                started_at_ms: s.started_at_ms,
+            })
+    }
+
+    fn list_devices(&mut self) -> Vec<xiaozhi::plugin::host_system::DeviceInfo> {
+        self.ctx
+            .facts
+            .devices()
+            .into_iter()
+            .map(|d| xiaozhi::plugin::host_system::DeviceInfo {
+                id: d.id,
+                online: d.online,
+                last_seen_ms: d.last_seen_ms,
+                client_id: d.client_id,
+            })
+            .collect()
+    }
+
+    fn get_device(
+        &mut self,
+        device_id: String,
+    ) -> Option<xiaozhi::plugin::host_system::DeviceInfo> {
+        self.ctx
+            .facts
+            .device(&device_id)
+            .map(|d| xiaozhi::plugin::host_system::DeviceInfo {
+                id: d.id,
+                online: d.online,
+                last_seen_ms: d.last_seen_ms,
+                client_id: d.client_id,
+            })
+    }
+
+    fn server_info(&mut self) -> xiaozhi::plugin::host_system::ServerFacts {
+        let f = self.ctx.facts.server();
+        xiaozhi::plugin::host_system::ServerFacts {
+            version: f.version,
+            data_dir: f.data_dir,
+            started_at_ms: f.started_at_ms,
+        }
+    }
+
+    fn data_dir(&mut self) -> String {
+        self.ctx.facts.server().data_dir
+    }
+
+    fn fs_read(&mut self, path: String) -> std::result::Result<Vec<u8>, String> {
+        if !self.permissions.fs {
+            return Err(denied(&self.plugin_id, "fs-read", "fs"));
+        }
+        self.ctx
+            .fs
+            .read(&self.plugin_id, &path)
+            .map_err(|e| format!("{e:#}"))
+    }
+
+    fn fs_write(&mut self, path: String, bytes: Vec<u8>) -> std::result::Result<(), String> {
+        if !self.permissions.fs {
+            return Err(denied(&self.plugin_id, "fs-write", "fs"));
+        }
+        self.ctx
+            .fs
+            .write(&self.plugin_id, &path, &bytes)
+            .map_err(|e| format!("{e:#}"))
+    }
+
+    fn fs_list(&mut self, dir: String) -> std::result::Result<Vec<String>, String> {
+        if !self.permissions.fs {
+            return Err(denied(&self.plugin_id, "fs-list", "fs"));
+        }
+        self.ctx
+            .fs
+            .list(&self.plugin_id, &dir)
+            .map_err(|e| format!("{e:#}"))
+    }
+
+    fn fs_delete(&mut self, path: String) -> std::result::Result<bool, String> {
+        if !self.permissions.fs {
+            return Err(denied(&self.plugin_id, "fs-delete", "fs"));
+        }
+        self.ctx
+            .fs
+            .delete(&self.plugin_id, &path)
+            .map_err(|e| format!("{e:#}"))
+    }
+
+    fn fs_stat(&mut self, path: String) -> Option<u64> {
+        if !self.permissions.fs {
+            return None;
+        }
+        self.ctx.fs.stat(&self.plugin_id, &path)
     }
 }
 
@@ -77,13 +491,12 @@ pub struct LoadedPlugin {
 
 impl LoadedPlugin {
     /// 从组件二进制实例化。激活预算（fuel/epoch）给得比单次调用宽。
-    /// `kv` 为宿主全局 kv（kv-get 导入按插件命名空间隔离访问）。
     pub fn instantiate(
         engine: &wasmtime::Engine,
         wasm: &[u8],
         plugin_id: &str,
         limits: SandboxLimits,
-        kv: std::sync::Arc<KvStore>,
+        ctx: std::sync::Arc<HostContext>,
     ) -> Result<Self> {
         let component = Component::new(engine, wasm)
             .map_err(|e| anyhow::anyhow!("组件解析失败（{plugin_id}）：{e}"))?;
@@ -94,8 +507,8 @@ impl LoadedPlugin {
             StoreData {
                 plugin_id: plugin_id.to_string(),
                 budget: super::sandbox::MemoryBudget::new(limits.max_memory_bytes),
-                kv,
-                // manifest 解析前为空权限：kv-get 一律 deny-as-absent
+                ctx,
+                // manifest 解析前为空权限：所有受限能力默认拒绝
                 permissions: Permissions::default(),
             },
         );
@@ -115,8 +528,7 @@ impl LoadedPlugin {
         })
     }
 
-    /// 注入 manifest 解析出的权限（registry 在 manifest 校验后、register 调用前执行；
-    /// 宿主导入 kv-get 自此按声明放行）。
+    /// 注入 manifest 解析出的权限（registry 在 manifest 校验后、register 调用前执行）。
     pub fn set_permissions(&mut self, permissions: Permissions) {
         self.store.data_mut().permissions = permissions;
     }
@@ -154,13 +566,26 @@ impl LoadedPlugin {
     /// 事件步进：ok = WIT 效果列表（由 registry 转 [`super::effects::Effect`]）
     pub fn handle_event(
         &mut self,
-        event: &str,
-        payload: &str,
+        event: xiaozhi::plugin::types::Event,
     ) -> Result<Result<Vec<xiaozhi::plugin::types::Effect>, String>> {
         self.arm_call()?;
         self.plugin
             .lifecycle()
-            .call_handle_event(&mut self.store, event, payload)
+            .call_handle_event(&mut self.store, &event)
+            .map_err(call_err)
+    }
+
+    /// 服务调用入口（其他插件 `call-service` 的目标）
+    pub fn handle_service(
+        &mut self,
+        service: &str,
+        method: &str,
+        payload: &[u8],
+    ) -> Result<Result<Vec<u8>, String>> {
+        self.arm_call()?;
+        self.plugin
+            .lifecycle()
+            .call_handle_service(&mut self.store, service, method, payload)
             .map_err(call_err)
     }
 

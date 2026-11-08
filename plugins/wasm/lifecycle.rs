@@ -23,7 +23,7 @@ use super::contract::{
 };
 use super::effects::Permissions;
 use super::instance::LoadedPlugin;
-use super::registry::{Phase, PluginEntry, WasmHost};
+use super::registry::{phase_ref, Phase, PluginEntry, WasmHost};
 
 /// 生命周期三态（snapshot 投影字符串 = `as_str()`）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -164,7 +164,7 @@ impl WasmHost {
             wasm,
             expected_id,
             self.limits,
-            Arc::clone(&self.kv),
+            Arc::clone(&self.ctx),
         )
         .map_err(|e| StageError::Invalid(format!("组件实例化失败（{expected_id}）：{e:#}")))?;
         let manifest = probe.manifest().map_err(|e| {
@@ -199,7 +199,7 @@ impl WasmHost {
             // Active 条目的实例仍是旧版本：调用方落盘后须 reload_active 原地换新
             e.manifest = manifest;
             e.registration = RegistrationDto::default();
-            e.phase = inactive_phase();
+            e.set_phase(inactive_phase());
             e.instance = None;
             return Ok(StageOutcome {
                 id: expected_id.to_string(),
@@ -216,9 +216,10 @@ impl WasmHost {
                 manifest,
                 registration: RegistrationDto::default(),
                 permissions: Permissions::default(),
-                phase: inactive_phase(),
+                phase: phase_ref(inactive_phase()),
                 instance: None,
                 lifecycle: Lifecycle::Staged,
+                inbox: None,
             },
         );
         tracing::info!(plugin = expected_id, "插件登记为 Staged（未装载）");
@@ -235,11 +236,13 @@ impl WasmHost {
     /// 任一失败保留 Staged 并带原因。成功后不保留实例（未装载）。
     pub fn register(&self, expected_id: &str, wasm: &[u8]) -> Result<RegistrationDto> {
         let mut candidate = self.build_entry(expected_id, wasm)?;
-        let results = candidate
-            .instance
-            .as_mut()
-            .expect("build_entry 成功必有实例")
-            .self_test()?;
+        let instance = candidate.instance.take().expect("build_entry 成功必有实例");
+        let results = {
+            let mut guard = instance
+                .lock()
+                .map_err(|_| anyhow::anyhow!("候选实例锁中毒"))?;
+            guard.self_test()?
+        };
         if let Some(bad) = results.iter().find(|r| !r.ok) {
             anyhow::bail!("self-test 未通过：{}：{}", bad.name, bad.detail);
         }
@@ -257,7 +260,7 @@ impl WasmHost {
         e.registration = candidate.registration.clone();
         e.permissions = candidate.permissions;
         e.lifecycle = Lifecycle::Registered;
-        e.phase = inactive_phase();
+        e.set_phase(inactive_phase());
         e.instance = None;
         tracing::info!(plugin = expected_id, "插件注册为 Registered（未装载）");
         Ok(candidate.registration)
@@ -296,8 +299,14 @@ impl WasmHost {
         let entry = self
             .build_entry(expected_id, wasm)
             .map_err(|e| ActivateError::Build(format!("{e:#}")))?;
-        let mut entries = self.entries.lock().expect("entries lock poisoned");
-        entries.insert(expected_id.to_string(), entry);
+        {
+            let mut entries = self.entries.lock().expect("entries lock poisoned");
+            entries.insert(expected_id.to_string(), entry);
+        }
+        if let Err(e) = self.arm(expected_id) {
+            self.unload(expected_id);
+            return Err(ActivateError::Build(format!("{e:#}")));
+        }
         tracing::info!(plugin = expected_id, "插件激活（Registered → Active）");
         Ok(())
     }
@@ -330,8 +339,12 @@ impl WasmHost {
         let entry = self
             .build_entry(expected_id, wasm)
             .with_context(|| format!("插件 {expected_id} 新版本构建失败（旧实例保留）"))?;
-        let mut entries = self.entries.lock().expect("entries lock poisoned");
-        entries.insert(expected_id.to_string(), entry);
+        {
+            let mut entries = self.entries.lock().expect("entries lock poisoned");
+            entries.insert(expected_id.to_string(), entry);
+        }
+        self.arm(expected_id)
+            .with_context(|| format!("插件 {expected_id} 新版本注册面装配失败"))?;
         tracing::info!(plugin = expected_id, "插件原地升级换版本（Active 保持）");
         Ok(())
     }
@@ -354,9 +367,11 @@ impl WasmHost {
             }
         }
         let e = entries.get_mut(id).expect("只读判定已确认条目存在");
+        self.release_entry(e);
         e.instance = None;
+        e.inbox = None;
         e.lifecycle = Lifecycle::Registered;
-        e.phase = inactive_phase();
+        e.set_phase(inactive_phase());
         tracing::info!(plugin = id, "插件停用（Active → Registered；kv/产物保留）");
         Ok(())
     }
@@ -371,9 +386,12 @@ impl WasmHost {
         if e.lifecycle == Lifecycle::Active {
             return Err(RemoveError::Active);
         }
-        entries.remove(id);
+        let removed = entries.remove(id);
         drop(entries);
-        self.kv.clear_plugin(id);
+        if let Some(e) = removed.as_ref() {
+            self.release_entry(e);
+        }
+        self.kv().clear_plugin(id);
         tracing::info!(plugin = id, "插件移除（条目 + kv 回收）");
         Ok(())
     }
@@ -464,7 +482,7 @@ impl WasmHost {
                     "implements": e.manifest.implements,
                     "permissions": e.manifest.permissions,
                     "lifecycle": e.lifecycle.as_str(),
-                    "phase": if active { phase_json(&e.phase) } else { serde_json::json!({"state": "inactive"}) },
+                    "phase": if active { phase_json(&e.phase_snapshot()) } else { serde_json::json!({"state": "inactive"}) },
                     "registration": if active {
                         serde_json::json!({
                             "menu": e.registration.menu,

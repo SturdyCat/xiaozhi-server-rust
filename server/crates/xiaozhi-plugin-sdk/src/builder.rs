@@ -22,10 +22,20 @@ use crate::xiaozhi::plugin::types as wit;
 // ============================================================
 
 /// 已知权限名（与宿主 `effects::Permissions::parse` 同源；漂移双侧同步改）。
-const KNOWN_BARE_PERMISSIONS: [&str; 5] =
-    ["kv", "speak", "device-frames", "schedule", "lan-socket"];
-/// 已知菜单槽位（与宿主 `contract::validate_registration` 同源）。
-pub const KNOWN_MENU_SLOTS: [&str; 3] = ["nav.main", "config.section", "workflow.node-menu"];
+const KNOWN_BARE_PERMISSIONS: [&str; 12] = [
+    "kv",
+    "config",
+    "pub",
+    "services",
+    "net",
+    "timer",
+    "fs",
+    "mdns",
+    "lan-socket",
+    "speak",
+    "device-frames",
+    "schedule",
+];
 /// 已知配置字段 kind（同源）。
 const KNOWN_FIELD_KINDS: [&str; 9] = [
     "str", "password", "int", "float", "bool", "enum", "path", "dir", "text",
@@ -63,6 +73,10 @@ pub struct ManifestBuilder {
     implements: Vec<String>,
     official: bool,
     requires: Vec<wit::PluginRequirement>,
+    subscriptions: Vec<wit::Subscription>,
+    endpoints: Vec<wit::EndpointSpec>,
+    resources: wit::ResourceLimits,
+    provides: Vec<wit::ServiceDecl>,
 }
 
 impl ManifestBuilder {
@@ -85,6 +99,17 @@ impl ManifestBuilder {
             implements: Vec::new(),
             official: false,
             requires: Vec::new(),
+            subscriptions: Vec::new(),
+            endpoints: Vec::new(),
+            resources: wit::ResourceLimits {
+                fuel_per_call: 0,
+                epoch_ms_per_call: 0,
+                memory_bytes: 0,
+                max_connections: 0,
+                max_queued_events: 0,
+                max_open_files: 0,
+            },
+            provides: Vec::new(),
         })
     }
 
@@ -177,7 +202,7 @@ impl ManifestBuilder {
             return Err(Error::Invalid("api-version 为空".into()));
         }
         Ok(wit::PluginManifest {
-            id: self.id,
+            id: self.id.clone(),
             version: self.version,
             api_version: self.api_version,
             title: self.title,
@@ -186,8 +211,110 @@ impl ManifestBuilder {
             implements: self.implements,
             official: self.official,
             requires: self.requires,
+            subscriptions: self.subscriptions,
+            endpoints: self.endpoints,
+            resources: self.resources,
+            // 配置命名空间恒等于插件 id（宿主装载期强校验）
+            config_namespace: self.id,
+            provides: self.provides,
         })
     }
+
+    /// 订阅事件 topic（`<域>.<名>` 或尾部 `prefix.*`；重复报错）。
+    pub fn subscribe(mut self, topic: &str, filter_json: Option<&str>) -> Result<Self> {
+        if !valid_topic(topic) {
+            return Err(Error::Invalid(format!(
+                "订阅 topic {topic:?} 非法（`a.b` 形，尾部可 `.*`，≤128 字节）"
+            )));
+        }
+        if self.subscriptions.iter().any(|s| s.topic == topic) {
+            return Err(Error::Duplicate(format!("订阅 topic {topic:?}")));
+        }
+        if let Some(f) = filter_json {
+            let parsed: serde_json::Value = serde_json::from_str(f)
+                .map_err(|e| Error::Invalid(format!("topic {topic} 的 filter 不是 JSON：{e}")))?;
+            if !parsed.is_object() {
+                return Err(Error::Invalid("订阅 filter 顶层必须是 JSON 对象".into()));
+            }
+        }
+        self.subscriptions.push(wit::Subscription {
+            topic: topic.to_string(),
+            filter_json: filter_json.map(str::to_string),
+        });
+        Ok(self)
+    }
+
+    /// 声明宿主代为监听的端点（激活时绑定；失败按 `required` 决定是否激活失败）。
+    pub fn endpoint(
+        mut self,
+        name: &str,
+        protocol: wit::Protocol,
+        bind: &str,
+        port: u16,
+        path: Option<&str>,
+        required: bool,
+    ) -> Result<Self> {
+        if name.is_empty() {
+            return Err(Error::Invalid("端点 name 不能为空".into()));
+        }
+        if self.endpoints.iter().any(|e| e.name == name) {
+            return Err(Error::Duplicate(format!("端点 name {name:?}")));
+        }
+        if !["0.0.0.0", "127.0.0.1", "::", "::1"].contains(&bind) {
+            return Err(Error::Invalid(format!(
+                "端点 {name} 的 bind {bind:?} 非法（仅 0.0.0.0/127.0.0.1/::/::1）"
+            )));
+        }
+        let msg_oriented = matches!(protocol, wit::Protocol::Http | wit::Protocol::Ws);
+        if msg_oriented && path.map(|p| p.is_empty()).unwrap_or(true) {
+            return Err(Error::Invalid(format!(
+                "端点 {name}：http/ws 必须声明非空 path"
+            )));
+        }
+        self.endpoints.push(wit::EndpointSpec {
+            name: name.to_string(),
+            protocol,
+            bind: bind.to_string(),
+            port,
+            path: path.map(str::to_string),
+            required,
+        });
+        Ok(self)
+    }
+
+    /// 资源配额（0 = 用宿主默认值；上限由宿主装载期校验）。
+    pub fn resources(mut self, limits: wit::ResourceLimits) -> Self {
+        self.resources = limits;
+        self
+    }
+
+    /// 声明本插件提供的服务（方法签名用 JSON Schema 文本描述）。
+    pub fn provide(mut self, decl: wit::ServiceDecl) -> Result<Self> {
+        if decl.name.is_empty() || !decl.name.contains('.') {
+            return Err(Error::Invalid(format!(
+                "服务名 {:?} 非法（应为 `域.名` 形）",
+                decl.name
+            )));
+        }
+        if self.provides.iter().any(|s| s.name == decl.name) {
+            return Err(Error::Duplicate(format!("服务名 {:?}", decl.name)));
+        }
+        self.provides.push(decl);
+        Ok(self)
+    }
+}
+
+/// topic 形状（与宿主 `contract/validate::valid_topic` 同源）。
+fn valid_topic(topic: &str) -> bool {
+    !topic.is_empty()
+        && topic.len() <= 128
+        && topic
+            .strip_suffix(".*")
+            .map(|base| !base.is_empty() && !base.ends_with('.'))
+            .unwrap_or(true)
+        && topic
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' || c == '*')
 }
 
 /// 数字点分段版本可比较性（与宿主 `contract::compare_versions` 同源；非数字段/空串非法）。
@@ -203,9 +330,10 @@ fn valid_version(v: &str) -> bool {
 #[derive(Default)]
 pub struct RegistrationBuilder {
     menu: Vec<wit::MenuEntry>,
-    config_fields: Vec<wit::FieldSchema>,
+    config_fields: Vec<wit::ConfigField>,
     actions: Vec<wit::ActionDesc>,
     ui_json: Option<String>,
+    services: Vec<wit::ServiceDecl>,
 }
 
 impl RegistrationBuilder {
@@ -223,9 +351,10 @@ impl RegistrationBuilder {
         order: u16,
         icon: &str,
     ) -> Result<Self> {
-        if !KNOWN_MENU_SLOTS.contains(&slot) {
+        // 槽位不设白名单（宿主已放开）：只校验 `<域>.<名>` 形状与长度
+        if slot.is_empty() || !slot.contains('.') || slot.len() > 64 {
             return Err(Error::Invalid(format!(
-                "菜单槽位 {slot:?} 未知（entry {id:?}；已知 {KNOWN_MENU_SLOTS:?}）"
+                "菜单槽位 {slot:?} 形状非法（应为 `nav.main` 形且 ≤64 字节；entry {id:?}）"
             )));
         }
         if self.menu.iter().any(|m| m.slot == slot && m.id == id) {
@@ -248,7 +377,7 @@ impl RegistrationBuilder {
     }
 
     /// 注册配置字段（[`FieldSpec`] 构建后传入；key 唯一）。
-    pub fn config_field(mut self, spec: wit::FieldSchema) -> Result<Self> {
+    pub fn config_field(mut self, spec: wit::ConfigField) -> Result<Self> {
         if spec.key.is_empty() || spec.key.contains('.') || spec.key.contains('/') {
             return Err(Error::Invalid(format!(
                 "配置字段 key {:?} 非法（`[plugins.<id>.config]` 段内的裸键）",
@@ -299,7 +428,23 @@ impl RegistrationBuilder {
             config_fields: self.config_fields,
             actions: self.actions,
             ui_json: self.ui_json,
+            services: self.services,
         }
+    }
+
+    /// 运行时补充服务声明（与 manifest.provides 合并去重后注册）。
+    pub fn service(mut self, decl: wit::ServiceDecl) -> Result<Self> {
+        if decl.name.is_empty() || !decl.name.contains('.') {
+            return Err(Error::Invalid(format!(
+                "服务名 {:?} 非法（应为 `域.名` 形）",
+                decl.name
+            )));
+        }
+        if self.services.iter().any(|s| s.name == decl.name) {
+            return Err(Error::Duplicate(format!("服务名 {:?}", decl.name)));
+        }
+        self.services.push(decl);
+        Ok(self)
     }
 
     /// 声明通用 JSON UI 描述（A2UI 最小闭环）：整份 UI 描述文本——组件树 +
@@ -411,8 +556,8 @@ impl FieldSpec {
         self
     }
 
-    pub fn build(self) -> wit::FieldSchema {
-        wit::FieldSchema {
+    pub fn build(self) -> wit::ConfigField {
+        wit::ConfigField {
             key: self.key,
             label: self.label,
             kind: self.kind.to_string(),

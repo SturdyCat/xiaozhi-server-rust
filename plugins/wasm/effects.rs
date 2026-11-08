@@ -24,9 +24,16 @@ pub enum Effect {
         key: String,
         value: Vec<u8>,
     },
-    HttpGet {
+    KvDelete {
+        key: String,
+    },
+    HttpRequest {
         request_id: String,
+        method: String,
         url: String,
+        headers: Vec<(String, String)>,
+        body: Vec<u8>,
+        timeout_ms: u32,
     },
     LanStatus {
         request_id: String,
@@ -45,7 +52,8 @@ impl Effect {
         match self {
             Effect::Log { .. } => "log",
             Effect::KvPut { .. } => "kv-put",
-            Effect::HttpGet { .. } => "http-get",
+            Effect::KvDelete { .. } => "kv-delete",
+            Effect::HttpRequest { .. } => "http-request",
             Effect::LanStatus { .. } => "lan-status",
             Effect::LanSetDp { .. } => "lan-set-dp",
         }
@@ -53,11 +61,27 @@ impl Effect {
 }
 
 /// 权限集合：从 manifest.permissions 解析。
-/// v0.1 形状：`kv`、`log`（log 免声明）；`http-out:<host>`、`speak`、`device-frames`、
-/// `schedule` 为预占位（解析进来并记录，效果执行器尚未支持）。
+///
+/// 0.2 形状：`kv` / `config` / `pub` / `services` / `net` / `timer` / `fs` / `mdns`
+/// （`log` 免声明）；`http-out:<host>` / `speak` / `device-frames` / `schedule` /
+/// `lan-socket` 为旧效果通道，保留解析以兼容已装插件。
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Permissions {
     pub kv: bool,
+    /// 插件配置命名空间读写（`config-get` / `config-secret` / `config-set`）。
+    pub config: bool,
+    /// 发布自定义 topic（`publish`，仍限 `<plugin-id>.*`）。
+    pub publish: bool,
+    /// 调用其他插件的服务（`call-service`）。
+    pub services: bool,
+    /// socket 监听与出站（`listen` / `net-send` / `udp-send` 等）。
+    pub net: bool,
+    /// 定时器（`set-timeout` / `set-interval`）。
+    pub timer: bool,
+    /// 插件私有文件沙箱。
+    pub fs: bool,
+    /// mDNS 广播。
+    pub mdns: bool,
     pub http_out_hosts: Vec<String>,
     pub speak: bool,
     pub device_frames: bool,
@@ -72,6 +96,13 @@ impl Permissions {
         for d in declared {
             match d.as_str() {
                 "kv" => p.kv = true,
+                "config" => p.config = true,
+                "pub" => p.publish = true,
+                "services" => p.services = true,
+                "net" => p.net = true,
+                "timer" => p.timer = true,
+                "fs" => p.fs = true,
+                "mdns" => p.mdns = true,
                 "speak" => p.speak = true,
                 "device-frames" => p.device_frames = true,
                 "schedule" => p.schedule = true,
@@ -83,7 +114,10 @@ impl Permissions {
                         }
                         p.http_out_hosts.push(host.to_string());
                     } else {
-                        anyhow::bail!("未知权限：{other:?}（合法：kv/speak/device-frames/schedule/lan-socket/http-out:<host>）");
+                        anyhow::bail!(
+                            "未知权限：{other:?}（合法：kv/config/pub/services/net/timer/fs/mdns/\
+                             speak/device-frames/schedule/lan-socket/http-out:<host>）"
+                        );
                     }
                 }
             }
@@ -242,7 +276,7 @@ pub fn enforce_permissions(
     for e in &effects {
         match e {
             Effect::Log { .. } => {} // 结构化日志免权限
-            Effect::KvPut { .. } => {
+            Effect::KvPut { .. } | Effect::KvDelete { .. } => {
                 if !perms.kv {
                     return Err(PermissionError::Denied {
                         kind: e.kind(),
@@ -250,7 +284,7 @@ pub fn enforce_permissions(
                     });
                 }
             }
-            Effect::HttpGet { url, .. } => match url_host(url) {
+            Effect::HttpRequest { url, .. } => match url_host(url) {
                 Some(host) if perms.http_out_hosts.iter().any(|h| h == &host) => {}
                 _ => {
                     return Err(PermissionError::Denied {
@@ -302,6 +336,44 @@ fn url_host(url: &str) -> Option<String> {
 pub trait HttpFetcher: Send + Sync {
     /// GET 一个 URL。成功 = (状态码, 响应体)；失败 = 错误消息（回灌给插件自行降级）。
     fn fetch(&self, url: &str) -> std::result::Result<(u16, String), String>;
+
+    /// 通用请求（`effect-http-request`）。默认实现只接受「无 body 的 GET」，
+    /// 其余形态返回错误由插件自行降级——避免宿主静默降级成语义不同的请求。
+    fn fetch_request(
+        &self,
+        req: &HttpRequestSpec,
+    ) -> std::result::Result<(u16, String), String> {
+        if req.method.eq_ignore_ascii_case("GET") && req.body.is_empty() {
+            self.fetch(&req.url)
+        } else {
+            Err(format!(
+                "当前 HttpFetcher 实现不支持 {} {}（仅 GET 无 body）",
+                req.method, req.url
+            ))
+        }
+    }
+}
+
+/// 一次 HTTP 请求的宿主侧描述（`effect-http-request` 的 Rust 形态）。
+#[derive(Debug, Clone)]
+pub struct HttpRequestSpec {
+    pub method: String,
+    pub url: String,
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
+    pub timeout_ms: u32,
+}
+
+impl HttpRequestSpec {
+    pub fn get(url: impl Into<String>) -> Self {
+        Self {
+            method: "GET".to_string(),
+            url: url.into(),
+            headers: Vec::new(),
+            body: Vec::new(),
+            timeout_ms: 0,
+        }
+    }
 }
 
 /// 生产实现：reqwest 阻塞客户端**懒创建**（不能在 async 上下文建——同 weather 的
@@ -328,6 +400,13 @@ impl Default for ReqwestFetcher {
 
 impl HttpFetcher for ReqwestFetcher {
     fn fetch(&self, url: &str) -> std::result::Result<(u16, String), String> {
+        self.fetch_request(&HttpRequestSpec::get(url))
+    }
+
+    fn fetch_request(
+        &self,
+        req: &HttpRequestSpec,
+    ) -> std::result::Result<(u16, String), String> {
         let client = self.client.get_or_init(|| {
             reqwest::blocking::Client::builder()
                 .timeout(std::time::Duration::from_secs(self.timeout_secs))
@@ -335,7 +414,19 @@ impl HttpFetcher for ReqwestFetcher {
                 .build()
                 .unwrap_or_else(|_| reqwest::blocking::Client::new())
         });
-        let resp = client.get(url).send().map_err(|e| e.to_string())?;
+        let method = reqwest::Method::from_bytes(req.method.to_uppercase().as_bytes())
+            .map_err(|e| format!("非法 HTTP 方法 {}：{e}", req.method))?;
+        let mut builder = client.request(method, &req.url);
+        for (k, v) in &req.headers {
+            builder = builder.header(k.as_str(), v.as_str());
+        }
+        if !req.body.is_empty() {
+            builder = builder.body(req.body.clone());
+        }
+        if req.timeout_ms > 0 {
+            builder = builder.timeout(std::time::Duration::from_millis(req.timeout_ms as u64));
+        }
+        let resp = builder.send().map_err(|e| e.to_string())?;
         let status = resp.status().as_u16();
         let body = resp.text().map_err(|e| e.to_string())?;
         Ok((status, body))
@@ -403,8 +494,27 @@ pub fn execute_effects_with_lan_queue(
                 Ok(())
             }
             Effect::KvPut { key, value } => kv.put(plugin_id, key, value).map_err(Into::into),
-            Effect::HttpGet { request_id, url } => {
-                match fetcher.fetch(url) {
+            Effect::KvDelete { key } => {
+                let existed = kv.delete(plugin_id, key);
+                tracing::debug!(plugin = plugin_id, key, existed, "kv-delete 效果");
+                Ok(())
+            }
+            Effect::HttpRequest {
+                request_id,
+                method,
+                url,
+                headers,
+                body,
+                timeout_ms,
+            } => {
+                let spec = HttpRequestSpec {
+                    method: method.clone(),
+                    url: url.clone(),
+                    headers: headers.clone(),
+                    body: body.clone(),
+                    timeout_ms: *timeout_ms,
+                };
+                match fetcher.fetch_request(&spec) {
                     Ok((status, body)) => feedback.push(HttpFeedback {
                         id: request_id.clone(),
                         status,
@@ -476,9 +586,14 @@ impl From<wit::Effect> for Effect {
                 key: k.key,
                 value: k.value,
             },
-            wit::Effect::HttpGet(h) => Effect::HttpGet {
+            wit::Effect::KvDelete(k) => Effect::KvDelete { key: k.key },
+            wit::Effect::HttpRequest(h) => Effect::HttpRequest {
                 request_id: h.request_id,
+                method: h.method,
                 url: h.url,
+                headers: h.headers,
+                body: h.body,
+                timeout_ms: h.timeout_ms as u32,
             },
             wit::Effect::LanStatus(l) => Effect::LanStatus {
                 request_id: l.request_id,

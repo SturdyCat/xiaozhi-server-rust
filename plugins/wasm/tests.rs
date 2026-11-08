@@ -301,25 +301,38 @@ fn manifest_ok() -> contract::ManifestDto {
     contract::ManifestDto {
         id: "demo.official".into(),
         version: "0.1.0".into(),
-        api_version: "0.1".into(),
+        api_version: "0.2".into(),
         title: "演示".into(),
         description: "desc".into(),
         permissions: vec![],
         implements: vec!["demo.greeter".into()],
         official: true,
         requires: vec![],
+        subscriptions: vec![],
+        endpoints: vec![],
+        resources: Default::default(),
+        config_namespace: "demo.official".into(),
+        provides: vec![],
     }
 }
 
 #[test]
-fn registration_validation_rejects_duplicates_and_unknown_slots() {
+fn registration_validation_rejects_duplicates_and_malformed_slots() {
     let mut reg = contract::RegistrationDto::default();
     reg.menu.push(menu("nav.main", "a"));
     reg.menu.push(menu("nav.main", "a")); // 重复
     assert!(contract::validate_registration(&reg).is_err());
 
+    // 槽位不设白名单（宿主不认识业务域）：只校验 `<域>.<名>` 形状
     let mut reg = contract::RegistrationDto::default();
-    reg.menu.push(menu("sidebar.secret", "a")); // 未知槽位
+    reg.menu.push(menu("sidebar.secret", "a"));
+    assert!(
+        contract::validate_registration(&reg).is_ok(),
+        "形状合法的自定义槽位应被接受"
+    );
+
+    let mut reg = contract::RegistrationDto::default();
+    reg.menu.push(menu("nodot", "a")); // 形状非法
     assert!(contract::validate_registration(&reg).is_err());
 }
 

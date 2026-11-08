@@ -51,4 +51,4 @@ pub mod fallible;
 pub use error::{Error, Result};
 
 /// 契约版本（与 `server/wit/plugin.wit` 包版本一致；宿主校验主版本）。
-pub const API_VERSION: &str = "0.1";
+pub const API_VERSION: &str = "0.2";

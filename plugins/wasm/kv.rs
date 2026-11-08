@@ -74,6 +74,20 @@ impl KvStore {
         }
     }
 
+    /// 列前缀下的键（去掉插件前缀，按字典序）。
+    pub fn keys(&self, plugin_id: &str, prefix: &str) -> Vec<String> {
+        let inner = self.inner.lock().expect("kv lock poisoned");
+        let ns = format!("{plugin_id}:");
+        let full_prefix = format!("{ns}{prefix}");
+        let mut out: Vec<String> = inner
+            .map
+            .keys()
+            .filter_map(|k| k.strip_prefix(&full_prefix).map(str::to_string))
+            .collect();
+        out.sort();
+        out
+    }
+
     /// 卸载/禁用插件时清空其命名空间（注册-回收语义的一部分）。
     pub fn clear_plugin(&self, plugin_id: &str) {
         let mut inner = self.inner.lock().expect("kv lock poisoned");

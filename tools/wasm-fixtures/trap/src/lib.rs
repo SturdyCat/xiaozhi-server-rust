@@ -29,13 +29,25 @@ impl Guest for Component {
         types::PluginManifest {
             id: "trap.hostile".to_string(),
             version: "0.1.0".to_string(),
-            api_version: "0.1".to_string(),
+            api_version: "0.2".to_string(),
             title: "作恶插件（测试）".to_string(),
             description: "沙箱陷阱夹具：无限循环/无限分配".to_string(),
             permissions: vec![],
             implements: vec![],
             official: false,
             requires: vec![],
+            subscriptions: vec![],
+            endpoints: vec![],
+            resources: types::ResourceLimits {
+                fuel_per_call: 0,
+                epoch_ms_per_call: 0,
+                memory_bytes: 0,
+                max_connections: 0,
+                max_queued_events: 0,
+                max_open_files: 0,
+            },
+            config_namespace: "trap.hostile".to_string(),
+            provides: vec![],
         }
     }
 
@@ -45,10 +57,12 @@ impl Guest for Component {
             config_fields: vec![],
             actions: vec![],
             ui_json: None,
+            services: vec![],
         }
     }
 
-    fn handle_event(event: String, _payload: String) -> Result<Vec<types::Effect>, String> {
+    fn handle_event(ev: types::Event) -> Result<Vec<types::Effect>, String> {
+        let event = ev.topic.clone();
         match event.as_str() {
             "spin" => evil_spin(),
             // 观察者挂钩路径的作恶面（P2d）：宿主以 hook.<position> 事件派发
@@ -62,6 +76,14 @@ impl Guest for Component {
             }
             other => Err(format!("未知事件：{other}")),
         }
+    }
+
+    fn handle_service(
+        _service: String,
+        _method: String,
+        _payload: Vec<u8>,
+    ) -> Result<Vec<u8>, String> {
+        Err("不支持服务调用".to_string())
     }
 
     fn handle_action(_action_id: String, _payload: String) -> Result<String, String> {

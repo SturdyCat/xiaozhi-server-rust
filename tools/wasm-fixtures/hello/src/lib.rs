@@ -142,8 +142,10 @@ impl Guest for Component {
             .build()
     }
 
-    fn handle_event(event: String, payload: String) -> Result<Vec<types::Effect>, String> {
-        xiaozhi_plugin_sdk::xiaozhi::plugin::host::log("debug", &format!("event={event}"));
+    fn handle_event(ev: types::Event) -> Result<Vec<types::Effect>, String> {
+        let event = ev.topic.clone();
+        let payload = String::from_utf8_lossy(&ev.payload).to_string();
+        xiaozhi_plugin_sdk::xiaozhi::plugin::host_core::log("debug", &format!("event={event}"));
         match event.as_str() {
             "demo.echo" => Ok(vec![types::Effect::Log(types::EffectLog {
                 level: "info".to_string(),
@@ -154,14 +156,22 @@ impl Guest for Component {
                 value: payload.into_bytes(),
             })]),
             // http.probe：payload = 完整 URL（权限门要求 host=example.com）
-            "http.probe" => Ok(vec![types::Effect::HttpGet(types::EffectHttpGet {
+            "http.probe" => Ok(vec![types::Effect::HttpRequest(types::EffectHttpRequest {
                 request_id: "probe-1".to_string(),
+                method: "GET".to_string(),
                 url: payload,
+                headers: vec![],
+                body: vec![],
+                timeout_ms: 0,
             })]),
             // http.loop：回灌后再发一次请求（宿主深度上限的演练载体）
-            "http.loop" => Ok(vec![types::Effect::HttpGet(types::EffectHttpGet {
+            "http.loop" => Ok(vec![types::Effect::HttpRequest(types::EffectHttpRequest {
                 request_id: "loop".to_string(),
+                method: "GET".to_string(),
                 url: payload,
+                headers: vec![],
+                body: vec![],
+                timeout_ms: 0,
             })]),
             // http.responses：宿主按步批量回灌（数组）。存 kv 供测试断言；loop 再发一次
             "http.responses" => {
@@ -171,10 +181,14 @@ impl Guest for Component {
                 })];
                 // 无 JSON 库的夹具级判别：payload 形如 {"id":"loop",...}
                 if payload.contains("\"id\":\"loop\"") {
-                    effects.push(types::Effect::HttpGet(types::EffectHttpGet {
-                        request_id: "loop".to_string(),
-                        url: "https://example.com/again".to_string(),
-                    }));
+                    effects.push(types::Effect::HttpRequest(types::EffectHttpRequest {
+                request_id: "loop".to_string(),
+                method: "GET".to_string(),
+                url: "https://example.com/again".to_string(),
+                headers: vec![],
+                body: vec![],
+                timeout_ms: 0,
+            }));
                 }
                 Ok(effects)
             }
@@ -306,6 +320,14 @@ impl Guest for Component {
         }
     }
 
+    fn handle_service(
+        _service: String,
+        _method: String,
+        _payload: Vec<u8>,
+    ) -> Result<Vec<u8>, String> {
+        Err("夹具不提供服务调用".to_string())
+    }
+
     fn handle_action(action_id: String, payload: String) -> Result<String, String> {
         match action_id.as_str() {
             // 运行期载荷走可失败分配：OOM = 业务性 Err（不是陷阱降级）
@@ -318,7 +340,7 @@ impl Guest for Component {
                 Ok(out)
             }
             // 宿主 kv-get 导入：读回 demo.kv 事件写入的值（有 kv 权限 → 放行）
-            "recall" => match xiaozhi_plugin_sdk::xiaozhi::plugin::host::kv_get("last") {
+            "recall" => match xiaozhi_plugin_sdk::xiaozhi::plugin::host_core::kv_get("last") {
                 Some(bytes) => String::from_utf8(bytes).map_err(|e| format!("非 UTF-8：{e}")),
                 None => Ok("无缓存（尚未发生 demo.kv 事件）".to_string()),
             },

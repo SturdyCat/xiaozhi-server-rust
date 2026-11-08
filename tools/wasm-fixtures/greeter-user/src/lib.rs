@@ -54,15 +54,28 @@ impl Guest for Component {
             .build()
     }
 
-    fn handle_event(event: String, _payload: String) -> Result<Vec<types::Effect>, String> {
+    fn handle_event(ev: types::Event) -> Result<Vec<types::Effect>, String> {
+        let event = ev.topic.clone();
         match event.as_str() {
             // 对照面：无 http-out 权限的效果 → 宿主权限门拒绝（Degraded，审计上报）
-            "user.fetch" => Ok(vec![types::Effect::HttpGet(types::EffectHttpGet {
+            "user.fetch" => Ok(vec![types::Effect::HttpRequest(types::EffectHttpRequest {
                 request_id: "x".to_string(),
+                method: "GET".to_string(),
                 url: "https://example.com/".to_string(),
+                headers: vec![],
+                body: vec![],
+                timeout_ms: 0,
             })]),
             other => Err(format!("用户插件不处理事件：{other}")),
         }
+    }
+
+    fn handle_service(
+        _service: String,
+        _method: String,
+        _payload: Vec<u8>,
+    ) -> Result<Vec<u8>, String> {
+        Err("夹具不提供服务调用".to_string())
     }
 
     fn handle_action(action_id: String, payload: String) -> Result<String, String> {
@@ -71,7 +84,7 @@ impl Guest for Component {
             "greet" => Ok(format!("用户插件问候：{payload}！")),
             // 无 kv 权限：宿主返回 none，插件把它当「没有缓存」——这是拒绝的温和形态
             "recall" => Ok(
-                match xiaozhi_plugin_sdk::xiaozhi::plugin::host::kv_get("last") {
+                match xiaozhi_plugin_sdk::xiaozhi::plugin::host_core::kv_get("last") {
                     Some(bytes) => format!(
                         "读到（不应发生：未声明 kv 权限）：{}",
                         String::from_utf8_lossy(&bytes)

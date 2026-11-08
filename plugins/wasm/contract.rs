@@ -1,10 +1,10 @@
 //! WIT 契约宿主绑定与投影 DTO。
 //!
 //! `bindgen!` 以 `server/wit/plugin.wit` 为唯一源生成宿主侧类型与链接器胶水；
-//! 本文件把这些 WIT 类型转成 serde DTO（`/api/plugins` 投影与内部记录用），
-//! 并提供 manifest 的装载期校验（契约主版本、id 形状、扩展点声明形状）。
+//! 本文件把这些 WIT 类型转成 serde DTO（`/api/plugins` 投影与内部记录用）。
+//! 装载期校验在 [`validate`] 子模块（manifest / registration / endpoint / subscription）。
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::anyhow;
 
 wasmtime::component::bindgen!({
     // 直接指向契约文件（目录形式会被当作 deps/ 包布局解析而失败）
@@ -14,15 +14,93 @@ wasmtime::component::bindgen!({
 
 // bindgen 产物**直接展开在本模块**（无 bindings:: 包装）：
 // - `contract::Plugin`：world 实例（lifecycle 导出的访问器）
-// - `contract::xiaozhi::plugin::host::Host`：宿主服务 trait（log / now-ms）
+// - `contract::xiaozhi::plugin::host_core::Host` 等：四个宿主服务 trait
 // - `contract::xiaozhi::plugin::types::*`：契约记录
 // 下面统一 re-export，模块树其余部分只经 contract 引用。
+pub use self::xiaozhi::plugin::types as wit;
 
-use self::xiaozhi::plugin::types as wit;
+mod validate;
+pub use validate::{validate_manifest, validate_registration};
 
 // ============================================================
 // 投影 DTO（serde；WIT 类型不过 serde，边界处转换）
 // ============================================================
+
+/// 事件订阅投影。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct SubscriptionDto {
+    pub topic: String,
+    #[serde(default)]
+    pub filter_json: Option<String>,
+}
+
+/// 端点协议（与 WIT `protocol` 同义）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProtocolDto {
+    Http,
+    Tcp,
+    Udp,
+    Ws,
+}
+
+impl ProtocolDto {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Http => "http",
+            Self::Tcp => "tcp",
+            Self::Udp => "udp",
+            Self::Ws => "ws",
+        }
+    }
+
+    /// 该协议是否由宿主做 HTTP 报文分帧（其余给原始字节）。
+    pub fn is_message_oriented(&self) -> bool {
+        matches!(self, Self::Http | Self::Ws)
+    }
+}
+
+/// 端点声明投影。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct EndpointSpecDto {
+    pub name: String,
+    pub protocol: ProtocolDto,
+    pub bind: String,
+    pub port: u16,
+    #[serde(default)]
+    pub path: Option<String>,
+    pub required: bool,
+}
+
+/// 资源配额投影（0 表示用宿主默认值）。
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ResourceLimitsDto {
+    pub fuel_per_call: u64,
+    pub epoch_ms_per_call: u64,
+    pub memory_bytes: u64,
+    pub max_connections: u16,
+    pub max_queued_events: u16,
+    pub max_open_files: u16,
+}
+
+/// 服务方法投影。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ServiceMethodDto {
+    pub name: String,
+    #[serde(default)]
+    pub request_schema_json: String,
+    #[serde(default)]
+    pub response_schema_json: String,
+}
+
+/// 服务声明投影。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ServiceDeclDto {
+    pub name: String,
+    pub version: String,
+    #[serde(default)]
+    pub methods: Vec<ServiceMethodDto>,
+}
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct ManifestDto {
@@ -37,6 +115,21 @@ pub struct ManifestDto {
     /// 依赖的其他插件（激活前置；装载/注册不判定）。
     #[serde(default)]
     pub requires: Vec<RequirementDto>,
+    /// 事件订阅；宿主按 topic 路由，不解释语义。
+    #[serde(default)]
+    pub subscriptions: Vec<SubscriptionDto>,
+    /// 要宿主监听的端点。
+    #[serde(default)]
+    pub endpoints: Vec<EndpointSpecDto>,
+    /// 资源配额。
+    #[serde(default)]
+    pub resources: ResourceLimitsDto,
+    /// 配置命名空间（必须等于 id）。
+    #[serde(default)]
+    pub config_namespace: String,
+    /// 提供的服务声明。
+    #[serde(default)]
+    pub provides: Vec<ServiceDeclDto>,
 }
 
 /// 依赖声明投影（`requires`）。
@@ -87,6 +180,9 @@ pub struct RegistrationDto {
     /// 通用 JSON UI 描述（A2UI 最小闭环）：`Some(文本)` 必须是单个 JSON 对象；
     /// 宿主只校验并透传投影（组件树 / actions / config bindings 由插件自组织）。
     pub ui_json: Option<String>,
+    /// 运行时补充的服务声明（与 manifest.provides 合并）。
+    #[serde(default)]
+    pub services: Vec<ServiceDeclDto>,
 }
 
 /// UI 描述大小上限（与 guest SDK builder 同源；漂移双侧同步改）：
@@ -103,6 +199,31 @@ pub struct TestResultDto {
 // ============================================================
 // WIT → DTO 转换
 // ============================================================
+
+fn protocol_from(p: wit::Protocol) -> ProtocolDto {
+    match p {
+        wit::Protocol::Http => ProtocolDto::Http,
+        wit::Protocol::Tcp => ProtocolDto::Tcp,
+        wit::Protocol::Udp => ProtocolDto::Udp,
+        wit::Protocol::Ws => ProtocolDto::Ws,
+    }
+}
+
+fn service_decl_from(s: wit::ServiceDecl) -> ServiceDeclDto {
+    ServiceDeclDto {
+        name: s.name,
+        version: s.version,
+        methods: s
+            .methods
+            .into_iter()
+            .map(|m| ServiceMethodDto {
+                name: m.name,
+                request_schema_json: m.request_schema_json,
+                response_schema_json: m.response_schema_json,
+            })
+            .collect(),
+    }
+}
 
 impl From<wit::PluginManifest> for ManifestDto {
     fn from(m: wit::PluginManifest) -> Self {
@@ -123,6 +244,36 @@ impl From<wit::PluginManifest> for ManifestDto {
                     min_version: r.min_version,
                 })
                 .collect(),
+            subscriptions: m
+                .subscriptions
+                .into_iter()
+                .map(|s| SubscriptionDto {
+                    topic: s.topic,
+                    filter_json: s.filter_json,
+                })
+                .collect(),
+            endpoints: m
+                .endpoints
+                .into_iter()
+                .map(|e| EndpointSpecDto {
+                    name: e.name,
+                    protocol: protocol_from(e.protocol),
+                    bind: e.bind,
+                    port: e.port,
+                    path: e.path,
+                    required: e.required,
+                })
+                .collect(),
+            resources: ResourceLimitsDto {
+                fuel_per_call: m.resources.fuel_per_call,
+                epoch_ms_per_call: m.resources.epoch_ms_per_call,
+                memory_bytes: m.resources.memory_bytes,
+                max_connections: m.resources.max_connections,
+                max_queued_events: m.resources.max_queued_events,
+                max_open_files: m.resources.max_open_files,
+            },
+            config_namespace: m.config_namespace,
+            provides: m.provides.into_iter().map(service_decl_from).collect(),
         }
     }
 }
@@ -152,11 +303,6 @@ pub fn compare_versions(a: &str, b: &str) -> Option<std::cmp::Ordering> {
         }
     }
     Some(order)
-}
-
-/// 版本文本是否可参与比较（全数字点分段；空串拒绝）。
-fn valid_version(v: &str) -> bool {
-    compare_versions(v, "0").is_some()
 }
 
 /// `version >= min`（数字点分段；任一侧不可比较 = false）。
@@ -213,6 +359,7 @@ impl From<wit::Registration> for RegistrationDto {
                 })
                 .collect(),
             ui_json: r.ui_json,
+            services: r.services.into_iter().map(service_decl_from).collect(),
         }
     }
 }
@@ -227,171 +374,21 @@ impl From<wit::TestResult> for TestResultDto {
     }
 }
 
-// ============================================================
-// 装载期校验
-// ============================================================
-
-/// manifest 校验：拒绝而非静默容忍（对齐静态注册表「未知 engine 不静默回退」的口径）。
-pub fn validate_manifest(m: &ManifestDto) -> Result<()> {
-    if m.id.is_empty() {
-        bail!("manifest.id 不能为空");
-    }
-    // id 形状：`<域>.<名>`，段内仅小写字母数字与 `-`/`_`，防槽位键与配置段注入
-    for seg in m.id.split('.') {
-        if seg.is_empty()
-            || !seg
-                .chars()
-                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
-        {
-            bail!(
-                "manifest.id 非法：{:?}（应为 `<域>.<名>`，段内仅小写字母数字与 -/_）",
-                m.id
-            );
-        }
-    }
-    // 契约主版本：`api_version` 形如 "0" 或 "0.1"，取首段比对
-    let major = m
-        .api_version
-        .split('.')
-        .next()
-        .unwrap_or("")
-        .parse::<u32>()
-        .map_err(|_| anyhow!("manifest.api-version 非法：{:?}", m.api_version))?;
-    if major != crate::plugins::wasm::CONTRACT_MAJOR_VERSION {
-        bail!(
-            "契约主版本不匹配：插件 {} 声明 {}，宿主 {}（拒绝激活；请改用匹配的 SDK 构建）",
-            m.id,
-            m.api_version,
-            crate::plugins::wasm::CONTRACT_MAJOR_VERSION
-        );
-    }
-    if m.title.is_empty() {
-        bail!("manifest.title 不能为空（管理台清单展示需要）");
-    }
-    // 版本可比较性：manifest.version 与 requires[].min-version 都必须数字点分段
-    //（升级判定与依赖判定共用 compare_versions；写坏版本会在装载期暴露而非激活期才炸）
-    if !valid_version(&m.version) {
-        bail!(
-            "manifest.version 非法：{:?}（应为数字点分段，如 1.2.3）",
-            m.version
-        );
-    }
-    let mut seen_requires = std::collections::HashSet::new();
-    for r in &m.requires {
-        if r.id.is_empty()
-            || !r.id.split('.').all(|seg| {
-                !seg.is_empty()
-                    && seg.chars().all(|c| {
-                        c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_'
-                    })
-            })
-        {
-            bail!("manifest.requires[].id 非法：{:?}", r.id);
-        }
-        if r.id == m.id {
-            bail!("manifest.requires 自引用：{} 不能依赖自身", r.id);
-        }
-        if !seen_requires.insert(r.id.clone()) {
-            bail!("manifest.requires 重复依赖：{}", r.id);
-        }
-        if !valid_version(&r.min_version) {
-            bail!(
-                "manifest.requires[{}].min-version 非法：{:?}（数字点分段）",
-                r.id,
-                r.min_version
-            );
-        }
-    }
-    for p in &m.implements {
-        if p.is_empty() || !p.contains('.') {
-            bail!(
-                "manifest.implements 扩展点形状非法：{:?}（应为 `asr.provider` 形）",
-                p
-            );
-        }
-    }
-    Ok(())
+/// UI 描述的只读投影（`/api/plugins` registration.ui 与
+/// `GET /api/plugins/{id}/ui` 共用同一出口）：文本解析为 JSON 对象；
+/// 未声明 → `null`（装载期已校验，此处只为投影兜底）。
+pub fn ui_json_value(ui_json: Option<&str>) -> serde_json::Value {
+    ui_json
+        .and_then(|text| serde_json::from_str(text).ok())
+        .unwrap_or(serde_json::Value::Null)
 }
 
-/// 注册包校验：菜单槽位 id 唯一、槽位名在已知集合内；扩展点与 manifest 声明一致由 resolver 保证。
-pub fn validate_registration(reg: &RegistrationDto) -> Result<()> {
-    let known_slots = ["nav.main", "config.section", "workflow.node-menu"];
-    let mut seen = std::collections::HashSet::new();
-    for m in &reg.menu {
-        if !known_slots.contains(&m.slot.as_str()) {
-            bail!(
-                "菜单槽位 {:?} 未知（entry id={}）：已知 {:?}",
-                m.slot,
-                m.id,
-                known_slots
-            );
-        }
-        if !seen.insert((m.slot.clone(), m.id.clone())) {
-            bail!("菜单槽位 {:?} 内 entry id {:?} 重复", m.slot, m.id);
-        }
-        if m.label.is_empty() {
-            bail!("菜单 entry {} label 为空", m.id);
-        }
-    }
-    let mut keys = std::collections::HashSet::new();
-    let kinds = [
-        "str", "password", "int", "float", "bool", "enum", "path", "dir", "text",
-    ];
-    for f in &reg.config_fields {
-        if f.key.is_empty() || f.key.contains('.') || f.key.contains('/') {
-            bail!(
-                "配置字段 key 非法：{:?}（`[plugins.<id>.config]` 段内的裸键）",
-                f.key
-            );
-        }
-        if !keys.insert(f.key.clone()) {
-            bail!("配置字段 key 重复：{:?}", f.key);
-        }
-        if !kinds.contains(&f.kind.as_str()) {
-            bail!(
-                "配置字段 {} 的 kind 非法：{:?}（合法 {:?}）",
-                f.key,
-                f.kind,
-                kinds
-            );
-        }
-        if f.kind == "enum" && f.enum_values.is_empty() {
-            bail!("配置字段 {} 声明 enum 但 enum-values 为空", f.key);
-        }
-    }
-    let mut actions = std::collections::HashSet::new();
-    for a in &reg.actions {
-        if a.id.is_empty() || a.label.is_empty() {
-            bail!("动作声明非法：{:?}（id 与 label 必填）", a.id);
-        }
-        if !actions.insert(a.id.clone()) {
-            bail!("动作 id 重复：{:?}", a.id);
-        }
-    }
-    validate_ui_json(reg.ui_json.as_deref())
+/// 构造契约错误（供 host 实现复用统一文案）。
+pub fn contract_err(msg: impl Into<String>) -> anyhow::Error {
+    anyhow!(msg.into())
 }
 
-/// UI 描述校验（A2UI 透传管道的守门）：可选字段；`Some` 时必须是
-/// 「单个 JSON 对象」文本且不超大小上限。规则与 guest SDK
-/// `RegistrationBuilder::ui_json` 同源（漂移双侧同步改）。
-fn validate_ui_json(ui_json: Option<&str>) -> Result<()> {
-    let Some(text) = ui_json else {
-        return Ok(());
-    };
-    if text.len() > MAX_UI_JSON_BYTES {
-        bail!("UI 描述超上限：{} > {MAX_UI_JSON_BYTES} 字节", text.len());
-    }
-    let parsed: serde_json::Value =
-        serde_json::from_str(text).map_err(|e| anyhow!("UI 描述不是合法 JSON：{e}"))?;
-    if !parsed.is_object() {
-        bail!(
-            "UI 描述顶层必须是 JSON 对象（得到 {}）",
-            json_type_name(&parsed)
-        );
-    }
-    Ok(())
-}
-
+/// JSON 值类型名（错误文案用）。
 fn json_type_name(v: &serde_json::Value) -> &'static str {
     match v {
         serde_json::Value::Null => "null",
@@ -401,13 +398,4 @@ fn json_type_name(v: &serde_json::Value) -> &'static str {
         serde_json::Value::Array(_) => "array",
         serde_json::Value::Object(_) => "object",
     }
-}
-
-/// UI 描述的只读投影（`/api/plugins` registration.ui 与
-/// `GET /api/plugins/{id}/ui` 共用同一出口）：文本解析为 JSON 对象；
-/// 未声明 → `null`（装载期已校验，此处只为投影兜底）。
-pub fn ui_json_value(ui_json: Option<&str>) -> serde_json::Value {
-    ui_json
-        .and_then(|text| serde_json::from_str(text).ok())
-        .unwrap_or(serde_json::Value::Null)
 }

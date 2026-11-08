@@ -22,6 +22,7 @@ fn wit_registration_ui_json_converts_to_dto() {
         config_fields: vec![],
         actions: vec![],
         ui_json: Some(r#"{"a2ui":"0.1"}"#.to_string()),
+        services: vec![],
     };
     let dto: contract::RegistrationDto = wit_reg.into();
     assert_eq!(dto.ui_json.as_deref(), Some(r#"{"a2ui":"0.1"}"#));
@@ -33,6 +34,7 @@ fn wit_registration_ui_json_converts_to_dto() {
         config_fields: vec![],
         actions: vec![],
         ui_json: None,
+        services: vec![],
     }
     .into();
     assert_eq!(bare.ui_json, None);
