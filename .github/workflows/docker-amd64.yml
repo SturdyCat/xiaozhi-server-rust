@@ -79,10 +79,17 @@ jobs:
            test -f plugins/mod.rs
            grep -Fq 'COPY server/wit ./wit' Dockerfile
           test -f server/wit/plugin.wit
-          if grep -Eq 'COPY[[:space:]].*(\.wasm|plugins-src)' Dockerfile docker-compose.yml; then
-            echo 'pure-base release inputs contain a prebuilt business WASM artifact' >&2
+          # Official system plugins are built from source in Docker's dedicated
+          # system-plugins stage. Reject only direct prebuilt .wasm copies; source
+          # trees such as plugins-src are valid release inputs.
+          if grep -Eq '^[[:space:]]*COPY[[:space:]].*\.wasm([[:space:]]|$)' Dockerfile docker-compose.yml; then
+            echo 'pure-base release inputs contain a direct prebuilt WASM artifact' >&2
             exit 1
           fi
+          grep -Fq 'COPY plugins-src /plugins-src' Dockerfile
+          grep -Fq 'COPY tools/wasm-fixtures /tools/wasm-fixtures' Dockerfile
+          grep -Fq '**/target' .dockerignore
+          grep -Fq '*.wasm' .dockerignore
           grep -Fq '/var/run/docker.sock:/var/run/docker.sock' docker-compose.yml
 
       - name: Check ACR secrets presence

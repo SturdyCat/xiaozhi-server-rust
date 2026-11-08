@@ -21,6 +21,11 @@ tools/*
 !tools/nlu-trainer/
 tools/nlu-trainer/*
 !tools/nlu-trainer/train.py
+# System plugin images are built in Docker from source; include only their
+# source fixtures and builder, never local wasm/target outputs.
+!tools/build-system-plugins.sh
+!tools/wasm-fixtures/
+!tools/wasm-fixtures/**
 scripts
 .dev
 tests
@@ -73,8 +78,9 @@ server/scripts
 server/tests
 server/target
 
-# ---- Rust 构建产物 / 本地 cargo 配置 ----
-target
+# ---- Rust/WASM 构建产物 / 本地 cargo 配置 ----
+**/target
+*.wasm
 .cargo
 
 # ---- 运行时数据与凭证：绝不进镜像层 ----
