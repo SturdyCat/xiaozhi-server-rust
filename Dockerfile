@@ -255,9 +255,38 @@ ARG CARGO_BUILD_JOBS=2
 # AVX/AVX2 指令，导致运行时 SIGILL 崩溃。
 ENV RUSTFLAGS="-C target-cpu=x86-64-v2"
 
-# 依赖缓存层：先 COPY 清单 + dummy main.rs 编译全部依赖（含 sherpa 特性的原生库下载——
-# 网络耗时都落在这一层，日常改代码只重编本 crate）。--locked：清单与 lock 不一致即构建失败
-# （可复现发布镜像是核心诉求）。
+# sherpa-onnx 预编译库预取层：sherpa-onnx-sys 的 build.rs 默认从 GitHub release 资产端点
+# 下载静态库归档，该端点间歇性 504/传输中途截断（2026-11-08 GHA 与本地同时复现；ureq 无
+# 重试，一撞即 build.rs:42 panic）。对策：预取到 /opt/sherpa-archives 并设
+# SHERPA_ONNX_ARCHIVE_DIR——build.rs 见目录内有精确文件名的归档即跳过下载（本仓库
+# ~/.cargo 缓存中 sherpa-onnx-sys-1.13.8/build.rs 的既定契约）。源顺序：GitHub 直连（健康时
+# 最快，GHA 美国 runner 常态首选）→ gh-proxy.com 前置代理（国内/直连故障兜底，社区代理
+# 有篡改风险，靠下方 sha256 钉版校验兜住）。⚠️ 升级 sherpa-onnx-sys（Cargo.lock 版本变化）
+# 后 case 未命中会明确报错：需下载新归档补一行 sha256 再构建——保「可复现 + 防篡改」。
+COPY server/Cargo.lock ./
+RUN SHERPA_VER="$(awk '/^name = "sherpa-onnx-sys"$/{getline; gsub(/"/, ""); print $3; exit}' Cargo.lock)" \
+ && ARCHIVE="sherpa-onnx-v${SHERPA_VER}-linux-x64-static-lib.tar.bz2" \
+ && case "${SHERPA_VER}" in \
+      1.13.8) SHA256=e1fdc5b67530e15741ef897fa5ffff297056f3bf0c6d829a27af9225a4c4b5a6 ;; \
+      *) echo "sherpa-onnx-sys ${SHERPA_VER} 未钉版：下载 ${ARCHIVE} 算 sha256 后补进本 RUN 的 case 分支" >&2; exit 64 ;; \
+    esac \
+ && mkdir -p /opt/sherpa-archives && cd /opt/sherpa-archives \
+ && ok=0 \
+ && for base in \
+      "https://github.com/k2-fsa/sherpa-onnx/releases/download/v${SHERPA_VER}" \
+      "https://gh-proxy.com/https://github.com/k2-fsa/sherpa-onnx/releases/download/v${SHERPA_VER}"; do \
+      echo "[sherpa] 拉取 ${ARCHIVE} ← ${base}" \
+      && curl -fL --connect-timeout 10 --max-time 300 --retry 2 --retry-all-errors -o "${ARCHIVE}" "${base}/${ARCHIVE}" \
+      && echo "${SHA256}  ${ARCHIVE}" | sha256sum -c - \
+      && ok=1 && break \
+      || echo "[sherpa] 本源失败（504/截断/哈希不符），换下一源" >&2; \
+    done \
+ && [ "${ok}" = 1 ] \
+ && ls -l /opt/sherpa-archives
+ENV SHERPA_ONNX_ARCHIVE_DIR=/opt/sherpa-archives
+
+# 依赖缓存层：先 COPY 清单 + dummy main.rs 编译全部依赖（sherpa 静态库由上方预取层供给，
+# 不再现场下载）。--locked：清单与 lock 不一致即构建失败（可复现发布镜像是核心诉求）。
 COPY server/Cargo.toml server/Cargo.lock ./
 # registry/git 挂命名缓存（两条 cargo RUN 共挂，源码层那条也要挂——上游 crate 源码解包在
 # CARGO_HOME/registry/src，源码层校验指纹时要读）：清单变更使本层失效时，crates.io 下载
