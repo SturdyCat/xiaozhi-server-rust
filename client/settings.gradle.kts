@@ -28,20 +28,17 @@ dependencyResolutionManagement {
     // ⚠️ 不要改成 PREFER_SETTINGS：那会把 Kotlin/JS 插件自动加到根工程的 nodejs.org dist
     // 仓库丢弃掉，org.nodejs:node（Node 发行版）将落到 maven 仓库里找 → 必然 Could not resolve。
     repositories {
-        google()
-        mavenCentral()
-        maven { setUrl("https://mirrors.tencent.com/repository/maven-tencent/") }
-        // com.yarnpkg:yarn 备援源（2026-11-08 修复）：Kotlin/JS 的 kotlinYarnSetup 在任务图阶段
-        // 解析 detached configuration，从 KGP 内置的 GitHub release 资产端点拉 yarn tarball；
-        // 该端点当时对 HEAD/GET 一律 504（GHA 与本地冷缓存同时复现，逐字一致），构建必然失败，
-        // 且失败的 RUN 不导出缓存挂载 → 下次依旧冷构建依旧死在同一处。
-        // npm registry 上的 yarn@1.22.17 与 GitHub release tarball 逐字节同源
-        // （Gradle 构件缓存目录名 = 文件 sha1 = bf910747…，两源完全一致），顶层布局同为
-        // yarn-v1.22.17/，KGP 解压即用。两个 ivy 源均 content 过滤【只】服务该模块：
-        // 其他依赖解析零额外网络面；KGP 的 GitHub 源仍在链尾兜底（npm 双源全挂时才触达）。
-        // ⚠️ 与上文「不追加额外源」的约定不冲突：那条防的是无过滤源扩大 DNS 故障面，
-        // 此处为单模块备援，不改变其他依赖的解析链。Kotlin 升级若提高默认 yarn 版本，
-        // pattern 的 [revision] 自动跟随，无需改这里。
+        // com.yarnpkg:yarn 唯一来源（2026-11-08 第七次事故后由「备援」转正，838db3e 的备援源
+        // 当时从未被尝试）：KGP 的 :kotlinYarnSetup 在任务图阶段解析 detached configuration，
+        // AbstractSetupTask.withUrlRepo 会临时把 GitHub release ivy 仓库注册进根工程
+        // project.repositories；PREFER_PROJECT 下 project 一旦声明仓库，本块的整条仓库链就
+        // 退出该次解析，GitHub 端点 504 即构建失败。根 build.gradle.kts 已清空 downloadBaseUrl，
+        // withUrlRepo 不再注册仓库，回落到此处两个带 content 过滤的 npm ivy 源。
+        // npm registry 的 yarn-1.22.17.tgz 与 GitHub release 归档逐字节同源（sha1 bf910747…，
+        // 顶层同为 yarn-v1.22.17/），KGP 解压即用；[revision] 跟随 KGP 默认 yarn 版本自动变化。
+        // ⚠️ 必须放在链首且带 content 过滤：yarn 模块在第一个仓库即命中，不触达后面的 maven 源；
+        // 其他模块被过滤直接跳过，零额外网络面（与上文「不追加无过滤源」的约定一致）。
+        // ⛔ 不要移回链尾：maven 源返回非 404 错误时 Gradle 会中止解析，走不到这里的 ivy 源。
         ivy("https://registry.npmmirror.com") {
             patternLayout { artifact("yarn/-/yarn-[revision].tgz") }
             metadataSources { artifact() }
@@ -52,6 +49,9 @@ dependencyResolutionManagement {
             metadataSources { artifact() }
             content { includeModule("com.yarnpkg", "yarn") }
         }
+        google()
+        mavenCentral()
+        maven { setUrl("https://mirrors.tencent.com/repository/maven-tencent/") }
     }
 }
 

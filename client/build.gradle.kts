@@ -38,3 +38,24 @@ plugins {
 //   ② 根工程一旦带上项目级仓库，Kotlin/JS 的 Node 发行版（org.nodejs:node，nodejs.org dist 仓库）
 //      会被挤到链条末尾——中间某个仓库抛 DNS 异常时整个解析直接中止（实测 maven.tencent.com
 //      解析失败导致 org.nodejs:node 必然失败）。xiaoya-player 的根工程同样没有 allprojects 仓库块。
+
+// ⚠️ Kotlin/JS 的 yarn 下载源（2026-11-08 第七次构建事故，详见 Dockerfile 头部）：
+//   KGP 2.1.21 的 YarnRootExtension 默认把 downloadBaseUrl 钉在 GitHub release 资产端点；
+//   AbstractSetupTask.withUrlRepo 在 :kotlinYarnSetup 求 @Classpath 输入时，会把该 GitHub ivy
+//   仓库**临时**注册进根工程 project.repositories，解析完再删。一旦注册，PREFER_PROJECT 语义下
+//   settings.gradle.kts 的整条仓库链即退出该 detached configuration —— 实测仓库链只剩 GitHub
+//   一个，端点 504 就整条构建失败（往 settings 里追加备援源也不会被尝试）。
+//   清空 downloadBaseUrl 后 withUrlRepo 不注册任何仓库，解析回落到 settings 中带 content 过滤的
+//   npm registry ivy 源（两个源的 yarn-1.22.17.tgz 与 GitHub 归档逐字节同源，sha1 bf910747…）；
+//   Node 的 nodejs.org dist 仓库由 NodeJsSetupTask 独立注入，不受影响。
+//   ⚠️ 用 plugins.withType 而非 afterEvaluate：YarnPlugin 由子模块配置 Kotlin/JS 时才 apply 到
+//      根工程（晚于根脚本执行），withType 在 apply 当刻回调。升级 Kotlin 到 2.2+ 时复核
+//      AbstractSettings 的 downloadBaseUrl 是否已移除，届时改配 kotlinYarnSpec 扩展。
+plugins.withType(org.jetbrains.kotlin.gradle.targets.js.yarn.YarnPlugin::class.java) {
+    extensions.configure<org.jetbrains.kotlin.gradle.targets.js.yarn.YarnRootExtension>(
+        org.jetbrains.kotlin.gradle.targets.js.yarn.YarnRootExtension.YARN,
+    ) {
+        @Suppress("DEPRECATION")
+        downloadBaseUrl = null
+    }
+}

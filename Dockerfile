@@ -91,6 +91,22 @@
 #   ⛔ 与第五次同型：移动源码目录时，`#[path]` 层数 / COPY 目标 / find 清单必须同一提交内同步。
 #   判断口径补充：日志出现 `couldn't read <相对路径>` 这类明确编译错误时，先按 rustc 的
 #   `#[path]` / `include_*!` 相对层级手算容器内绝对路径，再决定改 COPY 目标还是改源码。
+#
+# 🚨 2026-11-08 第七次复现：**GHA 死在 web 15/16，既不是 OOM / 漏 COPY，也不是编译错误**：
+#   `Could not determine the dependencies of task ':kotlinYarnSetup'` →
+#   `Could not HEAD https://github.com/yarnpkg/yarn/releases/download/v1.22.17/yarn-v1.22.17.tar.gz`
+#   `Received status code 504`（同日 sherpa-onnx-sys 的 GitHub release 端点也 504，见 build 阶段预取层）。
+#   根因：KGP 2.1.21 的 AbstractSetupTask.withUrlRepo 在 :kotlinYarnSetup 求 @Classpath 输入时，
+#   把 GitHub ivy 仓库**临时**注册进根工程 project.repositories（解析完即删）；PREFER_PROJECT 下
+#   project 一旦声明仓库，settings.gradle.kts 的整条仓库链就不参与该 detached configuration，
+#   于是 838db3e 加在 settings 里的 npm 备援源从未被尝试（本地诊断实测：仓库链只剩 GitHub 一个）。
+#   修法：client/build.gradle.kts 用 plugins.withType<YarnPlugin> 清空 downloadBaseUrl →
+#   withUrlRepo 不注册仓库，解析回落到 settings 中两个带 content 过滤的 npm ivy 源（提到链首）；
+#   npm registry 的 yarn-1.22.17.tgz 与 GitHub 归档逐字节同源（sha1 bf910747…），本地冷缓存
+#   实测 5s 下载成功，Node 的 nodejs.org 仓库由 NodeJsSetupTask 独立注入、不受影响。
+#   ⚠️ 判断口径补充：`Could not determine the dependencies of task` + 外部资产端点 5xx 属
+#     「构建依赖下载链」问题：先查该任务的仓库注册层级（project 级动态仓库会挤掉 settings 链），
+#     ⛔ 不要按 OOM 调参，也不要只在 settings 里追加仓库（不会被尝试）。
 # ♻️ 构建缓存（2026-10-28 起，两层正交，详见 workflow 与本文件各 RUN 的 --mount）：
 #   L1 层缓存 —— GHA workflow 以 buildx type=gha,mode=max 跨次构建复用全部 stage 的层：
 #     只改 server/ → web 阶段整段命中不重编；只改 client/ → Rust 阶段命中；

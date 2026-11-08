@@ -8,6 +8,7 @@
 - Web 管理台文本须可划选复制：h5App [Main](<apps/h5App/src/jsMain/kotlin/com/xiaozhi/admin/Main.kt>) 设 `KuiklyProcessor.preventDefaultSelect = false`（渲染器默认在桌面浏览器把滚动容器内的 selectstart 全部拦截）；drag 拦截保持 true 防 HTML5 原生拖拽卡死滚动列表，不要回退。
 - 渲染器坐标/版本以[Gradle 配置](<apps/h5App/build.gradle.kts>)与[版本配置](<gradle.properties>)为准；升级同步根 buildscript，保留[JS 依赖锁](<kotlin-js-store/yarn.lock>)。
 - 不设 PREFER_SETTINGS，不加入多余项目级 repositories，避免丢 Kotlin/JS 自动注入的 Node 下载源。
+- Kotlin/JS 的 yarn 归档不走 GitHub release：根 `build.gradle.kts` 清空 KGP 的 `downloadBaseUrl`，由 `settings.gradle.kts` 中带 content 过滤的 npm registry ivy 源（链首）解析；⛔ 不要改回默认值，也不要把该 ivy 源移出链首（KGP 动态注入的 project 级仓库会挤掉 settings 链，端点 5xx 即整条构建失败）。
 
 在 client 目录验证：
 
