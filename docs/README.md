@@ -15,7 +15,7 @@
 | EchoMuse 设备入口（Echo Dot 2 / emOS 直连） | [EchoMuse 说明](<echomuse.md>)、[模块指引](<../server/src/device/echomuse/AGENTS.md>)、[手动安装 emOS](<emos-manual-install.md>)（脚本 `tools/emos_install.py`）、[上游 Dot 2 交互/控制文档整理](<echomuse/>) |
 | 会话、推理闸门与分段延迟 | [会话](<../server/src/workflow/session/AGENTS.md>)、[推理](<../server/src/workflow/pipeline/inference/AGENTS.md>)、[指标](<../server/src/observability/metrics/AGENTS.md>) |
 | HTTP、配置更新与观测接口 | [网关](<../server/src/gateway/ws/AGENTS.md>)、[配置端点](<../server/src/gateway/ws/config/AGENTS.md>) |
-| 插件、注册表与能力维护 | [插件层](<../plugins/AGENTS.md>)（含[注册表](<../plugins/registry/AGENTS.md>)、[LLM](<../plugins/llm/AGENTS.md>)、[TTS](<../plugins/tts/AGENTS.md>)）；[WASM 插件平台与设备公共能力三层架构](<designs/wasm-plugin-platform.md>)、[设备公共能力模块](<../server/src/device/capabilities/mod.rs>) |
+| 插件、注册表与能力维护 | [插件层](<../plugins/AGENTS.md>)（含[注册表](<../plugins/registry/AGENTS.md>)、[LLM](<../plugins/llm/AGENTS.md>)、[TTS](<../plugins/tts/AGENTS.md>)）；**当前契约 0.2 权威说明**：[WASM 插件平台](<../plugins/wasm/AGENTS.md>)；历史设计与设备公共能力三层架构见[方案 v4 长文](<designs/wasm-plugin-platform.md>)、[设备公共能力模块](<../server/src/device/capabilities/mod.rs>) |
 | 人格与记忆 | [人格](<../plugins/soul/AGENTS.md>)、[记忆](<../plugins/memory/AGENTS.md>) |
 | MCP、OTA、音色探测与文件管理 | [MCP](<../server/src/workflow/mcp/AGENTS.md>)、[OTA](<../server/src/device/firmware/AGENTS.md>)、[音色](<../server/src/device/voices/AGENTS.md>)、[文件管理](<../server/src/gateway/files/AGENTS.md>) |
 | NLU 动态技能、模型构建与效果验收 | [模型唯一识别与完整默认技能清单](<model-only-skills.md>)、[稳定技能能力/持久任务](<../server/src/skills/AGENTS.md>)、[构建/候选测试契约](<../server/src/gateway/ws/nlu_build/AGENTS.md>)、[2026-11-01 真实验证及发布边界](<nlu-model-validation-20261101.md>)、[2026-11-02 构建修复与同输入对照](<nlu-model-validation-20261102.md>) |
@@ -27,7 +27,7 @@
 
 ## 文档目录结构
 
-根 `docs/` 只放**当前说明**；历史资料按性质进入三个子目录，子目录内部同样按主题组织、不平铺：
+根 `docs/` 只放**当前说明**；历史资料按性质进入三个子目录，子目录内部同样按主题组织、不平铺。契约类当前事实以 `server/wit/plugin.wit` 与 `plugins/wasm/AGENTS.md` 为唯一权威，`designs/` 里的方案 v4 长文只作历史记录：
 
 ```
 docs/
@@ -61,7 +61,7 @@ docs/
 | 文档 | 内容 |
 |---|---|
 | [插件架构统一](<designs/plugin-architecture-unification.md>) | 改造前盘点、描述符与宿主、LLM 护栏、配置约定、管理页与分期实施 |
-| [WASM 插件平台](<designs/wasm-plugin-platform.md>) | 方案 v4：DSH 概念映射、控制面/数据面分离铁律、WIT 契约、沙箱预算、扩展点回退、P0–P8 阶段与 P9 设备公共能力三层架构（底座 → `device.*` capability → 业务插件；hot path native 直连，WASM 仅低频可选） |
+| [WASM 插件平台（历史设计长文）](<designs/wasm-plugin-platform.md>) | **历史文档 / 状态：描述 v0.1 契约（`xiaozhi:plugin@0.1.0`）与方案 v4 阶段，§5 契约清单、§9 阶段表、§10 测试计数均为当时快照**。内容：DSH 概念映射、控制面/数据面分离铁律、沙箱预算、扩展点回退、P0–P8 阶段与 P9 设备公共能力三层架构（hot path native 直连，WASM 仅低频可选）。当前契约 `xiaozhi:plugin@0.2.0` 以 [server/wit/plugin.wit](<../server/wit/plugin.wit>) 与 [plugins/wasm/AGENTS.md](<../plugins/wasm/AGENTS.md>) 为准 |
 | [人格与图记忆](<designs/soul-and-graph-memory-plan.md>) | 集成背景、上游尽调、人格档案、记忆数据流、界面与提示词调研 |
 | [管理台界面设计与验收记录](<designs/admin-ui-design.md>) | 管理页信息架构、配置与上下文页面、健康和记忆的前端验收 |
 | [三项缺口设计](<designs/gap-implementation-design.md>) | 推理并发闸门、TTFA 分段指标、残句定时 flush 的设计与实施记录 |
@@ -82,7 +82,7 @@ docs/
 ## 文档维护规则
 
 1. **不要为了拆分而拆分。** 同一范围的说明与长文合计不超过 **400 行**时保留在一个文档里；更长的设计、历史与跨模块记录统一归档到根 `docs/`（当前说明留根层，历史资料进 `plans/` `designs/` `research/`），由相关 `AGENTS.md` 直接引用。跨模块接线、取舍和交付记录保留完整语境。**每个目录的维护指引必须是该目录唯一的 `AGENTS.md`**，`docs/` 之外的目录不出现其他普通 Markdown，也不写只有"见链接"的纯导航文件。
-2. **仅根目录保留 `docs/`。** 普通 Markdown 只允许出现在根 `docs/`（含其子目录）与根 `README.md`；`docs/` 之外的目录（技能库、第三方依赖与构建产物除外）不新建普通 Markdown 或模块 `docs/`，只保留该级 `AGENTS.md`。
+2. **仅根目录保留 `docs/`。** 普通 Markdown 只允许出现在根 `docs/`（含其子目录）与根 `README.md`；`docs/` 之外的目录（技能库、第三方依赖、构建产物与插件源交付面 `plugins-src/*/README.md` 除外）不新建普通 Markdown 或模块 `docs/`，只保留该级 `AGENTS.md`。插件 README 由 `plugins/plugin_docs_tests.rs` 结构检查强制，属显式豁免。
 3. **维护指引统一使用大写 `AGENTS.md`。** 根目录 README 保留项目介绍与使用入口；各级指引维护适用范围内的职责和约束，可以直接引用跨多级的相关说明，不重复堆积已经有权威出处的细节。
 4. **同一事实只保留一处权威。** 字段与默认值在类型和样例，协议字节布局在源码与测试，热生效在注册表，维护约束在对应指引；其他资料以链接解释关联。行为改变时同步更新当前说明，不把历史提案改写成已实现事实。
 5. **迁移保留正文与可追溯性。** 移动或合并时重算相对链接，保留有价值的背景、取舍和验收记录；同主题的多份记录合并时在文件头注明来源与状态。引用旧 `§N` 时说明原章节范围，实际跳转使用目标文件链接。

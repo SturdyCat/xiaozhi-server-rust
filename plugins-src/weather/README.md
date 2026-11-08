@@ -1,7 +1,7 @@
 # weather.official — 天气查询（NMC 国家气象中心）
 
 - **插件 id**：`weather.official`（官方默认实现，随内核分发、不可卸载、被回退器兜底）
-- **版本**：0.1.0 · **契约**：`xiaozhi:plugin@0.1` · **扩展点**：`skill.weather`（排他）
+- **版本**：0.1.0 · **契约**：`xiaozhi:plugin@0.2.0`（api-version `0.2`） · **扩展点**：`skill.weather`（排他）
 - **权限**：`kv`、`http-out:www.nmc.cn`
 
 ## 功能描述
@@ -10,7 +10,7 @@
 产出与原生实现**完全同构**的结果 JSON（`ok/speech/realtime/forecast/hourly/...`）与中文语音话术。
 解析与归一化逻辑和原生 `plugins/weather/` 共享同一份 `parse.rs`（单源）。
 
-执行模型是**纯决策瀑布**：本插件不持有任何 I/O——宿主喂事件，插件返回效果（http-get/kv-put），
+执行模型是**纯决策瀑布**：本插件不持有任何 I/O——宿主喂事件，插件返回效果（http-request/kv-put），
 宿主执行后按步批量回灌 `http.responses`。冷路径 3 次回灌；TTL 内热路径零出网。
 
 ## 使用方法

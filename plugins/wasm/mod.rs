@@ -1,28 +1,27 @@
-//! WASM 插件平台（方案 v4 / `docs/designs/wasm-plugin-platform.md`，P0）。
+//! WASM 插件平台：契约 `xiaozhi:plugin@0.2.0`（唯一源 `server/wit/plugin.wit`）。
+//! 当前维护说明见本级 [`AGENTS.md`](<AGENTS.md>)；`docs/designs/wasm-plugin-platform.md`
+//! 是 v0.1 / 方案 v4 的历史长文，不作现行事实。
+//!
+//! ## 边界
+//!
+//! 宿主构建期不含任何业务，只提供通用能力：四个 Host trait（core/net/timer/system）、
+//! 事件总线与服务注册表、宿主代监听的 socket、定时器、文件与配置沙箱、mDNS、artifact
+//! 与生命周期。扩展点、topic、协议语义全在插件侧，宿主按字符串通用路由。
 //!
 //! ## 分层（文件即职责）
 //!
-//! - [`artifacts`]：产物落盘（上传即启用：save/remove/scan，重启重装）；
-//! - [`contract`]：WIT 契约（`server/wit/plugin.wit`）的宿主绑定 + 投影 DTO；
-//! - [`sandbox`]：沙箱三重上限（fuel / epoch / 内存）与陷阱分类；
-//! - [`instance`]：单个已装载插件（Store + bindgen 实例 + 带预算的调用包装）；
-//! - [`effects`]：效果模型 + 权限门 + 执行器（log / kv-put / http-get 两段式回灌；
-//!   其余变体显式 Unsupported，随宿主服务落地扩员）；
-//! - [`kv`]：插件隔离命名空间的键值存储（P0 内存实现，后续换 SQLite）；
-//! - [`resolver`]：扩展点解析表（排他扩展点 → 唯一实现，用户插件失败回退官方默认）;
-//! - [`waterfall`]：有序事件瀑布（`next()` 透传纪律 + 强度分级），内核通用件，P2 移交会话层；
-//! - [`registry`]：`WasmHost`——装载/激活/phase/快照/事件分发的门面。
+//! - [`artifacts`] / [`sandbox`] / [`resolver`] / [`kv`]：产物钉版、沙箱预算、排他解析、隔离存储；
+//! - [`contract`]（含 `contract/validate.rs`）：bindgen 绑定、DTO 与装载期强校验；
+//! - [`host_api`]：`HostContext` 聚合根 + `SystemFacts` 抽象，平台不反向依赖会话层；
+//! - [`instance`]：四个 Host trait 实现 + 类型化 `handle_event` / `handle_service`；
+//! - [`registry`] / [`lifecycle`]：`WasmHost` 门面、每插件 Runner/入站队列/泵任务、三态生命周期；
+//! - [`event_bus`] / [`services`] / [`net`] / [`timers`] / [`fs`] / [`mdns`] / [`config_store`]：
+//!   订阅路由、服务调用、socket 监听、定时器、文件沙箱、广播与配置命名空间；
+//! - [`effects`]：声明式效果 + 权限门（log/kv-put/kv-delete/http-request + legacy lan）；
+//! - [`bridge`] / [`waterfall`]：遗留策略桥与事件瀑布，阶段二删除，新代码不要再接。
 //!
-//! ## 刻意不做（P0 边界）
-//!
-//! - 不接管静态注册表（`plugins/registry`）的装配：两套体系并存，P4+ 才逐域绞杀迁移；
-//! - 无并发实例池：v0 单实例串行调用（Mutex），池化在 P1 按性能预算引入；
-//! - 效果执行器只实现 log/kv-put；http-out/speak 等宿主服务按阶段扩。
-//!
-//! ## 与静态注册表的关系
-//!
-//! 静态注册表回答「内置能力现在什么状态」；本模块回答「动态插件提供什么」。
-//! 两者在 P2 的 `/api/plugins` 投影里合并为同一张清单。
+//! 静态注册表（`plugins/registry`）回答「内置能力现状」，本模块回答「动态插件供给」，
+//! 两者在 `/api/plugins` 合并为同一张清单；静态表与 native 业务 feature 的剥离属阶段二。
 
 #[cfg(feature = "wasm-plugins")]
 pub mod artifacts;

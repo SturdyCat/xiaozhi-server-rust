@@ -4,17 +4,19 @@
 
 ## 9. Docker 部署细节
 
-### Pure-base 发布镜像
+### 底座发布镜像
 
 发布镜像由根目录 [`Dockerfile`](<../Dockerfile>) 构建，Rust 服务端使用
 `sherpa,nlu,wasm-plugins` features：
 
 - `sherpa` 提供真实 ASR/TTS/VAD 模型与音频运行时；
-- `wasm-plugins` 编译 WASM Component 宿主与 WIT 契约；
-- 默认构建保持发布进程为底座装配，镜像内不预置 WASM 业务 artifact。
+- `wasm-plugins` 编译 WASM Component 宿主与 WIT 契约 `xiaozhi:plugin@0.2.0`；
+- 默认构建保持发布进程为底座装配。
 
-WASM 宿主本身随 `/app/server` 发布；业务组件必须通过明确的运行期插件管理流程提供，
-不会从 Docker build context 或镜像层自动带入；运行期 artifact 仍由数据卷与插件管理流程提供。
+WASM 宿主随 `/app/server` 发布。**官方系统插件**由 [`tools/build-system-plugins.sh`](<../tools/build-system-plugins.sh>) 构建到 `build/system-plugins/`（15 个 `.wasm`，含 `hello.official` 探针），随镜像置于 `/app/system-plugins`（可用 `XIAOZHI_SYSTEM_PLUGINS_DIR` 覆盖）；boot 扫描后恢复注册与激活状态。**用户插件**仍走管理界面 `POST /api/plugins/upload/raw` 上传，运行期 artifact 落在数据卷。
+
+⛔ **契约升级运维（实测踩过）**：`wasm_boot.rs::import_system_plugins_from` 只在数据卷**尚无同 id 产物**时导入系统插件，刻意不覆盖用户升级/停用状态。因此把宿主从 0.1 升到 0.2 后，数据卷里的旧契约产物不会被替换，装载校验失败会让插件列表变空。必须重建产物并逐个重走 `upload/raw → register → activate`；同版本号重传会被 409「版本不升级」拒绝，必要时升版本号。验收口径：`GET /api/plugins` 返回 15 插件 / 14 Active / 14 扩展点 resolved，`hello.official` 保持 Registered 不激活（它声明 13 个扩展点且 official=true，激活会造成双官方冲突）。完整纪律见 [plugins/wasm/AGENTS.md](<../plugins/wasm/AGENTS.md>)。
+
 NLU 训练沿用 compose 显式挂载的宿主 Docker socket，训练脚本作为服务端编译期源码输入保留。
 
 ### 模型自动下载

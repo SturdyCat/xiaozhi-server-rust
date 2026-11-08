@@ -1,8 +1,24 @@
-# WASM 插件平台（方案 v4 实施）
+# WASM 插件平台（方案 v4 实施记录 · 历史）
 
-> 状态：**P0 + P1 + P2(a–e) + P3（配置门/上传 UI/摘要钉版）+ P4a/P4b/P4c/P4d + P5a/P5b + P6a + P7a–P7g + P8a/P8b/P8c 已实施**（CI provenance attestation 生成与验证、服务端 Ed25519 artifact admission、P8 native 路径收口已补；native 数据面按兼容性要求保留）；Tuya native command consumer 已接入现有 worker，见 P5b；分发模型已按用户方向反转，见 §分发。
+> **历史文档 / 状态**：本文描述 v0.1 契约（`xiaozhi:plugin@0.1.0`）与方案 v4 的 P0–P9 阶段。
+> **§5 契约清单、§9 阶段表、§10 及各阶段验证计数均为当时快照，不作现行规则**（见 `docs/README.md` 维护规则 6）。
+> **当前契约以 `server/wit/plugin.wit`（`xiaozhi:plugin@0.2.0` / 方案 v5）与 [`plugins/wasm/AGENTS.md`](<../../plugins/wasm/AGENTS.md>) 为唯一权威。**
+> 结论：本文保留 DSH 概念映射、控制面/数据面分离铁律、设备公共能力三层架构与逐阶段交付证据，供追溯取舍；
+> 0.2 已把单 `interface host` 拆成四个 Host trait，改为事件驱动 + 宿主通用 socket 监听，旧契约全文描述不再适用。
 > 概念蓝本：DeepSeek Harness（"Everything is a Plugin"，cordis 插件框架）；
-> 本仓库现状与源码：`server/wit/plugin.wit`、`plugins/wasm/`、`tools/wasm-fixtures/`。
+> 历史源码落点：`server/wit/plugin.wit`、`plugins/wasm/`、`tools/wasm-fixtures/`。
+
+## 0. 当前契约 0.2（方案 v5，2026-11-08 起）
+
+用户方向：宿主构建期不含任何业务，只提供插件依赖的通用能力；扩展点由插件 manifest 声明，宿主按字符串通用路由，不解释业务语义。
+
+- 包名 `xiaozhi:plugin@0.2.0`；`world plugin { import host-core; import host-net; import host-timer; import host-system; export lifecycle }`。
+- 新增 `subscription / protocol / endpoint-spec / resource-limits / config-field / service-method / service-decl / event / effect-kv-delete / effect-http-request`；manifest 增 `subscriptions / endpoints / resources / config-namespace / provides`，registration 增 `services`。
+- `handle-event(ev: event)` 类型化信封（取代旧字符串双参），新增 `handle-service`；`effect-http-get` 由 `effect-http-request` 取代，`effect-lan-*` 仅作 legacy 保留到阶段三。
+- 宿主新增 `host_api / event_bus / services / timers / fs / mdns / config_store / net/{http,ws,tcp,udp} / contract/validate`；`registry` 改为「条目表锁只做查找 + 每插件 Runner / 有界入站队列 / 泵任务」，`instance` 改为四个 Host trait。
+- ⛔ 0.2 是破坏性升级：**远端已部署插件不会自动迁移**，必须重建产物并重新 `upload/raw → register → activate`。
+
+模块清单、并发模型、权限门、沙箱预算与升级运维纪律见 [`plugins/wasm/AGENTS.md`](<../../plugins/wasm/AGENTS.md>)；本文下文各节均为 v0.1 时代记录。
 
 ## 1. 目标与总原则
 
@@ -15,7 +31,7 @@
    （NLU 模式：Docker 训练/转换 → 候选验证 → 显式采用）产出，宿主原生引擎服务执行。
    张量计算永不越过 wasm 边界（与"帧级不进 wasm"同一铁律的张量级推广）。
 
-### 1.1 设备公共能力层（P9 规划）
+### 1.1 设备公共能力层（P9 规划 · 历史阶段编号）
 
 “系统能力”在本项目语境中指**接入硬件提供的公共能力**，不是服务器自身提供重启/音量。EchoMuse、Xiaozhi ESP、ESPHome 等设备适配器可以实现同一能力，业务技能和业务插件通过公共 native 模块复用，避免重复实现。
 
@@ -137,7 +153,9 @@ sequenceDiagram
     K->>D: 下行音频（原生 pacing）
 ```
 
-## 5. 契约（WIT v0.1）
+## 5. 契约（WIT v0.1 · 历史）
+
+> ⚠️ 本节是 v0.1 契约全文描述，包名、导入面、效果与签名均已过时；当前契约见 §0 与 `plugins/wasm/AGENTS.md`。
 
 `server/wit/plugin.wit`，包 `xiaozhi:plugin@0.1.0`：
 
@@ -184,7 +202,9 @@ sequenceDiagram
 P2 在 `/api/plugins` 投影合并两清单；P4+ 按域迁移（provider 绑定/策略先走，模型工件与
 推理路径保持原生），P8 删除原生路径、架构测试白名单归零。
 
-## 9. 分阶段计划
+## 9. 分阶段计划（v0.1 历史阶段表）
+
+> ⚠️ 下表 P0–P8 的「已实施」是 2026-11-04～06 的当时状态，不是当前阶段口径。
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
@@ -198,7 +218,9 @@ P2 在 `/api/plugins` 投影合并两清单；P4+ 按域迁移（provider 绑定
 | P7 | 其余域（nlu/唤醒/echo 的**策略与目录**；skills 域；prompt/soul/memory.policy；**debug 域**：节点测试/日志流/测试台独立成插件——用户方向 2026-11-04） | 🚧 P7a 天气缓存粒度统一、P7b prompt.soul、P7c wakeup.strategy、P7d debug.policy、P7e skill.policy、P7f memory.policy、P7g nlu.catalog 有界策略桥已实施；其余策略/目录域待做 |
 | P8 | 收口：删原生路径、架构测试白名单归零、本文档归档实测数据 | ✅ P8a bridge 依赖守卫 + P8b native 数据面归属证据 + P8c 删除门槛矩阵 + 显式 policy/fallback guard 已实施；native 数据面不删除，按兼容性保留 |
 
-## 10. P0/P1a 验证证据
+## 10. P0/P1a 验证证据（历史快照）
+
+> ⚠️ 本节及后续各阶段 `cargo test ... passed` 计数均为当时快照，不作现行测试基线；当前基线以 `cargo test --features wasm-plugins` 实跑为准。
 
 ### P0（契约/沙箱/解析）
 

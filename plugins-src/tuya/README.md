@@ -1,7 +1,7 @@
 # tuya.official — 涂鸦设备控制策略
 
 - **插件 id**：`tuya.official`（官方默认实现，`official=true`）
-- **版本**：0.1.0 · **契约**：`xiaozhi:plugin@0.1`（api-version `0.1`）
+- **版本**：0.1.0 · **契约**：`xiaozhi:plugin@0.2.0`（api-version `0.2`）
 - **扩展点**：`connector.tuya`
 - **权限**：`kv`、`lan-socket`
 - **定位**：新架构下 server 只做系统底座；本插件承接重构前「涂鸦设备控制策略」功能的**控制/策略面**。数据面（PCM、模型推理、设备协议、HTTP/SSE）仍由原生宿主持有。
@@ -47,11 +47,11 @@
 ### 边界与限制
 
 - `candidate_index` 不得越界、`action` 必须与请求一致；宿主逐项校验。
-- `LanStatus`/`LanSetDp` 需要 `lan-socket` 权限，由原生 `TuyaEngine` 消费；pure-base 未编译该引擎时命令只入队不执行。
+- `LanStatus`/`LanSetDp`（0.2 legacy 效果，阶段三删除）需要 `lan-socket` 权限，由原生 `TuyaEngine` 消费；默认底座构建未编译该引擎时命令只入队不执行。
 - 需 `[tuya].engine = "wasm-policy"` 才会派发 `prepare`。
 
 - 插件不持有 PCM / 模型 / 设备句柄；`route` 一律 `native`。
-- pure-base 宿主未编译对应业务 worker 时，本插件只提供策略决策；业务链路仍需带 `native-plugins` 的镜像。
+- 默认底座构建未编译对应业务 worker 时，本插件只提供策略决策；业务链路仍需带 `native-plugins` 的镜像。
 - 策略结果全部有界，超出宿主校验范围的字段会被拒绝（fail-closed）。
 
 ### 构建与分发

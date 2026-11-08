@@ -1,5 +1,6 @@
 # xiaozhi-server-rust 功能与 UI 分模块优化分析
 
+> **历史分析 / 结论**：2026-10-12 的分模块优化调研，作为总体实施计划的上游输入；文中注册表条数、`FieldSchema` 形状与文件规模均为当时快照，当前事实以源码、测试与各模块 `AGENTS.md` 为准。
 > 方法：参考 Golang 版 [`xiaozhi-esp32-server-golang`](https://github.com/hackers365/xiaozhi-esp32-server-golang) 的优秀设计，对 Rust 版 `xiaozhi-server-rust` 做分模块优化分析。
 > 团队：软件开发专家团（主理人 齐活林 / 架构师 高见远 / 产品经理 许清楚）。
 > 日期：2026-10-12。定位前提：Rust 版 = 离线 ASR/TTS(sherpa-onnx) + 云端 HTTP LLM 的**单二进制 Docker** 小智服务端，固件协议严格对齐(v1/v2/v3)，N5105 低功耗主机。Golang 版 = 全功能多引擎多协议重型实现。

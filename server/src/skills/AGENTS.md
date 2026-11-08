@@ -2,7 +2,7 @@
 
 继承[服务端指引](<../../AGENTS.md>)。本目录不识别意图、不调用模型、不联网、不直接控制设备或生成音频；识别及会话执行分别由插件目录与会话模块负责。新增使用已有能力的技能只需保存 plan；新增底层能力才改 Rust。
 
-weather.forecast 是本目录**唯一**允许联网的能力；其网络实际发生在 `plugins/weather`（持有 reqwest 客户端与简易缓存；`[weather].backend="wasm"` 时改经 `plugins/wasm/bridge.rs` 事件桥进 weather.official 插件，网络发生在插件 http-get 效果），本目录仅做调度与结果组装，不内联任何 HTTP 请求。其它能力仍严守「不联网」铁律。
+weather.forecast 是本目录**唯一**允许联网的能力；其网络实际发生在 `plugins/weather`（持有 reqwest 客户端与简易缓存；`[weather].backend="wasm"` 时改经 `plugins/wasm/bridge.rs` 事件桥进 weather.official 插件，网络发生在插件 http-request 效果），本目录仅做调度与结果组装，不内联任何 HTTP 请求。其它能力仍严守「不联网」铁律。
 
 ## 类型与安全边界
 

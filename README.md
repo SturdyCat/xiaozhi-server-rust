@@ -13,7 +13,7 @@
 - 🧠 **智能上下文，可插拔、默认零成本** —— 记忆三后端（图记忆 / 纯存储 / **本地文档 RAG**，词法检索零外网零向量库）、灵魂人格预设、唤醒问候（稳态零 LLM 零 TTS）——不开启时行为与裸服务端完全一致。
 - 🎛️ **配置即产品** —— schema 驱动 + 热生效三粒度 + 密钥打码护栏 + 部分更新/乐观并发；**配置预设**一键快照回滚；**每设备 overlay** 白名单个性化（这台设备换音色/语速/人格，其他设备不受影响）。
 - 🩺 **状态可自诊** —— 11 个能力健康自检（坏了显示原因与怎么修）、延迟大盘 p50/p95、设备/会话/对话/用量面板、设备消息注入、LLM/TTS/VAD 内联连通性测试。
-- 🧩 **WASM 插件平台** —— WIT 契约 + wasmtime 沙箱宿主（feature `wasm-plugins`，默认关闭零依赖）：扩展点替换/回退、有界策略桥（天气/Tuya/EchoMuse/NLU 目录等）、artifact SHA-256 钉版 + Ed25519 attestation 装载门、builder 镜像 CI 与 provenance 证明；控制面插件化，模型推理与帧级计算铁律留原生。
+- 🧩 **WASM 插件平台** —— 契约 `xiaozhi:plugin@0.2.0`（`server/wit/plugin.wit`）+ wasmtime 沙箱宿主（feature `wasm-plugins`）：四个通用 Host trait（core/net/timer/system）、类型化事件与 `handle-service`、事件订阅 / 宿主代监听 socket / 服务注册表 / 定时器 / 文件与配置沙箱；宿主不含任何业务，扩展点由插件 manifest 声明。15 个官方系统插件随发布提供，控制面插件化，模型推理与帧级计算留原生。
 - 🔌 **设备公共能力三层架构** —— 项目底座 → 设备公共能力层（`device.*` capability ID + native registry：音量/重启/状态，EchoMuse/ESPHome/Tuya 复用，MCP/技能旧名称兼容）→ 业务插件/技能层；高性能路径（PCM/VAD/推理/WS/Tuya LAN）native 直连，WASM 仅低频可选。
 - 📦 **运维闭环** —— OTA 固件按「功能 × 型号」托管分发（元数据自动识别，防发错包变砖）、模型自动下载、可选 Bearer 鉴权。
 - 💻 **双端管理** —— Web 管理台（浏览器直开）+ macOS 原生测试台（麦克风采集 + Opus 播放，端到端语音验收）。
@@ -42,7 +42,7 @@ flowchart LR
         end
         DOWN[下行三段缓冲<br/>起跑闸 + 水库 + 实时 pacing]
         REG[插件注册表<br/>ASR/TTS/LLM/VAD 可换实现 · 热生效]
-        WASM[WASM 插件平台<br/>控制面策略/效果 · 沙箱隔离]
+        WASM[WASM 插件平台<br/>事件驱动/声明式效果 · 沙箱隔离]
         CAP[设备公共能力层<br/>音量/重启/状态 native registry]
         CTX[灵魂人格 + 记忆<br/>graph / store / RAG]
         OBS[健康自检 · 延迟大盘 · 用量 · OTA]
@@ -105,7 +105,8 @@ curl http://127.0.0.1:8000/api/health              # => {"status":"ok",...}
 |---|---|
 | [`docs/architecture.md`](<docs/architecture.md>) | 模块划分、会话流水线、协议设计、部署架构与扩展指引 |
 | [`docs/README.md`](<docs/README.md>) | 文档索引：功能、配置、协议、管理台与模块维护入口 |
-| [`docs/designs/wasm-plugin-platform.md`](<docs/designs/wasm-plugin-platform.md>) | WASM 插件平台与设备公共能力三层架构：WIT 契约、沙箱、扩展点回退、P0–P9 阶段与验证证据 |
+| [`plugins/wasm/AGENTS.md`](<plugins/wasm/AGENTS.md>) | WASM 插件平台**当前说明**：契约 0.2.0、模块清单、并发模型与升级运维纪律 |
+| [`docs/designs/wasm-plugin-platform.md`](<docs/designs/wasm-plugin-platform.md>) | 历史设计长文（方案 v4 / v0.1 契约）：设备公共能力三层架构、沙箱、扩展点回退、P0–P9 阶段与当时验证证据 |
 | [`server/config.example.toml`](<server/config.example.toml>) | 全部配置字段的行内注释（权威） |
 | [`docs/plans/overall-implementation-plan.md`](<docs/plans/overall-implementation-plan.md>) | 路线图与交付状态 |
 | [`docs/plans/p1-features-prd.md`](<docs/plans/p1-features-prd.md>) | 本期功能需求与验收标准 |
@@ -144,7 +145,7 @@ curl http://127.0.0.1:8000/api/health              # => {"status":"ok",...}
 - ASR 为离线逐段识别（SenseVoice），逐字流式需换 Zipformer `OnlineRecognizer`。
 - RAG 召回为词法检索（零 embedding）；本地 ONNX 语义检索列为后续可选增强。
 - iOS/Android/OHOS 宿主已就位但未启用语音测试台（原生桥接当前仅 macOS 编译）。
-- WASM 插件平台默认关闭（`wasm-plugins` feature）；测试夹具由 `tools/wasm-fixtures/build.sh` 本地按需构建、产物不入库（`gitignore`）；wasm 插件发布走管理界面上传已构建组件，重启经数据卷扫描重装即注册，服务端不做 Docker 自动构建。
+- WASM 插件平台默认关闭（`wasm-plugins` feature）；测试夹具由 `tools/wasm-fixtures/build.sh` 本地按需构建、产物不入库（`gitignore`）。官方系统插件由 `tools/build-system-plugins.sh` 构建（15 个 `.wasm`）随镜像提供，用户插件走管理界面上传；**契约升级后已部署插件不会自动迁移**，须重建产物并重新 `upload/raw → register → activate`（见 [`plugins/wasm/AGENTS.md`](<plugins/wasm/AGENTS.md>)）。
 
 ---
 

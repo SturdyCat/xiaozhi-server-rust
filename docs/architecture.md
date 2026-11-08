@@ -28,7 +28,7 @@ flowchart LR
 - [网关](<../server/src/gateway/ws/AGENTS.md>)负责路由、鉴权、协商和静态管理页托管；[会话](<../server/src/workflow/session/AGENTS.md>)负责编排，不耦合具体引擎实现。
 - [技能级联](<../plugins/skill/mod.rs>)统一编译 `[command]` + `[nlu]`：规则、轻量模型、云 LLM 三级识别只有提名权，动作与槽位白名单由目录 `resolve` 校验（`end_session` / `reply` / `mcp:<设备工具名>`）；LLM 只能调用 `execute_skill`，不能指定工具或动作。
 - [插件层](<../plugins/AGENTS.md>)按能力定义 trait/config/实现，[注册表](<../plugins/registry/AGENTS.md>)声明选择、构建、字段与热生效档位，[宿主](<../plugins/host.rs>)校验并上报状态。
-- [WASM 插件平台](<designs/wasm-plugin-platform.md>)（feature `wasm-plugins`，默认关闭）承载控制面策略与效果：扩展点替换/回退、有界策略桥、artifact SHA-256 钉版 + Ed25519 attestation 装载门；模型推理与帧级计算铁律留原生。
+- [WASM 插件平台](<../plugins/wasm/AGENTS.md>)（feature `wasm-plugins`）以 `server/wit/plugin.wit`（`xiaozhi:plugin@0.2.0`）为唯一契约：四个 Host trait（core/net/timer/system）、类型化 `handle-event(ev)` 与 `handle-service`、事件订阅 / 宿主代监听端点 / 服务注册表 / 资源配额 / 配置命名空间；宿主不解释业务语义，只按字符串通用路由，入站事件驱动、出站声明式效果。模型推理与帧级计算留原生。artifact SHA-256 钉版 + Ed25519 attestation 装载门、排他扩展点回退仍在。**未完成**：`GET /api/plugins` 仅投影旧 manifest 字段，新增投影尚未接入 HTTP 层。历史设计见[方案 v4 长文](<designs/wasm-plugin-platform.md>)。
 - [设备公共能力层](<../server/src/device/capabilities/mod.rs>)提供 `device.*` capability ID、native `CapabilityRegistry` 与跨硬件 adapter 支持矩阵（音量/重启/状态，EchoMuse/ESPHome/Tuya 复用，旧 MCP/技能名称兼容）；高性能路径 native 直连，WASM 仅低频可选。
 - [Engines](<../server/src/runtime/mod.rs>)管理共享模型、VAD 池、派生缓存、运行快照和热刷新；同步推理隔离到 blocking 任务，并由共享闸门限制并发。
 - `[aiui].enabled` 是另一条云端识别/LLM/TTS 闭环模式，本地人格和记忆不参与；不是普通 TTS 供应商切换。
@@ -64,7 +64,7 @@ flowchart LR
 | 变更 | 阅读入口 |
 |---|---|
 | 新 ASR/TTS/LLM 实现 | [注册表规范](<../plugins/registry/AGENTS.md>)与各能力目录的 `AGENTS.md` |
-| WASM 插件 / 设备公共能力 | [WASM 插件平台](<designs/wasm-plugin-platform.md>)、[插件层](<../plugins/AGENTS.md>)、[设备公共能力模块](<../server/src/device/capabilities/mod.rs>)（hot path 保持 native 直连，WASM 仅低频可选） |
+| WASM 插件 / 设备公共能力 | [WASM 插件平台当前说明](<../plugins/wasm/AGENTS.md>)、[插件层](<../plugins/AGENTS.md>)、[设备公共能力模块](<../server/src/device/capabilities/mod.rs>)（hot path 保持 native 直连，WASM 仅低频可选）；**契约升级后已部署插件须重新 `upload/raw → register → activate`** |
 | 新配置字段 / 密钥 | [配置维护](<../server/src/config/AGENTS.md>)与[HTTP 契约](<../server/src/gateway/ws/config/AGENTS.md>) |
 | 新协议消息 / 二进制布局 | [协议实现](<../server/src/workflow/protocol/protocol.rs>)、同级测试与客户端联调 |
 | 新设备工具调用 | [MCP 契约](<../server/src/workflow/mcp/AGENTS.md>)与会话响应关联 |

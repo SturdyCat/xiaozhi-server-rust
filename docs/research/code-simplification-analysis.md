@@ -1,5 +1,6 @@
 # 代码简化分析报告 · 分模块（2026-10-12）
 
+> **历史分析 / 结论**：只分析不改码；文中 `plugins/registry` 清理项、文件数与优先级均为 2026-10-12 快照，实施前须重新核对源码，不作现行规则。
 > 分析方式：6 组并行只读分析（Simplify skill），范围 = server（Rust，131 文件约 19k 行）+ client/shared（Kuikly Kotlin，40 文件约 7.1k 行）。
 > 原则：只分析不改码；所有"刻意设计"（P4 描述符架构、DownlinkPacer/prefetch、协议小写 tag、密钥打码三处同改、normalize/rewrite_legacy_paths 等）已核实未被误伤。
 > 风险：高 = 可能改变行为/布局，需重点回归。
