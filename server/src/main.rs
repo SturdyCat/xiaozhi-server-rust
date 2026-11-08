@@ -107,9 +107,7 @@ async fn run(config: Config, config_store: Arc<dyn ConfigStore>, dev_mode: bool)
     } else {
         Engines::new(&config, config_store)?
     };
-    // 启动期解析服务器出口 IP 作为默认定位（仅国内写入；非 dev 与 dev 都跑）。
-    // 失败只 warn，绝不阻塞启动。
-    tokio::spawn(crate::plugins::geo::resolve_location());
+    // 底座启动不执行网络地理定位；可选插件如需定位，应自行注册生命周期任务。
     // WASM 插件仅由管理界面上传发布（上传即启用，重启经数据卷 plugins/ 扫描重装）；
     // 不再做服务端 Docker 自动构建（用户方向 2026-11-06：简化部署、底座与插件解耦）。
     // 定时任务只生成持久 outbox；真正音频由设备会话串行投递，不走 ASR/NLU 注入。
@@ -117,7 +115,7 @@ async fn run(config: Config, config_store: Arc<dyn ConfigStore>, dev_mode: bool)
     // 直推一次工具调用，离线/失败降级为文字提醒（见 runtime/skill_tasks 模块注释）。
     // UI 开发模式可检验任务 CRUD，但不启动生产调度或伪造设备播报。
     // pure-base 不编译调度模块（业务面），该绑定在纯底座构建中不存在。
-    #[cfg(not(feature = "pure-base"))]
+    #[cfg(feature = "native-plugins")]
     let _skill_tasks = (!dev_mode).then(|| crate::runtime::skill_tasks::start(&engines));
     // 延迟/事件聚合（P1-1）：进程最早的订阅者——spawn 越早，broadcast 环形缓冲越不丢
     // 早期事件（LAGGED 只告警；聚合口径是近似值，见 app/metrics 模块注释）。
@@ -141,8 +139,8 @@ async fn run(config: Config, config_store: Arc<dyn ConfigStore>, dev_mode: bool)
     }
     // 发音人目录：读盘缓存/离线兜底 + 配置了控制台会话时后台刷新一次（失败非致命）。
     // pure-base 不启动外部目录探测，避免把可选业务后台带入纯底座进程。
-    #[cfg(feature = "legacy-business")]
-    if !cfg!(feature = "pure-base") {
+    #[cfg(feature = "native-plugins")]
+    if !dev_mode {
         crate::device::voices::init();
         if !dev_mode {
             crate::device::voices::spawn_startup_probe(engines.clone());
@@ -228,7 +226,7 @@ async fn run(config: Config, config_store: Arc<dyn ConfigStore>, dev_mode: bool)
     // 广播端口跟随实际监听：`[echomuse].plain_port`（默认 8767，官方明文 controller
     // 端口——上游固件 tcp_peer() 只认远端 8767/8770 的连接为 controller）额外监听
     // 成功则指向专用端口；绑定失败或 plain_port=0 时回退主端口（/em/* 两边都在）。
-    #[cfg(all(not(feature = "pure-base"), feature = "legacy-business"))]
+    #[cfg(feature = "echomuse-plugin")]
     if config.echomuse.enabled && !dev_mode {
         let mdns_port = match crate::device::echomuse::listen::dedicated_port(&config.echomuse) {
             Some(p) => crate::device::echomuse::listen::spawn_dedicated(engines.clone(), p)
@@ -248,14 +246,14 @@ async fn run(config: Config, config_store: Arc<dyn ConfigStore>, dev_mode: bool)
     // 宣告 `bluetooth_proxy`（Dot 2 当 BLE 代理）。见
     // docs/research/emx-integration-analysis.md §4.1.1 / §4.1.2。
     #[cfg(feature = "esp_home")]
-    if config.esp_home.enabled && !dev_mode && !cfg!(feature = "pure-base") {
+    if config.esp_home.enabled && !dev_mode {
         crate::device::esp_home::spawn(config.esp_home.clone(), engines.clone());
     }
     // Tuya IoT 设备集成 worker（常驻）：定时云同步 + 60s 错峰在线轮询 + 5min 局域网发现。
     // 每 tick 重读 [tuya].enabled（热生效），关闭时本 tick 空转；dev 模式不起
     // （无真机、避免 UDP/TCP 副作用；管理面路由仍挂载，可验证 UI）。
-    #[cfg(feature = "legacy-business")]
-    if !dev_mode && !cfg!(feature = "pure-base") {
+    #[cfg(feature = "tuya-plugin")]
+    if !dev_mode {
         crate::device::tuya::worker::spawn(engines.clone());
     }
     // 管理客户端发现（常驻、无配置项）：广播 `_xiaozhi-admin._tcp`，macApp 等

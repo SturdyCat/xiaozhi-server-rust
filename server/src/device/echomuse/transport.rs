@@ -2,7 +2,7 @@
 use super::fx::Fx;
 use super::{media::MediaState, ControlOut, DataOut};
 use crate::media::media::*;
-use crate::workflow::protocol::{IncomingFrame, Transport};
+use crate::workflow::protocol::{BinVersion, IncomingFrame, Transport};
 use anyhow::Result;
 use std::sync::Arc;
 use std::time::Duration;
@@ -50,7 +50,16 @@ impl Transport for EchomuseTransport {
         params: &crate::workflow::session::SessionParams,
     ) -> TerminalProfile {
         let _ = params;
-        TerminalProfile::echo()
+        TerminalProfile {
+            input: AudioFormat::new(AudioCodec::PcmS16Le, 16_000, 40),
+            output: AudioFormat::new(AudioCodec::PcmS16Le, 48_000, 40),
+            binary_version: BinVersion::V1,
+            capabilities: TerminalCapabilities {
+                bounded_utterance: true,
+                mcp: false,
+                playback_ack: false,
+            },
+        }
     }
     async fn send_audio(
         &mut self,
@@ -59,8 +68,9 @@ impl Transport for EchomuseTransport {
         _: u32,
     ) -> Result<AudioWrite> {
         anyhow::ensure!(
-            audio.format == AudioFormat::echo_speaker() && profile.output == audio.format,
-            "Echo requires PCM48k/40ms mono S16LE"
+            audio.format == AudioFormat::new(AudioCodec::PcmS16Le, 48_000, 40)
+                && profile.output == audio.format,
+            "native PCM adapter requires 48kHz/40ms mono S16LE"
         );
         let Some(epoch) = self.reply_epoch.clone() else {
             return Ok(AudioWrite::Cancelled);

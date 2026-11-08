@@ -209,36 +209,35 @@ fn fresh_clock_catalog_has_eighteen_seed_skills_and_independent_command() {
     let nlu = NluConfig::default();
     let catalog = effective_catalog(&command, &nlu).unwrap();
     let names: Vec<_> = catalog.intents.iter().map(|i| i.name.as_str()).collect();
-    assert_eq!(
-        names,
-        [
-            "reminder_countdown",
-            "reminder_schedule",
-            "reminder_repeat",
-            "reminder_daily",
-            "reminder_workdays",
-            "reminder_weekly",
-            "reminder_monthly",
-            "reminder_yearly",
-            "reminder_hourly",
-            "reminder_list",
-            "reminder_cancel",
-            "device_volume_set",
-            "device_mute",
-            "device_pause_playback",
-            "weather_query",
-            "iot_device_on",
-            "iot_device_off",
-            "end_session",
-        ]
-    );
+    let mut expected = vec![
+        "reminder_countdown",
+        "reminder_schedule",
+        "reminder_repeat",
+        "reminder_daily",
+        "reminder_workdays",
+        "reminder_weekly",
+        "reminder_monthly",
+        "reminder_yearly",
+        "reminder_hourly",
+        "reminder_list",
+        "reminder_cancel",
+        "device_volume_set",
+        "device_mute",
+        "device_pause_playback",
+        "weather_query",
+    ];
+    if cfg!(feature = "tuya-plugin") {
+        expected.extend(["iot_device_on", "iot_device_off"]);
+    }
+    expected.push("end_session");
+    assert_eq!(names, expected);
     // 域口径：提醒类归服务端，设备示例技能归设备，iot 语音开关归 IoT，注入的 end_session 是设备域。
     for intent in &catalog.intents {
         let expected = match intent.name.as_str() {
             "device_volume_set" | "device_mute" | "device_pause_playback" | "end_session" => {
                 Domain::Device
             }
-            "iot_device_on" | "iot_device_off" => Domain::Iot,
+            "iot_device_on" | "iot_device_off" if cfg!(feature = "tuya-plugin") => Domain::Iot,
             _ => Domain::Server,
         };
         assert_eq!(intent.domain, expected, "{} 域错误", intent.name);

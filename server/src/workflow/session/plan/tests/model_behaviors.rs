@@ -4,6 +4,7 @@ mod clock;
 mod delivery_recovery;
 mod mcp_permissions;
 mod preflight;
+#[cfg(feature = "tuya-plugin")]
 mod tuya_control;
 use crate::plugins::skill::{SkillAction, SkillInvocation};
 use crate::skills::{SkillPlan, SkillStep};

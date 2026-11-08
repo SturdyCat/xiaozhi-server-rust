@@ -70,11 +70,11 @@ impl<'a, T: Transport> Session<'a, T> {
                 if let Err(error) = self.execute_invocation(&inv, "model").await {
                     // 纯底座不编译声明式计划执行：plan 动作的失败是普通错误，
                     // 没有 SkillActionError 的澄清话术可提取（诚实失败，不伪造）。
-                    #[cfg(not(feature = "pure-base"))]
+                    #[cfg(feature = "native-plugins")]
                     let clarification = error
                         .downcast_ref::<crate::skills::SkillActionError>()
                         .map(|error| error.speech.clone());
-                    #[cfg(feature = "pure-base")]
+                    #[cfg(not(feature = "native-plugins"))]
                     let clarification: Option<String> = None;
                     self.note_error(format!("model-authorized skill failed: {error:#}"));
                     if let Some(clarification) = clarification {
@@ -168,12 +168,12 @@ impl<'a, T: Transport> Session<'a, T> {
                 // 声明式计划执行是业务管线（稳定技能系统 + 任务/outbox），
                 // pure-base 不编译：模型接受的 plan 意图在此明确失败，
                 // 走上方统一失败路径（记错 + 消费本轮），不伪造成功。
-                #[cfg(feature = "pure-base")]
+                #[cfg(not(feature = "native-plugins"))]
                 {
                     let _ = plan;
                     anyhow::bail!("声明式技能计划（plan）属于 legacy-business，pure-base 未编译");
                 }
-                #[cfg(not(feature = "pure-base"))]
+                #[cfg(feature = "native-plugins")]
                 {
                     self.execute_skill_plan(plan, inv).await?;
                     if !inv.reply.trim().is_empty() {

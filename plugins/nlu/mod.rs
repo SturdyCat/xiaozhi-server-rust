@@ -181,8 +181,19 @@ pub(crate) fn builtin_defs() -> (Vec<IntentDef>, Vec<SlotList>) {
         intents: Vec<IntentDef>,
         slots: Vec<SlotList>,
     }
+    #[cfg(feature = "tuya-plugin")]
     let defaults: Defaults = serde_json::from_str(include_str!("defaults.json"))
         .expect("bundled initial skill JSON must be valid");
+    #[cfg(not(feature = "tuya-plugin"))]
+    let mut defaults: Defaults = serde_json::from_str(include_str!("defaults.json"))
+        .expect("bundled initial skill JSON must be valid");
+    // Device-business seeds are contributed by their plugin feature. The shared
+    // NLU contract remains available in the base build, but the base must not
+    // advertise or validate actions whose executor is not compiled.
+    #[cfg(not(feature = "tuya-plugin"))]
+    defaults
+        .intents
+        .retain(|intent| !matches!(intent.name.as_str(), "iot_device_on" | "iot_device_off"));
     (defaults.intents, defaults.slots)
 }
 

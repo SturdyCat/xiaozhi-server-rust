@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 
-use super::contract::{ManifestDto, RegistrationDto, validate_manifest, validate_registration};
+use super::contract::{validate_manifest, validate_registration, ManifestDto, RegistrationDto};
 use super::effects::{
     self, Effect, HttpFetcher, LanSocketCommand, LanSocketQueue, Permissions, ReqwestFetcher,
 };
@@ -24,7 +24,7 @@ use super::instance::LoadedPlugin;
 use super::kv::KvStore;
 use super::lifecycle::Lifecycle;
 use super::resolver::{FlatWorld, Resolution, ResolutionTable};
-use super::sandbox::{EpochTicker, SandboxLimits, TrapKind, build_engine, classify_trap};
+use super::sandbox::{build_engine, classify_trap, EpochTicker, SandboxLimits, TrapKind};
 
 /// http-get 回灌深度上限（初始事件 + 最多 N 次 `http.responses` 批量续步）。
 /// 防插件「回灌再发请求」自我循环；超限停止回灌、记错误，不判插件死刑。

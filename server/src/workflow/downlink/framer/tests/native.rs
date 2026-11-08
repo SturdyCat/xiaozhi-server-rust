@@ -1,12 +1,16 @@
 use super::*;
-use crate::media::media::AudioFormat;
+use crate::media::media::{AudioCodec, AudioFormat};
 #[test]
 fn resampled_native_pcm_is_byte_identical_across_arbitrary_provider_chunk_boundaries() {
     let input: Vec<f32> = (0..4501)
         .map(|i| ((i % 1000) as f32 - 500.0) / 500.0)
         .collect();
-    let mut whole = StreamingFramer::new_format(24000, AudioFormat::echo_speaker()).unwrap();
-    let mut pieces = StreamingFramer::new_format(24000, AudioFormat::echo_speaker()).unwrap();
+    let mut whole =
+        StreamingFramer::new_format(24000, AudioFormat::new(AudioCodec::PcmS16Le, 48_000, 40))
+            .unwrap();
+    let mut pieces =
+        StreamingFramer::new_format(24000, AudioFormat::new(AudioCodec::PcmS16Le, 48_000, 40))
+            .unwrap();
     let mut a = whole.push(&input).unwrap();
     if let Some(tail) = whole.finish().unwrap() {
         a.push(tail);
@@ -26,7 +30,9 @@ fn resampled_native_pcm_is_byte_identical_across_arbitrary_provider_chunk_bounda
 #[test]
 fn native_output_is_s16le_with_exact_sample_values_and_zero_padded_tail() {
     // 同采样率（16k→16k）透传，才能断言样本值逐点精确。
-    let mut f = StreamingFramer::new_format(16000, AudioFormat::echo_mic()).unwrap();
+    let mut f =
+        StreamingFramer::new_format(16000, AudioFormat::new(AudioCodec::PcmS16Le, 16_000, 40))
+            .unwrap();
     assert!(f.push(&[-2.0, -1.0, 0.0, 1.0, 2.0]).unwrap().is_empty());
     let bytes = f.finish().unwrap().unwrap();
     let pcm: Vec<i16> = bytes

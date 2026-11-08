@@ -134,6 +134,7 @@ pub(super) const CAPABILITY_COMMON_FIELDS: &[(
             },
         ],
     ),
+    #[cfg(feature = "tuya-plugin")]
     (
         Capability::Tuya,
         &["tuya"],
@@ -194,6 +195,7 @@ pub(super) const CAPABILITY_COMMON_FIELDS: &[(
             },
         ],
     ),
+    #[cfg(feature = "echomuse-plugin")]
     (
         Capability::Echomuse,
         &["echomuse"],

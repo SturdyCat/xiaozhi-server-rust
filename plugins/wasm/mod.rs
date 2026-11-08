@@ -51,14 +51,13 @@ pub mod waterfall;
 #[cfg(feature = "wasm-plugins")]
 pub(crate) mod tests;
 
+pub(crate) use contract::version_at_least;
 pub use effects::{Effect, LanSocketCommand, PermissionError, Permissions};
 pub use lifecycle::{
-    ActivateError, DeactivateError, DependencyGap, Lifecycle, RemoveError, StageError,
-    StageOutcome,
+    ActivateError, DeactivateError, DependencyGap, Lifecycle, RemoveError, StageError, StageOutcome,
 };
 pub use registry::{Phase, WasmHost};
 pub use resolver::{Resolution, ResolutionTable};
-pub(crate) use contract::version_at_least;
 pub use sandbox::{SandboxLimits, TrapKind};
 pub use waterfall::{Strength, Waterfall};
 

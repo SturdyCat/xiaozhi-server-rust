@@ -161,12 +161,6 @@ const STANDARD_BEHAVIOR_ON_FULL: &[DefaultChange] = &[
         note: "记忆抽取（原文 → 可召回摘要）",
     },
     DefaultChange {
-        path: "echomuse.enabled",
-        from: DefaultValue::Bool(false),
-        to: DefaultValue::Bool(true),
-        note: "EchoMuse 设备入口（/em 路由 + mDNS）",
-    },
-    DefaultChange {
         path: "llm.enabled",
         from: DefaultValue::Bool(false),
         to: DefaultValue::Bool(true),
@@ -174,21 +168,8 @@ const STANDARD_BEHAVIOR_ON_FULL: &[DefaultChange] = &[
     },
 ];
 
-/// 默认对齐集合：纯底座不把 EchoMuse 业务段对齐为 enabled=true，即使复用普通构建生成的数据库。
-#[cfg(not(feature = "pure-base"))]
+/// 默认对齐集合只包含核心行为；设备插件配置由插件自身管理。
 pub const STANDARD_BEHAVIOR_ON: &[DefaultChange] = STANDARD_BEHAVIOR_ON_FULL;
-
-#[cfg(feature = "pure-base")]
-pub const STANDARD_BEHAVIOR_ON: &[DefaultChange] = &[
-    STANDARD_BEHAVIOR_ON_FULL[0],
-    STANDARD_BEHAVIOR_ON_FULL[1],
-    STANDARD_BEHAVIOR_ON_FULL[2],
-    STANDARD_BEHAVIOR_ON_FULL[3],
-    STANDARD_BEHAVIOR_ON_FULL[4],
-    STANDARD_BEHAVIOR_ON_FULL[5],
-    STANDARD_BEHAVIOR_ON_FULL[6],
-    STANDARD_BEHAVIOR_ON_FULL[8],
-];
 
 /// 全部批次（按版本升序）。新增批次只允许**追加**。
 pub const BATCHES: &[DefaultsBatch] = &[DefaultsBatch {

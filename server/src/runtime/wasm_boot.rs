@@ -13,8 +13,8 @@
 
 use std::collections::{BTreeMap, HashSet};
 
-use crate::config::PluginsConfig;
 use crate::config::store::ConfigStore;
+use crate::config::PluginsConfig;
 use crate::plugins::wasm::artifacts::{ArtifactDir, RegisteredMarker};
 use crate::plugins::wasm::{ActivateError, Lifecycle, WasmHost};
 

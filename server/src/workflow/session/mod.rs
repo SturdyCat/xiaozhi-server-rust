@@ -23,7 +23,7 @@ use crate::observability::events::{TurnId, TurnTrace};
 use crate::plugins::aiui::FullChainEngine;
 use crate::plugins::asr::AsrEngine;
 use crate::plugins::skill::SkillRegistry;
-#[cfg(not(feature = "pure-base"))]
+#[cfg(feature = "native-plugins")]
 use crate::plugins::wakeup::WakeGreeting;
 use crate::runtime::Engines;
 use crate::workflow::downlink::DownlinkPacer;
@@ -40,15 +40,15 @@ enum UtteranceDecision {
     NluStop,
 }
 
-#[cfg(not(feature = "pure-base"))]
+#[cfg(feature = "native-plugins")]
 mod aiui;
-#[cfg(not(feature = "pure-base"))]
+#[cfg(feature = "native-plugins")]
 mod alarm;
 mod bench;
 mod command;
-#[cfg(not(feature = "pure-base"))]
+#[cfg(feature = "native-plugins")]
 mod delivery;
-#[cfg(not(feature = "pure-base"))]
+#[cfg(feature = "native-plugins")]
 mod delivery_audio;
 mod hooks;
 mod mcp;
@@ -57,15 +57,15 @@ mod observe;
 mod plan;
 mod producer;
 mod reply;
-#[cfg(not(feature = "pure-base"))]
+#[cfg(feature = "native-plugins")]
 mod skill_plan;
 mod start;
 mod utterance;
-#[cfg(not(feature = "pure-base"))]
+#[cfg(feature = "native-plugins")]
 mod wakeup;
 
 // 上行 PCM 采样格式换算（AIUI 路径用）：下移到 app/audio/pcm（行为不变搬移）。
-#[cfg(not(feature = "pure-base"))]
+#[cfg(feature = "native-plugins")]
 pub(crate) use crate::media::pcm::f32_to_i16_16k;
 
 // 会话入口对 `gateway::ws` 可见（网关把升级后的连接交给会话状态机）。
@@ -89,22 +89,34 @@ where
 /// 接入入口声明的设备类型：**入口即定型**。
 ///
 /// 两个生产入口各自声明，会话层据此走专用分支（设备端 VAD 直通、连接欢迎语注入等），
-/// 不再从音频格式/codec 反推；共享流水线环节（ASR/技能/LLM/TTS/下行节拍）不感知该类型：
-/// - [`crate::gateway::ws`]（xiaozhi hello 协商入口）→ [`DeviceKind::XiaozhiEsp`]；
-/// - [`crate::device::echomuse`]（`/em/control`+`/em/data`，identify/ack、无 hello）→ [`DeviceKind::EchoMuse`]。
+/// 不再从音频格式/codec 反推；共享流水线环节（ASR/技能/LLM/TTS/下行节拍）只读取
+/// entry 声明的通用 profile。具体设备协议由各自 adapter 负责投影。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DeviceKind {
-    /// xiaozhi ESP 承载（含 `hello.test=true` 的 macApp 测试台——同一入口、同一 hello 协商）。
-    XiaozhiEsp,
-    /// EchoMuse 承载（Echo Dot 2 / emOS 直连；原生 mono PCM，设备端已做 speech gate）。
-    EchoMuse,
+pub struct SessionTransportProfile {
+    /// Opaque entry identifier used only by optional workflow conditions.
+    pub id: &'static str,
+    /// Whether this transport already performs speech gating before upload.
+    pub device_vad: bool,
+}
+
+impl SessionTransportProfile {
+    pub const fn core() -> Self {
+        Self {
+            id: "xiaozhi_esp",
+            device_vad: false,
+        }
+    }
+
+    pub const fn plugin(id: &'static str, device_vad: bool) -> Self {
+        Self { id, device_vad }
+    }
 }
 
 /// 会话协商参数（握手后固定）。
 #[derive(Clone, Copy)]
 pub struct SessionParams {
-    /// 接入入口声明的设备类型（见 [`DeviceKind`]）：会话专用分支的唯一判据。
-    pub kind: DeviceKind,
+    /// Entry-declared transport profile; the workflow never infers it from codec.
+    pub kind: SessionTransportProfile,
     pub uplink_bin_ver: BinVersion,
     pub downlink_bin_ver: BinVersion,
     pub uplink_sr: u32,
@@ -155,11 +167,10 @@ pub struct Session<'a, T: Transport> {
     downlink_ts: u32,
     test_recording: bool,
     test_buf: Vec<f32>,
-    /// 服务端 VAD 实例（池借出，RAII 归还）。`None` = 设备端已做 VAD 的会话（EchoMuse
-    /// speech gate，见 `start.rs::device_vad`）：跳过服务端检测，`device_vad=true` 走直通缓冲。
+    /// 服务端 VAD 实例（池借出，RAII 归还）。`None` = entry profile 已声明设备端
+    /// speech gate，跳过服务端检测，`device_vad=true` 走直通缓冲。
     vad: Option<crate::plugins::vad::pool::VadGuard>,
-    /// 设备端已做 VAD（EchoMuse speech gate 判定人声才上行）：上行 PCM 直接缓冲，
-    /// `UtteranceEnd::Speech`（设备 0x04）时整段送 ASR——不做服务端二次检测。
+    /// Entry-declared device-side VAD mode. The core does not identify a concrete device.
     device_vad: bool,
     uplink_decoder: Option<OpusFrameDecoder>,
     real_audio: bool,
@@ -176,7 +187,7 @@ pub struct Session<'a, T: Transport> {
     /// 会话固定目录 + 共享模型。只有真实模型的一次决策拥有技能授权。
     skills: SkillRegistry,
     /// 本轮技能侧turn id（计划执行幂等键/防重入用）；pure-base 不编译计划执行。
-    #[cfg(not(feature = "pure-base"))]
+    #[cfg(feature = "native-plugins")]
     skill_turn_id: TurnId,
     /// 空闲才认领 outbox（投递业务）。pure-base 保留字段与复位写入（写点多、
     /// 语义是"轮次结束"），但投递管线未编译——该标志在纯底座恒无人读取。
@@ -206,7 +217,7 @@ pub struct Session<'a, T: Transport> {
     /// 主循环里被 `await`，天然不会重入。
     ///
     /// pure-base 是空底座：问候业务（预制话术 + 三级音频复用）不编译，唤醒后静默等待。
-    #[cfg(not(feature = "pure-base"))]
+    #[cfg(feature = "native-plugins")]
     wake: WakeGreeting,
     /// 管理台注入通道（P1-2，见 `app/inject`）：`Some` = 本会话可被注入（设备 + 级联流水线），
     /// `None` = 测试台 / AIUI 全链路（不注册，HTTP 侧报"不支持"）。主循环 `select!` 消费。
@@ -273,7 +284,7 @@ impl<'a, T: Transport> Session<'a, T> {
                     }
                 }
                 _ = delivery_tick.tick() => {
-                    #[cfg(not(feature = "pure-base"))]
+                    #[cfg(feature = "native-plugins")]
                     if self.delivery_idle && !self.is_test && self.aiui.is_none() {
                         self.deliver_pending_message().await;
                     }
@@ -451,7 +462,7 @@ impl<'a, T: Transport> Session<'a, T> {
     async fn recognize_segments(&mut self, segments: Vec<Vec<f32>>) {
         let session_id = self.session_id.clone();
         // AIUI 全链路模式：仅 legacy-business 编译，切段即轮次并走云端闭环。
-        #[cfg(not(feature = "pure-base"))]
+        #[cfg(feature = "native-plugins")]
         if self.aiui.is_some() {
             self.aiui_segments(segments).await;
             return;
@@ -509,7 +520,7 @@ impl<'a, T: Transport> Session<'a, T> {
     async fn decide_user_text(&mut self, user_text: &str, turn_id: TurnId) -> UtteranceDecision {
         // Stage 1：记录（注册表观测 + 事件总线叠加层，见 observe.rs / events.rs）
         self.abort.store(false, Ordering::Relaxed); // new user turn, not a receipt
-        #[cfg(not(feature = "pure-base"))]
+        #[cfg(feature = "native-plugins")]
         {
             self.skill_turn_id = turn_id;
         }
@@ -565,9 +576,8 @@ impl<'a, T: Transport> Session<'a, T> {
                 // `CONFIG_SEND_WAKE_WORD_DATA=y` 启用）：这是"用户刚叫醒我"最早、最可靠的
                 // 信号——比任何 ASR 结果都早。在加 `[wakeup]` 之前这条消息只打一行日志，
                 // 用户唤醒后面对的是完全静默的等待。处置见 [`wakeup`] 子模块。
-                // `text` 在 ESP 上是唤醒词；echomuse 合成 detect 时用它携带触发来源
-                // （"本地唤醒词"/"action 键"，见 device::echomuse::turn），故措辞用
-                // "唤醒词/来源"兼容两种承载。
+                // `text` 既可来自设备固件唤醒词，也可由入口传递触发来源，故日志
+                // 采用“唤醒词/来源”这一通用措辞。
                 tracing::info!(
                     "session {session_id} 收到唤醒上报（唤醒词/来源：{:?}）",
                     text.as_deref().filter(|t| !t.is_empty()).unwrap_or("未知")

@@ -4,11 +4,9 @@
 //!
 //! `/api/ws` 已被小智设备协议占用，管理台 WS 用独立路径。本通道承载两类通讯：
 //!
-//! 1. **实时推送**（原有）：EchoMuse 设备面版本变化推送。设备上线/离线/批准/设置/
-//!    删除都会自增设备面版本号（[`crate::device::echomuse::subscribe_devices_version`]
-//!    的 watch 通道），变化即推给管理台。同一机制还承载**服务器状态**推送：出口 IP
-//!    解析完成时自增状态版本号（[`crate::plugins::geo::subscribe_status_version`]），
-//!    变化即推 `server_status_changed`；首帧 hello 内嵌状态快照，首连即有数据。
+//! 1. **实时推送**：通用资源版本变化推送。插件注册、卸载或资源状态变化时可 bump
+//!    底座提供的通用版本总线；管理台不感知具体插件类型。同一机制还承载服务器状态
+//!    推送：出口 IP 解析完成时自增状态版本号，变化即推 `server_status_changed`。
 //! 2. **管理 API 的 RPC 复用**：管理台客户端与服务器之间的 API 通讯**始终走 WS**
 //!    （web 与 macApp；设备连接协议与大文件传输除外）。客户端发
 //!    `{"type":"rpc","id":<n>,"method":"GET","path":"/api/stats"}`，服务端把
@@ -22,7 +20,7 @@
 //! - 连接建立后服务端**立刻**发 `{"type":"hello","version":<当前版本号>,
 //!   "server_status":{...}}`——`server_status` 是服务器状态快照（首连自动下发，
 //!   客户端不需要主动拉取就能渲染首页状态卡）；
-//! - 版本变化时服务端推 `{"type":"echomuse_devices_changed","version":<新版本>}`；
+//! - 通用资源版本变化时服务端推 `{"type":"resources_changed","version":<新版本>}`；
 //! - 服务器状态变化（当前：出口 IP 解析完成，含境外/失败落 note）推
 //!   `{"type":"server_status_changed","status":{...}}`——`status` 形状与 hello 的
 //!   `server_status` 完全一致（`schema_version` + `geo` 段），客户端用同一套解析；
@@ -243,7 +241,7 @@ pub(super) fn hello_frame(version: u64) -> String {
 
 /// 版本变化事件帧：管理台收到后刷新设备列表。
 pub(super) fn event_frame(version: u64) -> String {
-    serde_json::json!({ "type": "echomuse_devices_changed", "version": version }).to_string()
+    serde_json::json!({ "type": "resources_changed", "version": version }).to_string()
 }
 
 /// 服务器状态变化事件帧：与 hello 内嵌快照同一形状，客户端复用同一套解析。
@@ -322,6 +320,12 @@ pub(super) async fn admin_ws_loop(
     if out.send(hello_frame(current)).await.is_err() {
         return;
     }
+    // 预检 watch 存活：发送端已消失的 watch 永远不会再变（历史 pure-base stub 曾
+    // 每次新建并丢弃发送端），其 `changed()` 立即 Err——不能因此退出循环（文本帧
+    // 通道随之失活、连接无帧直断），也不能留臂轮询（忙循环）。死分支只在 Err 时
+    // 关闭一次，之后不再进入。
+    let mut ver_open = ver.has_changed().is_ok();
+    let mut status_open = status_ver.has_changed().is_ok();
     loop {
         tokio::select! {
             item = incoming.recv() => match item {
@@ -357,23 +361,27 @@ pub(super) async fn admin_ws_loop(
                 }
                 Some(WsIn::Closed) | None => return,
             },
-            changed = ver.changed() => {
-                // 发送端是进程级单例，Err 只在理论路径出现，按会话结束处理。
-                if changed.is_err() {
-                    return;
-                }
-                let version = *ver.borrow_and_update();
-                if out.send(event_frame(version)).await.is_err() {
-                    return;
+            changed = ver.changed(), if ver_open => {
+                match changed {
+                    // 发送端是进程级单例，Err 只在理论路径出现：关臂而非退出。
+                    Err(_) => ver_open = false,
+                    Ok(_) => {
+                        let version = *ver.borrow_and_update();
+                        if out.send(event_frame(version)).await.is_err() {
+                            return;
+                        }
+                    }
                 }
             }
-            changed = status_ver.changed() => {
-                if changed.is_err() {
-                    return;
-                }
-                let _ = status_ver.borrow_and_update();
-                if out.send(status_event_frame()).await.is_err() {
-                    return;
+            changed = status_ver.changed(), if status_open => {
+                match changed {
+                    Err(_) => status_open = false,
+                    Ok(_) => {
+                        let _ = status_ver.borrow_and_update();
+                        if out.send(status_event_frame()).await.is_err() {
+                            return;
+                        }
+                    }
                 }
             }
         }
@@ -403,8 +411,8 @@ async fn serve_admin_ws(socket: WebSocket) {
     let (mut sink, mut stream) = socket.split();
     let (in_tx, in_rx) = mpsc::channel::<WsIn>(16);
     let (out_tx, mut out_rx) = mpsc::channel::<String>(64);
-    let ver = crate::device::echomuse::subscribe_devices_version();
-    // 服务器状态 watch：出口 IP 解析完成时 bump → 推 server_status_changed。
+    // 通用资源与服务器状态 watch：两者都不绑定具体设备插件。
+    let ver = crate::observability::status::subscribe_version();
     let status_ver = crate::plugins::geo::subscribe_status_version();
     let rpc = RPC_ROUTER.get().cloned();
     tracing::debug!("管理台通道已连接（rpc={})", rpc.is_some());

@@ -4,4 +4,5 @@
 pub mod events;
 pub mod logtime;
 pub mod metrics;
+pub mod status;
 pub mod usage;

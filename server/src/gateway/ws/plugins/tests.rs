@@ -7,9 +7,9 @@ mod lifecycle_tests;
 
 use std::sync::Arc;
 
-use crate::config::Config;
-use crate::config::store::ConfigStore;
 use crate::config::store::sqlite::SqliteConfigStore;
+use crate::config::store::ConfigStore;
+use crate::config::Config;
 use crate::runtime::Engines;
 
 struct Server {

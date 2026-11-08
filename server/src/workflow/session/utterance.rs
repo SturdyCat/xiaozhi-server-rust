@@ -7,7 +7,7 @@ use crate::workflow::protocol::{IncomingFrame, Transport, UtteranceEnd};
 
 /// Speech 才把已切段及尾段交给 ASR；NoSpeech 丢弃两者。两种结束都重置 recurrent state。
 ///
-/// `vad` 为 `None` = 设备端已做 VAD 的会话（EchoMuse speech gate）：没有服务端实例，
+/// `vad` 为 `None` = entry profile 已声明设备端完成 speech gating：没有服务端实例，
 /// pending 里的 PCM 就是完整语音，Speech 直接整段交出（不 flush）。
 pub(super) fn finish_utterance(
     vad: Option<&mut VadGuard>,

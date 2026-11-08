@@ -66,13 +66,13 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Check pure-base release inputs
+      - name: Check base release inputs
         # Static guard: the published image must compile the WASM host with the
         # model/audio/NLU runtime, but may not copy a prebuilt business component.
         # NLU training intentionally uses the documented host Docker socket.
         run: |
           set -eu
-          grep -Eq -- '--no-default-features --features sherpa,nlu,wasm-plugins,pure-base' Dockerfile
+          grep -Eq -- '--no-default-features --features sherpa,nlu,wasm-plugins' Dockerfile
           # The WASM bindgen macro reads this contract during the Rust build;
           # fail here if the Docker context contract and COPY rule drift apart.
           grep -Fq 'COPY plugins /plugins' Dockerfile

@@ -79,9 +79,9 @@ const SECRET_PATHS: &[&[&str]] = &[
     &["aiui", "api_secret"],
     // 记忆抽取的独立模型路由（空 = 复用 [llm]）
     &["memory", "extractor", "api_key"],
-    // EchoMuse 设备接入凭据（同网段设备接入令牌；空串 = 不校验）
+    #[cfg(feature = "echomuse-plugin")]
     &["echomuse", "token"],
-    // 涂鸦云接入凭据（access_id 是 client_id 标识可留，secret 只写不读）
+    #[cfg(feature = "tuya-plugin")]
     &["tuya", "access_secret"],
 ];
 

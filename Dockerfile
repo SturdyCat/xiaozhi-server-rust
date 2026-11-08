@@ -104,7 +104,7 @@
 #   若重新启用，须先确认其构建机支持 BuildKit，否则在 RUN --mount 处解析报错。
 # 三个阶段：
 #   web    —— Gradle 构建 Kuikly H5 管理页（client 工程：shared 业务包 + h5App 壳）
-#   build  —— 编译 Rust server（--no-default-features --features sherpa,nlu,wasm-plugins,pure-base，模型/音频运行时 + NLU 训练/推理 + WASM 宿主）
+#   build  —— 编译 Rust server（--no-default-features --features sherpa,nlu,wasm-plugins，模型/音频运行时 + NLU 训练/推理 + WASM 宿主）
 #   运行时 —— debian-slim：同源托管 管理页(/) + /api + /api/ws，模型缺失由入口脚本按需下载
 #   运行镜像只包含底座运行时与 WASM 宿主，不预置业务 WASM 组件；NLU 训练经受限的宿主 Docker 编排。
 #
@@ -266,7 +266,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     mkdir -p src \
  && echo 'fn main() {}' > src/main.rs \
- && cargo build --release --no-default-features --features sherpa,nlu,wasm-plugins,pure-base --locked \
+ && cargo build --release --no-default-features --features sherpa,nlu,wasm-plugins --locked \
  && rm -rf src
 
 # 真实源码（bin-only crate：入口即 src/main.rs，无 lib.rs）。插件源码
@@ -303,7 +303,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     find src /plugins -type f -exec touch {} + \
  && cargo clean -p xiaozhi-server-rust --release \
- && cargo build --release --no-default-features --features sherpa,nlu,wasm-plugins,pure-base --locked \
+ && cargo build --release --no-default-features --features sherpa,nlu,wasm-plugins --locked \
  && strip target/release/xiaozhi-server-rust
 
 # ---- 运行阶段 ----

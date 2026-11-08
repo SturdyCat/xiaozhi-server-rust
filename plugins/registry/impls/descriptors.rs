@@ -171,6 +171,7 @@ pub const LLM_WASM_POLICY: PluginDescriptor = PluginDescriptor {
 };
 
 /// 原生 Tuya 局域网连接器（rustuya 数据面；当前由 TuyaEngine 共享装配）。
+#[cfg(feature = "tuya-plugin")]
 pub const TUYA_NATIVE: PluginDescriptor = PluginDescriptor {
     id: "tuya.native",
     capability: Capability::Tuya,
@@ -188,6 +189,7 @@ pub const TUYA_NATIVE: PluginDescriptor = PluginDescriptor {
 };
 
 /// WASM 控制策略 + 原生 Tuya 局域网数据面（P5）。
+#[cfg(feature = "tuya-plugin")]
 pub const TUYA_WASM_POLICY: PluginDescriptor = PluginDescriptor {
     id: "tuya.wasm-policy",
     capability: Capability::Tuya,
@@ -204,7 +206,8 @@ pub const TUYA_WASM_POLICY: PluginDescriptor = PluginDescriptor {
     selected: sel_tuya_wasm_policy,
 };
 
-/// 原生 EchoMuse 设备入口；路由、会话与协议仍由宿主 `device::echomuse` 负责。
+/// 原生 EchoMuse 设备入口；路由、会话与协议仍由 native 插件负责。
+#[cfg(feature = "echomuse-plugin")]
 pub const ECHOMUSE_NATIVE: PluginDescriptor = PluginDescriptor {
     id: "echomuse.native",
     capability: Capability::Echomuse,
@@ -222,6 +225,7 @@ pub const ECHOMUSE_NATIVE: PluginDescriptor = PluginDescriptor {
 };
 
 /// EchoMuse 的 WASM 控制策略元数据；本阶段不实现 WASM bridge 或额外路由。
+#[cfg(feature = "echomuse-plugin")]
 pub const ECHOMUSE_WASM_POLICY: PluginDescriptor = PluginDescriptor {
     id: "echomuse.wasm-policy",
     capability: Capability::Echomuse,

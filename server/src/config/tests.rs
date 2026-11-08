@@ -40,21 +40,22 @@ fn default_config_has_engine_keys_filled() {
     assert_eq!(cfg.tts.engine, "kokoro");
     assert_eq!(cfg.llm.engine, "openai");
     assert_eq!(cfg.memory.engine_id(), "graph");
+    #[cfg(feature = "native-plugins")]
     assert_eq!(cfg.echomuse.engine, "native");
 }
 
+#[cfg(feature = "native-plugins")]
 #[test]
-fn pure_base_device_defaults_are_inert() {
+fn native_device_plugin_defaults_are_enabled() {
     let mut cfg = Config::default();
-    assert_eq!(cfg.echomuse.enabled, !cfg!(feature = "pure-base"));
-    assert_eq!(cfg.tuya.enabled, !cfg!(feature = "pure-base"));
+    assert!(cfg.echomuse.enabled);
+    assert!(cfg.tuya.enabled);
 
-    // normalize also protects a pure-base binary opening a normal-build DB.
-    cfg.echomuse.enabled = true;
-    cfg.tuya.enabled = true;
+    cfg.echomuse.enabled = false;
+    cfg.tuya.enabled = false;
     cfg.normalize();
-    assert_eq!(cfg.echomuse.enabled, !cfg!(feature = "pure-base"));
-    assert_eq!(cfg.tuya.enabled, !cfg!(feature = "pure-base"));
+    assert!(!cfg.echomuse.enabled);
+    assert!(!cfg.tuya.enabled);
 }
 
 /// `normalize()` 幂等（load / default / merge 三条路径都可能重复调用）。
@@ -73,18 +74,19 @@ fn normalize_is_idempotent() {
 /// `TTS_ENGINES` 之类，会在这里直接打红。
 #[test]
 fn declared_engine_ids_match_registry_implementations() {
-    let tables: &[(Capability, &[EngineSpec])] = &[
+    let mut tables: Vec<(Capability, &[EngineSpec])> = vec![
         (Capability::Asr, crate::plugins::asr::ASR_ENGINES),
         (Capability::Vad, crate::plugins::vad::VAD_ENGINES),
         (Capability::Tts, crate::plugins::tts::TTS_ENGINES),
         (Capability::Llm, crate::plugins::llm::LLM_ENGINES),
-        (
-            Capability::Echomuse,
-            crate::device::echomuse::ECHOMUSE_ENGINES,
-        ),
     ];
+    #[cfg(feature = "native-plugins")]
+    tables.push((
+        Capability::Echomuse,
+        crate::device::echomuse::ECHOMUSE_ENGINES,
+    ));
     for (cap, specs) in tables {
-        let registered: Vec<&str> = impls_of(*cap).map(|d| impl_id(d.id)).collect();
+        let registered: Vec<&str> = impls_of(cap).map(|d| impl_id(d.id)).collect();
         for spec in specs.iter() {
             assert!(
                 registered.contains(&spec.id),
@@ -153,6 +155,7 @@ fn example_config_parses_and_normalizes() {
     assert_eq!(cfg.tts.kokoro.lang, "zh");
     assert_eq!(cfg.llm.engine, "openai");
     assert_eq!(cfg.memory.engine_id(), "graph");
+    #[cfg(feature = "native-plugins")]
     assert_eq!(cfg.echomuse.engine, "native");
     // 指令闸门：样例里默认开启（标准行为、开机即用），且填的默认词表就是需求里那三个词
     assert!(cfg.command.enabled);
@@ -165,7 +168,7 @@ fn example_config_parses_and_normalizes() {
     assert_eq!(cfg.command.max_chars, 5);
     // 内置默认灵魂：样例里写了 preset，且它必须是真实存在的预设（写错样例 = 每个新用户踩一次）。
     // pure-base 无预设表（人格业务不编译），仅保留配置形状，预设断言仅在 legacy 构建成立。
-    #[cfg(not(feature = "pure-base"))]
+    #[cfg(feature = "native-plugins")]
     {
         assert_eq!(cfg.soul.preset, crate::plugins::soul::presets::DEFAULT_ID);
         assert!(

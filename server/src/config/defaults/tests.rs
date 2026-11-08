@@ -195,19 +195,13 @@ fn standard_behaviors_default_on() {
         "nlu.enabled",
         "soul.enabled",
         "memory.enabled",
-        "echomuse.enabled",
         "llm.enabled",
     ] {
-        let pure_base_device = must == "echomuse.enabled" && cfg!(feature = "pure-base");
-        assert_eq!(
-            paths.contains(&must),
-            !pure_base_device,
-            "标准行为 {must} 的纯底座纳入状态不正确"
-        );
+        assert!(paths.contains(&must), "核心标准行为必须登记: {must}");
         assert_eq!(
             get_path(&defaults, must),
-            Some(&json!(!pure_base_device)),
-            "{must} 代码默认值必须符合当前构建边界"
+            Some(&json!(true)),
+            "{must} 代码默认值必须开启"
         );
     }
     // 需要凭据/模型文件的开关不在其内：缺了就启动失败，不能当"开箱即用"默认
@@ -265,7 +259,7 @@ fn fill_missing_is_idempotent_and_skips_mismatches() {
 }
 
 /// 护栏：空文档经结构补全后必须与 `Config::default()` 序列化形状完全一致——
-/// 这是"新配置段（如 [tuya]）在老库自动出现"的实现基准。
+/// 这是新配置段在配置库自动出现的实现基准。
 #[test]
 fn fill_missing_from_empty_matches_code_defaults() {
     let defaults = serde_json::to_value(Config::default()).expect("序列化默认配置");
@@ -273,7 +267,7 @@ fn fill_missing_from_empty_matches_code_defaults() {
     let filled = fill_missing(&mut empty, &defaults);
     assert_eq!(empty, defaults, "空文档补全后必须与当前默认完全一致");
     assert!(
-        filled.contains(&"tuya".to_string()),
+        filled.contains(&"playback".to_string()),
         "新增配置段必须在补全清单里: {filled:?}"
     );
 }

@@ -6,9 +6,9 @@
 - enabled 是配置意图，phase 是运行状态，两者不能合并。必需能力构建失败快速失败，可选能力降级；热重建失败保留旧实例并报告原因。
 - 历史设计见[插件统一导航](<../docs/designs/plugin-architecture-unification.md>)；设计中的统一 action/job、动态 UI 等未实现提案不当作扩展要求。
 
-## Pure-base 边界（当前发布契约）
+## 通用底座边界（当前发布契约）
 
-`pure-base` 是空底座发布模式：ASR/VAD/TTS/LLM 只保留核心数据面，WASM host 只负责安全装载、注册、动作与 manifest 投影；EchoMuse、Tuya、weather、memory、soul、skill、command、wakeup、AIUI、NLU 等业务能力不得进入 `/api/plugins` 的静态能力/schema/UI 投影。管理台业务入口必须来自已装载 WASM 的 `registration.menu`，未注册插件不渲染。`legacy-business` 裁剪现状：AIUI 网络客户端与会话分支、weather 原生 NMC 查询、soul 预设/预览/路由、wakeup 问候快照与会话路径、memory graph/store/rag 后端、skill 任务管理路由/调度器/投递/计划执行在 pure-base 均不编译（各能力目录以 `pure_base.rs` 空壳保留配置解析兼容）；识别链（skill/nlu 的模型唯一意图授权）与 `skills` 类型/校验层是底座契约，保留编译。
+默认构建就是空的通用底座：ASR/VAD/TTS/LLM、配置/日志/文件/观测与可选 WASM 宿主属于核心；EchoMuse、Tuya 等 native 设备插件必须通过显式 `native-plugins` 装载。底座不包含设备插件配置、路由、worker、依赖或兼容 stub；管理台业务入口只能来自已装载插件的 manifest。历史 `pure-base`/`legacy-business` 兼容分支不再作为架构边界。
 
 ## 插件装配与扩展
 

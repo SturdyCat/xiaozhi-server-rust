@@ -168,10 +168,10 @@ fn session<'a>(wire: &'a mut Wire, cfg: Config, memory: Arc<Memory>) -> Session<
             &cfg.nlu,
             Some(Arc::new(LabelBert::new("end_session", 0.99))),
         ),
-        #[cfg(not(feature = "pure-base"))]
+        #[cfg(feature = "native-plugins")]
         skill_turn_id: 1,
         delivery_idle: true,
-        #[cfg(not(feature = "pure-base"))]
+        #[cfg(feature = "native-plugins")]
         wake: crate::plugins::wakeup::WakeGreeting::new(&cfg.wakeup),
         eff_config: Arc::new(cfg),
         tts_lease: engines.tts_lease(),
@@ -426,7 +426,7 @@ async fn recall_and_record_failure_obey_policy_without_background_extract() {
 
 /// 唤醒问候业务绑定（legacy）：失败不被吞掉、仅 detect 触发。
 /// pure-base 空底座不编译问候业务，该契约仅在 legacy 构建下成立。
-#[cfg(not(feature = "pure-base"))]
+#[cfg(feature = "native-plugins")]
 #[tokio::test]
 async fn wake_hook_failure_is_not_swallowed_and_only_detect_triggers() {
     for stop in [true, false] {
@@ -542,5 +542,5 @@ async fn disabled_skill_cannot_be_restored_by_llm_tool_nomination() {
 /// 业务执行语义（计划/任务/投递/到期动作）：pure-base 不编译执行管线，
 /// 这棵测试树只在 legacy 构建运行；纯底座边界由 config/designer 的
 /// pure_base_* 护栏测试另行钉住。
-#[cfg(not(feature = "pure-base"))]
+#[cfg(feature = "native-plugins")]
 mod model_behaviors;

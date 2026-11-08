@@ -14,7 +14,7 @@ DOCS_RS=1 ~/.cargo/bin/cargo check --manifest-path server/Cargo.toml --features 
 - cargo 不在 PATH 时用上述路径；USTC 镜像报 404 时追加 `--config 'source.ustc.registry="sparse+https://mirrors.ustc.edu.cn/crates.io-index/"'`，不要假定每台机器都需要镜像覆盖。
 - 默认 feature 支持编译/单测及显式 `--dev` 管理台开发模式（根目录 `./dev-server.sh`）；开发模式运行真实 SQLite/管理 API，独立 `.dev/` 数据、回环监听，推理/语音/训练明确 503，不伪造输出，不做模型下载/发现广播。开发开关仅进程态，不写入配置；保存配置和懒加载不得解除禁用。入口与保护在 [dev.rs](<src/dev.rs>)，运行期由 [Engines::new_dev](<src/runtime/mod.rs>) 装配。完整语音服务仍需要 `sherpa`、原生库与模型，不能把单测桩称为可运行 mock 服务。
 - `DOCS_RS=1` 只证明 feature 代码可类型检查，不代表链接成功或真实推理可用。真实环境另跑 `cargo test --features sherpa` 和协议联调。
-- 生产纯底座镜像使用 `--no-default-features --features sherpa,nlu,wasm-plugins,pure-base`：对外只暴露 ASR/VAD/TTS/LLM 核心数据面、通用配置/日志/文件/观测与 WASM 插件管理；静态业务能力（EchoMuse、Tuya、AIUI、memory、soul、skill、wakeup、NLU 等）不进入能力/schema/UI 投影，业务 UI 只能由已装载 WASM manifest 声明。`legacy-business` 编译期门控已完成：OTA/音色、EchoMuse/Tuya 原生设备面、AIUI 全链路、weather 原生查询、soul 预设与预览、wakeup 问候、memory 后端、技能任务管理路由/调度器/投递/计划执行在 pure-base 均不编译；识别链（模型唯一意图授权）与 `skills` 类型/校验层属底座契约保留，NLU 训练为系统级能力保留。
+- 默认构建就是干净服务底座（`default = []`）：只装配核心 ASR/VAD/TTS/LLM、通用配置/日志/文件/观测与可选 WASM 宿主；EchoMuse/Tuya 等 native 设备插件必须显式启用 `native-plugins`，不再通过 `pure-base` 反向裁剪，也不保留兼容 stub。业务 UI 只能由已装载 WASM manifest 声明；native 插件路由、配置、依赖和 worker 均在底座构建中不存在。
 - NLU 训练是系统级模型能力，不属于业务插件：训练端点仍通过 compose 挂载宿主 Docker socket 运行独立训练器，`tools/nlu-trainer/train.py` 作为服务端编译期契约输入保留。
 - macOS 编译真实 feature：安装 Homebrew `opus`，设置 `PATH="/opt/homebrew/bin:$PATH"` 与 `PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:$PKG_CONFIG_PATH"`。找不到系统 libopus 会回退 autotools，缺 automake/aclocal 时编译失败；本地动态链接产物不是 Docker 部署产物。
 - Rust 测试外置；子模块可访问父模块私有项，父模块调用子模块函数仅按需用 `pub(super)`，不因拆文件扩大为 `pub`。

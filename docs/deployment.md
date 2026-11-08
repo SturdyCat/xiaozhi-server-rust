@@ -7,11 +7,11 @@
 ### Pure-base 发布镜像
 
 发布镜像由根目录 [`Dockerfile`](<../Dockerfile>) 构建，Rust 服务端使用
-`sherpa,nlu,wasm-plugins,pure-base` features：
+`sherpa,nlu,wasm-plugins` features：
 
 - `sherpa` 提供真实 ASR/TTS/VAD 模型与音频运行时；
 - `wasm-plugins` 编译 WASM Component 宿主与 WIT 契约；
-- `pure-base` 保持发布进程为底座装配，镜像内不预置 WASM 业务 artifact。
+- 默认构建保持发布进程为底座装配，镜像内不预置 WASM 业务 artifact。
 
 WASM 宿主本身随 `/app/server` 发布；业务组件必须通过明确的运行期插件管理流程提供，
 不会从 Docker build context 或镜像层自动带入；运行期 artifact 仍由数据卷与插件管理流程提供。
@@ -32,13 +32,13 @@ NLU 训练沿用 compose 显式挂载的宿主 Docker socket，训练脚本作�
 
 构建期固定 `RUSTFLAGS="-C target-cpu=x86-64-v2"`（见 `Dockerfile`），兼容 N5105（Tremont，无 AVX）。**不要用 `native`**——会在构建机嵌入部署机不支持的 AVX 指令，运行时 `SIGILL` 崩溃。
 
-### 真实模型/音频与 NLU 运行时（`sherpa,nlu,wasm-plugins,pure-base`）本地依赖
+### 真实模型/音频与 NLU 运行时（`sherpa,nlu,wasm-plugins`）本地依赖
 
 1. 系统 `libopus`；2. 网络（构建期原生库下载）；3. 本地模型文件：
 
 ```bash
 ./server/scripts/download_models.sh /host/data/models     # 裸机部署时手动下载
-cd server && ~/.cargo/bin/cargo run --release --features sherpa,nlu,wasm-plugins,pure-base -- --config-db /host/data/data.db
+cd server && ~/.cargo/bin/cargo run --release --features sherpa,nlu,wasm-plugins -- --config-db /host/data/data.db
 ```
 
 ## 构建与故障边界

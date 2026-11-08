@@ -2,7 +2,7 @@
 
 入口[会话建立](<start.rs>)负责热刷新、依赖快照和注册；[主循环](<./mod.rs>)处理帧；[回复编排](<reply.rs>)串起上下文、LLM、TTS 和下行。测试台[bench](<bench.rs>)只服务 `hello.test=true`，不是生产捷径。
 
-**设备类型入口定型**：`SessionParams.kind`（`DeviceKind`）由两个生产入口各自声明——`gateway/ws`（hello 协商）→ `XiaozhiEsp`、`device::echomuse`（identify/ack、无 hello）→ `EchoMuse`。会话专用分支（设备端 VAD 直通、连接欢迎语）只读 kind，不从音频格式反推（debug_assert 钉住 kind⇔几何一致）；连接欢迎语文本由入口经 `run_session` 的 `welcome` 参数注入，`workflow` 不反向依赖 `device::echomuse`。共享流水线（ASR/技能/LLM/TTS/下行）不感知类型；几何差异（16k/48k、PCM/Opus、lead=0）由入口经 `SessionParams` 投影（`configured_defaults` 的 PcmS16Le⇔EchoMuse 口径），下行分帧按该投影走各自专属链路（Opus 编码 vs 48k PCM 直通）。
+**传输入口定型**：`SessionParams.kind` 是入口声明的 `SessionTransportProfile`（opaque id + 是否已完成设备端 VAD），会话专用分支只读 profile，不从音频格式反推；连接欢迎语文本由入口经 `run_session` 的 `welcome` 参数注入，workflow 不反向依赖任何设备插件。共享流水线（ASR/技能/LLM/TTS/下行）只消费通用 profile；几何差异（采样率、PCM/Opus、lead）由入口经 `SessionParams` 投影，下行分帧按该投影走各自 transport adapter。
 
 ## 推理与流式生产
 
@@ -15,7 +15,7 @@
 
 ## 可编排 hook 执行
 
-- [计划选择](<plan.rs>)消费会话建立时编译的固定快照；空计划关闭全部可选增强，但不关闭 VAD/ASR/LLM/TTS 核心链路。条件使用真实文本和入口 `DeviceKind`（`xiaozhi_esp` / `echomuse`），普通上下文没有可信置信度时 `confidence` 一律不命中；模型门控在唯一分类后使用真实分数。
+- [计划选择](<plan.rs>)消费会话建立时编译的固定快照；空计划关闭全部可选增强，但不关闭 VAD/ASR/LLM/TTS 核心链路。条件使用真实文本和入口 transport profile id，普通上下文没有可信置信度时 `confidence` 一律不命中；模型门控在唯一分类后使用真实分数。
 - `nlu.model` 是唯一模型授权节点；`command.gate` / `nlu.rules` / `skill.gate` 仅兼容别名，共存也只调用一次 `SkillRegistry::recognize`、执行一次。旧 command 绑定只授权 end_session，旧 NLU 绑定只授权 NLU 配置中的意图；条件不扩大目录权限。`confidence` 仅在该次真实分类后评估，非有限值拒绝。模型关闭/拒识可纯聊天，但不提供任何技能工具；模型故障消费本轮并明确记错，缺槽位明确澄清且不动作。
 - [上下文与生命周期](<hooks.rs>)按 `link.nlu.llm` 位置顺序组装人格/召回，`stop` 在真实错误时结束当前轮，`continue` 保留核心 prompt 并继续；唤醒仍仅挂每次 `detect`，不是连接开始或 `listen start`。AIUI 托管云端链路不执行本地人格/记忆。
 - `end` 写回只由正常完成、非取消、非打断的本地回复调用；会话内以单调 `turn_id` 防重入，原文 record 等待结果使错误策略真实生效，抽取/维护仍在后台。此保证不包含进程崩溃 exactly-once，也不代表设备已播放确认；背景任务失败不追溯撤销已完成轮次。

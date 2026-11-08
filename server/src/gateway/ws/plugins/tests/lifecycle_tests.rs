@@ -6,12 +6,12 @@
 
 use std::sync::Arc;
 
-use crate::config::Config;
-use crate::config::store::ConfigStore;
 use crate::config::store::sqlite::SqliteConfigStore;
+use crate::config::store::ConfigStore;
+use crate::config::Config;
 use crate::runtime::Engines;
 
-use super::{Server, b64, fixture, fixture_at, fixture_bytes, get_json};
+use super::{b64, fixture, fixture_at, fixture_bytes, get_json, Server};
 
 /// 挂真实产物目录的回环（生命周期端点需要读盘产物）。
 pub(super) async fn lifecycle_fixture(tag: &str) -> (String, Server, Arc<Engines>) {

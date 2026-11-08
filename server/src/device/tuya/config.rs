@@ -60,7 +60,7 @@ fn default_engine() -> String {
 }
 
 fn default_true() -> bool {
-    !cfg!(feature = "pure-base")
+    !cfg!(not(feature = "native-plugins"))
 }
 
 fn default_region() -> String {
@@ -89,7 +89,7 @@ impl TuyaConfig {
     pub fn normalize(&mut self) {
         // A pure-base binary must remain inert even when reusing a database
         // created by a normal build with `[tuya].enabled = true`.
-        if cfg!(feature = "pure-base") {
+        if cfg!(not(feature = "native-plugins")) {
             self.enabled = false;
         }
         self.engine = canonical_engine(&self.engine, TUYA_ENGINES, DEFAULT_TUYA_ENGINE);
@@ -144,5 +144,5 @@ impl TuyaConfig {
     }
 }
 
-#[cfg(all(test, feature = "legacy-business"))]
+#[cfg(all(test, feature = "native-plugins"))]
 mod tests;

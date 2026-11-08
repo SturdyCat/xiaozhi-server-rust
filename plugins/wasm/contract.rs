@@ -4,7 +4,7 @@
 //! 本文件把这些 WIT 类型转成 serde DTO（`/api/plugins` 投影与内部记录用），
 //! 并提供 manifest 的装载期校验（契约主版本、id 形状、扩展点声明形状）。
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{anyhow, bail, Result};
 
 wasmtime::component::bindgen!({
     // 直接指向契约文件（目录形式会被当作 deps/ 包布局解析而失败）

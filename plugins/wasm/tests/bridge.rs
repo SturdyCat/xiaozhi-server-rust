@@ -99,12 +99,12 @@ fn backend_switch_routes_service_to_wasm() {
     let mut cfg = WeatherConfig::default();
     // 默认后端随构建模式：full 默认 native（对存量配置零影响）；pure-base 未编译
     // 原生 NMC 客户端，唯一真实后端是已注册 WASM 插件，默认值即 wasm。
-    #[cfg(feature = "pure-base")]
+    #[cfg(not(feature = "native-plugins"))]
     assert_eq!(
         cfg.backend, "wasm",
         "pure-base 默认后端是 wasm（native 未编译）"
     );
-    #[cfg(not(feature = "pure-base"))]
+    #[cfg(feature = "native-plugins")]
     assert_eq!(cfg.backend, "native", "默认后端是 native（零影响）");
     cfg.backend = "wasm".into();
     let svc = crate::plugins::weather::WeatherService::new(&cfg);
@@ -130,9 +130,9 @@ fn backend_switch_without_host_reports_explicitly() {
     let svc = crate::plugins::weather::WeatherService::new(&cfg);
     let result = svc.forecast("杭州", "", "");
     assert_eq!(result["ok"], serde_json::json!(false), "{result}");
-    #[cfg(feature = "pure-base")]
+    #[cfg(not(feature = "native-plugins"))]
     let expected = "未注册";
-    #[cfg(not(feature = "pure-base"))]
+    #[cfg(feature = "native-plugins")]
     let expected = "未初始化";
     assert!(
         result["speech"]
@@ -413,9 +413,9 @@ fn backend_unknown_value_rejected() {
     let result = svc.forecast("杭州", "", "");
     assert_eq!(result["ok"], serde_json::json!(false), "{result}");
     // full 区分未知后端；pure-base 没有 native 分支，任何非 wasm 值统一显式拒绝。
-    #[cfg(feature = "pure-base")]
+    #[cfg(not(feature = "native-plugins"))]
     let expected = "只能使用已注册的 WASM 插件";
-    #[cfg(not(feature = "pure-base"))]
+    #[cfg(feature = "native-plugins")]
     let expected = "未知天气后端";
     assert!(
         result["speech"]

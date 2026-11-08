@@ -1,5 +1,5 @@
 //! Session-pinned executable hook selection. Missing context never matches.
-use super::{DeviceKind, Session};
+use super::Session;
 use crate::workflow::designer::{CompiledBinding, CompiledWorkflow, Condition};
 use crate::workflow::protocol::Transport;
 
@@ -64,10 +64,7 @@ pub(super) fn hook_result(
 
 impl<'a, T: Transport> Session<'a, T> {
     pub(super) fn hook_bindings(&self, position: &str, text: Option<&str>) -> Vec<CompiledBinding> {
-        let kind = match self.params.kind {
-            DeviceKind::XiaozhiEsp => "xiaozhi_esp",
-            DeviceKind::EchoMuse => "echomuse",
-        };
+        let kind = self.params.kind.id;
         // ASR/skill APIs expose no calibrated confidence. Never invent 1.0.
         select(
             &self.workflow,
@@ -115,10 +112,7 @@ impl<'a, T: Transport> Session<'a, T> {
         confidence: Option<f32>,
         before_model: bool,
     ) -> Vec<CompiledBinding> {
-        let kind = match self.params.kind {
-            DeviceKind::XiaozhiEsp => "xiaozhi_esp",
-            DeviceKind::EchoMuse => "echomuse",
-        };
+        let kind = self.params.kind.id;
         let ctx = HookContext {
             text: Some(text),
             device_kind: Some(kind),
@@ -139,5 +133,5 @@ impl<'a, T: Transport> Session<'a, T> {
     }
 }
 
-#[cfg(all(test, not(feature = "pure-base")))]
+#[cfg(all(test, feature = "native-plugins"))]
 mod tests;

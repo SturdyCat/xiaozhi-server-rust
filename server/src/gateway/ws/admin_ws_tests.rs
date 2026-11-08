@@ -1,6 +1,6 @@
 //! 管理台实时通道（`GET /api/admin/ws`）的**外置测试**：帧形状与
 //! [`admin_ws_loop`] 纯逻辑 mpsc/watch 直驱，不起真实 HTTP/WS
-//! （挂法照 `echomuse::admin_tests` 的外置风格）。
+//! （通道逻辑与 socket 桥接分离，便于直接驱动 channel 测试）。
 
 use std::time::Duration;
 
@@ -41,7 +41,7 @@ fn hello_and_event_frames_carry_type_and_version() {
     );
     assert!(status["geo"]["note"].is_string(), "geo 段必含 note");
     let event: serde_json::Value = serde_json::from_str(&event_frame(9)).unwrap();
-    assert_eq!(event["type"], "echomuse_devices_changed");
+    assert_eq!(event["type"], "resources_changed");
     assert_eq!(event["version"], 9);
 }
 
@@ -96,7 +96,7 @@ async fn loop_sends_hello_then_event_on_version_bump() {
     // 版本 bump → 推事件帧（新版本）。
     ver_tx.send_replace(6);
     let event = recv_frame(&mut out_rx).await;
-    assert_eq!(event["type"], "echomuse_devices_changed");
+    assert_eq!(event["type"], "resources_changed");
     assert_eq!(event["version"], 6);
 }
 
@@ -340,4 +340,57 @@ async fn loop_without_rpc_router_answers_status_zero() {
     assert_eq!(reply["id"], 9);
     assert_eq!(reply["status"], 0);
     assert!(reply["error"].is_string());
+}
+
+/// 死 watch（发送端已 drop）不得杀循环：通用管理事件总线关闭时，文本 RPC 仍应服务。
+/// 循环必须继续服务文本帧（ping→pong、非法→error），而非退出。
+#[tokio::test]
+async fn dead_sender_watch_keeps_loop_serving_text() {
+    let (_dead_ver_tx, ver_rx) = tokio::sync::watch::channel(0u64);
+    drop(_dead_ver_tx);
+    let (_dead_st_tx, st_rx) = tokio::sync::watch::channel(0u64);
+    drop(_dead_st_tx);
+    let (in_tx, in_rx) = tokio::sync::mpsc::channel::<WsIn>(16);
+    let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<String>(64);
+    tokio::spawn(admin_ws_loop(in_rx, out_tx, ver_rx, st_rx, None));
+    assert_eq!(recv_frame(&mut out_rx).await["type"], "hello");
+
+    in_tx
+        .send(WsIn::Text("{\"type\":\"ping\"}".into()))
+        .await
+        .unwrap();
+    assert_eq!(
+        recv_frame(&mut out_rx).await["type"],
+        "pong",
+        "死 watch 下循环必须存活"
+    );
+
+    in_tx.send(WsIn::Text("not-json".into())).await.unwrap();
+    assert_eq!(
+        recv_frame(&mut out_rx).await["type"],
+        "error",
+        "循环持续服务"
+    );
+}
+
+/// 底座通用资源版本总线必须保持发送端常驻。
+#[cfg(not(feature = "native-plugins"))]
+#[tokio::test]
+async fn base_resource_watch_survives_loop() {
+    let ver_rx = crate::observability::status::subscribe_version();
+    let st_rx = crate::plugins::geo::subscribe_status_version();
+    let (in_tx, in_rx) = tokio::sync::mpsc::channel::<WsIn>(16);
+    let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<String>(64);
+    tokio::spawn(admin_ws_loop(in_rx, out_tx, ver_rx, st_rx, None));
+    assert_eq!(recv_frame(&mut out_rx).await["type"], "hello");
+
+    in_tx
+        .send(WsIn::Text("{\"type\":\"ping\"}".into()))
+        .await
+        .unwrap();
+    assert_eq!(
+        recv_frame(&mut out_rx).await["type"],
+        "pong",
+        "stub watch 的发送端不得在 subscribe 后消失"
+    );
 }

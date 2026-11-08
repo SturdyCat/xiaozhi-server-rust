@@ -4,18 +4,65 @@ use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 
 pub fn capabilities() -> Vec<CapabilityMetadata> {
-    [
-        ("tasks.create", "Persist a device-bound reminder", "sqlite", json!({"required":["text"],"one_of":["after","at","interval","hourly","daily","workdays","weekly","monthly","yearly"],"calendar_fields":{"hourly":"0..59 minute integer or string, e.g.20分","workdays":"clock; Monday-Friday only","weekly":{"weekday":"1..7 or weekday string","time":"clock"},"monthly":{"day":"1..31","time":"clock"},"yearly":{"month":"1..12","day":"1..31","time":"clock"}},"invalid_dates":"skip; never clamp","timezone":"UTC or Asia/Shanghai; default UTC","speech":"actual local date, time, frequency; countdown target","optional":["timezone","action"],"action":"optional single step {api:'devices.call',args:{tool,arguments}}; runs on the device when the task fires (online devices only; offline degrades to the text reminder)"})),
-        ("tasks.list", "List this device's tasks", "sqlite", json!({"optional":{"limit":"1..100","offset":"0..10000"}})),
-        ("tasks.get", "Read one device-bound task", "sqlite", json!({"required":["task_id"]})),
-        ("tasks.cancel", "Cancel exact device-bound task and unsubmitted delivery; ambiguous text is rejected", "sqlite", json!({"one_of":["task_id","text"],"speech":"actual cancellation result or typed clarification error"})),
-        ("messages.send", "Persist text in this device's outbox", "sqlite", json!({"required":["text"]})),
-        ("devices.call", "Session dispatch to an advertised MCP tool", "session", json!({"required":["tool","arguments"],"tool":"static literal; no interpolation"})),
-        ("sessions.end", "Session-scoped stop listening", "session", json!({})),
-        ("replies.say", "Deferred receipt: session speaks only after all plan actions succeed", "session", json!({"required":["text"]})),
-        ("weather.forecast", "Query Chinese weather (NMC) for a city: realtime/current or 7-day forecast", "network", json!({"optional":["city","range","province"],"city":"城市；缺省时回退到服务器出口IP定位的默认地区","range":"实时/当前/今天=实时；明天/后天=+1/+2天；近7天/7天/一周/未来一周=7天预报；空=实时","province":"可选，用于消歧同名城市"})),
-        ("tuya.control", "Turn a synced Tuya device on/off by spoken name (alias or cloud name)", "network", json!({"required":["name","action"],"action":"on|off（静态字面量，不许插值）","name":"设备名或别名；与已同步目录先精确后双向包含匹配"})),
-    ].into_iter().map(|(api, description, execution, mut args_schema)| {
+    let mut entries = vec![
+        (
+            "tasks.create",
+            "Persist a device-bound reminder",
+            "sqlite",
+            json!({"required":["text"],"one_of":["after","at","interval","hourly","daily","workdays","weekly","monthly","yearly"],"calendar_fields":{"hourly":"0..59 minute integer or string, e.g.20分","workdays":"clock; Monday-Friday only","weekly":{"weekday":"1..7 or weekday string","time":"clock"},"monthly":{"day":"1..31","time":"clock"},"yearly":{"month":"1..12","day":"1..31","time":"clock"}},"invalid_dates":"skip; never clamp","timezone":"UTC or Asia/Shanghai; default UTC","speech":"actual local date, time, frequency; countdown target","optional":["timezone","action"],"action":"optional single step {api:'devices.call',args:{tool,arguments}}; runs on the device when the task fires (online devices only; offline degrades to the text reminder)"}),
+        ),
+        (
+            "tasks.list",
+            "List this device's tasks",
+            "sqlite",
+            json!({"optional":{"limit":"1..100","offset":"0..10000"}}),
+        ),
+        (
+            "tasks.get",
+            "Read one device-bound task",
+            "sqlite",
+            json!({"required":["task_id"]}),
+        ),
+        (
+            "tasks.cancel",
+            "Cancel exact device-bound task and unsubmitted delivery; ambiguous text is rejected",
+            "sqlite",
+            json!({"one_of":["task_id","text"],"speech":"actual cancellation result or typed clarification error"}),
+        ),
+        (
+            "messages.send",
+            "Persist text in this device's outbox",
+            "sqlite",
+            json!({"required":["text"]}),
+        ),
+        (
+            "devices.call",
+            "Session dispatch to an advertised MCP tool",
+            "session",
+            json!({"required":["tool","arguments"],"tool":"static literal; no interpolation"}),
+        ),
+        (
+            "sessions.end",
+            "Session-scoped stop listening",
+            "session",
+            json!({}),
+        ),
+        (
+            "replies.say",
+            "Deferred receipt: session speaks only after all plan actions succeed",
+            "session",
+            json!({"required":["text"]}),
+        ),
+        (
+            "weather.forecast",
+            "Query Chinese weather (NMC) for a city: realtime/current or 7-day forecast",
+            "network",
+            json!({"optional":["city","range","province"],"city":"城市；缺省时回退到服务器出口IP定位的默认地区","range":"实时/当前/今天=实时；明天/后天=+1/+2天；近7天/7天/一周/未来一周=7天预报；空=实时","province":"可选，用于消歧同名城市"}),
+        ),
+    ];
+    #[cfg(feature = "tuya-plugin")]
+    entries.push(("tuya.control", "Turn a synced Tuya device on/off by spoken name (alias or cloud name)", "network", json!({"required":["name","action"],"action":"on|off（静态字面量，不许插值）","name":"设备名或别名；与已同步目录先精确后双向包含匹配"})));
+    entries.into_iter().map(|(api, description, execution, mut args_schema)| {
         if matches!(api, "tasks.create" | "tasks.cancel" | "messages.send") {
             args_schema["idempotency"] = json!({"scope":"device_id + request_id","retention_days":7,"max_records_global":8192,"conflicting_payload":"rejected","request_id":"stable and unique per logical step"});
         }
@@ -115,6 +162,7 @@ pub fn validate_step(step: &SkillStep) -> Result<()> {
         "devices.call" => (&["tool", "arguments"], &["tool", "arguments"]),
         "sessions.end" => (&[], &[]),
         "weather.forecast" => (&[], &["city", "range", "province"]),
+        #[cfg(feature = "tuya-plugin")]
         "tuya.control" => (&["name", "action"], &["name", "action"]),
         _ => bail!("unknown skill capability: {}", step.api),
     };
@@ -149,6 +197,7 @@ pub fn validate_step(step: &SkillStep) -> Result<()> {
             "tasks.cancel requires exactly one of task_id or exact text"
         );
     }
+    #[cfg(feature = "tuya-plugin")]
     if step.api == "tuya.control" {
         // action 必须是静态字面量（不许插值，值域锁死 on/off）：开关语义写死在
         // 独立技能种子里（iot_device_on/off 各自静态 on/off，不共用值槽位），

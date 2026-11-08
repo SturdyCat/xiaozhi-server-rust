@@ -101,9 +101,11 @@ pub enum Capability {
     /// 每会话固定统一技能目录；模板仅为已接受的同一技能抽槽。
     /// 关闭/拒识可聊天，模型故障与缺槽明确停止，不提供规则或 LLM 动作回退。
     Nlu,
-    /// 涂鸦局域网连接器（原生 rustuya 或 WASM 控制策略 + 原生数据面）。
+    /// 涂鸦局域网连接器（native plugin only）。
+    #[cfg(feature = "tuya-plugin")]
     Tuya,
-    /// EchoMuse 设备入口（原生控制面或 WASM 控制策略元数据）。
+    /// EchoMuse 设备入口（native plugin only）。
+    #[cfg(feature = "echomuse-plugin")]
     Echomuse,
 }
 
@@ -121,7 +123,9 @@ pub const ALL_CAPABILITIES: &[Capability] = &[
     Capability::Command,
     Capability::Wake,
     Capability::Nlu,
+    #[cfg(feature = "tuya-plugin")]
     Capability::Tuya,
+    #[cfg(feature = "echomuse-plugin")]
     Capability::Echomuse,
 ];
 
@@ -141,7 +145,9 @@ impl Capability {
             Capability::Command => "command",
             Capability::Wake => "wakeup",
             Capability::Nlu => "nlu",
+            #[cfg(feature = "tuya-plugin")]
             Capability::Tuya => "tuya",
+            #[cfg(feature = "echomuse-plugin")]
             Capability::Echomuse => "echomuse",
         }
     }
@@ -160,7 +166,9 @@ impl Capability {
             Capability::Command => "命令词表（模型训练样例）",
             Capability::Wake => "唤醒问候语",
             Capability::Nlu => "NLU 模型（意图识别）",
+            #[cfg(feature = "tuya-plugin")]
             Capability::Tuya => "涂鸦局域网连接器",
+            #[cfg(feature = "echomuse-plugin")]
             Capability::Echomuse => "EchoMuse 设备入口",
         }
     }
@@ -198,7 +206,12 @@ impl Capability {
     ///   ——保持 `Engines::new` 既有行为（`aiui.enabled` 三要素缺失即退出）。
     /// - 其余可选能力（`Voices`/`Firmware`/`Memory`/`Soul`）坏掉只降级，不拖垮语音服务。
     pub const fn fatal_if_enabled(self) -> bool {
-        if cfg!(feature = "pure-base") {
+        if cfg!(not(any(
+            feature = "native-plugins",
+            feature = "echomuse-plugin",
+            feature = "tuya-plugin",
+            feature = "esp_home"
+        ))) {
             return self.required();
         }
         self.required() || matches!(self, Capability::FullChain)
@@ -266,14 +279,11 @@ const APP_SECTION_HOT: &[(&str, HotReload)] = &[
     ("playback", HotReload::NextSession),
     // Workflow changes are compiled and applied to new sessions only.
     ("workflow", HotReload::NextSession),
-    // `[echomuse]`（EchoMuse 设备入口）：路由挂载与 mDNS 广播由启动值决定，
-    // `enabled`/`token` 改动都需重启生效。
+    #[cfg(feature = "echomuse-plugin")]
     ("echomuse", HotReload::RestartOnly),
-    // `[esp_home]`（ESPHome 桥）：feature 开关与设备连接在启动时建立，
-    // 改动需重启生效。
+    #[cfg(feature = "esp_home")]
     ("esp_home", HotReload::RestartOnly),
-    // `[tuya]`（涂鸦 IoT 设备集成）：全部字段热生效——凭证变更由指纹检测
-    // 丢弃云 token 缓存、worker 每 tick 重读 config，无需重启（见 device/tuya/config.rs）。
+    #[cfg(feature = "tuya-plugin")]
     ("tuya", HotReload::Live),
     // `[weather]`（天气数据源）：`WeatherService` 在 `Engines::assemble` 装配一次
     // （HTTP 客户端/缓存/站点表），改动需重启生效。
@@ -489,9 +499,13 @@ pub static REGISTRY: &[PluginDescriptor] = &[
     TTS_WASM_POLICY,
     LLM_OPENAI,
     LLM_WASM_POLICY,
+    #[cfg(feature = "tuya-plugin")]
     TUYA_NATIVE,
+    #[cfg(feature = "tuya-plugin")]
     TUYA_WASM_POLICY,
+    #[cfg(feature = "echomuse-plugin")]
     ECHOMUSE_NATIVE,
+    #[cfg(feature = "echomuse-plugin")]
     ECHOMUSE_WASM_POLICY,
     AIUI_FULLCHAIN,
     VOICES_CATALOG,
@@ -539,7 +553,9 @@ pub fn configured_engine(cfg: &Config, cap: Capability) -> Option<String> {
         Capability::Tts => Some(cfg.tts.engine_id()),
         Capability::Llm => Some(cfg.llm.engine_id()),
         Capability::Memory => Some(cfg.memory.engine_id().to_string()),
+        #[cfg(feature = "tuya-plugin")]
         Capability::Tuya => Some(cfg.tuya.engine_id()),
+        #[cfg(feature = "echomuse-plugin")]
         Capability::Echomuse => Some(cfg.echomuse.engine_id()),
         Capability::FullChain
         | Capability::Voices

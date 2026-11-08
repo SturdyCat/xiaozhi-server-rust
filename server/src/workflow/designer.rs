@@ -78,7 +78,7 @@ pub struct CompiledWorkflow {
     pub plan: Vec<CompiledBinding>,
 }
 
-#[cfg(not(feature = "pure-base"))]
+#[cfg(feature = "native-plugins")]
 const PLUGINS: &[(&str, &str, &str, &[&str])] = &[
     ("nlu.model", "模型意图", "nlu", &["nlu"]),
     ("skill.gate", "模型门控（兼容）", "nlu", &["nlu"]),
@@ -123,25 +123,25 @@ fn static_plugin(
     &'static str,
     &'static [&'static str],
 )> {
-    #[cfg(feature = "pure-base")]
+    #[cfg(not(feature = "native-plugins"))]
     {
         let _ = id;
         None
     }
-    #[cfg(not(feature = "pure-base"))]
+    #[cfg(feature = "native-plugins")]
     {
         PLUGINS.iter().find(|x| x.0 == id)
     }
 }
 
 pub fn default_config() -> WorkflowConfig {
-    #[cfg(feature = "pure-base")]
+    #[cfg(not(feature = "native-plugins"))]
     return WorkflowConfig {
         version: 1,
         bindings: Vec::new(),
     };
 
-    #[cfg(not(feature = "pure-base"))]
+    #[cfg(feature = "native-plugins")]
     {
         let ids = [
             ("wakeup.greeting", "start"),
@@ -343,7 +343,7 @@ fn condition_json() -> Value {
         {"kind":"confidence","label":"置信度","fields":[{"key":"min","label":"最低值","type":"number","required":true},{"key":"max","label":"最高值","type":"number","required":false}]}
     ])
 }
-#[cfg(not(feature = "pure-base"))]
+#[cfg(feature = "native-plugins")]
 fn plugin_json((id, label, owner, allowed): &(&str, &str, &str, &[&str])) -> Value {
     let runtime = !allowed.is_empty();
     let config_paths = match *id {
@@ -356,11 +356,11 @@ fn plugin_json((id, label, owner, allowed): &(&str, &str, &str, &[&str])) -> Val
     json!({"id":id,"label":label,"alias_of":if safety_gate(id) && *id != "nlu.model" { Some("nlu.model") } else { None },"owner_position":owner,"allowed_positions":if runtime { *allowed } else { &[] as &[&str] },"config_paths":config_paths,"input_type":"event","output_type":"event","repeatable":false,"order_constraints":[],"tests":[],"actions":[],"condition_kinds":if runtime { condition_kinds(id) } else { &[] as &[&str] },"on_error_options":if runtime { error_options(id) } else { &[] as &[&str] }})
 }
 fn static_plugins_json() -> Vec<Value> {
-    #[cfg(feature = "pure-base")]
+    #[cfg(not(feature = "native-plugins"))]
     {
         Vec::new()
     }
-    #[cfg(not(feature = "pure-base"))]
+    #[cfg(feature = "native-plugins")]
     {
         PLUGINS.iter().map(plugin_json).collect()
     }
@@ -423,8 +423,8 @@ pub fn projection_with_observers(
     json!({"version":1,"revision":revision,"mode":mode,"hot":"next_session","condition_kinds":condition_json(),"positions":POSITIONS.iter().map(|(id,label,kind)| json!({"id":id,"label":label,"kind":kind})).collect::<Vec<_>>(),"plugins":plugins,"config":compiled.config,"plan":plan})
 }
 
-#[cfg(all(test, not(feature = "pure-base")))]
+#[cfg(all(test, feature = "native-plugins"))]
 mod tests;
 
-#[cfg(all(test, feature = "pure-base"))]
+#[cfg(all(test, not(feature = "native-plugins")))]
 mod pure_base_tests;

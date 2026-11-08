@@ -6,7 +6,7 @@
 //! - `GET /api/health/engines`：引擎健康自检（P1-6）——11 个 capability 的能力级
 //!   聚合 + 运行期本地探测（模型文件存在 / 记忆目录可写），与 `/api/plugins` 同源。
 //! - `GET /api/ws`：WebSocket 会话入口（先 [`auth_ok`] 鉴权，再 [`handle_handshake`] 协商）。
-//! - `GET /api/admin/ws`：管理台实时推送通道（双向 WS：hello + echomuse_devices_changed
+//! - `GET /api/admin/ws`：管理台实时推送通道（双向 WS：hello + resources_changed
 //!   + ping/pong/error，见 [`admin_ws`]）。
 //! - `GET/PUT/POST /api/config`：管理页面读写当前配置（语义见下）。
 //! - `GET /api/plugins`：能力清单 + 实际状态（`enabled`/`phase`/`last_error`）。
@@ -67,8 +67,8 @@ use crate::workflow::protocol::{
 use crate::workflow::protocol::{IncomingFrame, Transport, WsTransport};
 use crate::workflow::session::{run_session, send_text, SessionParams};
 
-// 管理台实时推送通道（`GET /api/admin/ws`）：hello + echomuse_devices_changed +
-// ping/pong/error 的双向 WS，替代已删除的 /api/echomuse/devices/wait 长挂轮询。
+// 管理台实时推送通道（`GET /api/admin/ws`）：hello + resources_changed +
+// ping/pong/error 的通用双向 WS。
 pub(crate) mod admin_ws;
 #[cfg(test)]
 mod admin_ws_tests;
@@ -79,14 +79,14 @@ mod health;
 // pub(crate)：main.rs 在初始化 tracing 时挂载采集层 layer()。
 pub(crate) mod log_stream;
 mod mcp;
-#[cfg(not(feature = "pure-base"))]
+#[cfg(feature = "native-plugins")]
 mod memory;
 pub(crate) mod nlu_build;
 pub(crate) use nlu_build::spawn_nlu_bootstrap;
 mod nlu_model;
-#[cfg(feature = "legacy-business")]
+#[cfg(feature = "native-plugins")]
 mod ota;
-#[cfg(not(feature = "pure-base"))]
+#[cfg(feature = "native-plugins")]
 mod skill_api;
 // 延迟/事件聚合（P1-1）：只读投影，数据源 observability::metrics（事件总线订阅者）
 mod metrics;
@@ -94,7 +94,7 @@ mod plugins;
 #[cfg(test)]
 mod plugins_tests;
 mod registry;
-#[cfg(not(feature = "pure-base"))]
+#[cfg(feature = "native-plugins")]
 mod soul;
 mod usage;
 mod workflow;
@@ -103,7 +103,7 @@ use config::presets::{preset_apply, preset_delete, preset_save, presets_list};
 use config::{config_meta, db_backup, db_query, get_config, put_config};
 use health::engines_health;
 use mcp::mcp_tools;
-#[cfg(not(feature = "pure-base"))]
+#[cfg(feature = "native-plugins")]
 use memory::{memory_clear, memory_maintain, memory_rag_reindex, memory_recall, memory_status};
 use metrics::metrics_snapshot;
 use nlu_build::{build_log_ws, build_status, start_build};
@@ -111,11 +111,11 @@ use nlu_build::{build_log_ws, build_status, start_build};
 #[cfg(test)]
 pub(crate) use bench_api::service_router as test_bench_router;
 pub(crate) use config::{config_is_persistent, config_revision};
-#[cfg(feature = "legacy-business")]
+#[cfg(feature = "native-plugins")]
 use ota::ota;
 use plugins::{config_schema, list_plugins};
 use registry::{conversations, device_detail, device_inject, devices, server_geo, sessions, stats};
-#[cfg(not(feature = "pure-base"))]
+#[cfg(feature = "native-plugins")]
 use soul::{soul_presets, soul_preview};
 use usage::{session_usage, usage};
 use workflow::{get_workflow, validate_workflow};
@@ -141,43 +141,6 @@ pub(super) fn json_response(code: StatusCode, body: serde_json::Value) -> Respon
 /// [`json_response`] 的单参便捷包装（`StatusCode::OK`）。
 pub(super) fn json_ok(body: serde_json::Value) -> Response {
     json_response(StatusCode::OK, body)
-}
-
-#[cfg(feature = "pure-base")]
-async fn pure_base_gate(req: axum::extract::Request, next: axum::middleware::Next) -> Response {
-    let path = req.uri().path();
-    let blocked = path == "/em"
-        || path.starts_with("/em/")
-        || path == "/api/tuya"
-        || path.starts_with("/api/tuya/")
-        || path == "/api/echomuse"
-        || path.starts_with("/api/echomuse/")
-        || path == "/api/memory"
-        || path.starts_with("/api/memory/")
-        || path == "/api/soul"
-        || path.starts_with("/api/soul/")
-        || path == "/api/skills"
-        || path.starts_with("/api/skills/")
-        || path == "/api/skill-tasks"
-        || path.starts_with("/api/skill-tasks/")
-        || path == "/api/ota"
-        || path.starts_with("/api/ota/")
-        || path == "/api/tts/voices"
-        || path.starts_with("/api/tts/voices/")
-        || path == "/api/firmware"
-        || path.starts_with("/api/firmware/")
-        || path == "/api/workflow"
-        || path.starts_with("/api/workflow/")
-        || path == "/api/test"
-        || path.starts_with("/api/test/")
-        || path == "/api/nlu"
-        || path.starts_with("/api/nlu/")
-        || path == "/api/mcp"
-        || path.starts_with("/api/mcp/");
-    if blocked {
-        return (StatusCode::NOT_FOUND, "业务插件未安装").into_response();
-    }
-    next.run(req).await
 }
 
 /// 构造 Axum 路由：API（健康检查 / WebSocket）之外，其余路径静态托管
@@ -275,21 +238,20 @@ pub fn router(engines: Arc<Engines>) -> Router {
         // 服务器全局实时日志流：macApp 连上即可实时看到全部运行日志；
         // AI/脚本客户端也可连它，一边调 /api 测试端点一边读日志观察效果。
         .route("/api/logs", get(log_stream::logs_ws))
-        // 服务端数据目录文件管理（/api/files/*）：管理台文件页数据源 + EchoMuse
-        // 自定义唤醒词模型上传通道（oww-models/）；通用存储管理，不受 [echomuse] 开关影响
+        // 服务端数据目录文件管理（/api/files/*）：通用存储管理。
         .merge(crate::gateway::files::router());
 
-    // OTA、固件目录和音色探测属于 legacy-business，纯底座不编译也不挂载。
-    #[cfg(feature = "legacy-business")]
+    // 可选 native 插件的 OTA、固件目录和音色路由，仅在显式插件构建中挂载。
+    #[cfg(feature = "native-plugins")]
     let api = api
         .route("/api/ota", get(ota).post(ota))
         .route("/api/ota/", get(ota).post(ota))
         .merge(crate::device::firmware::router())
         .merge(crate::device::voices::router());
 
-    // 业务能力路由（legacy 编译并挂载）：pure-base 不编译这些模块，
-    // 对应业务只能由运行期已装载的 WASM manifest 声明。
-    #[cfg(not(feature = "pure-base"))]
+    // 可选 native 上下文插件路由；通用底座不编译这些模块，
+    // 运行期 WASM 插件仍可通过 manifest 声明自己的业务入口。
+    #[cfg(feature = "native-plugins")]
     let api = api
         // 灵魂：内置预设清单 / 最终提示词预览（"人格配了之后到底发了什么"的当场验证入口）
         .route("/api/soul/presets", get(soul_presets))
@@ -307,18 +269,14 @@ pub fn router(engines: Arc<Engines>) -> Router {
         // 稳定技能目录与任务 CRUD；不绕过统一配置保存/鉴权，不执行候选模型。
         .merge(skill_api::routes());
 
-    // pure-base 保留通用文件/配置/工作流路由，但不把任何 EchoMuse/Tuya
-    // 设备路由挂进 Axum 表；因此这些业务在该构建中是不可达的，而非仅返回 disabled。
-    #[cfg(all(not(feature = "pure-base"), feature = "legacy-business"))]
+    // Native device plugin routes are contributed independently; the base has none.
+    #[cfg(feature = "echomuse-plugin")]
     let api = api
-        // EchoMuse 设备入口（Echo Dot 2 / emOS）
         .merge(crate::device::echomuse::routes::em_routes())
-        // EchoMuse 管理面（/api/echomuse/*，经 auth_ok 鉴权）
         .merge(crate::device::echomuse::admin::admin_routes())
-        // EchoMuse 蓝牙代理管理面（/api/echomuse/devices/{id}/ble/*）
-        .merge(crate::device::echomuse::ble::ble_routes())
-        // Tuya IoT 设备管理面（/api/tuya/*）
-        .merge(crate::device::tuya::api::routes());
+        .merge(crate::device::echomuse::ble::ble_routes());
+    #[cfg(feature = "tuya-plugin")]
+    let api = api.merge(crate::device::tuya::api::routes());
 
     // WASM 插件统一动作端点 + 扩展点首选（feature 门控；未编入 = 路由不存在，
     // 客户端按 404 隐藏插件 UI）。链尾条件续接：链中不能插 #[cfg]。
@@ -374,9 +332,6 @@ pub fn router(engines: Arc<Engines>) -> Router {
     } else {
         api.fallback(admin_missing)
     };
-
-    #[cfg(feature = "pure-base")]
-    let app = app.layer(axum::middleware::from_fn(pure_base_gate));
 
     let app = app.with_state(engines);
     // 管理台 WS 通道的 RPC 复用打的就是这份路由表（tower oneshot）：
@@ -495,7 +450,7 @@ async fn handle_handshake(
 
     let params = SessionParams {
         // 入口即定型：本入口（hello 协商）承载的是 xiaozhi ESP（含 hello.test 测试台）。
-        kind: crate::workflow::session::DeviceKind::XiaozhiEsp,
+        kind: crate::workflow::session::SessionTransportProfile::core(),
         output_codec: crate::media::media::AudioCodec::Opus,
         uplink_bin_ver,
         downlink_bin_ver,

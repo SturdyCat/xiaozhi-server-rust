@@ -90,7 +90,7 @@ fn default_music_dir() -> String {
 }
 
 fn default_true() -> bool {
-    !cfg!(feature = "pure-base")
+    !cfg!(not(feature = "native-plugins"))
 }
 
 impl Default for EchomuseConfig {
@@ -112,7 +112,7 @@ impl EchomuseConfig {
     pub fn normalize(&mut self) {
         // A pure-base binary must remain inert even when reusing a database
         // created by a normal build with `[echomuse].enabled = true`.
-        if cfg!(feature = "pure-base") {
+        if cfg!(not(feature = "native-plugins")) {
             self.enabled = false;
         }
         self.engine = canonical_engine(&self.engine, ECHOMUSE_ENGINES, DEFAULT_ECHOMUSE_ENGINE);
@@ -138,5 +138,5 @@ pub fn connect_welcome(client_id: &str, cfg: &EchomuseConfig) -> Option<String> 
     (!text.is_empty()).then(|| text.to_string())
 }
 
-#[cfg(all(test, feature = "legacy-business"))]
+#[cfg(all(test, feature = "native-plugins"))]
 mod tests;

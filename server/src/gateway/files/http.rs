@@ -181,11 +181,7 @@ async fn upload<S: Context>(
     let root = storage_root(ctx.config());
     match op_upload(&root, &rel, &body, overwrite) {
         Ok(size) => {
-            if rel.split('/').next() == Some(OWW_MODELS_DIR) {
-                tracing::info!("唤醒词模型已上传（设备设置页下拉可列出）: {rel}（{size}B）");
-            } else {
-                tracing::info!("文件已上传: {rel}（{size}B）");
-            }
+            tracing::info!("文件已上传: {rel}（{size}B）");
             ok_json(serde_json::json!({ "ok": true, "path": rel, "size": size }))
         }
         Err(e) => err(e),

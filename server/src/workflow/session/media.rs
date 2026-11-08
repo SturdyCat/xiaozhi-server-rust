@@ -1,46 +1,46 @@
 //! Native media adapters feed the same VAD/ASR path as the legacy ESP decoder.
-use super::{DeviceKind, Session, SessionParams};
+use super::{Session, SessionParams, SessionTransportProfile};
 use crate::media::media::{AudioChunk, AudioCodec, AudioFormat};
 use crate::workflow::protocol::Transport;
 
 impl SessionParams {
-    /// Saved-defaults diagnostic, NOT a claim about an ESP's negotiated hello.
+    /// Saved-defaults diagnostic, NOT a claim about a negotiated hello.
     ///
-    /// `kind` 按 codec 的入口对应关系推导（PcmS16Le 只有 EchoMuse 入口工厂使用）；
-    /// 真实入口各自显式声明（gateway/ws 字面量、`echomuse::session_params`），此处
-    /// 推导只为诊断/基准探针（`benchmark::features`）与测试保持同一口径。
+    /// The codec-specific profile is used only by diagnostics and tests. Real
+    /// connection entries construct the same generic profile explicitly.
     pub fn configured_defaults(cfg: &crate::config::Config, codec: AudioCodec) -> Self {
-        let echo = codec == AudioCodec::PcmS16Le;
-        // EchoMuse 上下行几何不同：mic 16 kHz、speaker 48 kHz（设备不重采样，
-        // 见 `AudioFormat::echo_speaker` 的上游依据）。都取协议常量，不跟随
-        // `[audio]` 里给 ESP 的 24 k/60 ms 配置。
-        let echo_out = AudioFormat::echo_speaker();
-        let version = if echo {
+        let native_pcm = codec == AudioCodec::PcmS16Le;
+        let version = if native_pcm {
             crate::workflow::protocol::BinVersion::V1
         } else {
             crate::workflow::protocol::BinVersion::from_u8(cfg.audio.binary_protocol_version)
         };
+        let (uplink_sr, downlink_sr, frame_ms) = if native_pcm {
+            (16_000, 48_000, 40)
+        } else {
+            (
+                16_000,
+                cfg.audio.downlink_sample_rate,
+                cfg.audio.downlink_frame_duration_ms,
+            )
+        };
         let mut params = Self {
-            kind: if echo {
-                DeviceKind::EchoMuse
+            kind: if native_pcm {
+                SessionTransportProfile::plugin("native-pcm", true)
             } else {
-                DeviceKind::XiaozhiEsp
+                SessionTransportProfile::core()
             },
             uplink_bin_ver: version,
             downlink_bin_ver: version,
-            uplink_sr: 16_000,
-            downlink_sr: if echo {
-                echo_out.sample_rate
-            } else {
-                cfg.audio.downlink_sample_rate
-            },
+            uplink_sr,
+            downlink_sr,
             output_codec: codec,
-            downlink_frame_ms: if echo {
-                echo_out.frame_ms
+            downlink_frame_ms: frame_ms,
+            downlink_lead_ms: if native_pcm {
+                0
             } else {
-                cfg.audio.downlink_frame_duration_ms
+                cfg.audio.downlink_lead_ms
             },
-            downlink_lead_ms: if echo { 0 } else { cfg.audio.downlink_lead_ms },
             downlink_buffer_ms: cfg.audio.downlink_buffer_ms,
             download_buffer_ms: cfg.audio.download_budget_ms(),
             downlink_buffer_start_ms: cfg.audio.downlink_buffer_start_ms,
@@ -54,7 +54,8 @@ impl SessionParams {
     }
 }
 pub(super) fn native_pcm(chunk: &AudioChunk) -> Option<Vec<f32>> {
-    if !chunk.is_current() || chunk.format != AudioFormat::echo_mic() || chunk.data.len() % 2 != 0 {
+    let input = AudioFormat::new(AudioCodec::PcmS16Le, 16_000, 40);
+    if !chunk.is_current() || chunk.format != input || chunk.data.len() % 2 != 0 {
         return None;
     }
     Some(
@@ -115,22 +116,20 @@ impl<T: Transport> Session<'_, T> {
             self.recognize_segments(segments).await;
         }
     }
-    /// EchoMuse 承载的上行：原生 mono PCM 块。`IncomingFrame::Audio` 只由
-    /// `EchomuseTransport` 产出；格式守卫在 [`native_pcm`]（数据完整性校验，
-    /// 类型判定在会话建立期的 `params.kind`，见 `start.rs::device_vad`）。
+    /// Native PCM entry 上行：原生 mono PCM 块。格式守卫在
+    /// [`native_pcm`]，类型判定来自入口声明的 transport profile。
     pub(super) async fn handle_audio(&mut self, chunk: AudioChunk) {
-        debug_assert_eq!(
-            self.params.kind,
-            super::DeviceKind::EchoMuse,
-            "Audio 帧只来自 EchoMuse 承载"
+        debug_assert!(
+            self.params.kind.device_vad,
+            "native PCM audio requires an entry-declared device-VAD profile"
         );
         if let Some(pcm) = native_pcm(&chunk) {
             self.handle_pcm(&pcm).await;
         }
     }
 
-    /// xiaozhi ESP 承载的上行：二进制信封（unwrap → Opus 解码）。类型分支在构造期：
-    /// EchoMuse 会话不建 `uplink_decoder`，即使误收 Binary 也在此自然忽略。
+    /// Opus entry 上行：二进制信封（unwrap → Opus 解码）。Native PCM entries
+    /// do not construct `uplink_decoder`, so an unexpected binary frame is ignored.
     pub(super) async fn handle_binary(&mut self, data: &[u8]) {
         let payload = crate::workflow::protocol::unwrap_uplink(self.params.uplink_bin_ver, data);
         if payload.is_empty() {

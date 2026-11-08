@@ -136,12 +136,21 @@ impl CapabilityRegistry {
 /// Static adapter support matrix. Protocol handlers remain in each device module.
 pub fn supported_capabilities(adapter_id: &str) -> &'static [&'static str] {
     match adapter_id {
-        "echomuse" | "esp_home" => &[
+        #[cfg(feature = "echomuse-plugin")]
+        "echomuse" => &[
             ids::DEVICE_AUDIO_VOLUME_GET,
             ids::DEVICE_AUDIO_VOLUME_SET,
             ids::DEVICE_AUDIO_MUTE_GET,
             ids::DEVICE_STATUS_GET,
         ],
+        #[cfg(feature = "esp_home")]
+        "esp_home" => &[
+            ids::DEVICE_AUDIO_VOLUME_GET,
+            ids::DEVICE_AUDIO_VOLUME_SET,
+            ids::DEVICE_AUDIO_MUTE_GET,
+            ids::DEVICE_STATUS_GET,
+        ],
+        #[cfg(feature = "tuya-plugin")]
         "tuya" => &[ids::DEVICE_STATUS_GET],
         _ => &[],
     }

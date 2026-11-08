@@ -19,13 +19,13 @@ pub(super) fn preview(cfg: &Config, action: &str, _text: &str) -> StageResult {
             if cfg.wakeup.validate().is_err() { return StageResult::error(action,"invalid_config","Invalid saved wakeup greeting configuration"); }
             json!({"enabled":cfg.wakeup.enabled,"active":cfg.wakeup.active(),"greetings":cfg.wakeup.pool(),"persist":cfg.wakeup.persist,"synthesis_tested":false})
         }
-        #[cfg(not(feature = "pure-base"))]
+        #[cfg(feature = "native-plugins")]
         "soul.preview" => match crate::plugins::soul::preview::build(cfg,"<node-test>") {
             Ok(p) => { r.text = Some(p.instructions.clone()); p.to_json() }
             Err(_) => return StageResult::error(action,"invalid_config","Invalid saved soul preset or prompt variables"),
         },
         // pure-base 人格业务未编译：预览如实投影实际会发送的 instructions（= system_prompt）。
-        #[cfg(feature = "pure-base")]
+        #[cfg(not(feature = "native-plugins"))]
         "soul.preview" => {
             let Ok(instructions) = crate::plugins::soul::instructions(cfg, "<node-test>") else {
                 return StageResult::error(action,"invalid_config","Invalid saved soul configuration");
@@ -47,29 +47,26 @@ fn format(f: AudioFormat) -> Value {
 fn profile(cfg: &Config, codec: AudioCodec) -> Value {
     // The same pure builders are used by the actual session/transport paths.
     let params = SessionParams::configured_defaults(cfg, codec);
-    let echo = codec == AudioCodec::PcmS16Le;
-    let p = if echo {
-        TerminalProfile::echo()
-    } else {
-        TerminalProfile::esp(&params)
-    };
+    // The core benchmark describes the generic session transport only. Device-specific
+    // adapters provide their own diagnostics and are not part of the base build.
+    let p = TerminalProfile::esp(&params);
     let requested_start =
         if cfg.playback.mode == crate::config::playback::PlaybackMode::Announcement {
             cfg.playback.announcement_start_ms
         } else {
             cfg.audio.downlink_buffer_start_ms
         };
-    let queue_ms = echo.then_some(crate::device::echomuse::media::AUDIO_QUEUE_MS);
-    let queue_bytes = echo.then_some(crate::device::echomuse::media::AUDIO_QUEUE_BYTES);
-    json!({"terminal":if echo {"echomuse"}else{"esp_default"},"scope":"configured_defaults_not_negotiated_device",
+    let queue_ms = None::<u64>;
+    let queue_bytes = None::<usize>;
+    json!({"terminal":"generic","scope":"configured_defaults_not_negotiated_device",
         "input":format(p.input),"output":format(p.output),
-        "binary_protocol_version":if echo {Value::Null}else{json!(cfg.audio.binary_protocol_version)},
-        "binary_version_note":if echo {"Native PCM does not consume ESP binary framing"}else{"Actual ESP session binary version follows device hello, not this saved default"},
+        "binary_protocol_version":json!(cfg.audio.binary_protocol_version),
+        "binary_version_note":"Actual session binary version follows device hello, not this saved default",
         "capabilities":{"bounded_utterance":p.capabilities.bounded_utterance,"mcp":p.capabilities.mcp,"playback_ack":p.capabilities.playback_ack},
         "effective":{"lead_ms":params.downlink_lead_ms,"reservoir_ms":params.downlink_buffer_ms,"download_buffer_ms":params.download_buffer_ms,
             "start_ms":params.downlink_buffer_start_ms,"start_max_ms":params.downlink_buffer_start_max_ms},
         "queue":{"transport_ms":queue_ms,"transport_bytes":queue_bytes,"device_capacity_ms":null,"device_capacity_verified":false},
         "clamps":{"requested_start_ms":requested_start,"effective_start_ms":params.downlink_buffer_start_ms,
-            "start_clamped":requested_start!=params.downlink_buffer_start_ms,"echo_speculative_lead_suppressed":echo&&cfg.audio.downlink_lead_ms>0},
+            "start_clamped":requested_start!=params.downlink_buffer_start_ms},
         "measurement":"configuration_only","negotiated":false,"socket_written":false,"played":false,"codec_verified":false})
 }

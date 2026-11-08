@@ -58,9 +58,11 @@ pub(super) fn sig_llm(cfg: &Config) -> String {
 pub(super) fn sig_llm_wasm_policy(cfg: &Config) -> String {
     format!("wasm-policy|{}", sig_llm(cfg))
 }
+#[cfg(feature = "tuya-plugin")]
 pub(super) fn sig_tuya(cfg: &Config) -> String {
     format!("{}|{}", cfg.tuya.engine_id(), cfg.tuya.enabled)
 }
+#[cfg(feature = "echomuse-plugin")]
 pub(super) fn sig_echomuse(cfg: &Config) -> String {
     format!("{}|{}", cfg.echomuse.engine_id(), cfg.echomuse.enabled)
 }

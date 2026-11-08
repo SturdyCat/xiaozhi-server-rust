@@ -20,7 +20,11 @@ fn development_is_explicit_and_isolated() {
         std::path::absolute("local.db").unwrap()
     );
     assert_eq!(
-        crate::device::echomuse::registry::data_dir(&config),
+        PathBuf::from(&config.memory.db_path)
+            .parent()
+            .unwrap()
+            .canonicalize()
+            .unwrap(),
         std::env::current_dir().unwrap()
     );
 }

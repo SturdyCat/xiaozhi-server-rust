@@ -35,16 +35,38 @@ fn parse_volume_level_rejects_non_integer_and_out_of_range_values() {
     assert_eq!(parse_volume_level(&json!({"level": -1})), None);
 }
 
+#[cfg(any(
+    feature = "echomuse-plugin",
+    feature = "tuya-plugin",
+    feature = "esp_home"
+))]
 #[test]
 fn adapter_support_matrix_is_explicit_and_native() {
     use super::registry::supported_capabilities;
+    #[cfg(feature = "echomuse-plugin")]
     assert!(supported_capabilities("echomuse").contains(&super::ids::DEVICE_AUDIO_VOLUME_SET));
+    #[cfg(feature = "esp_home")]
     assert!(supported_capabilities("esp_home").contains(&super::ids::DEVICE_AUDIO_MUTE_GET));
+    #[cfg(not(feature = "esp_home"))]
+    assert!(supported_capabilities("esp_home").is_empty());
+    #[cfg(feature = "tuya-plugin")]
     assert_eq!(
         supported_capabilities("tuya"),
         &[super::ids::DEVICE_STATUS_GET]
     );
     assert!(supported_capabilities("unknown").is_empty());
+}
+
+#[cfg(not(any(
+    feature = "echomuse-plugin",
+    feature = "tuya-plugin",
+    feature = "esp_home"
+)))]
+#[test]
+fn clean_base_has_no_native_adapter_matrix() {
+    assert!(super::registry::supported_capabilities("echomuse").is_empty());
+    assert!(super::registry::supported_capabilities("tuya").is_empty());
+    assert!(super::registry::supported_capabilities("esp_home").is_empty());
 }
 
 #[test]

@@ -43,10 +43,15 @@ fn every_implemented_capability_has_an_impl() {
 /// 2. `REGISTRY` 里某描述符指向一个不在清单里的能力（反向缺失）。
 #[test]
 fn capability_registry_is_complete_and_consistent() {
-    // (1) 变体数硬约束：当前 Capability 共 14 个变体。
+    // (1) 变体数硬约束：native 插件组合额外装载两个设备能力。
+    let expected = if cfg!(feature = "native-plugins") {
+        14
+    } else {
+        12
+    };
     assert_eq!(
         ALL_CAPABILITIES.len(),
-        14,
+        expected,
         "新增 Capability 变体须同步加入 ALL_CAPABILITIES 并改此断言"
     );
     // (2) 清单无重复。
@@ -117,7 +122,7 @@ fn required_capabilities_have_selectable_impl() {
 }
 
 /// TTS/FullChain 的选中判定随配置切换（多实现互斥）。
-#[cfg(not(feature = "pure-base"))]
+#[cfg(feature = "native-plugins")]
 #[test]
 fn selection_follows_config() {
     let mut cfg = Config::default();
@@ -346,7 +351,7 @@ fn schema_json_shape() {
     let expected: Vec<_> = ALL_CAPABILITIES
         .iter()
         .copied()
-        .filter(|&cap| !cfg!(feature = "pure-base") || cap.exposed_in_pure_base())
+        .filter(|&cap| !cfg!(not(feature = "native-plugins")) || cap.exposed_in_pure_base())
         .collect();
     assert_eq!(caps.len(), expected.len());
     let tts = caps
@@ -390,7 +395,7 @@ fn schema_json_shape() {
 /// pure-base 发布契约：schema 只投影核心 ASR/VAD/TTS/LLM，
 /// 任何业务能力（含 EchoMuse/Tuya/AIUI/memory/soul/skill/wakeup/NLU）
 /// 都不得以静态 schema 出现——业务 UI 只能来自已装载的 WASM manifest。
-#[cfg(feature = "pure-base")]
+#[cfg(not(feature = "native-plugins"))]
 #[test]
 fn pure_base_schema_exposes_core_only() {
     let v = schema_json();

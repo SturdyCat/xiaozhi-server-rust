@@ -62,16 +62,15 @@ pub(super) fn validate_plan_refs(plan: &SkillPlan) -> Result<()> {
                     source < index,
                     "step result references must point backwards"
                 );
+                let source_api = plan.steps[source].api.as_str();
+                let exposes_speech = matches!(
+                    source_api,
+                    "tasks.create" | "tasks.list" | "tasks.cancel" | "weather.forecast"
+                ) || (cfg!(feature = "tuya-plugin")
+                    && source_api == "tuya.control");
                 ensure!(
-                    matches!(
-                        plan.steps[source].api.as_str(),
-                        "tasks.create"
-                            | "tasks.list"
-                            | "tasks.cancel"
-                            | "weather.forecast"
-                            | "tuya.control"
-                    ),
-                    "only successful task/iot steps expose speech references"
+                    exposes_speech,
+                    "only successful task steps expose speech references"
                 );
             }
         }

@@ -19,7 +19,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 
 use super::contract::{
-    ManifestDto, RegistrationDto, RequirementDto, compare_versions, validate_manifest,
+    compare_versions, validate_manifest, ManifestDto, RegistrationDto, RequirementDto,
 };
 use super::effects::Permissions;
 use super::instance::LoadedPlugin;

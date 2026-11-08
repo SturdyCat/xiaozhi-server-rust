@@ -36,15 +36,19 @@ pub(super) fn sel_llm(cfg: &Config) -> bool {
 pub(super) fn sel_llm_wasm_policy(cfg: &Config) -> bool {
     cfg.llm.engine_id() == "wasm-policy"
 }
+#[cfg(feature = "tuya-plugin")]
 pub(super) fn sel_tuya_native(cfg: &Config) -> bool {
     cfg.tuya.enabled && cfg.tuya.engine_id() == "native"
 }
+#[cfg(feature = "tuya-plugin")]
 pub(super) fn sel_tuya_wasm_policy(cfg: &Config) -> bool {
     cfg.tuya.enabled && cfg.tuya.engine_id() == "wasm-policy"
 }
+#[cfg(feature = "echomuse-plugin")]
 pub(super) fn sel_echomuse_native(cfg: &Config) -> bool {
     cfg.echomuse.enabled && cfg.echomuse.engine_id() == "native"
 }
+#[cfg(feature = "echomuse-plugin")]
 pub(super) fn sel_echomuse_wasm_policy(cfg: &Config) -> bool {
     cfg.echomuse.enabled && cfg.echomuse.engine_id() == "wasm-policy"
 }

@@ -5,12 +5,12 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::config::store::ConfigStore;
 use crate::config::store::sqlite::SqliteConfigStore;
+use crate::config::store::ConfigStore;
 use crate::config::{Config, PluginEntryConfig};
-use crate::plugins::wasm::WasmHost;
 use crate::plugins::wasm::artifacts::ArtifactDir;
 use crate::plugins::wasm::tests::{ensure_fixture, fast_limits};
+use crate::plugins::wasm::WasmHost;
 
 fn temp_root(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("xz-wasm-boot-{tag}-{}", uuid::Uuid::new_v4()));

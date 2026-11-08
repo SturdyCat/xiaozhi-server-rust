@@ -43,10 +43,10 @@
 //! NLU 识别到已知意图即执行其 `action`（不再送 LLM）；**未知意图才放行给 LLM**。
 //! 匹配是规则式的（字面锚点 + 槽位表，确定性），与 command 的安全模型一脉相承。
 
-#[cfg(feature = "pure-base")]
+#[cfg(not(feature = "native-plugins"))]
 #[path = "aiui/pure_base.rs"]
 pub mod aiui;
-#[cfg(not(feature = "pure-base"))]
+#[cfg(feature = "native-plugins")]
 pub mod aiui;
 pub mod asr;
 pub mod command;
@@ -55,32 +55,32 @@ pub mod geo;
 pub mod health;
 pub mod host;
 pub mod llm;
-#[cfg(feature = "pure-base")]
+#[cfg(not(feature = "native-plugins"))]
 #[path = "memory/pure_base.rs"]
 pub mod memory;
-#[cfg(not(feature = "pure-base"))]
+#[cfg(feature = "native-plugins")]
 pub mod memory;
 pub mod nlu;
 pub mod prompt;
 pub mod registry;
 pub mod skill;
-#[cfg(feature = "pure-base")]
+#[cfg(not(feature = "native-plugins"))]
 #[path = "soul/pure_base.rs"]
 pub mod soul;
-#[cfg(not(feature = "pure-base"))]
+#[cfg(feature = "native-plugins")]
 pub mod soul;
 pub mod tts;
 pub mod vad;
-#[cfg(feature = "pure-base")]
+#[cfg(not(feature = "native-plugins"))]
 #[path = "wakeup/pure_base.rs"]
 pub mod wakeup;
-#[cfg(not(feature = "pure-base"))]
+#[cfg(feature = "native-plugins")]
 pub mod wakeup;
 /// 天气预报能力（业务查询在 pure-base 中仅由已注册 WASM manifest 提供）。
-#[cfg(feature = "pure-base")]
+#[cfg(not(feature = "native-plugins"))]
 #[path = "weather/pure_base.rs"]
 pub mod weather;
-#[cfg(not(feature = "pure-base"))]
+#[cfg(feature = "native-plugins")]
 pub mod weather;
 
 /// 插件源根文档契约（plugins-src/<插件> 必须自带 README：功能描述 + 使用方法）。

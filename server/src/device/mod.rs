@@ -1,25 +1,20 @@
-//! 设备管理：EchoMuse 设备控制面、Tuya IoT 设备集成、固件 OTA、局域网管理客户端发现、
-//! 进程内设备/会话注册表、发音人目录服务。
+//! 通用设备运行时：能力描述、局域网管理发现与进程内设备注册表。
+//!
+//! 具体设备协议必须以独立插件 feature 装载；底座不提供 stub、兼容壳或业务配置。
 
 pub mod capabilities;
 pub mod discovery;
-#[cfg(feature = "legacy-business")]
-pub mod echomuse;
-#[cfg(not(feature = "legacy-business"))]
-#[path = "echomuse_stub.rs"]
-pub mod echomuse;
-/// ESPHome Native API 桥（可选 feature `esp_home`）：把 Dot 2 暴露为标准 ESPHome 节点。
+#[cfg(feature = "esp_home")]
 pub mod esp_home;
-#[cfg(feature = "legacy-business")]
-pub mod firmware;
 pub mod registry;
-/// Tuya IoT 设备集成（`[tuya]`）：云目录同步 + 纯局域网发现/控制 + 管理面 `/api/tuya/*`。
-#[cfg(feature = "legacy-business")]
+
+#[cfg(feature = "echomuse-plugin")]
+pub mod echomuse;
+#[cfg(feature = "echomuse-plugin")]
+pub mod firmware;
+#[cfg(feature = "tuya-plugin")]
 pub mod tuya;
-#[cfg(not(feature = "legacy-business"))]
-#[path = "tuya_stub.rs"]
-pub mod tuya;
-#[cfg(feature = "legacy-business")]
+#[cfg(feature = "echomuse-plugin")]
 pub mod voices;
 
 /// 探测本机默认出口的局域网 IPv4（UDP connect 不发包，只查内核路由选源）。

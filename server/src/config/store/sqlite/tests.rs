@@ -177,7 +177,6 @@ fn insert_legacy_doc(store: &SqliteConfigStore, mutate: impl FnOnce(&mut Config)
     cfg.memory.enabled = false;
     cfg.memory.recall_enabled = false;
     cfg.memory.extraction_enabled = false;
-    cfg.echomuse.enabled = false;
     cfg.llm.enabled = false;
     mutate(&mut cfg);
     let doc = serde_json::to_string(&cfg).unwrap();
@@ -207,7 +206,6 @@ fn align_defaults_migrates_legacy_document() {
     assert_eq!(loaded.wakeup.greeting, "我在");
     assert!(loaded.command.enabled && loaded.nlu.enabled);
     assert!(loaded.memory.enabled && loaded.memory.recall_enabled);
-    assert_eq!(loaded.echomuse.enabled, !cfg!(feature = "pure-base"));
     assert!(loaded.llm.enabled);
     // 版本已推进 + 留了一条可回滚的历史
     let ver: i64 = store
@@ -322,7 +320,7 @@ fn align_defaults_fills_new_sections_automatically() {
             .unwrap();
         let mut v: serde_json::Value = serde_json::from_str(&doc).unwrap();
         let obj = v.as_object_mut().unwrap();
-        obj.remove("tuya");
+        obj.remove("playback");
         obj["server"]["port"] = serde_json::json!(9000);
         store
             .conn()
@@ -337,14 +335,16 @@ fn align_defaults_fills_new_sections_automatically() {
         .unwrap()
         .expect("缺失的新段必须被自动补全");
     assert!(
-        report.filled.contains(&"tuya".to_string()),
+        report.filled.contains(&"playback".to_string()),
         "{}",
         report.summary()
     );
     // 补进来的是当前代码默认值；用户已有值原样保留；版本本来就最新，保持不变
     let loaded = store.load().unwrap();
-    assert_eq!(loaded.tuya.enabled, !cfg!(feature = "pure-base"));
-    assert_eq!(loaded.tuya.access_id, "");
+    assert_eq!(
+        loaded.playback.mode,
+        crate::config::playback::PlaybackMode::Interactive
+    );
     assert_eq!(loaded.server.port, 9000, "用户已有值不得被补全覆盖");
     let ver: i64 = store
         .conn()
@@ -387,7 +387,7 @@ fn align_defaults_repairs_null_section() {
         let mut v: serde_json::Value = serde_json::from_str(&doc).unwrap();
         v.as_object_mut()
             .unwrap()
-            .insert("tuya".to_string(), serde_json::Value::Null);
+            .insert("playback".to_string(), serde_json::Value::Null);
         store
             .conn()
             .execute(
@@ -401,14 +401,14 @@ fn align_defaults_repairs_null_section() {
         .unwrap()
         .expect("null 段必须被当作缺失补回");
     assert!(
-        report.filled.contains(&"tuya".to_string()),
+        report.filled.contains(&"playback".to_string()),
         "{}",
         report.summary()
     );
     let loaded = store.load().unwrap();
     assert_eq!(
-        loaded.tuya.enabled,
-        !cfg!(feature = "pure-base"),
+        loaded.playback.mode,
+        crate::config::playback::PlaybackMode::Interactive,
         "null 段被补成当前构建默认值"
     );
     let _ = std::fs::remove_file(&path);

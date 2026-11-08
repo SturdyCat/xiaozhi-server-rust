@@ -340,7 +340,7 @@ impl PluginHost {
         let statuses = self.snapshot();
         let caps: Vec<serde_json::Value> = ALL_CAPABILITIES
             .iter()
-            .filter(|&&cap| !cfg!(feature = "pure-base") || cap.exposed_in_pure_base())
+            .filter(|&&cap| !cfg!(not(feature = "native-plugins")) || cap.exposed_in_pure_base())
             .map(|&cap| {
                 let s = Self::summarize(&statuses, cap);
                 serde_json::json!({
@@ -363,7 +363,9 @@ impl PluginHost {
             statuses
                 .iter()
                 .filter(|s| s.phase == p)
-                .filter(|s| !cfg!(feature = "pure-base") || s.capability.exposed_in_pure_base())
+                .filter(|s| {
+                    !cfg!(not(feature = "native-plugins")) || s.capability.exposed_in_pure_base()
+                })
                 .count()
         };
         serde_json::json!({

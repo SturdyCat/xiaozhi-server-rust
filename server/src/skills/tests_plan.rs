@@ -185,12 +185,15 @@ fn terminal_session_step_must_be_last() {
 #[test]
 fn capability_registry_is_serializable_and_complete() {
     let names: Vec<_> = capabilities().iter().map(|metadata| metadata.api).collect();
-    assert_eq!(names.len(), 10);
+    assert_eq!(
+        names.len(),
+        if cfg!(feature = "tuya-plugin") { 10 } else { 9 }
+    );
     assert!(
         names.contains(&"tasks.create")
             && names.contains(&"devices.call")
             && names.contains(&"weather.forecast")
-            && names.contains(&"tuya.control")
+            && (!cfg!(feature = "tuya-plugin") || names.contains(&"tuya.control"))
     );
     assert!(serde_json::to_value(capabilities()).is_ok());
 }
@@ -276,6 +279,7 @@ fn slots_resolve_deeply_inside_nested_action_args() {
 // tuya.control（NLU iot 域）：必填 name/action + action 静态字面量 on|off
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "tuya-plugin")]
 #[test]
 fn tuya_control_accepts_static_actions_and_required_name() {
     for action in ["on", "off"] {
@@ -305,6 +309,7 @@ fn tuya_control_accepts_static_actions_and_required_name() {
     assert_eq!(resolved.steps[0].args["name"], "客厅插座");
 }
 
+#[cfg(feature = "tuya-plugin")]
 #[test]
 fn tuya_control_rejects_dynamic_actions_missing_name_and_unknown_args() {
     for p in [

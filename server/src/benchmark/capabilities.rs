@@ -140,9 +140,9 @@ pub(super) fn unavailable_reason(cfg: &Config, action: &str) -> Option<String> {
         "input.profile"|"output.profile"=>None,
         "wakeup.preview"=>cfg.wakeup.validate().err().map(|_|"Invalid saved wakeup greeting configuration".into()),
         "command.match"=>nlu(cfg),
-        #[cfg(not(feature = "pure-base"))]
+        #[cfg(feature = "native-plugins")]
         "soul.preview"=>crate::plugins::soul::preview::build(cfg,"<node-test>").err().map(|_|"Invalid saved soul preset or prompt variables".into()),
-        #[cfg(feature = "pure-base")]
+        #[cfg(not(feature = "native-plugins"))]
         "soul.preview"=>crate::plugins::soul::instructions(cfg,"<node-test>").err().map(|_|"Invalid saved soul configuration".into()),
         "memory.recall"|"memory.writeback.dry_run"=>Some("No snapshot-isolated read-only memory test adapter; existing scoped memory API remains available".into()),
         "tts.playback"=>Some("Native client playback is not an HTTP server capability".into()),

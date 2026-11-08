@@ -5,7 +5,12 @@ use matcher::match_template;
 #[test]
 fn initial_skill_json_is_visible_editable_configuration() {
     let config = NluConfig::default();
-    assert_eq!(config.intents.len(), 17);
+    let expected = if cfg!(feature = "tuya-plugin") {
+        17
+    } else {
+        15
+    };
+    assert_eq!(config.intents.len(), expected);
     assert!(config.enabled && !config.bert_enabled);
     assert_eq!(config.bert_threshold, 0.75);
     for intent in &config.intents {
@@ -55,8 +60,10 @@ fn seed_domains_follow_executor_and_device_skills_call_firmware_tools() {
                 "{} 应归服务端域",
                 intent.name
             );
-        } else if intent.name == "iot_device_on" || intent.name == "iot_device_off" {
-            // iot 域语音开关：服务端执行的 plan 能力组合（tuya.control），非固件直调。
+        } else if cfg!(feature = "tuya-plugin")
+            && (intent.name == "iot_device_on" || intent.name == "iot_device_off")
+        {
+            // Tuya plugin action: server-side plan capability, not a firmware MCP call.
             assert_eq!(intent.domain, Domain::Iot, "{} 应归 IoT 域", intent.name);
             assert_eq!(intent.action.kind, "plan");
             let plan = intent.action.plan.as_ref().unwrap();
@@ -119,7 +126,12 @@ fn saved_state_without_domain_field_defaults_to_server_and_unknown_domain_fails(
 #[test]
 fn omitted_fields_seed_defaults_but_explicit_empty_stays_empty() {
     let omitted: NluConfig = serde_json::from_str("{}").unwrap();
-    assert_eq!(omitted.intents.len(), 17);
+    let expected = if cfg!(feature = "tuya-plugin") {
+        17
+    } else {
+        15
+    };
+    assert_eq!(omitted.intents.len(), expected);
     let cleared: NluConfig = serde_json::from_str(r#"{"intents":[],"slots":[]}"#).unwrap();
     assert!(cleared.intents.is_empty() && cleared.slots.is_empty());
     assert!(cleared.with_builtins().intents.is_empty());

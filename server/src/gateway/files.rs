@@ -1,10 +1,9 @@
 //! 服务端数据目录的**通用文件管理**（管理台"文件"页数据源，`/api/files/*`）：
 //! 列表 / 建目录 / 上传 / 下载 / 删除。管理台与脚本经同一组 HTTP 端点维护服务器
-//! 持久卷上的文件；EchoMuse 自定义唤醒词模型（[`OWW_MODELS_DIR`]）由此获得上传通道。
+//! 持久卷上的文件。
 //!
 //! ## 存储根（单一来源）
-//! 根 = [`crate::device::echomuse::registry::data_dir`]（`[memory].db_path` 的父目录，
-//! 默认 `/data`）——与配置库、设备登记文件同卷，不新增配置项，也不复制回退逻辑。
+//! 根由通用配置存储位置推导（配置库父目录，默认 `/data`），不依赖任何设备插件。
 //!
 //! ## 安全边界（纯函数见 [`validate_rel`] / [`resolve_in`] / [`is_protected`]）
 //! - 相对路径校验：拒绝 `..`/`.` 段、空段（`//`、前导 `/`）、`\` 与 NUL；尾部 `/` 仅
@@ -19,8 +18,7 @@
 //!
 //! ## 鉴权与门控
 //! 全部端点走 [`crate::gateway::ws::auth_ok`]（`expected_token` 空 = 不校验；头或 `?token=`
-//! 均可，web fetch/浏览器拿不到自定义头）。**EchoMuse enabled 开关不作用于此模块**——
-//! 这是通用服务端存储管理，不是设备面。错误一律 JSON `{"error":"…"}` + 相应状态码。
+//! 均可，web fetch/浏览器拿不到自定义头）。错误一律 JSON `{"error":"…"}` + 相应状态码。
 //!
 //! ## 客户端兼容
 //! Kuikly NetworkModule 只有 GET/POST：删除提供 `POST /api/files/delete`（body 带
@@ -35,26 +33,7 @@ use axum::{http::StatusCode, Router};
 use crate::config::Config;
 use crate::runtime::Engines;
 
-/// EchoMuse 自定义唤醒词模型目录（相对存储根）：管理台文件页 / API 把训练好的
-/// `.onnx` 传到这里，设备设置页的模型下拉据 `GET /api/files?path=oww-models` 列出。
-/// 服务端不主动建目录（upload/mkdir 按需创建）；且**不做** 服务端→设备的模型分发，
-/// 设备只消费本地已装的模型（见 `docs/echomuse.md` 自定义唤醒词一节）。
-/// 缺失时的列表语义见 [`OPTIONAL_DIRS`]。
-pub const OWW_MODELS_DIR: &str = "oww-models";
-
-/// 「允许缺失」的业务目录（相对存储根）：**不存在时 `GET /api/files` 返回空清单 200**，
-/// 而不是 404。
-///
-/// 为什么需要这个白名单：管理台一打开（`AdminPage.refreshAll`）就会无条件查一次
-/// `oww-models/` 来填唤醒词下拉，而该目录在没人上传过模型前本就不存在。按 404 返回会
-/// 让**每次启动都刷一条客户端错误日志**（Kuikly `NetworkModule` 对任何非 2xx 一律
-/// `[kuikly error]Received a non-success status code: 404`，业务侧静默也压不住），
-/// 看起来像故障、实际是正常初始态。
-///
-/// 边界：只对**顶层**目录名精确命中生效，子路径（`oww-models/x`）与其它未知路径仍走
-/// 404；上传/建目录依然按需创建，不预创建任何目录（保持「存储层不造业务副作用」）。
-const OPTIONAL_DIRS: [&str; 1] = [OWW_MODELS_DIR];
-
+/// 根目录不预创建；上传和建目录按需创建。
 /// 单文件上传上限：与固件托管同值（模型 ~1MB，音频/文档留足余量）。
 /// 通用数据目录单文件上限；固件模块关闭时文件管理仍保持可用。
 pub const MAX_FILE_BYTES: usize = 64 * 1024 * 1024;
@@ -63,7 +42,7 @@ pub const MAX_FILE_BYTES: usize = 64 * 1024 * 1024;
 const PROTECTED_NAMES: [&str; 3] = ["data.db", "data.db-wal", "data.db-shm"];
 
 // ============================================================
-// Context：处理器与存储根解耦（可测性，模式同 echomuse::ble_http）
+// Context：处理器与存储根解耦（可测性）
 // ============================================================
 
 /// 处理器只依赖配置（鉴权 + 存储根推导），不触真实引擎：
@@ -78,9 +57,12 @@ impl Context for Arc<Engines> {
     }
 }
 
-/// 文件管理存储根：复用 echomuse registry 的数据目录推导（单一来源）。
+/// 文件管理存储根：配置库父目录，未持久化时回落到 memory.db_path 父目录。
 fn storage_root(cfg: &Config) -> PathBuf {
-    crate::device::echomuse::registry::data_dir(cfg)
+    std::path::Path::new(&cfg.memory.db_path)
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map_or_else(|| PathBuf::from("/data"), PathBuf::from)
 }
 
 // ============================================================
@@ -237,8 +219,7 @@ fn internal(what: &str, e: std::io::Error) -> OpError {
 
 /// 列表：返回 canonical 根（响应的 `root` 字段）+ 排序条目。
 ///
-/// 一般路径缺失 404、存在但不是目录 400；但 [`OPTIONAL_DIRS`] 里的业务目录缺失时按
-/// **空目录 200** 返回（见常量说明）。
+/// 路径缺失 404、存在但不是目录 400。
 pub(super) fn op_list(root: &Path, rel: &str) -> Result<(PathBuf, Vec<Entry>), OpError> {
     // 根尚不存在（首次部署、卷未挂载）与「目录不存在」同一语义：404。
     let root_c = std::fs::canonicalize(root).map_err(|_| not_found("目录", rel))?;
@@ -249,9 +230,6 @@ pub(super) fn op_list(root: &Path, rel: &str) -> Result<(PathBuf, Vec<Entry>), O
     }
     if dir.exists() {
         return Err(bad(format!("路径不是目录: {rel}")));
-    }
-    if OPTIONAL_DIRS.contains(&rel) {
-        return Ok((root_c, Vec::new()));
     }
     Err(not_found("目录", rel))
 }

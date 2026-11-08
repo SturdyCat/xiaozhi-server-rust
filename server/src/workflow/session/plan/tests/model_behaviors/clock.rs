@@ -146,7 +146,7 @@ async fn tts_failure_after_audible_alarm_does_not_become_false_submitted() {
 }
 
 #[tokio::test]
-async fn alarm_respects_echomuse_pcm_geometry_not_esp_opus_packets() {
+async fn alarm_respects_native_pcm_geometry_not_opus_packets() {
     let mut wire = Wire::default();
     let cfg = config(vec![]);
     let mut s = session(&mut wire, cfg.clone(), Arc::new(Memory::default()));
@@ -160,7 +160,7 @@ async fn alarm_respects_echomuse_pcm_geometry_not_esp_opus_packets() {
         .transport
         .audio_formats
         .iter()
-        .all(|format| *format == AudioFormat::echo_speaker()));
+        .all(|format| *format == AudioFormat::new(AudioCodec::PcmS16Le, 48_000, 40)));
     assert_eq!(texts(&s), vec!["提醒铃声", "原生音频"]);
 }
 

@@ -6,31 +6,44 @@ description = "本地 ASR/TTS (sherpa-onnx) + 远程 LLM 的 xiaozhi-esp32 语�
 license = "MIT"
 
 [features]
-# 默认纯 Rust 编译/单测；--dev 可运行真实管理台/API（推理明确禁用，无需模型或系统 Opus）。
-# 在有网络/模型的目标机上用 `--features sherpa` 启用真实 SenseVoice/Kokoro/Silero 引擎。
-# 普通构建保留现有原生业务兼容面；纯底座发布必须显式 --no-default-features。
-default = ["legacy-business"]
-# 原生业务兼容层（EchoMuse/Tuya/OTA/音色及后续业务模块）。关闭后只编译底座与插件宿主。
-legacy-business = []
+# 默认构建就是干净的通用服务底座：不装配任何设备/业务插件。
+# 业务插件必须显式启用对应 feature，不能通过默认构建隐式进入底座。
+default = []
+# 当前仓库内置的 native 插件集合，仅用于需要 EchoMuse/Tuya 等原生插件的发行构建。
+# 通用底座不启用它；后续独立 WASM 插件也不依赖此集合。
+native-plugins = ["echomuse-plugin", "tuya-plugin"]
+echomuse-plugin = [
+    "dep:rupnp",
+    "dep:symphonia",
+    "dep:symphonia-core",
+    "dep:symphonia-bundle-flac",
+    "dep:symphonia-bundle-mp3",
+    "dep:symphonia-codec-aac",
+    "dep:symphonia-codec-adpcm",
+    "dep:symphonia-codec-pcm",
+    "dep:symphonia-codec-vorbis",
+    "dep:symphonia-format-isomp4",
+    "dep:symphonia-format-mkv",
+    "dep:symphonia-format-ogg",
+    "dep:symphonia-format-riff",
+    "dep:symphonia-metadata",
+    "dep:zip",
+]
+tuya-plugin = ["dep:rustuya"]
 sherpa = ["dep:sherpa-onnx", "dep:audiopus"]
 # TinyBERT 意图分类（技能级联第二级的语义模型实现）：需要 ONNX 运行时 + HF tokenizers。
 # ort 用 load-dynamic：运行时 dlopen libonnxruntime（镜像内 ORT_DYLIB_PATH 指路），
 # 不静态链 onnxruntime/onnx——否则与 sherpa-onnx-sys 的静态 onnx 对象符号重复，链接失败。
 # 仅类型检查用 `DOCS_RS=1 cargo check --features nlu`；真实推理需模型文件（见 config.example.toml [nlu]）。
 nlu = ["dep:ort", "dep:tokenizers"]
-# ESPHome Native API 桥（`[esp_home].enabled` 时监听 6053，把 Dot 2 暴露为标准 ESPHome
-# 节点；纯 Rust，无系统依赖）。默认关闭：不加该 feature 时零依赖、零监听、零行为变化。
-esp_home = ["dep:esphome-native-api"]
+# ESPHome Native API 适配器（仅随 EchoMuse native 插件显式装载）。
+esp_home = ["dep:esphome-native-api", "echomuse-plugin"]
 # WASM 插件平台（方案 v4 / docs/designs/wasm-plugin-platform.md）：wasmtime 宿主 + WIT 契约
 # （server/wit/plugin.wit）+ 扩展点解析/回退 + waterfall 事件内核。默认关闭：不加该 feature
 # 时零依赖、零行为变化；Docker 部署镜像启用。
 # 精选 feature 子集（非 default）：不需要 async/cranelift 之外的引擎、cache、GC、threads。
 # 48.x 线：rustc 下限 1.95，本仓库工具链满足；50.x 尚年轻，暂不追新。
 wasm-plugins = ["dep:wasmtime"]
-# 纯底座运行时：保留通用语音/工作流/模型与 WASM 宿主，但不装配或暴露
-# EchoMuse/Tuya 业务面。与 wasm-plugins 可同时启用。
-pure-base = []
-
 [dependencies]
 axum = { version = "0.8.4", features = ["ws"] }
 tokio = { version = "1.44.2", features = ["full"] }
@@ -47,31 +60,31 @@ chrono = { version = "0.4.20", default-features = false, features = ["clock"] }
 uuid = { version = "1.11.0", features = ["v4"] }
 futures-util = "0.3.31"
 tower-http = { version = "0.6", features = ["fs"] }
-# EchoMuse 设备发现（`[echomuse].enabled` 时广播 `_emcontroller._tcp`；纯 Rust，无系统依赖）
+# 通用管理面发现（_xiaozhi-admin._tcp），与设备插件无关。
 mdns-sd = "0.11"
 # DLNA/UPnP 媒体服务器接入：SSDP 发现（多网卡接口枚举、正确 M-SEARCH 收发）与设备
 # 描述/SOAP 动作交给 rupnp（成熟实现，内部 ssdp-client + roxmltree + hyper）；本 crate
 # 只做 DIDL 解析（内置极简 scanner）与音频解码推流。自研 SSDP 只查 MediaServer:1 单条
 # ST 会漏掉只声明 :2/:3 的服务器，且组播不枚举接口——这是"扫描无效"的根因。
-rupnp = "=3.0.0"
+rupnp = { version = "=3.0.0", optional = true }
 # DLNA 音频解码：symphonia 把常见格式（mp3/flac/wav/aac/m4a/ogg…）解码到 PCM，再统一
 # 重采样 48k mono 经既有音乐通道推流。XML（DIDL）用内置极简 scanner 解析。
 # 全家族精确钉 0.5.4：顶层 "0.5" 的 caret 会把子 crate（symphonia-core 等）解析到
 # 破坏性改版的 0.5.5（Probe::format 取代 probe()、audio planes/frames 签名全变），
 # 子 crate 与顶层 feature 转发必须同版本，否则编译失败。
-symphonia = "=0.5.4"
-symphonia-core = "=0.5.4"
-symphonia-bundle-flac = "=0.5.4"
-symphonia-bundle-mp3 = "=0.5.4"
-symphonia-codec-aac = "=0.5.4"
-symphonia-codec-adpcm = "=0.5.4"
-symphonia-codec-pcm = "=0.5.4"
-symphonia-codec-vorbis = "=0.5.4"
-symphonia-format-isomp4 = "=0.5.4"
-symphonia-format-mkv = "=0.5.4"
-symphonia-format-ogg = "=0.5.4"
-symphonia-format-riff = "=0.5.4"
-symphonia-metadata = "=0.5.4"
+symphonia = { version = "=0.5.4", optional = true }
+symphonia-core = { version = "=0.5.4", optional = true }
+symphonia-bundle-flac = { version = "=0.5.4", optional = true }
+symphonia-bundle-mp3 = { version = "=0.5.4", optional = true }
+symphonia-codec-aac = { version = "=0.5.4", optional = true }
+symphonia-codec-adpcm = { version = "=0.5.4", optional = true }
+symphonia-codec-pcm = { version = "=0.5.4", optional = true }
+symphonia-codec-vorbis = { version = "=0.5.4", optional = true }
+symphonia-format-isomp4 = { version = "=0.5.4", optional = true }
+symphonia-format-mkv = { version = "=0.5.4", optional = true }
+symphonia-format-ogg = { version = "=0.5.4", optional = true }
+symphonia-format-riff = { version = "=0.5.4", optional = true }
+symphonia-metadata = { version = "=0.5.4", optional = true }
 
 # 监听层（src/serve.rs 的手动 accept loop）：axum::serve 不暴露 per-connection socket
 # 选项，而 TCP keepalive 必须逐连接设置——设备拔电不发 FIN/RST，连接半开挂着，tokio 的
@@ -123,12 +136,12 @@ rusqlite = { version = "0.40.2", features = ["bundled"] }
 #（`rustuya::Device`/`DeviceBuilder`/`Scanner`）——`sync::Device` 在 tokio runtime 内
 # 会 panic（blocking_send），服务端一律禁用（见 device/tuya/lan.rs 模块注释）。
 # 精确钉版（=0.3.0）：涂鸦局域网协议实现版本敏感（3.4/3.5 会话握手），禁 caret 漂移。
-rustuya = "=0.3.0"
+rustuya = { version = "=0.3.0", optional = true }
 
 # 仅用于从官方钉版的 onnxruntime-android AAR（zip 容器）里解出 armv7 的
 # libonnxruntime.so（EchoMuse 设备语音门 dlopen 的运行时）。只开 deflate、
 # 关掉加密/其它压缩/时间特性，把依赖树压到最小。
-zip = { version = "4", default-features = false, features = ["deflate"] }
+zip = { version = "4", default-features = false, features = ["deflate"], optional = true }
 
 [dev-dependencies]
 # 仅测试用：`esphome-native-api` 内部用 `log` 打协议日志（握手/读取循环终止原因），

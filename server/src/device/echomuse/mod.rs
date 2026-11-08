@@ -583,12 +583,14 @@ fn local_ipv4() -> Option<Ipv4Addr> {
     super::local_ipv4()
 }
 
-/// Native Echo PCM geometry; no ESP codec/wire negotiation; PcmS16Le ⇔ `DeviceKind::EchoMuse`.
+/// Native PCM geometry; no Opus/wire negotiation.
 pub(crate) fn session_params(
     cfg: &crate::config::Config,
 ) -> crate::workflow::session::SessionParams {
-    crate::workflow::session::SessionParams::configured_defaults(
+    let mut params = crate::workflow::session::SessionParams::configured_defaults(
         cfg,
         crate::media::media::AudioCodec::PcmS16Le,
-    )
+    );
+    params.kind = crate::workflow::session::SessionTransportProfile::plugin("echomuse", true);
+    params
 }

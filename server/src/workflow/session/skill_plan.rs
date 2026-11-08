@@ -1,6 +1,6 @@
 //! Bounded declarative actions; device identity is always the bound session.
 use super::command::now_ms;
-use super::{DeviceKind, Session};
+use super::Session;
 use crate::plugins::skill::SkillInvocation;
 use crate::skills::{SkillExecutionContext, SkillPlan, SkillStep};
 use crate::workflow::protocol::Transport;
@@ -12,13 +12,7 @@ impl<T: Transport> Session<'_, T> {
             device_id: self.device_id.clone(),
             session_id: self.session_id.clone(),
             request_id: format!("{}:{}:{index}", self.session_id, self.skill_turn_id),
-            device_kind: Some(
-                match self.params.kind {
-                    DeviceKind::XiaozhiEsp => "xiaozhi_esp",
-                    DeviceKind::EchoMuse => "echomuse",
-                }
-                .into(),
-            ),
+            device_kind: Some(self.params.kind.id.into()),
             now_ms: now_ms(),
             cancelled: self.abort.clone(),
         }
@@ -81,53 +75,36 @@ impl<T: Transport> Session<'_, T> {
                             .to_owned(),
                     );
                 }
+                #[cfg(feature = "tuya-plugin")]
                 "tuya.control" => {
-                    // NLU iot 域语音开关（架构 §1 D1）：set_dp 是异步 rustuya TCP
-                    // 调用且持有 per-device tokio::Mutex，不能进 spawn_blocking
-                    // （阻塞线程上无法 .await）。voice_control infallible——设备
-                    // 未找到/歧义/离线等业务失败也返回 {"ok":false,"speech"}，
-                    // 作为正常结果进入 results 供 replies.say 引用播报，会话延续。
+                    // Tuya plugin action: validated before execution and dispatched through
+                    // the plugin-owned native engine. The base plan executor has no fallback
+                    // branch for an unavailable device business capability.
                     let name = step.args["name"]
                         .as_str()
                         .ok_or_else(|| anyhow::anyhow!("missing tuya device name"))?;
                     let action = step.args["action"]
                         .as_str()
                         .ok_or_else(|| anyhow::anyhow!("missing tuya action"))?;
-                    #[cfg(feature = "pure-base")]
+                    #[cfg(feature = "wasm-plugins")]
                     {
-                        let _ = (name, action);
-                        result = serde_json::json!({
-                            "ok": false,
-                            "kind": "unavailable",
-                            "speech": "当前纯底座构建未启用 Tuya 设备能力。"
-                        });
-                    }
-                    #[cfg(not(feature = "pure-base"))]
-                    {
-                        #[cfg(feature = "wasm-plugins")]
-                        {
-                            if self.engines.host.config().tuya.engine_id() == "wasm-policy" {
-                                if let Some(host) = self.engines.wasm.as_ref() {
-                                    result = self
-                                        .engines
-                                        .tuya
-                                        .voice_control_with_policy(host, name, action)
-                                        .await;
-                                } else {
-                                    result = serde_json::json!({
-                                        "ok": false,
-                                        "kind": "error",
-                                        "speech": "Tuya 控制策略宿主未装载，请检查 wasm-plugins 配置。"
-                                    });
-                                }
+                        if self.engines.host.config().tuya.engine_id() == "wasm-policy" {
+                            if let Some(host) = self.engines.wasm.as_ref() {
+                                result = self
+                                    .engines
+                                    .tuya
+                                    .voice_control_with_policy(host, name, action)
+                                    .await;
                             } else {
-                                result = self.engines.tuya.voice_control(name, action).await;
+                                anyhow::bail!("Tuya control policy host is not loaded");
                             }
-                        }
-                        #[cfg(not(feature = "wasm-plugins"))]
-                        {
+                        } else {
                             result = self.engines.tuya.voice_control(name, action).await;
                         }
+                    }
+                    #[cfg(not(feature = "wasm-plugins"))]
+                    {
+                        result = self.engines.tuya.voice_control(name, action).await;
                     }
                 }
                 _ => {

@@ -46,7 +46,7 @@ fn plan_reports_required_capabilities() {
 
 /// 全链路模式启用但三要素缺失 → **快速失败**（保持 `Engines::new` 既有行为：
 /// 配置不全时每个会话都会失败，远不如启动就报清楚）。
-#[cfg(not(feature = "pure-base"))]
+#[cfg(feature = "native-plugins")]
 #[test]
 fn aiui_missing_creds_fails_fast() {
     let mut cfg = Config::default();
@@ -73,7 +73,7 @@ fn aiui_missing_creds_fails_fast() {
 
 /// 可选能力的降级路径：状态可被标记为 Degraded 并带原因上报
 /// （当前 shipped 描述符里没有会降级的例子，故直接走 `mark` 验证机制本身）。
-#[cfg(not(feature = "pure-base"))]
+#[cfg(feature = "native-plugins")]
 #[test]
 fn degraded_phase_is_reported_with_reason() {
     let host = PluginHost::plan(&Config::default());
@@ -125,7 +125,7 @@ fn boot_reports_all_required_problems_at_once() {
 }
 
 /// 能力级聚合：disabled 实现不掩盖已激活实现。
-#[cfg(not(feature = "pure-base"))]
+#[cfg(feature = "native-plugins")]
 #[test]
 fn capability_aggregation_prefers_worst_phase() {
     let mut cfg = Config::default();
@@ -275,7 +275,7 @@ fn capabilities_json_carries_every_key_the_overview_page_reads() {
     }
 }
 
-#[cfg(feature = "pure-base")]
+#[cfg(not(feature = "native-plugins"))]
 #[test]
 fn pure_base_capability_projection_exposes_only_core_data_plane() {
     let host = PluginHost::plan(&Config::default());

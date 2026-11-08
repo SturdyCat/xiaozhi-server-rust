@@ -10,7 +10,7 @@ use super::*;
 use crate::config::Config;
 
 /// 全部能力 11 行 + 键契约（客户端按字符串取键，缺键只会显示空白，必须钉死）。
-#[cfg(not(feature = "pure-base"))]
+#[cfg(feature = "native-plugins")]
 #[test]
 fn engines_health_returns_all_capabilities_with_full_keys() {
     let host = PluginHost::plan(&Config::default());
@@ -54,7 +54,7 @@ fn engines_health_returns_all_capabilities_with_full_keys() {
 }
 
 /// 验收 2：memory.enabled=false → disabled、last_error null、probe null（显式关闭不是错误）。
-#[cfg(not(feature = "pure-base"))]
+#[cfg(feature = "native-plugins")]
 #[test]
 fn disabled_memory_has_no_probe_and_no_error() {
     // memory 默认已改为 enabled=true（标准行为）；显式构造关闭态验证 disabled 语义。
@@ -92,7 +92,7 @@ fn required_capability_missing_model_reports_failed() {
 /// 可选能力（memory）目录不可写/不存在 → degraded（坏掉只降级，不 failed）。
 /// ⚠️ 非 sherpa 构建下 memory 无 feature 门槛（plan 不 Fail），探测文案能透出；
 /// sherpa 构建下同样如此（memory.validate 不依赖 feature）。
-#[cfg(not(feature = "pure-base"))]
+#[cfg(feature = "native-plugins")]
 #[test]
 fn optional_capability_probe_fail_degrades_not_fails() {
     let mut cfg = Config::default();
@@ -132,7 +132,7 @@ fn host_failure_reason_wins_over_probe_when_worse() {
 }
 
 /// config_section 映射：fullchain→aiui、firmware→ota、voices→null、其余同 id。
-#[cfg(not(feature = "pure-base"))]
+#[cfg(feature = "native-plugins")]
 #[test]
 fn config_section_mapping_matches_admin_nav() {
     let host = PluginHost::plan(&Config::default());
@@ -210,7 +210,7 @@ fn engines_health_is_idempotent() {
 }
 
 /// 能力聚合取最坏：health 端点也必须看到 host 标记的降级（mark 后 phase 透出）。
-#[cfg(not(feature = "pure-base"))]
+#[cfg(feature = "native-plugins")]
 #[test]
 fn marked_degradation_is_visible_in_health() {
     let host = PluginHost::plan(&Config::default());

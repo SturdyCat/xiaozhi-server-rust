@@ -33,9 +33,12 @@
 
 use serde::{Deserialize, Serialize};
 
-// 引擎子配置段随插件走（定义在各插件 mod.rs），此处转发以维持 `crate::config::*` 路径稳定：
+// 核心配置只聚合通用运行时与能力；设备插件配置不进入底座 Config。
+#[cfg(feature = "echomuse-plugin")]
 pub use crate::device::echomuse::EchomuseConfig;
+#[cfg(feature = "esp_home")]
 pub use crate::device::esp_home::EspHomeConfig;
+#[cfg(feature = "tuya-plugin")]
 pub use crate::device::tuya::TuyaConfig;
 pub use crate::plugins::aiui::AiuiConfig;
 pub use crate::plugins::asr::AsrConfig;
@@ -173,22 +176,15 @@ pub struct Config {
     /// 稳态下每次唤醒零 LLM、零 TTS。默认开启（标准行为，不需要可关）。
     #[serde(default)]
     pub wakeup: WakeConfig,
-    /// EchoMuse 设备入口（`[echomuse]`）：Echo Dot 2 刷 emOS 后以 EchoMuse 设备协议
-    /// （`/em/control` + `/em/data` 双 WS、mic PCM 16k、`X-EM-Token` 鉴权、mDNS
-    /// `_emcontroller._tcp` 发现）直接接入，复用与 xiaozhi 设备同一条会话流水线。
-    /// 默认开启（开机即用）；关闭时零路由、零 mDNS、行为与没有这个入口完全一致。
+    /// Native device plugins are intentionally outside the core configuration schema.
+    /// Their sections are contributed by an installed plugin at runtime.
+    #[cfg(feature = "echomuse-plugin")]
     #[serde(default)]
     pub echomuse: EchomuseConfig,
-    /// ESPHome Native API 桥（`[esp_home]`）：把 Dot 2 状态暴露为标准 ESPHome 实体，
-    /// 供 HA / homeCore / 任意 native-api 客户端直接驱动。阶段 A 仅 `binary_sensor`
-    /// （在线/聆听/思考/播报），阶段 B 再加控制面与 `bluetooth_proxy`（BLE 代理控小米）。
-    /// **默认关闭**（可选模块，需 `--features esp_home` 编译 + `enabled=true` 才监听）。
+    #[cfg(feature = "esp_home")]
     #[serde(default)]
     pub esp_home: EspHomeConfig,
-    /// Tuya IoT 设备集成（`[tuya]`）：涂鸦云凭证 + 同步周期。**全部热生效，无需重启**。
-    /// 云侧仅做目录同步（含 local_key）；发现与控制纯局域网（UDP 6666/6667/7000 +
-    /// TCP 6668）。`access_secret` 只写不读（API 永不回显）。默认开启（无凭证时
-    /// 管理面可见、仅同步报"凭证未配置"，零云请求零局域网副作用）。
+    #[cfg(feature = "tuya-plugin")]
     #[serde(default)]
     pub tuya: TuyaConfig,
     #[serde(default)]
@@ -488,8 +484,11 @@ impl Default for Config {
             command: CommandConfig::default(),
             nlu: NluConfig::default(),
             wakeup: WakeConfig::default(),
+            #[cfg(feature = "echomuse-plugin")]
             echomuse: EchomuseConfig::default(),
+            #[cfg(feature = "esp_home")]
             esp_home: EspHomeConfig::default(),
+            #[cfg(feature = "tuya-plugin")]
             tuya: TuyaConfig::default(),
             playback: PlaybackConfig::default(),
             weather: WeatherConfig::default(),
@@ -519,8 +518,11 @@ impl Config {
         self.soul.normalize();
         self.command.normalize();
         self.wakeup.normalize();
+        #[cfg(feature = "echomuse-plugin")]
         self.echomuse.normalize();
+        #[cfg(feature = "esp_home")]
         self.esp_home.normalize();
+        #[cfg(feature = "tuya-plugin")]
         self.tuya.normalize();
     }
 

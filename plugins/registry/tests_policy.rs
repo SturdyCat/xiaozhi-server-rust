@@ -44,7 +44,7 @@ fn command_gate_is_optional_and_hot_reloadable() {
 
     // schema 必须把这张卡的字段暴露出去（管理页「指令」页签的数据源）；
     // pure-base 不投影业务能力，该断言仅在 legacy 构建下成立。
-    #[cfg(not(feature = "pure-base"))]
+    #[cfg(feature = "native-plugins")]
     {
         let v = schema_json();
         let cmd = v["capabilities"]
@@ -113,7 +113,7 @@ fn nlu_model_is_optional_and_hot_reloadable() {
 
     // schema 必须把这张卡的顶层字段暴露出去（管理页「NLU」页签的数据源）；
     // pure-base 不投影业务能力，该断言仅在 legacy 构建下成立。
-    #[cfg(not(feature = "pure-base"))]
+    #[cfg(feature = "native-plugins")]
     {
         let v = schema_json();
         let nlu = v["capabilities"]
@@ -261,7 +261,7 @@ fn wake_greeting_is_optional_hot_reloadable_and_flags_cache_conflict() {
 
     // schema 必须把这张卡的字段暴露出去（管理页「唤醒」页签的数据源）；
     // pure-base 不投影业务能力，该断言仅在 legacy 构建下成立。
-    #[cfg(not(feature = "pure-base"))]
+    #[cfg(feature = "native-plugins")]
     {
         let v = schema_json();
         let wake = v["capabilities"]
