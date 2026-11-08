@@ -1,5 +1,6 @@
 // h5App：Web 壳 h5App.js + shared 业务 nativevue2.js（入口先业务、后壳）。
 import java.security.MessageDigest
+import java.time.Instant
 import java.util.zip.ZipFile
 
 plugins {
@@ -106,4 +107,17 @@ tasks.register("publishWeb") {
     group = "kuikly"
     description = "Build and publish the Web application bundles"
     dependsOn(":shared:verifyAdminIcons", verifyEmBundle, syncBusinessBundle, syncShellBundle, syncEmAssets)
+    doLast {
+        val index = webDir.file("index.html").asFile
+        check(index.isFile) { "Missing Web entrypoint: ${index.path}" }
+        val timestamp = Instant.now().epochSecond.toString()
+        val versionedBundle = Regex("""(\./(?:nativevue2|h5App)\.js\?v=)[^"]+""")
+        val html = index.readText()
+        val matches = versionedBundle.findAll(html).count()
+        check(matches == 2) {
+            "Expected two timestamped Web bundle references in ${index.path}, found $matches"
+        }
+        index.writeText(versionedBundle.replace(html) { "${it.groupValues[1]}$timestamp" })
+        logger.lifecycle("Web bundle cache timestamp: $timestamp")
+    }
 }

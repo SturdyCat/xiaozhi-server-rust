@@ -51,11 +51,14 @@ fun PluginsManagePage(meta: PluginMetaState, manage: PluginsManageState, toast: 
     // 详情弹窗：持有插件 id（null = 关闭；内容从当前清单快照组装，零请求）
     var detailId by remember { mutableStateOf<String?>(null) }
     val snap = meta.wasmSlots
+    // 动态 WASM 投影是可选增量：旧服务端/未编入 feature 时也必须显示插件管理
+    // 与空清单，不能把「平台未启用」错误升级成页面级错误卡片。
+    val realLoadError = meta.loadError.takeUnless(::isWasmPlatformUnavailable)
 
     Column(modifier = Modifier.fillMaxWidth()) {
-        if (meta.loadError.isNotEmpty()) {
-            LabeledCard(title = "插件平台") {
-                WarnLine(meta.loadError + "（确认服务端地址可达后点「刷新清单」）", error = true)
+        if (!realLoadError.isNullOrEmpty()) {
+            LabeledCard(title = "插件清单") {
+                WarnLine(realLoadError + "（确认服务端地址可达后点「刷新清单」）", error = true)
             }
         }
 
@@ -302,6 +305,18 @@ fun PluginsManagePage(meta: PluginMetaState, manage: PluginsManageState, toast: 
             )
         }
     }
+}
+
+/**
+ * 可选动态平台的缺失不是插件管理页错误：旧服务端、pure-base 未编入宿主或 feature
+ * 关闭时都应落到「暂无插件」，保留上传入口而不显示误导性的阻断卡片。
+ */
+private fun isWasmPlatformUnavailable(message: String): Boolean {
+    val lower = message.lowercase()
+    val mentionsWasm = lower.contains("wasm-plugins") || lower.contains("wasm 插件平台")
+    if (!mentionsWasm) return false
+    return lower.contains("未启用") || lower.contains("feature") || lower.contains("构建") ||
+        lower.contains("不可用")
 }
 
 /**

@@ -41,14 +41,16 @@ const pluginsBody=()=>({
  const browser=await chromium.launch({headless:true,...(process.env.CHROME_PATH?{executablePath:process.env.CHROME_PATH}:{})});
  const page=await browser.newPage({viewport:{width:1440,height:1000}});
  const errors=[];
- let pluginsDelay=1500; // 首次拉取延迟：覆盖「快照晚于首帧」的加载窗口
+ let pluginsDelay=3000; // 首次拉取延迟：覆盖「快照晚于首帧」的加载窗口
  page.on('pageerror',e=>errors.push(e.message));
  // 管理台 JSON 走 /api/admin/ws 的 WS RPC 复用（getJson/adminTransport），必须按帧协议应答：
  // 客户端 {"type":"rpc","id","method","path"} → 服务端 {"type":"rpc_result","id","status","body"}。
  await page.routeWebSocket('**/api/admin/ws*',ws=>{
   ws.send(JSON.stringify({type:'hello',version:0,server_status:{}}));
-  ws.onMessage(msg=>{
-   let frame;try{frame=JSON.parse(msg.text());}catch{return;}
+  ws.onMessage(raw=>{
+   // playwright-core：onMessage 回调入参即 payload（string|Buffer）
+   const text=typeof raw==='string'?raw:(raw&&raw.toString())||'';
+   let frame;try{frame=JSON.parse(text);}catch{return;}
    if(frame.type==='ping'){ws.send(JSON.stringify({type:'pong'}));return;}
    if(frame.type!=='rpc')return;
    const respond=()=>ws.send(JSON.stringify({type:'rpc_result',id:frame.id,status:200,body:pluginsBody()}));
@@ -72,27 +74,30 @@ const pluginsBody=()=>({
   await fs.mkdir(out,{recursive:true});
   await page.goto('http://plugins.test/?page_name=admin');
 
-  // ① 快照在途（前 1500ms）：静态「插件」导航可见；不得误报平台不可用；清单卡显示加载中。
+  // ① wasm 快照在途（3s 延迟）：主动进入「插件」管理页，必须显示加载提示，
+  //    不得误报「平台不可用」或提前宣判「暂无插件」。
+  await page.getByText('插件',{exact:true}).first().click();
   await page.getByText('正在获取插件清单…',{exact:true}).first().waitFor({timeout:8000});
   assert.equal(await page.getByText('服务端未启用 WASM 插件平台',{exact:true}).count(),0,'loading 不得误报平台不可用');
   assert.equal(await page.getByText('暂无插件',{exact:true}).count(),0,'loading 不得提前宣判空清单');
-  const navCount=await page.getByText('插件',{exact:true}).count();
-  assert.ok(navCount>=1,'静态插件导航在 wasm 解析前必须可见');
+  assert.ok(await page.getByText('选择 .wasm 并上传',{exact:true}).first().isVisible(),'上传入口在加载期即可用');
   await page.screenshot({path:path.join(out,'loading.png')});
 
-  // ② 回包落定：插件行渲染（标题 + 动作按钮），空态/不可用文案消失，动态导航出现。
+  // ② 回包落定：插件行渲染（标题 + 生命周期按钮），空态/不可用文案消失，动态导航出现。
   await page.getByText('天气（国家气象中心）',{exact:true}).first().waitFor({timeout:10000});
   assert.equal(await page.getByText('服务端未启用 WASM 插件平台',{exact:true}).count(),0);
   assert.equal(await page.getByText('正在获取插件清单…',{exact:true}).count(),0);
   assert.ok(await page.getByText('已装载插件',{exact:true}).first().isVisible(),'已装载插件卡可见');
-  assert.ok(await page.getByText('查天气',{exact:true}).first().isVisible(),'注册动作按钮可见');
+  assert.ok(await page.getByText('详情',{exact:true}).first().isVisible(),'详情入口可见');
+  assert.ok(await page.getByText('禁用',{exact:true}).first().isVisible(),'active 生命周期禁用按钮可见');
+  assert.ok(await page.getByText('weather.official',{exact:true}).first().isVisible(),'扩展点解析显示实现');
   assert.ok(await page.getByText('天气',{exact:true}).count()>=1,'动态插件导航入口出现');
   await page.screenshot({path:path.join(out,'loaded.png')});
 
-  // ③ 进入静态插件管理页（配置组的「插件」导航项）：清单与上传入口同页成立。
-  await page.getByText('插件',{exact:true}).first().click();
+  // ③ 动作/A2UI 只在 Active 插件的动态运行页承载：经 nav.main「天气」入口进入。
+  await page.getByText('天气',{exact:true}).first().click();
   await page.waitForTimeout(300);
-  assert.ok(await page.getByText('天气（国家气象中心）',{exact:true}).first().isVisible(),'导航往返后清单仍在');
+  assert.ok(await page.getByText('查天气',{exact:true}).first().isVisible(),'动态运行页渲染注册动作');
   assert.equal(errors.length,0,'无页面错误: '+errors.join(' | '));
   console.log('plugins-list browser regression: PASS');
  }catch(e){
