@@ -1,6 +1,7 @@
 package com.xiaozhi.admin.contracts
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -37,7 +38,11 @@ data class PluginSlotSnapshot(
             for (row in rows) {
                 val obj = runCatching { row.jsonObject }.getOrNull() ?: continue
                 val id = obj.str("id") ?: continue
-                val registration = obj["registration"]?.jsonObject
+                // 宿主对非 Active 插件下发 `"registration": null`（见 lifecycle.rs 投影）。
+                // 这里一律用 `as?` 安全转换：`?.jsonObject` 只挡 null，遇到 JsonNull 会抛
+                // IllegalArgumentException，而本解析在调用方被 runCatching 整体吞成 null，
+                // 结果是一条停用插件就让「插件」整页显示为空。
+                val registration = obj["registration"] as? JsonObject
                 val plugin = PluginSlotPlugin(
                     id = id,
                     title = obj.str("title") ?: id,
@@ -45,18 +50,18 @@ data class PluginSlotSnapshot(
                     version = obj.str("version") ?: "",
                     apiVersion = obj.str("api_version") ?: "",
                     official = obj.bool("official"),
-                    phase = obj["phase"]?.jsonObject?.str("state") ?: "unknown",
+                    phase = (obj["phase"] as? JsonObject)?.str("state") ?: "unknown",
                     lifecycle = obj.str("lifecycle"),
                     implements = obj.strings("implements"),
                     permissions = obj.strings("permissions"),
-                    requires = parseRequires(obj["requires"]?.jsonArray),
+                    requires = parseRequires(obj["requires"] as? JsonArray),
                     dependents = obj.strings("dependents"),
-                    menu = parseMenu(registration?.get("menu")?.jsonArray),
-                    actions = parseActions(registration?.get("actions")?.jsonArray),
-                    configFields = parseFields(registration?.get("config_fields")?.jsonArray),
+                    menu = parseMenu(registration?.get("menu") as? JsonArray),
+                    actions = parseActions(registration?.get("actions") as? JsonArray),
+                    configFields = parseFields(registration?.get("config_fields") as? JsonArray),
                 )
                 plugins += plugin
-                val menu = registration?.get("menu")?.jsonArray ?: continue
+                val menu = registration?.get("menu") as? JsonArray ?: continue
                 for (entryEl in menu) {
                     val entry = runCatching { entryEl.jsonObject }.getOrNull() ?: continue
                     if (entry.str("slot") != "nav.main") continue
@@ -72,7 +77,7 @@ data class PluginSlotSnapshot(
                 }
             }
             val extensions = mutableMapOf<String, PluginExtensionState>()
-            val ext = wasm["extensions"]?.jsonObject
+            val ext = wasm["extensions"] as? JsonObject
             if (ext != null) {
                 for ((key, value) in ext) {
                     val row = runCatching { value.jsonObject }.getOrNull() ?: continue
@@ -97,7 +102,7 @@ data class PluginSlotSnapshot(
             (this[key] as? kotlinx.serialization.json.JsonPrimitive)?.content == "true"
 
         private fun JsonObject.strings(key: String): List<String> {
-            val array = this[key]?.jsonArray ?: return emptyList()
+            val array = this[key] as? JsonArray ?: return emptyList()
             return array.mapNotNull { el ->
                 (el as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { it.isString }?.content
             }.filter { it.isNotBlank() }
