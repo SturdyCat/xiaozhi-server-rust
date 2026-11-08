@@ -5,6 +5,9 @@ package com.xiaozhi.admin
 //! 页面只负责三件事：标题栏添加插件、每个 WASM 插件占一行、详情弹窗。
 //! 版本/权限/依赖/registration UI 等明细不在列表展开，统一收进详情弹窗；
 //! 数据源仍是 [PluginMetaState]，写通道仍是 [PluginsManageState]。
+//!
+//! 根容器必须是 [pageScroller]：裸 Column 在 Kuikly 布局里会让首行吃掉父容器
+//! 全部剩余高度（行内徽标被拉伸到整屏高）、后续行被压成 0 高且无法滚动。
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -31,6 +34,7 @@ import com.xiaozhi.admin.kit.bodyLine
 import com.xiaozhi.admin.kit.dividerH
 import com.xiaozhi.admin.kit.hGap
 import com.xiaozhi.admin.kit.listRow
+import com.xiaozhi.admin.kit.pageScroller
 import com.xiaozhi.admin.kit.pluginLifecycleBadge
 import com.xiaozhi.admin.kit.pluginStatusBadge
 import com.xiaozhi.admin.kit.statusBadge
@@ -50,7 +54,7 @@ fun PluginsManagePage(meta: PluginMetaState, manage: PluginsManageState, toast: 
     val snap = meta.wasmSlots
     val realLoadError = meta.loadError.takeUnless(::isWasmPlatformUnavailable)
 
-    Column(modifier = Modifier.fillMaxWidth()) {
+    pageScroller {
         // 标题行：页面标题 + 右侧唯一的「添加插件」入口。
         listRow(
             title = "插件",
@@ -323,7 +327,7 @@ fun PluginRuntimePage(
 ) {
     val ctx = LocalAdminPagerOrThrow()
     val doc = uiDocs[plugin.id]
-    Column(modifier = Modifier.fillMaxWidth()) {
+    pageScroller {
         LabeledCard(title = plugin.title) {
             HintLine(plugin.description.ifEmpty { "该页面由插件清单声明，底座不内置业务页面。" })
             HintLine("${plugin.id} · v${plugin.version} · ${plugin.phase}")
