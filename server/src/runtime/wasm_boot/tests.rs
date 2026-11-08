@@ -63,13 +63,18 @@ impl Rig {
     }
 
     fn boot(&mut self) {
+        self.boot_with_system_dir(None);
+    }
+
+    fn boot_with_system_dir(&mut self, system_dir: Option<&std::path::Path>) {
         // 与 Engines::assemble 同序：先持久化当前配置，再把盘上态交给引导
         self.store.persist(&self.config).expect("persist config");
-        crate::runtime::wasm_boot::boot_lifecycle(
+        crate::runtime::wasm_boot::boot_lifecycle_with_system_dir(
             &self.config.plugins,
             &self.dir,
             &self.host,
             self.store.as_ref(),
+            system_dir,
         );
     }
 
@@ -121,6 +126,40 @@ fn boot_migrates_legacy_enabled_plugin_without_marker() {
     let row = &rig.host.snapshot_json()["plugins"][0];
     assert_eq!(row["lifecycle"], "active");
     assert!(!row["registration"].is_null());
+}
+
+#[test]
+fn boot_imports_and_activates_all_declared_system_plugins() {
+    let mut rig = Rig::new("system-plugins");
+    let system_dir = temp_root("system-plugin-artifacts");
+    std::fs::write(
+        system_dir.join("hello.official.wasm"),
+        ensure_fixture("hello"),
+    )
+    .expect("hello system artifact");
+    std::fs::write(
+        system_dir.join("weather.official.wasm"),
+        ensure_fixture("weather"),
+    )
+    .expect("weather system artifact");
+
+    rig.boot_with_system_dir(Some(&system_dir));
+
+    assert_eq!(rig.lifecycle("hello.official"), "active");
+    assert_eq!(rig.lifecycle("weather.official"), "active");
+    assert!(rig.stored_enabled("hello.official"));
+    assert!(rig.stored_enabled("weather.official"));
+    let snapshot = rig.host.snapshot_json();
+    let ids: Vec<_> = snapshot["plugins"]
+        .as_array()
+        .expect("plugin snapshot")
+        .iter()
+        .filter_map(|row| row["id"].as_str())
+        .collect();
+    assert!(ids.contains(&"hello.official"));
+    assert!(ids.contains(&"weather.official"));
+
+    let _ = std::fs::remove_dir_all(system_dir);
 }
 
 #[test]

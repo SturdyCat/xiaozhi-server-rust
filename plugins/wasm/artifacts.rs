@@ -56,11 +56,14 @@ impl ArtifactDir {
         key.verify(digest.as_bytes(), &signature_bytes).is_ok()
     }
 
+    /// 读取已落盘产物；缺失或不可读时返回 None。
+    pub fn read(&self, id: &str) -> Option<Vec<u8>> {
+        std::fs::read(self.path_for(id)).ok()
+    }
+
     /// 读取已落盘产物并计算摘要；缺失或不可读时返回 None。
     pub fn digest_for(&self, id: &str) -> Option<String> {
-        std::fs::read(self.path_for(id))
-            .ok()
-            .map(|bytes| Self::digest(&bytes))
+        self.read(id).map(|bytes| Self::digest(&bytes))
     }
 
     /// 保存产物（写盘即持久启用；临时文件 + 原子改名，半份文件不会被发现）。

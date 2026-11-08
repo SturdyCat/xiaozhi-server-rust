@@ -8,3 +8,11 @@
 [[plugins]]
 id = "weather.official"
 dir = "weather"
+package = "weather-official"
+
+# 内置系统级扩展点探针：用于验证官方插件从构建产物到注册/激活的完整链路。
+# 它不是用户自建插件，源码暂复用 WASM 测试夹具，生产构建仍通过本目录统一产物目录分发。
+[[plugins]]
+id = "hello.official"
+source_dir = "tools/wasm-fixtures/hello"
+package = "hello"

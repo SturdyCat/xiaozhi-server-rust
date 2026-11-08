@@ -80,17 +80,18 @@ const pluginsBody=()=>({
   await page.getByText('正在获取插件清单…',{exact:true}).first().waitFor({timeout:8000});
   assert.equal(await page.getByText('服务端未启用 WASM 插件平台',{exact:true}).count(),0,'loading 不得误报平台不可用');
   assert.equal(await page.getByText('暂无插件',{exact:true}).count(),0,'loading 不得提前宣判空清单');
-  assert.ok(await page.getByText('选择 .wasm 并上传',{exact:true}).first().isVisible(),'上传入口在加载期即可用');
+  assert.ok(await page.getByRole('button',{name:'添加插件'}).isVisible(),'添加插件图标在加载期即可用');
   await page.screenshot({path:path.join(out,'loading.png')});
 
   // ② 回包落定：插件行渲染（标题 + 生命周期按钮），空态/不可用文案消失，动态导航出现。
   await page.getByText('天气（国家气象中心）',{exact:true}).first().waitFor({timeout:10000});
   assert.equal(await page.getByText('服务端未启用 WASM 插件平台',{exact:true}).count(),0);
   assert.equal(await page.getByText('正在获取插件清单…',{exact:true}).count(),0);
-  assert.ok(await page.getByText('已装载插件',{exact:true}).first().isVisible(),'已装载插件卡可见');
-  assert.ok(await page.getByText('详情',{exact:true}).first().isVisible(),'详情入口可见');
-  assert.ok(await page.getByText('禁用',{exact:true}).first().isVisible(),'active 生命周期禁用按钮可见');
-  assert.ok(await page.getByText('weather.official',{exact:true}).first().isVisible(),'扩展点解析显示实现');
+  assert.ok(await page.getByText('weather.official',{exact:true}).first().isVisible(),'插件行显示 id');
+   assert.ok(await page.getByText('国家气象中心实时天气查询',{exact:true}).first().isVisible(),'插件行显示次要描述');
+  assert.ok(await page.getByRole('button',{name:'查看插件详情'}).isVisible(),'详情 action 可见');
+  assert.ok(await page.getByRole('button',{name:'禁用插件'}).isVisible(),'active 生命周期禁用 action 可见');
+  assert.equal(await page.getByText('扩展点解析',{exact:true}).count(),0,'扩展点不在纯列表展开');
   assert.ok(await page.getByText('天气',{exact:true}).count()>=1,'动态插件导航入口出现');
   await page.screenshot({path:path.join(out,'loaded.png')});
 

@@ -1,6 +1,6 @@
 # 插件源根（plugins-src/）
 
-真实 WASM 插件的源码根（方案 v4）。**分发模型（用户方向 2026-11-04，2026-11-06 简化为纯上传）：插件不编译进主系统，wasm 产物一律不入 git**——源码是唯一入库物；生产装载只走管理界面上传已构建组件（`POST /api/plugins/upload`，验证→采用→立即生效，重启经数据卷扫描重装即注册）。服务端不再做 Docker 自动构建；开发态改插件源只重建 guest（`./build.sh`），永不触发主系统构建。guest 统一经 [xiaozhi-plugin-sdk](<../server/crates/xiaozhi-plugin-sdk/AGENTS.md>) 使用契约；测试夹具性质的演示插件在 `tools/wasm-fixtures/`（与本目录区分：那是测试件，这是真插件）。
+真实 WASM 插件的源码根（方案 v4）。**用户插件不编译进主系统，wasm 产物一律不入 git**——源码是唯一入库物；生产装载走管理界面上传已构建组件（`POST /api/plugins/upload`）或镜像随附的官方系统插件目录。官方系统插件由 [tools/build-system-plugins.sh](<../tools/build-system-plugins.sh>) 按本表构建，运行时由 WASM boot 自动导入、注册并激活；用户插件仍由数据卷生命周期管理。guest 统一经 [xiaozhi-plugin-sdk](<../server/crates/xiaozhi-plugin-sdk/AGENTS.md>) 使用契约；测试夹具性质的演示插件在 `tools/wasm-fixtures/`（系统级 hello 探针暂复用该源码验证全链路）。
 
 ## 直属下级
 

@@ -106,7 +106,8 @@
 #   web    —— Gradle 构建 Kuikly H5 管理页（client 工程：shared 业务包 + h5App 壳）
 #   build  —— 编译 Rust server（--no-default-features --features sherpa,nlu,wasm-plugins，模型/音频运行时 + NLU 训练/推理 + WASM 宿主）
 #   运行时 —— debian-slim：同源托管 管理页(/) + /api + /api/ws，模型缺失由入口脚本按需下载
-#   运行镜像只包含底座运行时与 WASM 宿主，不预置业务 WASM 组件；NLU 训练经受限的宿主 Docker 编排。
+#   运行镜像包含底座、WASM 宿主与官方系统级 WASM 插件；用户插件仍经数据卷/管理端上传。
+#   NLU 训练经受限的宿主 Docker 编排。
 #
 # 运行镜像内浏览器访问 `http://<host>:8000/` 即管理页，`/api/config` 读写 SQLite 配置库（data.db），
 # `/api/ws` 供设备（xiaozhi-esp32）WebSocket 接入；静态页与 API 同源，无 CORS 问题。
@@ -306,6 +307,23 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
  && cargo build --release --no-default-features --features sherpa,nlu,wasm-plugins --locked \
  && strip target/release/xiaozhi-server-rust
 
+# ---- 官方系统级 WASM 插件构建阶段 ----
+# 系统插件不编进 server 二进制，但随发行镜像构建并由 boot 生命周期自动注册/激活。
+FROM build AS system-plugins
+ENV RUSTFLAGS=""
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3 \
+ && rm -rf /var/lib/apt/lists/* \
+ && rustup target add wasm32-unknown-unknown \
+ && cargo install wasm-tools --version 1.263.0 --locked
+COPY server/crates /server/crates
+COPY server/wit /server/wit
+COPY plugins-src /plugins-src
+COPY tools/wasm-fixtures /tools/wasm-fixtures
+COPY tools/build-system-plugins.sh /tools/build-system-plugins.sh
+RUN chmod +x /tools/build-system-plugins.sh \
+ && /tools/build-system-plugins.sh
+
 # ---- 运行阶段 ----
 FROM debian:bookworm-slim AS runtime
 
@@ -337,15 +355,12 @@ COPY --from=web /src/client/apps/h5App/web /app/web
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
 # 内置配置示例：字段说明参照（配置真源为 SQLite data.db；示例不再作为首启配置生成）
 COPY server/config.example.toml /app/config.example.toml
-# Release smoke checks: the binary/entrypoint must be present, and no prebuilt WASM
-# business artifact may enter the image. The host is compiled into /app/server;
-# runtime plugin installation remains an explicit deployment operation.
+# 官方系统插件产物来自 system-plugins stage；用户插件仍只从数据卷/管理端上传。
+COPY --from=system-plugins /build/system-plugins /app/system-plugins
 RUN chmod +x /app/docker-entrypoint.sh \
  && test -x /app/server \
- && if find /app -type f -name '*.wasm' -print -quit | grep -q .; then \
-      echo 'base-only image must not contain a prebuilt WASM artifact' >&2; \
-      exit 1; \
-    fi
+ && test -s /app/system-plugins/weather.official.wasm \
+ && test -s /app/system-plugins/hello.official.wasm
 
 # 数据卷：模型持久化挂载点（entrypoint 缺失时自动下载到此；必须可写，勿 :ro 挂载）
 RUN mkdir -p /data
@@ -362,7 +377,8 @@ VOLUME ["/data"]
 ENV XIAOZHI_CONFIG_DB=/data/data.db \
     XIAOZHI_ADMIN_DIR=/app/web \
     XIAOZHI_AUTO_DOWNLOAD_MODELS=missing \
-    ORT_DYLIB_PATH=/usr/local/lib/libonnxruntime.so
+    ORT_DYLIB_PATH=/usr/local/lib/libonnxruntime.so \
+    XIAOZHI_SYSTEM_PLUGINS_DIR=/app/system-plugins
 # host 网络部署（docker-compose 默认）下 EXPOSE 仅作文档，监听端口即宿主端口。
 EXPOSE 8000
 

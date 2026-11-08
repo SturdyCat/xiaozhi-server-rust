@@ -12,6 +12,7 @@
 //! 单个插件故障只跳过自身，绝不阻断核心语音服务启动。
 
 use std::collections::{BTreeMap, HashSet};
+use std::path::{Path, PathBuf};
 
 use crate::config::store::ConfigStore;
 use crate::config::PluginsConfig;
@@ -67,6 +68,71 @@ fn admission_allowed(
     Ok(())
 }
 
+fn system_plugin_dir() -> Option<PathBuf> {
+    let configured = std::env::var_os("XIAOZHI_SYSTEM_PLUGINS_DIR")
+        .map(PathBuf::from)
+        .or_else(|| Some(PathBuf::from("/app/system-plugins")))?;
+    configured.is_dir().then_some(configured)
+}
+
+/// 导入镜像随附的官方系统插件；只在数据卷尚无同 id 产物时写入，避免覆盖用户升级/停用状态。
+/// 返回系统插件 id，供 boot 在缺省配置下走正常注册/激活流程。
+fn import_system_plugins_from(
+    dir: &ArtifactDir,
+    host: &WasmHost,
+    system_dir: Option<&Path>,
+) -> Vec<String> {
+    let Some(system_dir) = system_dir else {
+        return Vec::new();
+    };
+    let mut ids = Vec::new();
+    let Ok(entries) = std::fs::read_dir(&system_dir) else {
+        return ids;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("wasm") {
+            continue;
+        }
+        let Ok(bytes) = std::fs::read(&path) else {
+            tracing::warn!(path = %path.display(), "系统插件产物读取失败，跳过");
+            continue;
+        };
+        let Ok(id) = host.probe_id(&bytes) else {
+            tracing::warn!(path = %path.display(), "系统插件 manifest 探测失败，跳过");
+            continue;
+        };
+        let Ok(manifest) = host.probe_manifest(&id, &bytes) else {
+            tracing::warn!(plugin = %id, "系统插件 manifest 校验失败，跳过");
+            continue;
+        };
+        if !manifest.official {
+            tracing::warn!(plugin = %id, "系统插件目录只允许 official=true 组件，跳过");
+            continue;
+        }
+        ids.push(id.clone());
+        let should_save = match dir.read(&id) {
+            None => true,
+            Some(existing) => match host.probe_manifest(&id, &existing) {
+                Ok(old) => {
+                    old.version != manifest.version
+                        && crate::plugins::wasm::version_at_least(&manifest.version, &old.version)
+                }
+                Err(_) => true,
+            },
+        };
+        if should_save {
+            match dir.save(&id, &bytes) {
+                Ok(_) => {
+                    tracing::info!(plugin = %id, version = %manifest.version, "导入/升级镜像随附系统插件产物")
+                }
+                Err(e) => tracing::warn!(plugin = %id, "系统插件产物落盘失败：{e}"),
+            }
+        }
+    }
+    ids
+}
+
 /// 生命周期引导主入口（Engines::assemble 装配期调用一次）。
 pub(super) fn boot_lifecycle(
     config: &PluginsConfig,
@@ -74,12 +140,28 @@ pub(super) fn boot_lifecycle(
     host: &WasmHost,
     store: &dyn ConfigStore,
 ) {
+    let configured = system_plugin_dir();
+    boot_lifecycle_with_system_dir(config, dir, host, store, configured.as_deref());
+}
+
+/// 可注入系统插件目录的引导入口；测试用临时目录，生产由镜像环境变量提供。
+#[cfg_attr(not(test), allow(dead_code))]
+pub(super) fn boot_lifecycle_with_system_dir(
+    config: &PluginsConfig,
+    dir: &ArtifactDir,
+    host: &WasmHost,
+    store: &dyn ConfigStore,
+    system_dir: Option<&Path>,
+) {
     if !config.enabled {
         tracing::info!("[plugins].enabled=false（平台总闸），跳过插件引导");
         return;
     }
 
-    // ① 扫描 → 登记 Staged
+    // ① 导入镜像随附的官方系统插件，再扫描数据卷产物。
+    let system_ids = import_system_plugins_from(dir, host, system_dir);
+
+    // ② 扫描 → 登记 Staged
     let mut bytes_by_id: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     for (id, bytes) in dir.scan() {
         let digest = ArtifactDir::digest(&bytes);
@@ -126,8 +208,19 @@ pub(super) fn boot_lifecycle(
                 }
             }
         }
+        let system_default = system_ids.iter().any(|system_id| system_id == id)
+            && config
+                .entries
+                .get(id)
+                .map(|entry| entry.enabled)
+                .unwrap_or(true);
+        if system_default && !config.entries.contains_key(id) {
+            if let Err(e) = persist_enabled(store, id, true) {
+                tracing::warn!(plugin = %id, "系统插件激活意图固化失败（本次运行仍继续）：{e:#}");
+            }
+        }
         if host.lifecycle_of(id).map(|(lc, _)| lc) == Some(Lifecycle::Registered)
-            && (config.allows(id) || migrated.iter().any(|m| m == id))
+            && (config.allows(id) || migrated.iter().any(|m| m == id) || system_default)
         {
             to_activate.push(id.clone());
         }

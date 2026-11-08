@@ -59,8 +59,8 @@ services:
       #   /data/models/SenseVoiceSmall 等   模型（首启缺失时入口脚本自动下载，持久化）
       #   /data/data.db                     配置+记忆共用的 SQLite 库（配置唯一真源：
       #                                管理页「保存配置」写 cfg_documents；空库首启自举默认配置）
-      #   /data/plugins/<id>.wasm             运行期上传的插件 artifact（默认目录为空；
-      #                                         不随镜像预置，重启由 WASM 宿主扫描重装）
+      #   /data/plugins/<id>.wasm             用户运行期上传的插件 artifact（系统级官方插件
+      #                                         随镜像置于 /app/system-plugins；重启由 boot 自动导入激活）
       # ⚠️ 必须是**可写**挂载（勿加 :ro）。目录挂载支持原子 rename——
       #   旧版「单文件 bind mount → rename EBUSY → 回退原地写」的问题自此布局起不存在。
       - ./server-data:/data
