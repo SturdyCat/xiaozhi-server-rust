@@ -1,6 +1,6 @@
 package com.xiaozhi.admin
 
-//! 「插件」管理页状态（P3 末件）：raw 上传桥 + 生命周期（注册/激活/禁用/移除）+ 卸载 + 统一动作的客户端通道。
+//! 「插件」管理页状态（P3 末件）：raw 上传桥 + 生命周期（注册/启用/停用/移除）+ 卸载 + 统一动作的客户端通道。
 //!
 //! 清单数据复用 [PluginMetaState]（同一次 `GET /api/plugins`，`wasm` 键解析成
 //! [PluginSlotSnapshot]），本状态只持有**写通道**与 busy/结果态：
@@ -80,13 +80,13 @@ class PluginsManageState(private val meta: PluginMetaState) {
     fun register(ctx: Pager, pluginId: String, onDone: (ok: Boolean, msg: String) -> Unit) =
         lifecyclePost(ctx, "register", "注册", pluginId, "已注册 $pluginId", onDone)
 
-    /** 激活（registered → active）：依赖未满足时服务端 409，文案就地展示。 */
+    /** 启用（registered → active）：依赖未满足时服务端 409，文案就地展示。 */
     fun activate(ctx: Pager, pluginId: String, onDone: (ok: Boolean, msg: String) -> Unit) =
-        lifecyclePost(ctx, "activate", "激活", pluginId, "已激活 $pluginId", onDone)
+        lifecyclePost(ctx, "activate", "启用", pluginId, "已启用 $pluginId", onDone)
 
-    /** 禁用（active → registered）：被依赖插件未停用前服务端 409（页面侧也先行禁用按钮）。 */
+    /** 停用（active → registered）：被依赖插件未停用前服务端 409（页面侧也先行禁用按钮）。 */
     fun deactivate(ctx: Pager, pluginId: String, onDone: (ok: Boolean, msg: String) -> Unit) =
-        lifecyclePost(ctx, "deactivate", "禁用", pluginId, "已禁用 $pluginId", onDone)
+        lifecyclePost(ctx, "deactivate", "停用", pluginId, "已停用 $pluginId", onDone)
 
     /** 移除（仅 staged / registered 非运行插件）：回收注册声明与产物。 */
     fun remove(ctx: Pager, pluginId: String, onDone: (ok: Boolean, msg: String) -> Unit) =

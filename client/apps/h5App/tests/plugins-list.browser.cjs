@@ -91,7 +91,9 @@ const pluginsBody=()=>({
    // 描述与 id 同在一个可换行 Text 内，子串断言。
    assert.ok(await page.getByText('国家气象中心实时天气查询',{exact:false}).first().isVisible(),'插件行显示次要描述');
   assert.ok(await page.getByLabel('查看插件详情',{exact:true}).isVisible(),'详情 action 可见');
-  assert.ok(await page.getByLabel('禁用插件',{exact:true}).isVisible(),'active 生命周期禁用 action 可见');
+  assert.ok(await page.getByText('停用',{exact:true}).first().isVisible(),'active 生命周期停用文字按钮可见');
+  assert.equal(await page.getByText('移除',{exact:true}).count(),0,'active 行不出现移除按钮');
+  assert.ok(await page.getByText('运行中',{exact:false}).first().isVisible(),'行内生命周期短标签可见');
   assert.equal(await page.getByText('扩展点解析',{exact:true}).count(),0,'扩展点不在纯列表展开');
   assert.ok(await page.getByText('天气',{exact:true}).count()>=1,'动态插件导航入口出现');
   await page.screenshot({path:path.join(out,'loaded.png')});

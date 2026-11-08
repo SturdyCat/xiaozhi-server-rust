@@ -139,20 +139,20 @@ fun PluginsManagePage(meta: PluginMetaState, manage: PluginsManageState, toast: 
         val isRemove = lifecycleTarget?.first == "remove"
         ConfirmDialog(
             visible = lifecyclePlugin != null,
-            title = if (isRemove) "删除插件？" else "禁用插件？",
+            title = if (isRemove) "移除插件？" else "停用插件？",
             message = buildString {
                 append(lifecyclePlugin?.title ?: "")
                 append("（")
                 append(lifecyclePlugin?.id ?: "")
                 append("）")
                 if (isRemove) {
-                    append("将从服务端移除并删除产物文件。仅禁用（非运行）插件可删除；此操作不可撤销。")
+                    append("将从服务端移除并删除产物文件。仅停用（非运行）插件可移除；此操作不可撤销。")
                 } else {
-                    append("将停止运行；注册声明与配置保留，之后可重新激活。")
+                    append("将停止运行；注册声明与配置保留，之后可重新启用。")
                     append("若其他插件依赖它，需先停用依赖者。")
                 }
             },
-            confirmText = if (isRemove) "删除" else "禁用",
+            confirmText = if (isRemove) "移除" else "停用",
             cancelText = "取消",
             destructive = isRemove,
             dismissOnOutside = false,
@@ -213,45 +213,47 @@ private fun PluginListRow(
                         onClick = onDetails,
                         disabled = manage.busy.isNotEmpty(),
                     )
+                    // 生命周期操作必须是文字按钮：✓/✕ 纯图标无法传达「启用/停用」语义。
                     when (plugin.lifecycle) {
                         "staged" -> {
-                            EchoMuseActionButton(
-                                icon = IconToken.Check,
-                                contentDescription = "注册插件",
+                            PluginLifecycleButton(
+                                manage = manage,
+                                text = "注册",
+                                busyFlag = "register:${plugin.id}",
                                 onClick = { onLifecycleDone("register") },
-                                disabled = manage.busy.isNotEmpty(),
-                                loading = manage.busy == "register:${plugin.id}",
                             )
-                            EchoMuseActionButton(
-                                icon = IconToken.Delete,
-                                contentDescription = "删除插件",
-                                onClick = { onLifecycleConfirm("remove") },
+                            hGap()
+                            PluginLifecycleButton(
+                                manage = manage,
+                                text = "移除",
+                                busyFlag = "remove:${plugin.id}",
                                 destructive = true,
-                                disabled = manage.busy.isNotEmpty(),
+                                onClick = { onLifecycleConfirm("remove") },
                             )
                         }
                         "registered" -> {
-                            EchoMuseActionButton(
-                                icon = IconToken.Check,
-                                contentDescription = "激活插件",
+                            PluginLifecycleButton(
+                                manage = manage,
+                                text = "启用",
+                                busyFlag = "activate:${plugin.id}",
+                                enabled = plugin.canActivate,
                                 onClick = { onLifecycleDone("activate") },
-                                disabled = !plugin.canActivate || manage.busy.isNotEmpty(),
-                                loading = manage.busy == "activate:${plugin.id}",
                             )
-                            EchoMuseActionButton(
-                                icon = IconToken.Delete,
-                                contentDescription = "删除插件",
-                                onClick = { onLifecycleConfirm("remove") },
+                            hGap()
+                            PluginLifecycleButton(
+                                manage = manage,
+                                text = "移除",
+                                busyFlag = "remove:${plugin.id}",
                                 destructive = true,
-                                disabled = manage.busy.isNotEmpty(),
+                                onClick = { onLifecycleConfirm("remove") },
                             )
                         }
-                        "active" -> EchoMuseActionButton(
-                            icon = IconToken.Close,
-                            contentDescription = "禁用插件",
+                        "active" -> PluginLifecycleButton(
+                            manage = manage,
+                            text = "停用",
+                            busyFlag = "deactivate:${plugin.id}",
+                            enabled = plugin.canDeactivate,
                             onClick = { onLifecycleConfirm("deactivate") },
-                            disabled = !plugin.canDeactivate || manage.busy.isNotEmpty(),
-                            loading = manage.busy == "deactivate:${plugin.id}",
                         )
                         null -> {
                             for (action in plugin.actions) {
@@ -276,18 +278,46 @@ private fun PluginListRow(
                 }
             },
         )
-        // 第二行是次要信息：id/版本 + 一段可换行的简短描述。
+        // 第二行是次要信息：id/版本/生命周期短标签 + 一段可换行的简短描述。
         HintLine(
             buildString {
                 append(plugin.id)
                 if (plugin.version.isNotBlank()) append(" · v${plugin.version}")
+                append(" · ${plugin.lifecycleLabel}")
                 if (plugin.description.isNotBlank()) append("\n${plugin.description}")
             },
         )
         if (plugin.lifecycle == "registered" && plugin.missingRequirements.isNotEmpty()) {
-            HintLine("依赖未满足，无法激活：" + plugin.missingRequirements.joinToString("、") { it.id })
+            HintLine("依赖未满足，无法启用：" + plugin.missingRequirements.joinToString("、") { it.id })
+        }
+        if (plugin.lifecycle == "active" && plugin.dependents.isNotEmpty()) {
+            HintLine("被依赖中：" + plugin.dependents.joinToString("、") + "。需先停用依赖者才能停用本插件。")
         }
     }
+}
+
+/**
+ * 生命周期文字按钮（注册/启用/停用/移除）：统一 GearUI [Button] 小号；
+ * 移除是危险动作走 DANGER 文本按钮，其余 OUTLINE。语义靠文字传达，不用纯图标。
+ */
+@Composable
+private fun PluginLifecycleButton(
+    manage: PluginsManageState,
+    text: String,
+    busyFlag: String,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+    destructive: Boolean = false,
+) {
+    Button(
+        text = text,
+        onClick = onClick,
+        type = if (destructive) ButtonType.TEXT else ButtonType.OUTLINE,
+        theme = if (destructive) ButtonTheme.DANGER else ButtonTheme.PRIMARY,
+        size = ButtonSize.EXTRA_SMALL,
+        disabled = !enabled || manage.busy.isNotEmpty(),
+        loading = manage.busy == busyFlag,
+    )
 }
 
 private fun manageLifecycle(

@@ -113,7 +113,7 @@ fun pluginStatusBadge(phase: String, enabled: Boolean) {
  * | lifecycle | phase | 徽标 |
  * |---|---|---|
  * | `staged` | — | 「未注册」（idle） |
- * | `registered` | — | 「已注册·禁用」（idle） |
+ * | `registered` | — | 「已注册·已停用」（idle） |
  * | `active` | `active` | 不打标（正常） |
  * | `active` | `degraded` / `failed` | 「降级」（busy）/「异常」（error） |
  * | 其他值 | — | 按 phase 展示（fail-closed，不猜测未知态语义） |
@@ -123,7 +123,7 @@ fun pluginStatusBadge(phase: String, enabled: Boolean) {
 fun pluginLifecycleBadge(lifecycle: String?, phase: String) {
     when (lifecycle) {
         "staged" -> statusBadge(state = "idle", text = "未注册")
-        "registered" -> statusBadge(state = "idle", text = "已注册·禁用")
+        "registered" -> statusBadge(state = "idle", text = "已注册·已停用")
         null -> Unit
         else -> pluginStatusBadge(phase = phase, enabled = true)
     }

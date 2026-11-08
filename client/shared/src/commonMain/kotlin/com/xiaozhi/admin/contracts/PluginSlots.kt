@@ -215,7 +215,7 @@ data class PluginSlotPlugin(
     /** 状态徽标 / 详情摘要的短文案。 */
     val lifecycleLabel: String get() = when (lifecycle) {
         "staged" -> "待注册"
-        "registered" -> "已注册·禁用"
+        "registered" -> "已注册·已停用"
         "active", null -> "运行中"
         else -> lifecycle
     }
@@ -501,7 +501,7 @@ data class PluginDetailModel(
                     sections += PluginDetailSection("动态页面", uiPages)
                 }
             } else {
-                sections += PluginDetailSection("注册状态", listOf("尚未激活：功能入口 / 配置项 / 动作在激活后由插件注册投影下发。"))
+                sections += PluginDetailSection("注册状态", listOf("尚未启用：功能入口 / 配置项 / 动作在启用后由插件注册投影下发。"))
             }
             return PluginDetailModel(
                 title = plugin.title,
@@ -511,9 +511,9 @@ data class PluginDetailModel(
         }
 
         private fun lifecycleLineOf(plugin: PluginSlotPlugin): String = when (plugin.lifecycle) {
-            "staged" -> "待注册：上传已完成，注册并激活后才运行业务。"
-            "registered" -> "已注册·禁用：" +
-                if (plugin.missingRequirements.isEmpty()) "满足依赖后激活即可运行。" else "存在未满足依赖，激活不可用。"
+            "staged" -> "待注册：上传已完成，注册并启用后才运行业务。"
+            "registered" -> "已注册·已停用：" +
+                if (plugin.missingRequirements.isEmpty()) "满足依赖后启用即可运行。" else "存在未满足依赖，启用不可用。"
             "active" -> if (plugin.phase == "active") "运行中。" else "运行中（phase：${plugin.phase}）。"
             null -> "运行中（旧服务端投影，无生命周期管理）。"
             else -> "状态：${plugin.lifecycle}。"
