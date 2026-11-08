@@ -40,5 +40,7 @@ __pycache__/
 /.dev/
 
 # WASM 插件产物：一律不入库（用户方向 2026-11-04）——本地/CI 按需构建，
-# 生产由系统启动引导（Docker）或管理界面上传已构建组件。源码即唯一入库物。
+# 生产由镜像随附的系统插件目录或管理界面上传已构建组件。源码即唯一入库物。
 server/tests/fixtures/wasm/*.wasm
+# tools/build-system-plugins.sh 的统一产物目录同样不入库
+/build/

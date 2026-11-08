@@ -4,7 +4,24 @@
 
 ## 直属下级
 
-- [weather](<weather/AGENTS.md>)：NMC 天气官方默认插件（P1c 试点）。
+按重构前功能拆分的官方插件，**一域一插件、一插件一扩展点**；底座不编译业务面，功能与业务的策略面一律由这些插件提供。数据面（PCM、模型推理、设备协议、HTTP/SSE、路由与后台 worker）仍是编译期原生能力，插件只补控制/策略与菜单/动作/配置字段。
+
+- [weather](<weather/AGENTS.md>)：`skill.weather`，NMC 天气官方默认插件（P1c 试点，唯一完整 WASM 化的业务）。
+- [asr](<asr/README.md>)：`asr.provider`，识别结果策略收口。
+- [tts](<tts/README.md>)：`tts.provider`，合成前文本/语速/发音人有界放行。
+- [llm](<llm/README.md>)：`llm.provider`，对话前用户文本放行。
+- [vad](<vad/README.md>)：`vad.provider`，分段阈值有界回传。
+- [tuya](<tuya/README.md>)：`connector.tuya`，涂鸦候选选择与 LAN 命令编排。
+- [echomuse](<echomuse/README.md>)：`device.echomuse`，会话入口欢迎语放行。
+- [soul](<soul/README.md>)：`prompt.soul`，人格语气与表达预算。
+- [wakeup](<wakeup/README.md>)：`wakeup.strategy`，问候目录索引选择。
+- [debug](<debug/README.md>)：`debug.policy`，节点测试/日志流/测试台展示预算。
+- [skill](<skill/README.md>)：`skill.policy`，技能准入与步数预算。
+- [memory](<memory/README.md>)：`memory.policy`，召回准入与条数/字数预算。
+- [nlu](<nlu/README.md>)：`nlu.catalog`，意图/技能候选目录筛选。
+- [greeter](<greeter/README.md>)：`demo.greeter`，替换演练与链路冒烟。
+
+`hello.official`（源在 `tools/wasm-fixtures/hello`）是拆分前包揽 13 个扩展点的系统级探针，保留作官方回退，不承担业务。
 
 ## 约定
 

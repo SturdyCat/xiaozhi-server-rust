@@ -16,3 +16,70 @@ package = "weather-official"
 id = "hello.official"
 source_dir = "tools/wasm-fixtures/hello"
 package = "hello"
+
+# 按重构前功能拆分出的官方插件（系统底座不编译业务面，功能一律由插件提供）。
+# 每个插件独占一个宿主扩展点；hello.official 是拆分前的系统级探针，保留作回退。
+[[plugins]]
+id = "asr.official"
+dir = "asr"
+package = "asr-official"
+
+[[plugins]]
+id = "tts.official"
+dir = "tts"
+package = "tts-official"
+
+[[plugins]]
+id = "llm.official"
+dir = "llm"
+package = "llm-official"
+
+[[plugins]]
+id = "vad.official"
+dir = "vad"
+package = "vad-official"
+
+[[plugins]]
+id = "tuya.official"
+dir = "tuya"
+package = "tuya-official"
+
+[[plugins]]
+id = "echomuse.official"
+dir = "echomuse"
+package = "echomuse-official"
+
+[[plugins]]
+id = "soul.official"
+dir = "soul"
+package = "soul-official"
+
+[[plugins]]
+id = "wakeup.official"
+dir = "wakeup"
+package = "wakeup-official"
+
+[[plugins]]
+id = "debug.official"
+dir = "debug"
+package = "debug-official"
+
+[[plugins]]
+id = "skill.official"
+dir = "skill"
+package = "skill-official"
+
+[[plugins]]
+id = "memory.official"
+dir = "memory"
+package = "memory-official"
+
+[[plugins]]
+id = "nlu.official"
+dir = "nlu"
+package = "nlu-official"
+
+[[plugins]]
+id = "greeter.official"
+dir = "greeter"
+package = "greeter-official"
