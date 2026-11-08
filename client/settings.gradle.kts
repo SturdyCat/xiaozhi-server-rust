@@ -31,6 +31,27 @@ dependencyResolutionManagement {
         google()
         mavenCentral()
         maven { setUrl("https://mirrors.tencent.com/repository/maven-tencent/") }
+        // com.yarnpkg:yarn 备援源（2026-11-08 修复）：Kotlin/JS 的 kotlinYarnSetup 在任务图阶段
+        // 解析 detached configuration，从 KGP 内置的 GitHub release 资产端点拉 yarn tarball；
+        // 该端点当时对 HEAD/GET 一律 504（GHA 与本地冷缓存同时复现，逐字一致），构建必然失败，
+        // 且失败的 RUN 不导出缓存挂载 → 下次依旧冷构建依旧死在同一处。
+        // npm registry 上的 yarn@1.22.17 与 GitHub release tarball 逐字节同源
+        // （Gradle 构件缓存目录名 = 文件 sha1 = bf910747…，两源完全一致），顶层布局同为
+        // yarn-v1.22.17/，KGP 解压即用。两个 ivy 源均 content 过滤【只】服务该模块：
+        // 其他依赖解析零额外网络面；KGP 的 GitHub 源仍在链尾兜底（npm 双源全挂时才触达）。
+        // ⚠️ 与上文「不追加额外源」的约定不冲突：那条防的是无过滤源扩大 DNS 故障面，
+        // 此处为单模块备援，不改变其他依赖的解析链。Kotlin 升级若提高默认 yarn 版本，
+        // pattern 的 [revision] 自动跟随，无需改这里。
+        ivy("https://registry.npmmirror.com") {
+            patternLayout { artifact("yarn/-/yarn-[revision].tgz") }
+            metadataSources { artifact() }
+            content { includeModule("com.yarnpkg", "yarn") }
+        }
+        ivy("https://registry.yarnpkg.com") {
+            patternLayout { artifact("yarn/-/yarn-[revision].tgz") }
+            metadataSources { artifact() }
+            content { includeModule("com.yarnpkg", "yarn") }
+        }
     }
 }
 
