@@ -6,8 +6,31 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::config::{canonical_engine, EngineSpec};
+
+/// `[esp_home].engine` 可选实现（配置层权威表，与 tuya/echomuse 同口径）。
+///
+/// `wasm-policy` = 桥启动期经 `connector.esp-home` 扩展点向 WASM 插件征询实体目录
+/// 放行/显示名决策；协议握手、加密、状态采集与命令执行仍由 native 承载（阶段三
+/// ESPHome 第一切片，数据面不出原生）。
+pub const ESPHOME_ENGINES: &[EngineSpec] = &[
+    EngineSpec {
+        id: "native",
+        aliases: &[],
+    },
+    EngineSpec {
+        id: "wasm-policy",
+        aliases: &["wasm"],
+    },
+];
+const DEFAULT_ESPHOME_ENGINE: &str = "native";
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct EspHomeConfig {
+    /// 桥实现：`native`（宿主全原生）或 `wasm-policy`（启动期实体目录经 WASM 策略
+    /// 插件决策）。旧值 `wasm` 仍可读；均为 RestartOnly（桥是启动期拉起的后台任务）。
+    #[serde(default = "default_engine")]
+    pub engine: String,
     /// 是否启用桥。**默认关闭**（可选模块，不影响现有语音/设备路径）。
     #[serde(default)]
     pub enabled: bool,
@@ -47,6 +70,7 @@ pub struct EspHomeConfig {
 impl Default for EspHomeConfig {
     fn default() -> Self {
         Self {
+            engine: default_engine(),
             enabled: false,
             port: default_port(),
             encryption_key: String::new(),
@@ -62,11 +86,17 @@ impl Default for EspHomeConfig {
 }
 
 impl EspHomeConfig {
-    /// 配置规范化（幂等）：端口/名称非法时回落默认，密钥去空白。
+    /// 配置规范化（幂等）：端口/名称非法时回落默认，密钥去空白，引擎别名收敛。
     ///
     /// `encryption_key` 的 base64 合法性不在这里校验——由 `server::serve` 启动前
     /// 用 crate 的 `build()` 探测（同样口径，避免两处各写一套 base64 规则）。
     pub fn normalize(&mut self) {
+        // 纯底座构建（未编 native-plugins）即使复用了带 `[esp_home].enabled=true`
+        // 的数据库也保持惰性：桥依赖 EchoMuse 设备入口，底座里它不存在。
+        if cfg!(not(feature = "native-plugins")) {
+            self.enabled = false;
+        }
+        self.engine = canonical_engine(&self.engine, ESPHOME_ENGINES, DEFAULT_ESPHOME_ENGINE);
         if self.port == 0 {
             tracing::warn!("[esp_home].port=0 非法（无法监听），已回落到 6053");
             self.port = default_port();
@@ -81,8 +111,16 @@ impl EspHomeConfig {
         }
         self.encryption_key = self.encryption_key.trim().to_string();
     }
+
+    /// 规范化后的实现 id（未知值原样小写，交由注册表 fail-loud 校验）。
+    pub fn engine_id(&self) -> String {
+        canonical_engine(&self.engine, ESPHOME_ENGINES, DEFAULT_ESPHOME_ENGINE)
+    }
 }
 
+fn default_engine() -> String {
+    "native".into()
+}
 fn default_port() -> u16 {
     6053
 }

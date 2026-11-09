@@ -22,7 +22,7 @@ use crate::xiaozhi::plugin::types as wit;
 // ============================================================
 
 /// 已知权限名（与宿主 `effects::Permissions::parse` 同源；漂移双侧同步改）。
-const KNOWN_BARE_PERMISSIONS: [&str; 12] = [
+const KNOWN_BARE_PERMISSIONS: [&str; 11] = [
     "kv",
     "config",
     "pub",
@@ -31,7 +31,6 @@ const KNOWN_BARE_PERMISSIONS: [&str; 12] = [
     "timer",
     "fs",
     "mdns",
-    "lan-socket",
     "speak",
     "device-frames",
     "schedule",

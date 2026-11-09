@@ -26,9 +26,7 @@ use tokio::sync::mpsc;
 
 use super::config_store::{MemoryConfigStore, PluginConfigStore};
 use super::contract::{validate_manifest, validate_registration, ManifestDto, RegistrationDto};
-use super::effects::{
-    self, Effect, HttpFetcher, LanSocketCommand, LanSocketQueue, Permissions, ReqwestFetcher,
-};
+use super::effects::{self, Effect, HttpFetcher, Permissions, ReqwestFetcher};
 use super::event_bus::{Envelope, EventBus};
 use super::fs::FsSandbox;
 use super::host_api::{EmptySystemFacts, HostContext, SystemFacts};
@@ -202,7 +200,11 @@ impl TimerSink for InboxSink {
             &serde_json::json!({ "timer_id": timer_id, "kind": kind }),
         );
         if !self.inbox.deliver(plugin_id, env) {
-            tracing::debug!(plugin = plugin_id, timer_id, "插件入站队列不可用，定时事件丢弃");
+            tracing::debug!(
+                plugin = plugin_id,
+                timer_id,
+                "插件入站队列不可用，定时事件丢弃"
+            );
         }
     }
 }
@@ -212,7 +214,6 @@ impl TimerSink for InboxSink {
 pub(super) struct ExecEnv {
     pub(super) ctx: Arc<HostContext>,
     pub(super) fetcher: Arc<dyn HttpFetcher>,
-    pub(super) lan_queue: Arc<LanSocketQueue>,
 }
 
 /// 宿主装配选项（缺省为「内存配置 + 临时目录 + 空事实 + 当前运行时」）。
@@ -261,7 +262,6 @@ pub struct WasmHost {
     fetcher: Arc<dyn HttpFetcher>,
     resolver: Mutex<ResolutionTable>,
     /// 受限高层 LAN 命令队列；native connector 可按批 drain。
-    lan_queue: Arc<LanSocketQueue>,
     runtime: Option<tokio::runtime::Handle>,
     /// epoch 递增线程句柄（Drop 停止；字段持有即活着）
     _ticker: EpochTicker,
@@ -331,7 +331,6 @@ impl WasmHost {
             inbox,
             fetcher,
             resolver: Mutex::new(ResolutionTable::new()),
-            lan_queue: Arc::new(LanSocketQueue::default()),
             runtime: opts.runtime,
             limits,
             _ticker: ticker,
@@ -342,7 +341,6 @@ impl WasmHost {
         ExecEnv {
             ctx: Arc::clone(&self.ctx),
             fetcher: Arc::clone(&self.fetcher),
-            lan_queue: Arc::clone(&self.lan_queue),
         }
     }
 
@@ -413,7 +411,10 @@ impl WasmHost {
                 .get(plugin_id)
                 .ok_or_else(|| anyhow::anyhow!("插件 {plugin_id} 未装载"))?;
             let Some(runner) = e.runner(plugin_id) else {
-                anyhow::bail!("插件 {plugin_id} 无运行实例（lifecycle={}）", e.lifecycle.as_str());
+                anyhow::bail!(
+                    "插件 {plugin_id} 无运行实例（lifecycle={}）",
+                    e.lifecycle.as_str()
+                );
             };
             (
                 runner,
@@ -491,10 +492,10 @@ impl WasmHost {
             let invoker: Arc<dyn ServiceInvoker> = Arc::new(EntryInvoker {
                 runner: runner.clone(),
             });
-            if let Err(e) = self
-                .ctx
-                .services
-                .register_plugin_service(plugin_id, &decl, Some(invoker))
+            if let Err(e) =
+                self.ctx
+                    .services
+                    .register_plugin_service(plugin_id, &decl, Some(invoker))
             {
                 tracing::warn!(plugin = plugin_id, service = %decl.name, "{e:#}");
             }
@@ -655,6 +656,17 @@ impl WasmHost {
         self.ctx.bus.stats_json()
     }
 
+    /// **测试用**：订阅指定 topic（验证 guest 发布面；宿主侧无生产消费方）。
+    #[cfg(test)]
+    pub(crate) fn subscribe_topic(
+        &self,
+        topic: &str,
+    ) -> tokio::sync::mpsc::Receiver<super::event_bus::Envelope> {
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        self.ctx.bus.subscribe("__test__", topic, None, tx);
+        rx
+    }
+
     /// 已注册服务名全集。
     pub fn services(&self) -> Vec<String> {
         self.ctx.services.names()
@@ -668,16 +680,6 @@ impl WasmHost {
     /// 宿主 → 插件的事件发布（`sys.*` / `io.*` / `host.*`）。
     pub fn publish(&self, env: Envelope) -> bool {
         self.ctx.bus.publish(&env)
-    }
-
-    /// 取出一批受限 LAN 命令，交给 native connector 执行；不会暴露队列内部锁。
-    pub fn drain_lan_commands(&self, max: usize) -> Vec<LanSocketCommand> {
-        self.lan_queue.drain(max)
-    }
-
-    /// 当前待执行 LAN 命令数，用于背压和观测。
-    pub fn pending_lan_commands(&self) -> usize {
-        self.lan_queue.len()
     }
 
     /// **探测**未知组件的 manifest id（管理台上传 id 缺省时用）。
@@ -729,7 +731,8 @@ impl WasmHost {
         payload: &str,
     ) -> Result<Option<Vec<Effect>>> {
         let runner = self.runner(plugin_id)?;
-        let Some(wit_effects) = call_guest_event(&runner, topic, payload.as_bytes())? else {
+        // try_dispatch 是测试/同步面：无关联键（socket 编排走泵路径）。
+        let Some(wit_effects) = call_guest_event(&runner, topic, payload.as_bytes(), None)? else {
             return Ok(None);
         };
         let domain: Vec<Effect> = wit_effects.into_iter().map(Into::into).collect();
@@ -765,10 +768,14 @@ fn call_guest_event(
     runner: &Runner,
     topic: &str,
     payload: &[u8],
+    correlation_id: Option<String>,
 ) -> Result<Option<Vec<super::contract::xiaozhi::plugin::types::Effect>>> {
     let ev = super::contract::xiaozhi::plugin::types::Event {
         topic: topic.to_string(),
-        correlation_id: None,
+        // S3m 勘误：此前硬编码 None——socket 事件（io.tcp.data/closed）的
+        // correlation-id = connection-id 是 guest 编排定位连接的唯一键，
+        // 泵路径丢失会让所有回灌事件无法关联（文档承诺的关联键语义）。
+        correlation_id,
         payload: payload.to_vec(),
     };
     let called = {
@@ -803,7 +810,9 @@ pub(super) fn dispatch_event(
     let mut feedback_count = 0usize;
 
     while let Some(ev) = pending.pop_front() {
-        let Some(wit_effects) = call_guest_event(runner, &ev.topic, &ev.payload)? else {
+        let Some(wit_effects) =
+            call_guest_event(runner, &ev.topic, &ev.payload, ev.correlation_id.clone())?
+        else {
             return Ok(all_errs);
         };
         let domain: Vec<Effect> = wit_effects.into_iter().map(Into::into).collect();
@@ -812,13 +821,8 @@ pub(super) fn dispatch_event(
             Err(e) => return Err(runner.mark_degraded(TrapKind::Trap, e.to_string())),
         };
         runner.set_phase(Phase::Active);
-        let (errs, feedback) = effects::execute_effects_with_lan_queue(
-            &runner.plugin_id,
-            &allowed,
-            &exec.ctx.kv,
-            &exec.fetcher,
-            Some(&exec.lan_queue),
-        );
+        let (errs, feedback) =
+            effects::execute_effects(&runner.plugin_id, &allowed, &exec.ctx.kv, &exec.fetcher);
         all_errs.extend(errs);
         if !feedback.is_empty() {
             if feedback_count >= MAX_HTTP_FEEDBACK_DEPTH {
@@ -851,6 +855,12 @@ fn spawn_pump(
 ) {
     rt.spawn(async move {
         while let Some(env) = rx.recv().await {
+            eprintln!(
+                "[pump] dispatch topic={} corr={:?} len={}",
+                env.topic,
+                env.correlation_id,
+                env.payload.len()
+            );
             let runner = runner.clone();
             let exec = exec.clone();
             let topic = env.topic.clone();
@@ -879,13 +889,7 @@ struct EntryInvoker {
 }
 
 impl ServiceInvoker for EntryInvoker {
-    fn invoke(
-        &self,
-        service: &str,
-        method: &str,
-        payload: &[u8],
-        _depth: u32,
-    ) -> Result<Vec<u8>> {
+    fn invoke(&self, service: &str, method: &str, payload: &[u8], _depth: u32) -> Result<Vec<u8>> {
         let called = {
             let mut inst = self
                 .runner
@@ -899,9 +903,7 @@ impl ServiceInvoker for EntryInvoker {
             Ok(Err(msg)) => anyhow::bail!("服务 {service}.{method} 由插件侧拒绝：{msg}"),
             Err(call_err) => {
                 let kind = classify_trap(&call_err);
-                Err(self
-                    .runner
-                    .mark_degraded(kind, call_err.to_string()))
+                Err(self.runner.mark_degraded(kind, call_err.to_string()))
             }
         }
     }

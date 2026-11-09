@@ -252,7 +252,7 @@ impl WeatherService {
     #[cfg(feature = "wasm-plugins")]
     fn forecast_wasm(&self, city: &str, province: &str, range: &str) -> Value {
         match self.wasm.get() {
-            Some(host) => crate::plugins::wasm::bridge::forecast(host, city, province, range),
+            Some(host) => dispatch::forecast_via_plugin(host, city, province, range),
             None => json!({
                 "ok": false,
                 "speech": "天气后端为 wasm，但插件宿主未初始化（见服务启动日志）",
@@ -410,3 +410,10 @@ pub fn set_global(s: std::sync::Arc<WeatherService>) {
 pub fn global() -> Option<std::sync::Arc<WeatherService>> {
     WEATHER.get().cloned()
 }
+
+// ───────────────────────── wasm 后端事件派发 ─────────────────────────
+
+// dispatch 单源（pure_base 壳共用同一文件，`#[path]` 显式指路）。
+#[cfg(feature = "wasm-plugins")]
+#[path = "dispatch.rs"]
+pub(crate) mod dispatch;

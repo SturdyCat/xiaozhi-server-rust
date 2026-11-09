@@ -465,13 +465,25 @@ impl WasmHost {
     /// `registration`（含 UI）仅 Active 投影——未激活不渲染业务；`lifecycle`
     /// 与 `requires`/`dependents` 随行，客户端 Active 判定 =
     /// `lifecycle=="active" && phase.state=="active"`。
+    ///
+    /// 契约 0.2 投影（阶段二收口，此前缺失）：每条目携带 manifest 声明的
+    /// `subscriptions` / `endpoints`（请求）/ `resources` / `config_namespace` /
+    /// `provides` 与 registration 补充的 `services`；宿主级追加 `bus`（事件总线
+    /// 统计）、`services`（已武装服务名全集）、`endpoints`（已武装端点，按插件 id
+    /// 分组，仅含非空者）、`config_namespaces`（已登记配置命名空间去重全集）。
     pub fn snapshot_json(&self) -> serde_json::Value {
         let entries = self.entries.lock().expect("entries lock poisoned");
+        let mut config_namespaces: Vec<String> = Vec::new();
         let plugins: Vec<serde_json::Value> = entries
             .iter()
             .map(|(id, e)| {
                 let active = e.lifecycle == Lifecycle::Active;
                 let dependents = dependents_of(&entries, id);
+                if !e.manifest.config_namespace.is_empty()
+                    && !config_namespaces.contains(&e.manifest.config_namespace)
+                {
+                    config_namespaces.push(e.manifest.config_namespace.clone());
+                }
                 serde_json::json!({
                     "id": id,
                     "version": e.manifest.version,
@@ -481,6 +493,13 @@ impl WasmHost {
                     "official": e.manifest.official,
                     "implements": e.manifest.implements,
                     "permissions": e.manifest.permissions,
+                    // 契约 0.2 manifest 面（声明即投影，宿主不解释语义）
+                    "subscriptions": e.manifest.subscriptions,
+                    "endpoints": e.manifest.endpoints,
+                    "resources": e.manifest.resources,
+                    "config_namespace": e.manifest.config_namespace,
+                    "provides": e.manifest.provides,
+                    "services": e.registration.services,
                     "lifecycle": e.lifecycle.as_str(),
                     "phase": if active { phase_json(&e.phase_snapshot()) } else { serde_json::json!({"state": "inactive"}) },
                     "registration": if active {
@@ -528,6 +547,12 @@ impl WasmHost {
                 }
             }
         }
+        // 已武装端点按插件分组（运行期事实；Active 且宿主代监听中的端点才有条目）
+        let armed_ids: Vec<String> = entries
+            .iter()
+            .filter(|(_, e)| e.lifecycle == Lifecycle::Active)
+            .map(|(id, _)| id.clone())
+            .collect();
         drop(entries);
         let (table, world) = self.views();
         let mut ext_map = serde_json::Map::new();
@@ -535,7 +560,21 @@ impl WasmHost {
             ext_map.insert(p.clone(), resolution_json(&table.resolve(p, &world)));
         }
         let extensions = serde_json::Value::Object(ext_map);
-        serde_json::json!({ "plugins": plugins, "extensions": extensions })
+        let mut endpoint_map = serde_json::Map::new();
+        for id in &armed_ids {
+            let armed = self.endpoints_of(id);
+            if !armed.is_empty() {
+                endpoint_map.insert(id.clone(), serde_json::Value::Array(armed));
+            }
+        }
+        serde_json::json!({
+            "plugins": plugins,
+            "extensions": extensions,
+            "bus": self.bus_stats(),
+            "services": self.services(),
+            "endpoints": serde_json::Value::Object(endpoint_map),
+            "config_namespaces": config_namespaces,
+        })
     }
 }
 

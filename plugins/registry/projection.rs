@@ -170,14 +170,7 @@ fn fields_json(path: &[&str], fields: &[FieldSchema]) -> serde_json::Value {
 pub fn schema_json() -> serde_json::Value {
     let capabilities: Vec<serde_json::Value> = ALL_CAPABILITIES
         .iter()
-        .filter(|&&cap| {
-            cfg!(any(
-                feature = "native-plugins",
-                feature = "echomuse-plugin",
-                feature = "tuya-plugin",
-                feature = "esp_home"
-            )) || cap.exposed_in_pure_base()
-        })
+        .filter(|&&cap| super::static_business_present() || cap.exposed_in_pure_base())
         .map(|&cap| {
             let common: Vec<serde_json::Value> = capability_common_fields(cap)
                 .map(|(path, fields)| {

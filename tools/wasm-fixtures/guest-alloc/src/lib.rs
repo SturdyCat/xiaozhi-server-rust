@@ -1,95 +1,48 @@
-//! wasm32-unknown-unknown 极简 bump 分配器：用 `memory.grow` 内联指令按需扩线性内存。
+//! wasm32-unknown-unknown guest 分配器：**可回收**（dlmalloc）。
 //!
-//! **必须从 `__heap_base` 之后起分配**：线性内存低地址是 guest 静态数据段
-//! （字符串字面量、静态量、shadow stack）；从 0/1 起 bump 会覆盖数据段
-//! （实测第一笔分配就破坏分配器自身状态 → guest panic 陷阱）。
-//! wit-bindgen 只为导出生成 cabi_realloc，不提供通用 GlobalAlloc；
-//! guest 内 `format!`/`Vec` 需要 `#[global_allocator]`。不释放（bump），
-//! 对测试夹具足够；宿主侧内存上限由 ResourceLimiter 兜底。
+//! S3n 实测教训：此前的极简 bump 分配器只增不回收，插件长跑或高频事件
+//! （每秒心跳 + 数据面帧）下堆持续增长，撞上沙箱 `max_memory_bytes`（64MB）
+//! 后分配返回 null → wasm OOM trap → **整个 handle_event 中断、状态未落盘**
+//! （表现为间歇性「事件处理无效果」，排查耗时极长的静默失败）。
+//!
+//! 现委托 [dlmalloc]（成熟实现：支持 free 回收、按页 `memory.grow`），
+//! 类型名 [`GrowingBump`] 保留以免 15 个插件源码改动（`guest_alloc::GrowingBump::new()`）。
+//!
+//! [dlmalloc]: https://crates.io/crates/dlmalloc
 
 use core::alloc::{GlobalAlloc, Layout};
-use core::cell::UnsafeCell;
-use core::ptr;
-use core::sync::atomic::{AtomicUsize, Ordering};
 
-// LLD 为 wasm 提供的链接符号：静态数据段之后的第一个可用地址
-unsafe extern "C" {
-    static __heap_base: u8;
-}
+use dlmalloc::GlobalDlmalloc;
 
-pub struct GrowingBump {
-    /// 0 = 未初始化；首次分配时定位到 __heap_base
-    head: AtomicUsize,
-    lock: UnsafeCell<()>,
-}
-
-const WASM_PAGE: usize = 64 * 1024;
-
-unsafe impl Sync for GrowingBump {}
+/// guest 全局分配器（名称沿用历史，实现为可回收的 dlmalloc）。
+pub struct GrowingBump;
 
 impl GrowingBump {
     pub const fn new() -> Self {
-        Self {
-            head: AtomicUsize::new(0),
-            lock: UnsafeCell::new(()),
-        }
+        Self
     }
+}
 
-    fn heap_start() -> usize {
-        ptr::addr_of!(__heap_base) as usize
+impl Default for GrowingBump {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
 unsafe impl GlobalAlloc for GrowingBump {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        // 单线程 bump：测试 guest 无并发
-        let _guard = &*self.lock.get();
-        let align = layout.align().max(1);
-        let size = layout.size().max(1);
-        let mut head = self.head.load(Ordering::Relaxed);
-        if head == 0 {
-            head = Self::heap_start().max(1);
-        }
-        let aligned = (head + align - 1) / align * align;
-        let next = aligned.checked_add(size).unwrap_or(usize::MAX);
-        let mem_size = wasm_mem_size();
-        if next >= mem_size {
-            let need_pages = (next - mem_size + WASM_PAGE) / WASM_PAGE;
-            if wasm_memory_grow(need_pages).is_err() {
-                return ptr::null_mut();
-            }
-        }
-        self.head.store(next, Ordering::Relaxed);
-        aligned as *mut u8
+        unsafe { GlobalDlmalloc.alloc(layout) }
     }
 
-    unsafe fn dealloc(&self, _ptr: *mut u8, _layout: Layout) {
-        // bump：不释放（测试夹具语义）
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        unsafe { GlobalDlmalloc.dealloc(ptr, layout) }
     }
-}
 
-#[cfg(target_arch = "wasm32")]
-fn wasm_mem_size() -> usize {
-    core::arch::wasm32::memory_size(0) * WASM_PAGE
-}
-
-#[cfg(target_arch = "wasm32")]
-fn wasm_memory_grow(pages: usize) -> Result<(), ()> {
-    // memory_grow 返回旧页数（usize），失败为 usize::MAX
-    let prev = core::arch::wasm32::memory_grow(0, pages);
-    if prev == usize::MAX {
-        Err(())
-    } else {
-        Ok(())
+    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        unsafe { GlobalDlmalloc.alloc_zeroed(layout) }
     }
-}
 
-#[cfg(not(target_arch = "wasm32"))]
-fn wasm_mem_size() -> usize {
-    usize::MAX
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn wasm_memory_grow(_pages: usize) -> Result<(), ()> {
-    Err(())
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        unsafe { GlobalDlmalloc.realloc(ptr, layout, new_size) }
+    }
 }

@@ -49,6 +49,9 @@
 pub mod ble;
 pub mod frames;
 pub(crate) mod fx;
+/// `device.echomuse` 会话入口策略（欢迎语放行；WS/PTY/音频留 native）。
+#[cfg(feature = "wasm-plugins")]
+pub mod policy;
 pub mod transport;
 
 pub(crate) mod admin;
@@ -70,6 +73,7 @@ pub(crate) mod listen;
 #[cfg(test)]
 mod listen_tests;
 pub(crate) mod mic;
+#[cfg(all(test, feature = "wasm-plugins"))] mod policy_tests;
 pub(crate) mod music;
 mod onnx_typed;
 pub(crate) mod oww;

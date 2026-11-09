@@ -1,7 +1,7 @@
 //! weather.official 回放测试（P1c 试点：真实插件源 plugins-src/weather/ 经
 //! 脚本化 NMC 应答走完整瀑布——省列表 → 全省城市 → 站点匹配 → 天气组装 → 缓存命中）。
 
-use super::{fast_limits, fixture, host_with};
+use super::{ensure_fixture, fixture, host_with};
 use crate::plugins::wasm::Resolution;
 use std::sync::Arc;
 
@@ -134,5 +134,156 @@ fn weather_self_test_proves_shared_parse_alive_in_wasm() {
     assert!(
         results.iter().all(|r| r.ok),
         "自检应全过（共享 parse.rs 在 wasm 内可用）：{results:?}"
+    );
+}
+
+// ============================================================
+// 服务级事件派发（阶段二收口：dispatch 归位 plugins/weather，桥已删除）
+// ============================================================
+
+use crate::plugins::weather::dispatch::forecast_via_plugin;
+use crate::plugins::weather::WeatherConfig;
+
+fn dispatch_host(scripted: bool) -> (Arc<super::ScriptedFetcher>, crate::plugins::wasm::WasmHost) {
+    let fetcher = Arc::new(super::ScriptedFetcher::new());
+    if scripted {
+        fetcher.push_ok(200, PROVINCES);
+        fetcher.push_ok(200, ZHEJIANG_CITIES);
+        fetcher.push_ok(200, JIANGSU_CITIES);
+        fetcher.push_ok(200, HANGZHOU_WEATHER);
+    }
+    let host = host_with(&fetcher);
+    host.load("weather.official", &ensure_fixture("weather"))
+        .expect("load weather");
+    (fetcher, host)
+}
+
+#[test]
+fn dispatch_full_flow_with_cache_reuse() {
+    let (fetcher, host) = dispatch_host(true);
+
+    let result = forecast_via_plugin(&host, "杭州", "", "");
+    assert_eq!(result["ok"], serde_json::json!(true), "{result}");
+    assert_eq!(result["location"]["code"], "58457");
+    assert!(
+        result["speech"].as_str().unwrap_or_default().contains("晴"),
+        "{}",
+        result
+    );
+    assert_eq!(fetcher.fetch_count(), 4, "省列表 + 2 省 + 天气");
+
+    // 插件 kv 缓存：同城市同时段第二次查询零出网（派发对缓存透明）。
+    // 注意粒度差异：插件按「城市+原始 range」缓存；原生按站点码缓存（不同 range
+    // 变体共享一次拉取）——P7 收口时统一，见 weather README 边界一节。
+    let again = forecast_via_plugin(&host, "杭州", "", "");
+    assert_eq!(again["ok"], serde_json::json!(true));
+    assert_eq!(fetcher.fetch_count(), 4, "缓存命中不应出网");
+}
+
+#[test]
+fn dispatch_geo_prefill_for_empty_city() {
+    // 测试进程未注入定位（assemble 只设 RwLock(None)）→ 空城市走 geo 缺省报错
+    //（与原生 forecast 同口径；有定位时由事件源侧预填，见 weather 文档）
+    let (_fetcher, host) = dispatch_host(false);
+    let result = forecast_via_plugin(&host, "  ", "", "");
+    assert_eq!(result["ok"], serde_json::json!(false), "{result}");
+    assert!(
+        result["speech"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("未指定城市"),
+        "{}",
+        result
+    );
+}
+
+#[test]
+fn dispatch_reports_unloaded_plugin_explicitly() {
+    let fetcher = Arc::new(super::ScriptedFetcher::new());
+    let host = host_with(&fetcher); // 空注册表（内核零插件知识 = 完整可启动）
+
+    let result = forecast_via_plugin(&host, "杭州", "", "");
+    assert_eq!(result["ok"], serde_json::json!(false), "{result}");
+    assert!(
+        result["speech"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("未装载"),
+        "缺依赖明确报错，不静默回退：{result}"
+    );
+    assert_eq!(fetcher.fetch_count(), 0);
+}
+
+#[test]
+fn backend_switch_routes_service_to_wasm() {
+    // [weather].backend = "wasm"：WeatherService 分发进事件派发（真实服务级开关）
+    let (fetcher, host) = dispatch_host(true);
+    let mut cfg = WeatherConfig::default();
+    // 默认后端随构建模式：full 默认 native（对存量配置零影响）；pure-base 未编译
+    // 原生 NMC 客户端，唯一真实后端是已注册 WASM 插件，默认值即 wasm。
+    #[cfg(not(feature = "native-plugins"))]
+    assert_eq!(
+        cfg.backend, "wasm",
+        "pure-base 默认后端是 wasm（native 未编译）"
+    );
+    #[cfg(feature = "native-plugins")]
+    assert_eq!(cfg.backend, "native", "默认后端是 native（零影响）");
+    cfg.backend = "wasm".into();
+    let svc = crate::plugins::weather::WeatherService::new(&cfg);
+    svc.set_wasm_host(Arc::new(host));
+
+    let result = svc.forecast("杭州", "", "");
+    assert_eq!(result["ok"], serde_json::json!(true), "{result}");
+    assert_eq!(result["location"]["code"], "58457");
+    assert_eq!(
+        fetcher.fetch_count(),
+        4,
+        "确实走了 wasm 瀑布而非原生 reqwest"
+    );
+}
+
+#[test]
+fn backend_switch_without_host_reports_explicitly() {
+    // wasm 后端 + 宿主句柄缺失（初始化失败的装配形态）→ 明确报错，不回退 native。
+    // 错误措辞随构建模式：full 报「未初始化」（宿主注入失败）；pure-base 报「未注册」
+    //（底座视角缺的是插件本身）。
+    let mut cfg = WeatherConfig::default();
+    cfg.backend = "wasm".into();
+    let svc = crate::plugins::weather::WeatherService::new(&cfg);
+    let result = svc.forecast("杭州", "", "");
+    assert_eq!(result["ok"], serde_json::json!(false), "{result}");
+    #[cfg(not(feature = "native-plugins"))]
+    let expected = "未注册";
+    #[cfg(feature = "native-plugins")]
+    let expected = "未初始化";
+    assert!(
+        result["speech"]
+            .as_str()
+            .unwrap_or_default()
+            .contains(expected),
+        "{}",
+        result
+    );
+}
+
+#[test]
+fn backend_unknown_value_rejected() {
+    let mut cfg = WeatherConfig::default();
+    cfg.backend = "cloud".into();
+    let svc = crate::plugins::weather::WeatherService::new(&cfg);
+    let result = svc.forecast("杭州", "", "");
+    assert_eq!(result["ok"], serde_json::json!(false), "{result}");
+    // full 区分未知后端；pure-base 没有 native 分支，任何非 wasm 值统一显式拒绝。
+    #[cfg(not(feature = "native-plugins"))]
+    let expected = "只能使用已注册的 WASM 插件";
+    #[cfg(feature = "native-plugins")]
+    let expected = "未知天气后端";
+    assert!(
+        result["speech"]
+            .as_str()
+            .unwrap_or_default()
+            .contains(expected),
+        "{}",
+        result
     );
 }

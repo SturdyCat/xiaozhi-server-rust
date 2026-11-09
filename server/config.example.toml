@@ -364,6 +364,10 @@ welcome = "我已连接，喊我的唤醒词或按一下按键就能开始对话
 #       ⚠️ 改动本段需**重启**生效。
 [esp_home]
 enabled = false                     # true = 在 port 上提供 ESPHome Native API（默认关闭）
+engine = "native"                   # "native" = 全原生；"wasm-policy" = 桥启动期实体目录放行/改名
+                                    # 经 connector.esp-home 策略插件决策（需 wasm-plugins feature
+                                    # 且已激活 esphome.official；插件不可用桥不启动，不静默降级）。
+                                    # 旧值 "wasm" 仍可读；改动需重启。
 port = 6053                         # ESPHome 官方默认端口；与 [server].port 无关、互不影响
 encryption_key = ""                 # noise_psk（base64 的 32 字节，ESPHome 生成的那串）；
                                     # 留空 = 明文，仅限可信局域网。生产建议设置。

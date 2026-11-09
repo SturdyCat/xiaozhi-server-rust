@@ -6,8 +6,7 @@
 //! `http.response` 事件回灌插件（深度上限见 registry）。speak / device-frames /
 //! schedule 在对应阶段落地，执行器对其返回 [`EffectError::Unsupported`]。
 
-use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use anyhow::Result;
 
@@ -35,16 +34,6 @@ pub enum Effect {
         body: Vec<u8>,
         timeout_ms: u32,
     },
-    LanStatus {
-        request_id: String,
-        device_handle: String,
-    },
-    LanSetDp {
-        request_id: String,
-        device_handle: String,
-        dp: String,
-        value_json: String,
-    },
 }
 
 impl Effect {
@@ -54,8 +43,6 @@ impl Effect {
             Effect::KvPut { .. } => "kv-put",
             Effect::KvDelete { .. } => "kv-delete",
             Effect::HttpRequest { .. } => "http-request",
-            Effect::LanStatus { .. } => "lan-status",
-            Effect::LanSetDp { .. } => "lan-set-dp",
         }
     }
 }
@@ -63,8 +50,9 @@ impl Effect {
 /// 权限集合：从 manifest.permissions 解析。
 ///
 /// 0.2 形状：`kv` / `config` / `pub` / `services` / `net` / `timer` / `fs` / `mdns`
-/// （`log` 免声明）；`http-out:<host>` / `speak` / `device-frames` / `schedule` /
-/// `lan-socket` 为旧效果通道，保留解析以兼容已装插件。
+/// （`log` 免声明）；`http-out:<host>` / `speak` / `device-frames` / `schedule`
+/// 为旧效果通道，保留解析以兼容已装插件（v0.1 的 `lan-socket` 已随 legacy
+/// LAN 效果删除——阶段三收口，见 plugins/wasm/AGENTS.md）。
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Permissions {
     pub kv: bool,
@@ -86,8 +74,6 @@ pub struct Permissions {
     pub speak: bool,
     pub device_frames: bool,
     pub schedule: bool,
-    /// 高层 LAN connector 效果；不等于 raw socket 权限。
-    pub lan_socket: bool,
 }
 
 impl Permissions {
@@ -106,7 +92,6 @@ impl Permissions {
                 "speak" => p.speak = true,
                 "device-frames" => p.device_frames = true,
                 "schedule" => p.schedule = true,
-                "lan-socket" => p.lan_socket = true,
                 other => {
                     if let Some(host) = other.strip_prefix("http-out:") {
                         if host.is_empty() || host.contains(' ') {
@@ -116,7 +101,7 @@ impl Permissions {
                     } else {
                         anyhow::bail!(
                             "未知权限：{other:?}（合法：kv/config/pub/services/net/timer/fs/mdns/\
-                             speak/device-frames/schedule/lan-socket/http-out:<host>）"
+                             speak/device-frames/schedule/http-out:<host>）"
                         );
                     }
                 }
@@ -124,127 +109,6 @@ impl Permissions {
         }
         Ok(p)
     }
-}
-
-/// LAN connector 的高层命令；句柄是不透明标识，命令不携带密钥、IP、报文或 socket。
-#[derive(Debug, Clone, PartialEq)]
-pub enum LanSocketCommand {
-    Status {
-        /// Internal routing metadata; never crosses the WIT boundary.
-        plugin_id: String,
-        request_id: String,
-        device_handle: String,
-    },
-    SetDp {
-        /// Internal routing metadata; never crosses the WIT boundary.
-        plugin_id: String,
-        request_id: String,
-        device_handle: String,
-        dp: String,
-        value_json: String,
-    },
-}
-
-/// 有界 LAN 命令队列：宿主可在 native Tuya runtime 中异步 drain，队列满则显式失败。
-pub struct LanSocketQueue {
-    inner: Mutex<VecDeque<LanSocketCommand>>,
-    capacity: usize,
-}
-
-impl LanSocketQueue {
-    pub const DEFAULT_CAPACITY: usize = 64;
-    pub const MAX_REQUEST_ID_BYTES: usize = 128;
-    pub const MAX_HANDLE_BYTES: usize = 128;
-    pub const MAX_DP_BYTES: usize = 32;
-    pub const MAX_VALUE_JSON_BYTES: usize = 4096;
-
-    pub fn new(capacity: usize) -> Self {
-        Self {
-            inner: Mutex::new(VecDeque::new()),
-            capacity: capacity.clamp(1, Self::DEFAULT_CAPACITY),
-        }
-    }
-
-    pub fn len(&self) -> usize {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).len()
-    }
-
-    pub fn drain(&self, max: usize) -> Vec<LanSocketCommand> {
-        let mut queue = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        (0..max.min(queue.len()))
-            .filter_map(|_| queue.pop_front())
-            .collect()
-    }
-
-    pub fn push(&self, command: LanSocketCommand) -> Result<(), String> {
-        validate_lan_command(&command)?;
-        let mut queue = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        if queue.len() >= self.capacity {
-            return Err(format!("lan-socket 命令队列已满（上限 {}）", self.capacity));
-        }
-        queue.push_back(command);
-        Ok(())
-    }
-}
-
-impl Default for LanSocketQueue {
-    fn default() -> Self {
-        Self::new(Self::DEFAULT_CAPACITY)
-    }
-}
-
-fn validate_lan_command(command: &LanSocketCommand) -> Result<(), String> {
-    let (plugin_id, request_id, handle, dp, value_len) = match command {
-        LanSocketCommand::Status {
-            plugin_id,
-            request_id,
-            device_handle,
-        } => (plugin_id, request_id, device_handle, None, None),
-        LanSocketCommand::SetDp {
-            plugin_id,
-            request_id,
-            device_handle,
-            dp,
-            value_json,
-        } => (
-            plugin_id,
-            request_id,
-            device_handle,
-            Some(dp),
-            Some(value_json.len()),
-        ),
-    };
-    if plugin_id.is_empty()
-        || plugin_id.len() > LanSocketQueue::MAX_HANDLE_BYTES
-        || plugin_id.chars().any(char::is_control)
-    {
-        return Err("lan-socket plugin_id 为空、超长或含控制字符".to_string());
-    }
-    if request_id.is_empty() || request_id.len() > LanSocketQueue::MAX_REQUEST_ID_BYTES {
-        return Err("lan-socket request_id 为空或超长".to_string());
-    }
-    if handle.is_empty()
-        || handle.len() > LanSocketQueue::MAX_HANDLE_BYTES
-        || handle.chars().any(char::is_control)
-    {
-        return Err("lan-socket device_handle 为空、超长或含控制字符".to_string());
-    }
-    if let Some(dp) = dp {
-        if dp.is_empty()
-            || dp.len() > LanSocketQueue::MAX_DP_BYTES
-            || !dp.bytes().all(|b| b.is_ascii_digit())
-        {
-            return Err("lan-socket dp 必须是有界数字标识".to_string());
-        }
-    }
-    if value_len.is_some_and(|len| len > LanSocketQueue::MAX_VALUE_JSON_BYTES) {
-        return Err("lan-socket value-json 超长".to_string());
-    }
-    if let LanSocketCommand::SetDp { value_json, .. } = command {
-        serde_json::from_str::<serde_json::Value>(value_json)
-            .map_err(|e| format!("lan-socket value-json 非法：{e}"))?;
-    }
-    Ok(())
 }
 
 /// 权限拒绝（审计事件，不是 bug）
@@ -293,14 +157,6 @@ pub fn enforce_permissions(
                     })
                 }
             },
-            Effect::LanStatus { .. } | Effect::LanSetDp { .. } => {
-                if !perms.lan_socket {
-                    return Err(PermissionError::Denied {
-                        kind: e.kind(),
-                        perm: "lan-socket",
-                    });
-                }
-            }
         }
     }
     Ok(effects)
@@ -468,18 +324,6 @@ pub fn execute_effects(
     kv: &Arc<KvStore>,
     fetcher: &Arc<dyn HttpFetcher>,
 ) -> (Vec<EffectError>, Vec<HttpFeedback>) {
-    execute_effects_with_lan_queue(plugin_id, effects, kv, fetcher, None)
-}
-
-/// 执行效果并可选地将高层 LAN 命令放入有界队列。
-/// `None` 保持旧调用方的显式 Unsupported 语义；宿主已绑定队列时才入队。
-pub fn execute_effects_with_lan_queue(
-    plugin_id: &str,
-    effects: &[Effect],
-    kv: &Arc<KvStore>,
-    fetcher: &Arc<dyn HttpFetcher>,
-    lan_queue: Option<&LanSocketQueue>,
-) -> (Vec<EffectError>, Vec<HttpFeedback>) {
     let mut errs = Vec::new();
     let mut feedback = Vec::new();
     for e in effects {
@@ -530,36 +374,6 @@ pub fn execute_effects_with_lan_queue(
                 }
                 Ok(())
             }
-            Effect::LanStatus {
-                request_id,
-                device_handle,
-            } => match lan_queue {
-                Some(queue) => queue
-                    .push(LanSocketCommand::Status {
-                        plugin_id: plugin_id.to_string(),
-                        request_id: request_id.clone(),
-                        device_handle: device_handle.clone(),
-                    })
-                    .map_err(anyhow::Error::msg),
-                None => Err(anyhow::anyhow!("lan-socket 宿主服务未绑定")),
-            },
-            Effect::LanSetDp {
-                request_id,
-                device_handle,
-                dp,
-                value_json,
-            } => match lan_queue {
-                Some(queue) => queue
-                    .push(LanSocketCommand::SetDp {
-                        plugin_id: plugin_id.to_string(),
-                        request_id: request_id.clone(),
-                        device_handle: device_handle.clone(),
-                        dp: dp.clone(),
-                        value_json: value_json.clone(),
-                    })
-                    .map_err(anyhow::Error::msg),
-                None => Err(anyhow::anyhow!("lan-socket 宿主服务未绑定")),
-            },
         };
         if let Err(err) = res {
             tracing::warn!(plugin = plugin_id, kind = e.kind(), %err, "效果执行失败");
@@ -594,16 +408,6 @@ impl From<wit::Effect> for Effect {
                 headers: h.headers,
                 body: h.body,
                 timeout_ms: h.timeout_ms as u32,
-            },
-            wit::Effect::LanStatus(l) => Effect::LanStatus {
-                request_id: l.request_id,
-                device_handle: l.device_handle,
-            },
-            wit::Effect::LanSetDp(l) => Effect::LanSetDp {
-                request_id: l.request_id,
-                device_handle: l.device_handle,
-                dp: l.dp,
-                value_json: l.value_json,
             },
         }
     }

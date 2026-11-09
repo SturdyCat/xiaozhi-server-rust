@@ -107,6 +107,23 @@ pub enum Capability {
     /// EchoMuse 设备入口（native plugin only）。
     #[cfg(feature = "echomuse-plugin")]
     Echomuse,
+    /// ESPHome Native API 桥（native plugin only；`esp_home` feature 蕴含 echomuse-plugin）。
+    #[cfg(feature = "esp_home")]
+    EspHome,
+}
+
+/// 当前构建是否携带静态设备业务（native 设备插件 feature 任一开启）。
+///
+/// `ui.mode` 投影与静态 schema 投影**共用同一判据**（阶段二收口：按构建如实声明）——
+/// 开了任一设备 feature 的构建如实声明 `base` + `static_business=true` 并投影全部能力；
+/// 其余构建是 `pure-base`，schema 只投影 [`Capability::exposed_in_pure_base`] 核心。
+pub fn static_business_present() -> bool {
+    cfg!(any(
+        feature = "native-plugins",
+        feature = "echomuse-plugin",
+        feature = "tuya-plugin",
+        feature = "esp_home"
+    ))
 }
 
 /// 全部能力（顺序即 UI 展示顺序）。
@@ -127,6 +144,8 @@ pub const ALL_CAPABILITIES: &[Capability] = &[
     Capability::Tuya,
     #[cfg(feature = "echomuse-plugin")]
     Capability::Echomuse,
+    #[cfg(feature = "esp_home")]
+    Capability::EspHome,
 ];
 
 impl Capability {
@@ -149,6 +168,8 @@ impl Capability {
             Capability::Tuya => "tuya",
             #[cfg(feature = "echomuse-plugin")]
             Capability::Echomuse => "echomuse",
+            #[cfg(feature = "esp_home")]
+            Capability::EspHome => "esp-home",
         }
     }
 
@@ -170,6 +191,8 @@ impl Capability {
             Capability::Tuya => "涂鸦局域网连接器",
             #[cfg(feature = "echomuse-plugin")]
             Capability::Echomuse => "EchoMuse 设备入口",
+            #[cfg(feature = "esp_home")]
+            Capability::EspHome => "ESPHome 桥",
         }
     }
 
@@ -197,7 +220,6 @@ impl Capability {
             Capability::Asr | Capability::Vad | Capability::Tts | Capability::Llm
         )
     }
-
     /// 校验失败是否**致命**（启动即失败）。
     ///
     /// - 必需能力恒致命；
@@ -507,6 +529,10 @@ pub static REGISTRY: &[PluginDescriptor] = &[
     ECHOMUSE_NATIVE,
     #[cfg(feature = "echomuse-plugin")]
     ECHOMUSE_WASM_POLICY,
+    #[cfg(feature = "esp_home")]
+    ESPHOME_NATIVE,
+    #[cfg(feature = "esp_home")]
+    ESPHOME_WASM_POLICY,
     AIUI_FULLCHAIN,
     VOICES_CATALOG,
     FIRMWARE_HOST,
@@ -557,6 +583,8 @@ pub fn configured_engine(cfg: &Config, cap: Capability) -> Option<String> {
         Capability::Tuya => Some(cfg.tuya.engine_id()),
         #[cfg(feature = "echomuse-plugin")]
         Capability::Echomuse => Some(cfg.echomuse.engine_id()),
+        #[cfg(feature = "esp_home")]
+        Capability::EspHome => Some(cfg.esp_home.engine_id()),
         Capability::FullChain
         | Capability::Voices
         | Capability::Firmware

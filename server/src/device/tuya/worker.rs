@@ -59,15 +59,6 @@ async fn tick(
     if !tuya.enabled {
         return;
     }
-    // WASM typed LAN effects use the same native Tuya engine and are drained
-    // before periodic work; an empty/failed queue never changes native cadence.
-    #[cfg(feature = "wasm-plugins")]
-    if let Some(host) = crate::plugins::wasm::host_global() {
-        let drained = engine.drain_wasm_commands(&host, 16).await;
-        if drained > 0 {
-            tracing::debug!("[tuya] WASM LAN 命令已交给 native 执行：{drained} 条");
-        }
-    }
     // 凭证热生效：指纹变化 → 丢弃 token 缓存
     engine.check_credentials(tuya);
     // 定时云同步（手动按钮共用同一闸门与 60s 间隔）

@@ -299,6 +299,13 @@ impl Engines {
         if let Some(host) = wasm.as_ref() {
             weather_svc.set_wasm_host(Arc::clone(host));
         }
+        // tuya 云面（[tuya].engine = "wasm-policy"）的执行载体注入（S3e）：目录
+        // 拉取经 connector.tuya 插件云链路；native 引擎永不触碰该句柄。
+        // （tuya 引擎本体门控在 tuya-plugin feature 下，注入随之。）
+        #[cfg(all(feature = "wasm-plugins", feature = "tuya-plugin"))]
+        if let Some(host) = wasm.as_ref() {
+            tuya.set_wasm_host(Arc::clone(host));
+        }
         Arc::new(Self {
             asr: booted.asr,
             tts: tts::TtsSlot::new(config, booted.tts),

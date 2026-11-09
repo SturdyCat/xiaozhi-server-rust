@@ -9,10 +9,87 @@
 //! 扩展点名，在调用期解析全局宿主；测试可注入宿主避免全局槽污染。
 
 use anyhow::{Context, Result};
+use serde::Deserialize;
+use serde_json::json;
 use std::sync::Arc;
 
 use crate::plugins::tts::{TtsChunkCallback, TtsEngine};
-use crate::plugins::wasm::bridge;
+use crate::plugins::wasm::WasmHost;
+
+const MAX_TTS_TEXT_BYTES: usize = 16 * 1024;
+const MAX_TTS_ROUTE_BYTES: usize = 64;
+
+/// WASM 策略返回的控制结果；它不携带任何 PCM 或音频 base64。
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+struct TtsPrepareResult {
+    text: String,
+    #[serde(default)]
+    speed: Option<f32>,
+    #[serde(default)]
+    speaker: Option<i32>,
+    #[serde(default)]
+    route: Option<String>,
+}
+
+/// 向 `tts.provider` 派发一次整句控制事件并读取策略结果。
+///
+/// 请求 payload 只包含文本与合成参数；结果至少包含 `text`，可选覆盖 `speed`、
+/// `speaker`、`route`。宿主/插件缺失、事件错误、结果缺失或 JSON 非法均显式返回 Err，
+/// 不回退到未经过策略的 native 文本。
+fn tts_prepare(
+    host: &WasmHost,
+    plugin_id: &str,
+    text: &str,
+    speed: f32,
+    speaker: i32,
+) -> std::result::Result<TtsPrepareResult, String> {
+    if text.len() > MAX_TTS_TEXT_BYTES {
+        return Err(format!(
+            "TTS 文本超长（{} > {MAX_TTS_TEXT_BYTES} bytes）",
+            text.len()
+        ));
+    }
+    if !speed.is_finite() || speed <= 0.0 {
+        return Err(format!("TTS 请求 speed 非法：{speed}"));
+    }
+    let req_id = uuid::Uuid::new_v4().to_string();
+    let payload = json!({
+        "req_id": req_id,
+        "text": text,
+        "speed": speed,
+        "speaker": speaker,
+    })
+    .to_string();
+    let errors = host
+        .handle_event(plugin_id, "tts.prepare", &payload)
+        .map_err(|e| format!("TTS 策略插件事件失败：{e:#}"))?;
+    if !errors.is_empty() {
+        return Err(format!("TTS 策略效果执行失败：{errors:?}"));
+    }
+    let bytes = host
+        .kv()
+        .get(plugin_id, &format!("tts-result:{req_id}"))
+        .ok_or_else(|| "TTS 策略插件未返回结果（需要 kv 键 tts-result:<req_id>）".to_string())?;
+    let result: TtsPrepareResult = serde_json::from_slice(&bytes)
+        .map_err(|e| format!("TTS 策略结果损坏（需要 JSON {{text,...}}）：{e}"))?;
+    if result.text.len() > MAX_TTS_TEXT_BYTES {
+        return Err(format!(
+            "TTS 策略文本超长（{} > {MAX_TTS_TEXT_BYTES} bytes）",
+            result.text.len()
+        ));
+    }
+    if let Some(route) = result.route.as_deref() {
+        if route.len() > MAX_TTS_ROUTE_BYTES {
+            return Err(format!("TTS 策略 route 超长（{} bytes）", route.len()));
+        }
+    }
+    if let Some(result_speed) = result.speed {
+        if !result_speed.is_finite() || result_speed <= 0.0 {
+            return Err(format!("TTS 策略 speed 非法：{result_speed}"));
+        }
+    }
+    Ok(result)
+}
 
 /// 由 WASM 策略决定的、仍交给原生 TTS 的控制参数。
 #[derive(Debug, Clone, PartialEq)]
@@ -102,7 +179,7 @@ impl TtsEngine for WasmTtsPolicy {
     ) -> Result<()> {
         let host = self.host()?;
         let plugin_id = self.plugin_id(&host)?;
-        let raw = bridge::tts_prepare(&host, &plugin_id, text, speed, speaker)
+        let raw = tts_prepare(&host, &plugin_id, text, speed, speaker)
             .map_err(|e| anyhow::anyhow!(e))
             .context("TTS 策略插件执行失败")?;
         let decision = TtsPolicyDecision {

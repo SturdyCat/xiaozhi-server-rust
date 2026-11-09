@@ -125,3 +125,101 @@ fn auto_sync_due_false_while_syncing() {
     }
     assert!(!engine.auto_sync_due(3600), "syncing 期间不应判定到期");
 }
+
+// ---- S3e：插件云链路目录同步（`[tuya].engine = "wasm-policy"`）----
+// 真实插件源（tuya.official）承接协议语义；宿主编排（token 一次 + 翻页 + 落库）。
+
+#[cfg(feature = "wasm-plugins")]
+mod plugin_path {
+    use std::sync::Arc;
+
+    use super::super::{TuyaConfig, TuyaEngine};
+    use super::temp_engine;
+    use crate::plugins::wasm::tests::{ensure_fixture, host_with, ScriptedFetcher};
+    use crate::plugins::wasm::WasmHost;
+
+    const PLUGIN: &str = "tuya.official";
+    // 与 plugins/wasm/tests/tuya_cloud.rs 同源的回包形状（token + 真机设备清单页）。
+    const TOKEN_OK: &str = r#"{"code":0,"success":true,"msg":"ok","result":{"access_token":"tok-1","expire_time":7200}}"#;
+    const DEVICES_PAGE: &str = r#"{"code":0,"success":true,"msg":"ok","result":{
+      "devices":[
+        {"id":"ivf9id1","name":"客厅开关","model":"m1","local_key":"k1","online":true,"ip":"192.168.1.2","product_id":"p1"},
+        {"id":"ivf9id2","name":"卧室插座","model":"m2","local_key":"k2","online":false,"ip":"","product_id":"p2"}],
+      "has_more":false,"last_row_key":"","total":2}}"#;
+
+    fn wasm_policy_cfg() -> TuyaConfig {
+        let mut cfg = TuyaConfig::default();
+        cfg.enabled = true;
+        cfg.engine = "wasm-policy".into();
+        cfg
+    }
+
+    /// 种好插件配置（凭证在插件配置命名空间，不在 [tuya] 段）+ 装载真实插件。
+    fn seeded_host() -> (Arc<ScriptedFetcher>, WasmHost) {
+        let fetcher = Arc::new(ScriptedFetcher::new());
+        fetcher.push_ok(200, TOKEN_OK);
+        fetcher.push_ok(200, DEVICES_PAGE);
+        let host = host_with(&fetcher);
+        let store = host.config_store();
+        store.set(PLUGIN, "region", "cn").expect("seed region");
+        store
+            .set(PLUGIN, "access_id", "aid-test")
+            .expect("seed access_id");
+        store
+            .set(PLUGIN, "access_secret", "asec-test")
+            .expect("seed access_secret");
+        host.load(PLUGIN, &ensure_fixture("tuya"))
+            .expect("load tuya.official");
+        (fetcher, host)
+    }
+
+    #[tokio::test]
+    async fn sync_now_routes_through_plugin_cloud_chain_and_stores() {
+        let (dir, engine) = temp_engine("plugin-sync");
+        let (fetcher, host) = seeded_host();
+        engine.set_wasm_host(Arc::new(host));
+
+        // 首次同步放行闸门 → engine = wasm-policy → 走插件链路
+        let outcome = engine.sync_now(&wasm_policy_cfg()).await;
+        assert_eq!(outcome.result, "ok", "{}", outcome.message);
+        assert!(
+            outcome.message.contains("经插件云链路"),
+            "{}",
+            outcome.message
+        );
+
+        // 目录落库（native 编排 + native SQLite；协议语义在插件）
+        let rows = engine.store.list_devices().expect("list devices");
+        assert_eq!(rows.len(), 2, "两台设备应落库");
+        assert_eq!(rows[0].device_id, "ivf9id1");
+        assert_eq!(rows[0].local_key, "k1");
+        assert!(rows[0].online);
+        assert_eq!(rows[1].device_id, "ivf9id2");
+        assert!(!rows[1].online);
+
+        // 同步历史记录 ok（结果四归类同口径）
+        let last = engine
+            .last_sync()
+            .await
+            .expect("last sync")
+            .expect("record");
+        assert_eq!(last.result, "ok");
+
+        let _ = (dir, fetcher);
+    }
+
+    #[tokio::test]
+    async fn wasm_policy_without_host_fails_explicitly() {
+        let (_dir, engine) = temp_engine("plugin-nohost");
+        // 不注入宿主：engine = wasm-policy 必须显式失败，不静默回退 native
+        let outcome = engine.sync_now(&wasm_policy_cfg()).await;
+        assert_eq!(outcome.result, "network_error", "{}", outcome.message);
+        assert!(
+            outcome.message.contains("宿主未注入"),
+            "{}",
+            outcome.message
+        );
+        let rows = engine.store.list_devices().expect("list devices");
+        assert!(rows.is_empty(), "失败路径不得落库");
+    }
+}

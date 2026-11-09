@@ -37,7 +37,7 @@ sherpa = ["dep:sherpa-onnx", "dep:audiopus"]
 # 仅类型检查用 `DOCS_RS=1 cargo check --features nlu`；真实推理需模型文件（见 config.example.toml [nlu]）。
 nlu = ["dep:ort", "dep:tokenizers"]
 # ESPHome Native API 适配器（仅随 EchoMuse native 插件显式装载）。
-esp_home = ["dep:esphome-native-api", "echomuse-plugin"]
+esp_home = ["dep:esphome-native-api", "dep:noise-protocol", "dep:noise-rust-crypto", "echomuse-plugin"]
 # WASM 插件平台（方案 v4 / docs/designs/wasm-plugin-platform.md）：wasmtime 宿主 + WIT 契约
 # （server/wit/plugin.wit）+ 扩展点解析/回退 + waterfall 事件内核。默认关闭：不加该 feature
 # 时零依赖、零行为变化；Docker 部署镜像启用。
@@ -58,6 +58,8 @@ tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 # 日志时间戳本地化（app::logtime）：控制台 fmt 层与 /api/logs 日志流共用的唯一时间出口
 chrono = { version = "0.4.20", default-features = false, features = ["clock"] }
 uuid = { version = "1.11.0", features = ["v4"] }
+# 宿主随机源（WIT host-core.random）：插件密码学 nonce/IV/临时密钥的唯一熵源。
+getrandom = "0.3.4"
 futures-util = "0.3.31"
 tower-http = { version = "0.6", features = ["fs"] }
 # 通用管理面发现（_xiaozhi-admin._tcp），与设备插件无关。
@@ -103,6 +105,11 @@ audiopus = { version = "0.2", optional = true }
 # 托管 Hello/DeviceInfo/Ping 握手与加密；我们只补「实体列表 + 状态应答」（该 crate 的
 # 高层 EspHomeServer 在 v3.0.0 仍是空壳，见 src/device/esp_home/server.rs 模块文档）。
 esphome-native-api = { version = "3.0.0", optional = true }
+# 仅在 esp_home feature + 测试下作为 **独立参考实现**：S3t 的 esphome.official noise
+# 握手对拍（noise-protocol 双角色 / noise-rust-crypto 原语）。生产路径不引用它们——
+# 插件的 guest 侧自持有等价的纯 Rust 密码学栈（plugins-src/esphome/src/noise_crypto.rs）。
+noise-protocol = { version = "0.2.1", optional = true }
+noise-rust-crypto = { version = "0.6.2", optional = true }
 
 # 仅在 nlu feature 下引入（ONNX Runtime 动态库 + 分词器）
 # 精确钉 rc.10：caret 会被锁到 rc.14（要求 ONNX Runtime >=1.31），与镜像内 1.22.1 dylib 不配对

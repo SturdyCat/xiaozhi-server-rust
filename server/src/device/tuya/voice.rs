@@ -300,12 +300,7 @@ impl TuyaEngine {
                 })
             })
             .collect();
-        let decision = match crate::plugins::wasm::bridge::tuya_prepare(
-            host,
-            name,
-            action,
-            &candidates,
-        ) {
+        let decision = match super::policy::tuya_prepare(host, name, action, &candidates) {
             Ok(decision) => decision,
             Err(e) => {
                 tracing::warn!("Tuya WASM 策略失败：{e}");
@@ -327,7 +322,7 @@ impl TuyaEngine {
         self.lan.ensure_listener(&row.device_id);
         let text = lan::with_call_timeout(device.status()).await?;
         let dps = match text {
-            Some(text) => lan::parse_dps(&text),
+            Some(text) => super::dps::parse_dps(&text),
             None => HashMap::new(),
         };
         if !dps.is_empty() {

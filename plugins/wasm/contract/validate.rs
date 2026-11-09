@@ -45,7 +45,21 @@ fn valid_topic(topic: &str) -> Result<()> {
     if topic.is_empty() || topic.len() > 128 {
         bail!("订阅 topic 长度非法：{:?}（1..=128 字节）", topic);
     }
-    if !topic
+    // 通配形状先判（S3m 勘误：此前字符白名单先行，尾部 `.*` 永远无法通过声明
+    // ——文档承诺的通配订阅是死路）。只允许尾部通配且形如 `.*`。
+    let wildcard = topic.ends_with(".*");
+    if topic.contains('*') && !wildcard {
+        bail!(
+            "订阅 topic 通配只允许尾部 `.*`：{:?}（禁止中间通配）",
+            topic
+        );
+    }
+    // 字符白名单对去除尾部 `.*` 后的前缀检查（`*` 只在尾部通配语境合法）。
+    let prefix = topic.trim_end_matches(".*");
+    if prefix.is_empty() {
+        bail!("订阅 topic 通配前缀不能为空：{:?}", topic);
+    }
+    if !prefix
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
     {
@@ -54,16 +68,8 @@ fn valid_topic(topic: &str) -> Result<()> {
             topic
         );
     }
-    if let Some(pos) = topic.find('*') {
-        if !topic.ends_with(".*") || pos != topic.len() - 1 {
-            bail!(
-                "订阅 topic 通配只允许尾部 `.*`：{:?}（禁止中间通配）",
-                topic
-            );
-        }
-        if topic.trim_end_matches(".*").is_empty() {
-            bail!("订阅 topic 通配前缀不能为空：{:?}", topic);
-        }
+    if prefix.ends_with('.') || prefix.contains("..") {
+        bail!("订阅 topic 段非法（空段）：{:?}", topic);
     }
     Ok(())
 }

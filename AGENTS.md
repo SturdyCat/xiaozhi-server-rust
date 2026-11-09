@@ -15,7 +15,7 @@
 
 - [server](<server/AGENTS.md>)：服务端构建、依赖、源码与测试。
 - [client](<client/AGENTS.md>)：客户端平台、构建、公共管理台与原生宿主。
-- [plugins-src](<plugins-src/AGENTS.md>)：14 个官方系统插件源码根（契约 `xiaozhi:plugin@0.2.0`；产物由 `tools/build-system-plugins.sh` 构建到 `build/system-plugins/`，共 15 个 `.wasm`）。
+- [plugins-src](<plugins-src/AGENTS.md>)：15 个官方系统插件源码根（契约 `xiaozhi:plugin@0.2.0`；产物由 `tools/build-system-plugins.sh` 构建到 `build/system-plugins/`，共 16 个 `.wasm`）。
 
 ## 本级资料
 

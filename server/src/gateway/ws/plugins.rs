@@ -28,15 +28,27 @@ use crate::gateway::ws::config::config_is_persistent;
 use crate::plugins::registry;
 use crate::runtime::Engines;
 
+/// `GET /api/plugins.ui` 投影：按**当前构建**如实声明静态业务归属。
+/// - 默认构建 = pure-base：底座不含业务，客户端据此隐藏编译期静态业务导航，
+///   业务入口只能来自已装载的 WASM manifest；
+/// - native 设备插件构建（native-plugins/echomuse-plugin/tuya-plugin/esp_home）
+///   携带静态设备业务，如实声明 `base` + `static_business=true`。
+/// 阶段二收口：此前恒返回 `base`，与客户端 `pure-base` 判定漂移（见
+/// plugins/wasm/AGENTS.md「未完成」）。
+pub(super) fn ui_projection_json() -> serde_json::Value {
+    // 与静态 schema 投影共用同一判据（registry::static_business_present 单源）。
+    let static_business = crate::plugins::registry::static_business_present();
+    serde_json::json!({
+        "mode": if static_business { "base" } else { "pure-base" },
+        "static_business": static_business,
+    })
+}
+
 /// `GET /api/plugins`：能力清单 + 状态（+ wasm 动态插件投影）。
 pub(super) async fn list_plugins(State(engines): State<Arc<Engines>>) -> Response {
     let mut body = engines.host.capabilities_json();
     body["ok"] = serde_json::json!(true);
-    // UI 只反映通用底座；业务菜单必须来自已装载的 WASM manifest。
-    body["ui"] = serde_json::json!({
-        "mode": "base",
-        "static_business": false,
-    });
+    body["ui"] = ui_projection_json();
     // 配置来源一并带上：状态解读常需知道"这些值来自哪个文件、重启会不会丢"
     let config_path = engines.config_path();
     body["config"] = serde_json::json!({

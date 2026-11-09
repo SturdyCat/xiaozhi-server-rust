@@ -16,7 +16,48 @@
 use anyhow::{Context, Result};
 
 use crate::plugins::asr::AsrEngine;
-use crate::plugins::wasm::bridge;
+use crate::plugins::wasm::WasmHost;
+
+/// utterance 转写：`asr.transcribe` 事件（payload JSON 含 f32-le PCM 的 base64），
+/// 插件经 kv 结果通道 `asr-result:<req_id>` 返回 `{"text":"..."}`。
+/// 调用纪律：`recognize` 本就是同步 trait 且管线在 spawn_blocking 内调用——与原生
+/// reqwest/引擎推理同一纪律。错误 = 显式 Err（会话侧按 on_error 语义处理）。
+fn asr_transcribe(
+    host: &WasmHost,
+    plugin_id: &str,
+    session_id: &str,
+    samples: &[f32],
+    sample_rate: u32,
+) -> std::result::Result<String, String> {
+    use base64::Engine as _;
+
+    let req_id = uuid::Uuid::new_v4().to_string();
+    let mut pcm = Vec::with_capacity(samples.len() * 4);
+    for s in samples {
+        pcm.extend_from_slice(&s.to_le_bytes());
+    }
+    let payload = serde_json::json!({
+        "req_id": req_id,
+        "session_id": session_id,
+        "sample_rate": sample_rate,
+        "samples": samples.len(),
+        "pcm_base64": base64::engine::general_purpose::STANDARD.encode(&pcm),
+    })
+    .to_string();
+    host.handle_event(plugin_id, "asr.transcribe", &payload)
+        .map_err(|e| format!("ASR 插件事件失败：{e:#}"))?;
+    let bytes = host
+        .kv()
+        .get(plugin_id, &format!("asr-result:{req_id}"))
+        .ok_or_else(|| "ASR 插件未返回结果（流程中断）".to_string())?;
+    let value: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|e| format!("ASR 结果损坏：{e}"))?;
+    Ok(value
+        .get("text")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_string())
+}
 
 /// 经 `asr.provider` 扩展点插件的远端 ASR 引擎（utterance 粒度，晚绑宿主槽）。
 pub struct WasmAsrEngine {
@@ -69,7 +110,7 @@ impl AsrEngine for WasmAsrEngine {
         let plugin_id = self
             .resolved_plugin_id()
             .context("ASR 插件未装载（扩展点无可用实现）")?;
-        bridge::asr_transcribe(&host, &plugin_id, "", samples, sample_rate)
+        asr_transcribe(&host, &plugin_id, "", samples, sample_rate)
             .map_err(|e| anyhow::anyhow!(e))
             .context("ASR 插件转写失败")
     }

@@ -1,0 +1,28 @@
+# esphome.official：ESPHome 桥实体目录策略（按重构前功能拆分的官方插件）。
+[package]
+name = "esphome-official"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+serde_json = "1"
+# S3t：Noise NNpsk0 密码学原语（全纯 Rust，wasm32-unknown-unknown 可编）。
+# chacha20poly1305 关闭默认 getrandom：guest 无熵源，临时密钥经宿主 `host-core.random`。
+chacha20poly1305 = { version = "0.10.1", default-features = false, features = ["alloc"] }
+sha2 = "0.11"
+hmac = "0.13"
+x25519-dalek = { version = "2.0.1", features = ["static_secrets"] }
+# 从 plugins-src/<dir>/ 出发：两级向上到仓库根
+xiaozhi-plugin-sdk = { path = "../../server/crates/xiaozhi-plugin-sdk" }
+guest-alloc = { path = "../../tools/wasm-fixtures/guest-alloc" }
+
+# 独立 workspace（仓库根无 Cargo.toml）：体积优化 profile 在本 crate 生效
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+panic = "abort"

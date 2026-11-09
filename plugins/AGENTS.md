@@ -8,7 +8,9 @@
 
 ## 通用底座边界（当前发布契约）
 
-默认构建就是空的通用底座：ASR/VAD/TTS/LLM、配置/日志/文件/观测与可选 WASM 宿主属于核心；EchoMuse、Tuya 等 native 设备插件必须通过显式 `native-plugins` 装载。底座不包含设备插件配置、路由、worker、依赖或兼容 stub；管理台业务入口只能来自已装载插件的 manifest。历史 `pure-base`/`legacy-business` 兼容分支不再作为架构边界。 ⚠️ **未完成漂移**：`GET /api/plugins` 实际返回 `ui.mode = "base"` / `static_business: false`，而客户端 `PluginMetaState` 仍按 `"pure-base"` 判断隐藏静态业务导航，二者待阶段二收口。
+默认构建就是空的通用底座：ASR/VAD/TTS/LLM、配置/日志/文件/观测与可选 WASM 宿主属于核心；EchoMuse、Tuya 等 native 设备插件必须通过显式 `native-plugins` 装载。底座不包含设备插件配置、路由、worker、依赖或兼容 stub；管理台业务入口只能来自已装载插件的 manifest。历史 `pure-base`/`legacy-business` 兼容分支不再作为架构边界。 ✅ **ui.mode 漂移已收口（阶段二）**：`GET /api/plugins.ui.mode` 按构建如实声明——默认构建 `pure-base`（客户端据此隐藏静态业务导航）、native 设备插件构建 `base` + `static_business:true`；`ui.mode` 与静态 schema 投影共用同一判据 `registry::static_business_present`（单源，勿再各自 `cfg!` 手写）。
+
+✅ **geo/天气入口归属裁决（阶段二收口）**：`plugins/geo` 是底座通用「服务器事实/观测」能力（出口 IP 定位 → 管理台展示 + 天气默认定位预填），不是设备业务，归属底座；天气业务本体不属于底座——native NMC 全量实现只在 `native-plugins`，pure-base 经 `skill.weather` 扩展点由 WASM 插件提供（[weather/dispatch.rs](<weather/dispatch.rs>)），`server/src/skills/weather_ops.rs` 只是通用技能步执行器（自身不联网，铁律由 `plugins/wasm/tests/architecture.rs` 守卫）。
 
 ## 插件装配与扩展
 
@@ -48,12 +50,12 @@
 `wasm/` 与静态注册表并存（绞杀者迁移仍在进行）；控制面插件化，**模型推理与帧级计算留原生**。当前契约、模块清单、并发模型与运维纪律以 [wasm/AGENTS.md](<wasm/AGENTS.md>) 为**唯一权威**；[方案 v4 设计长文](<../docs/designs/wasm-plugin-platform.md>) 是 v0.1 时代的历史记录。契约唯一源 `server/wit/plugin.wit`（宿主 bindgen 与 [guest SDK](<../server/crates/xiaozhi-plugin-sdk/AGENTS.md>) 同源），**改契约必须双侧同步重建全部 guest 与 wasm 产物**。
 
 - 0.2 为破坏性升级：`xiaozhi:plugin@0.2.0`、四个 Host trait（core/net/timer/system）、类型化 `handle-event(ev)` + `handle-service`、事件订阅/端点/服务/资源配额/配置命名空间；宿主不认识扩展点名字，只按字符串通用路由。菜单槽位改为形状校验，不设白名单。
-- 装载期强校验在 `plugins/wasm/contract/validate.rs`（topic 通配、bind 白名单、资源上限、服务名、UI JSON）；效果与权限门在 `effects.rs`（`log/kv-put/kv-delete/http-request` + legacy lan，未声明即拒）。
+- 装载期强校验在 `plugins/wasm/contract/validate.rs`（topic 通配、bind 白名单、资源上限、服务名、UI JSON）；效果与权限门在 `effects.rs`（`log/kv-put/kv-delete/http-request`，未声明即拒）。
 - 生命周期三态：上传 → **Staged**（只登记不装载）→ `register` → **Registered**（完整校验 + self-test，写标记供重启恢复）→ `activate` → **Active**（依赖前置 + 装载 + 持久化 `enabled=true`）。`deactivate` 回 Registered（有 Active 依赖者 409），`remove` 仅非 Active 可移除；同 id 重传要求版本严格递增，否则 409。`Phase`（active/failed/degraded）只是 Active 态的运行健康子状态。
 - 生产分发：`POST /api/plugins/upload`（JSON base64）或管理台桥 `POST /api/plugins/upload/raw?id=<id>`，共享 `adopt_bytes` 管线（大小上限 → 平台总闸 → 探测 manifest → 版本升级判定 → 落盘 + SHA-256 钉版 → 登记 Staged）。测试夹具按需本地构建、产物不入库（[tools/wasm-fixtures](<../tools/wasm-fixtures/AGENTS.md>)）；真实插件源在 [plugins-src](<../plugins-src/AGENTS.md>)。
 - ⛔ **契约升级后远端已部署插件不会自动迁移**：boot 只在数据卷尚无同 id 产物时导入镜像随附的系统插件，刻意不覆盖用户状态。必须逐个重走 `upload/raw → register → activate`，否则旧契约产物装载校验失败、插件列表变空（完整纪律见 [wasm/AGENTS.md](<wasm/AGENTS.md>)）。
 - JSON UI 描述（A2UI 0.1 嵌套组件树）：`registration.ui-json` 宿主只校验「合法 JSON 对象 + 大小上限」后透传，**不解释树**，形状越界的 fail-closed 在客户端渲染层；投影到 `registration.ui` 与只读 `GET /api/plugins/{id}/ui`，仅 Active 插件（未激活 404）。
-- **未完成**：`GET /api/plugins` 仍只投影旧 manifest 字段，0.2 新增的 endpoints / services / 事件总线统计 / 配置命名空间投影尚未接入 HTTP 层；legacy `effect-lan-*` 与 bridge 策略桥待阶段二/三删除。
+- **未完成**：阶段三设备**协议面**迁插件仍在进行——ESPHome **协议语义已齐**（目录策略 `connector.esp-home` + 明文帧/服务端消息 protobuf（S3k/S3r）+ **Noise NNpsk0 加密握手与 AEAD 传输帧**（S3t），esphome-native-api 真连接/真实加密连接对拍），剩余 **TCP 会话编排进插件与生产接管**（P8c 真机 + HA 客户端回归门槛）与桥外更多消息类型；Tuya LAN 协议面已全进插件（v3.4/v3.5 会话编排 + 重连 + 设备上报 DP 状态，S3m–S3q），**生产接管/删 native worker 以 P8c 真机回归为门槛**；EchoMuse 协议栈按设计保留 native、入口策略面经插件；以上按 P8c 删除门槛矩阵逐域取证。legacy `effect-lan-*` 与 bridge 策略桥已删除（阶段二/三收口），`GET /api/plugins` 已补齐 0.2 投影（endpoints / services / 事件总线统计 / 配置命名空间），`ui.mode` 漂移已收口（默认构建如实声明 `pure-base`）。
 - 验证：`cargo test --features wasm-plugins`（默认 feature 零影响）；P0–P9 阶段编号与测试计数属历史快照，见[设计长文](<../docs/designs/wasm-plugin-platform.md>)，不作现行规则。
 
 ## 直属下级

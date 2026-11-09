@@ -190,8 +190,17 @@ fn summary_marks_missing_stages_with_dash() {
         3,
         "已 mark 的 2 个阶段不再显示 -：{got}"
     );
+    // 只断言「已发生阶段带数字毫秒值」，不绑定位数：并行全量套件下机器负载会把
+    // 15ms 睡拖到 3 位毫秒（历史上本断言因此偶发误报，S3p 顺带加固）。
+    let llm_ms = got.split("llm首字=").nth(1).and_then(|s| {
+        s.chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect::<String>()
+            .parse::<u64>()
+            .ok()
+    });
     assert!(
-        got.contains("llm首字=1") || got.contains("llm首字=2"),
+        matches!(llm_ms, Some(ms) if ms >= 5),
         "已发生的阶段应带实际毫秒值：{got}"
     );
 }

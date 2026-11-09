@@ -85,6 +85,23 @@ impl SystemFacts for EmptySystemFacts {
     }
 }
 
+/// 密码学随机源抽象（生产 = OS 熵源；测试/嵌入方可替换实现）。
+pub trait RandomSource: Send + Sync {
+    /// 填充 `len` 字节随机数（调用方负责长度上限校验）。
+    fn fill(&self, len: usize) -> Result<Vec<u8>, String>;
+}
+
+/// OS 熵源实现（`getrandom`：Linux getrandom / macOS getentropy / Windows BCrypt）。
+pub struct OsRandom;
+
+impl RandomSource for OsRandom {
+    fn fill(&self, len: usize) -> Result<Vec<u8>, String> {
+        let mut buf = vec![0u8; len];
+        getrandom::fill(&mut buf).map_err(|e| format!("OS 随机源不可用：{e}"))?;
+        Ok(buf)
+    }
+}
+
 /// 宿主上下文：所有插件共享同一份。
 pub struct HostContext {
     pub kv: Arc<KvStore>,
@@ -96,6 +113,8 @@ pub struct HostContext {
     pub fs: Arc<FsSandbox>,
     pub mdns: Arc<MdnsAdvertiser>,
     pub facts: Arc<dyn SystemFacts>,
+    /// 宿主随机源（WIT `host-core.random`；guest 无熵源时的唯一来源）。
+    pub rng: Arc<dyn RandomSource>,
 }
 
 impl HostContext {
@@ -121,6 +140,7 @@ impl HostContext {
             fs,
             mdns,
             facts,
+            rng: Arc::new(OsRandom),
         })
     }
 }

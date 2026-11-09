@@ -265,7 +265,7 @@ async fn control_session(
     #[cfg(feature = "wasm-plugins")]
     if engines.config.echomuse.engine_id() == "wasm-policy" {
         if let Some(host) = engines.wasm.as_ref() {
-            welcome = match crate::plugins::wasm::bridge::echomuse_prepare(
+            welcome = match super::policy::echomuse_prepare(
                 host,
                 &device_id,
                 register.base_os.as_deref().unwrap_or_default(),

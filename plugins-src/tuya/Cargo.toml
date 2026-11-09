@@ -10,6 +10,12 @@ crate-type = ["cdylib"]
 
 [dependencies]
 serde_json = "1"
+# 与宿主 server/Cargo.toml 钉版一致：单源 protocol.rs 在 guest 内编译所需
+hmac = "0.13.0"
+sha2 = "0.11.0"
+# S3f：LAN 0x6699（3.5）帧 AES-128-GCM；关闭 getrandom（guest 无熵源，IV 由调用方传入）
+aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc"] }
+aes = "0.9"
 # 从 plugins-src/<dir>/ 出发：两级向上到仓库根
 xiaozhi-plugin-sdk = { path = "../../server/crates/xiaozhi-plugin-sdk" }
 guest-alloc = { path = "../../tools/wasm-fixtures/guest-alloc" }

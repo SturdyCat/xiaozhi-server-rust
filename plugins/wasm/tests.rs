@@ -6,7 +6,6 @@
 
 use super::effects::{enforce_permissions, Effect, Permissions};
 use super::resolver::{FlatWorld, ResolutionTable};
-use super::waterfall::{Participant, Strength, Waterfall, WaterfallOutcome};
 use super::{contract, WasmHost};
 use crate::plugins::wasm::sandbox::SandboxLimits;
 
@@ -15,10 +14,12 @@ pub(crate) fn fixture(name: &str) -> Vec<u8> {
 }
 
 /// 构建产物源集（任一更新即视为过期）：
-/// 契约（WIT）+ guest SDK + 两个源根的全部 .rs/Cargo.toml/build.sh。
-const SOURCE_ROOTS: [&str; 3] = [
+/// 契约（WIT）+ guest SDK + 真实插件源根的全部 .rs/Cargo.toml/build.sh。
+const SOURCE_ROOTS: [&str; 5] = [
     "tools/wasm-fixtures",
     "plugins-src/weather",
+    "plugins-src/tuya",
+    "plugins-src/esphome",
     "server/crates/xiaozhi-plugin-sdk",
 ];
 
@@ -73,7 +74,16 @@ fn artifact_stale(artifact: &std::path::Path, repo_root: &std::path::Path) -> bo
 
 /// 缺失或过期时本地重建全部夹具（本地实验产物，git 忽略），再读回字节。
 /// 跨模块共享（gateway 端点测试也用）：`pub(crate)`。
+///
+/// 进程级互斥（S3d 实测教训）：产物过期时多个测试线程并发进入本函数会同时跑
+/// build.sh 并读对方写到一半的产物——曾造成全量套件间歇性失败。重建全程持锁，
+/// 读产物也走同一把锁，杜绝"边写边读"。
 pub(crate) fn ensure_fixture(name: &str) -> Vec<u8> {
+    static BUILD_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    let _guard = BUILD_LOCK
+        .get_or_init(|| std::sync::Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let repo_root = manifest_dir.join(".."); // server/ → 仓库根
     let artifact = manifest_dir
@@ -83,11 +93,25 @@ pub(crate) fn ensure_fixture(name: &str) -> Vec<u8> {
         let scripts = [
             repo_root.join("tools/wasm-fixtures/build.sh"),
             repo_root.join("plugins-src/weather/build.sh"),
+            repo_root.join("plugins-src/tuya/build.sh"),
+            repo_root.join("plugins-src/esphome/build.sh"),
         ];
         for script in &scripts {
-            let out = std::process::Command::new("bash")
-                .arg(script)
-                .current_dir(&repo_root)
+            // 隔离宿主 cargo 全局配置的两种污染（2026-11-09 实测）：
+            // ① ~/.cargo/config.toml [env] 的 CARGO_PROFILE_DEV_DEBUG 会被 cargo
+            //    注入本测试进程并传给子 cargo，"line-tables" 非法值 → 子构建直接
+            //    报 "could not load config key profile.dev"；
+            // ② rustc-wrapper = sccache 在测试进程沙盒下对 rmeta 写入间歇
+            //    EPERM。夹具构建是独立小构建，二者都不需要。
+            let mut cmd = std::process::Command::new("bash");
+            cmd.arg(script).current_dir(&repo_root);
+            for (key, _) in std::env::vars_os() {
+                let key = key.to_string_lossy().into_owned();
+                if key.starts_with("CARGO_PROFILE_") || key == "RUSTC_WRAPPER" {
+                    cmd.env_remove(&key);
+                }
+            }
+            let out = cmd
                 .output()
                 .unwrap_or_else(|e| panic!("无法执行 {}（缺 bash？）：{e}", script.display()));
             if !out.status.success() {
@@ -131,7 +155,7 @@ impl ScriptedFetcher {
             urls: std::sync::Mutex::new(Vec::new()),
         }
     }
-    fn push_ok(&self, status: u16, body: &str) {
+    pub(crate) fn push_ok(&self, status: u16, body: &str) {
         self.responses
             .lock()
             .unwrap()
@@ -262,16 +286,38 @@ fn manifest_id_mismatch_rejected_and_old_instance_kept() {
 
 mod architecture;
 mod artifacts;
-mod bridge;
+mod dispatch;
+// ESPHome 帧对拍整文件依赖 esphome-native-api（esp_home feature）。
+#[cfg(feature = "esp_home")]
+mod esphome_frame;
+#[cfg(feature = "esp_home")]
+mod esphome_noise;
+#[cfg(feature = "esp_home")]
+mod esphome_session;
+#[cfg(feature = "esp_home")]
+mod esphome_session_encrypted;
+#[cfg(feature = "esp_home")]
+mod esphome_session_guards;
 mod extension;
 mod http;
-mod lan;
 mod lifecycle;
+mod net_connect;
+mod protocol;
+mod random;
 mod sandbox;
+mod tuya_cloud;
+mod tuya_lan;
+mod tuya_lan_orchestrate;
+mod tuya_lan_reconnect;
+mod tuya_lan_session;
+mod tuya_lan_status;
+// v3.5 会话对拍整文件依赖 rustuya（tuya-plugin feature），与模块内测试同级门控。
+#[cfg(feature = "tuya-plugin")]
+mod tuya_lan_session_v35;
 mod ui;
 mod weather;
 
-// 契约校验 / 权限门 / waterfall（纯逻辑）
+// 契约校验 / 权限门（纯逻辑）
 // ============================================================
 
 #[test]
@@ -377,53 +423,4 @@ fn permissions_parse_rejects_unknown() {
         Permissions::parse(&["http-out:".into()]).is_err(),
         "空 host 应拒绝"
     );
-}
-
-#[test]
-fn waterfall_runs_in_priority_order_with_trace() {
-    let mut wf: Waterfall<i32> = Waterfall::new();
-    // 注册：high 优先级 1 先执行，low 10 后执行
-    wf.register(Participant {
-        id: "low".into(),
-        priority: 10,
-        strength: Strength::Rewrite,
-        handler: 0,
-    })
-    .unwrap();
-    wf.register(Participant {
-        id: "high".into(),
-        priority: 1,
-        strength: Strength::Observe,
-        handler: 0,
-    })
-    .unwrap();
-    let mut payload = 0;
-    let (outcome, trace) = wf.run(&mut payload, |_, data| {
-        *data += 1;
-        Ok(false) // 全部透传
-    });
-    assert_eq!(outcome, WaterfallOutcome::Completed);
-    assert_eq!(trace, vec!["high:next", "low:next"]);
-    assert_eq!(payload, 2);
-
-    // 重复注册即报错（对齐 DSH「重复即报错」）
-    assert!(wf
-        .register(Participant {
-            id: "high".into(),
-            priority: 1,
-            strength: Strength::Observe,
-            handler: 0
-        })
-        .is_err());
-
-    // guard 否决短路
-    let (outcome, trace) = wf.run(&mut payload, |p, _| {
-        if p.id == "high" {
-            Err("拒绝".into())
-        } else {
-            Ok(false)
-        }
-    });
-    assert_eq!(outcome, WaterfallOutcome::Blocked("high".into()));
-    assert_eq!(trace.len(), 1);
 }

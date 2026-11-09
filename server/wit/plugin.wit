@@ -11,7 +11,7 @@
 //
 // 版本化：包名 `xiaozhi:plugin@<主.次>`；manifest.api-version 主版本与宿主不符 → 拒绝激活。
 // v0.2 为破坏性升级：handle-event 改类型化信封，新增 net / config / events / services /
-// timer / system 六个宿主服务；v0.1 的 lan-status / lan-set-dp 仅作 legacy 保留到阶段三。
+// timer / system 六个宿主服务；v0.1 的 lan-status / lan-set-dp legacy 效果已删除（阶段三收口）。
 
 package xiaozhi:plugin@0.2.0;
 
@@ -214,28 +214,11 @@ interface types {
         timeout-ms: u32,
     }
 
-    /// legacy（阶段三随 native Tuya 删除）：受限 LAN 状态读取。
-    /// device-handle 是宿主分配的不透明句柄，绝不携带 local_key / IP / 凭证 / 原始报文。
-    record effect-lan-status {
-        request-id: string,
-        device-handle: string,
-    }
-
-    /// legacy（阶段三随 native Tuya 删除）：受限 LAN DP 写入。
-    record effect-lan-set-dp {
-        request-id: string,
-        device-handle: string,
-        dp: string,
-        value-json: string,
-    }
-
     variant effect {
         log(effect-log),
         kv-put(effect-kv-put),
         kv-delete(effect-kv-delete),
         http-request(effect-http-request),
-        lan-status(effect-lan-status),
-        lan-set-dp(effect-lan-set-dp),
     }
 }
 
@@ -249,6 +232,11 @@ interface host-core {
     now-ms: func() -> u64;
     /// 单调时钟（毫秒）
     monotonic-ms: func() -> u64;
+
+    /// 密码学安全随机字节（宿主 OS 熵源；单次 1..=1024 字节，越界/熵源不可用
+    /// 显式报错）。供插件做 nonce / IV / 临时密钥等不可预测材料——guest 自身
+    /// 无熵源；**不用于持久化密钥**（凭据仍走 config/kv 隔离面）。
+    random: func(len: u32) -> result<list<u8>, string>;
 
     /// 插件隔离 kv。需 `kv` 权限；未声明 → deny-as-absent（返回 none + 审计）
     kv-get: func(key: string) -> option<list<u8>>;
@@ -287,6 +275,13 @@ interface host-net {
     net-close: func(connection-id: u64, reason: string) -> result<_, string>;
     /// 对端地址 `ip:port`
     net-peer: func(connection-id: u64) -> option<string>;
+
+    /// 出站 TCP 连接（插件主动连出）。需 `net` 权限。返回 connection-id，
+    /// 之后 net-send / net-close / net-peer 同口径复用；连接生命周期与入站
+    /// 连接一致：`io.tcp.opened` / `io.tcp.data`（correlation-id = connection-id，
+    /// 原始字节）/ `io.tcp.closed` 回灌。协议语义（分帧/握手/加密）在插件侧，
+    /// 宿主只搬运字节。仅限明文 TCP；不含 TLS。
+    tcp-connect: func(host: string, port: u16) -> result<u64, string>;
 
     /// UDP 出站
     udp-send: func(socket-handle: u64, peer: string, payload: list<u8>) -> result<u64, string>;

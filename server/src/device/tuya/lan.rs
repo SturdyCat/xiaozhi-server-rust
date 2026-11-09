@@ -1,4 +1,5 @@
-//! 局域网会话池（rustuya **async facade**）+ 控制失败三归类 + DP 载荷解析。
+//! 局域网会话池（rustuya **async facade**）+ 控制失败三归类；DP 载荷解析已拆到
+//! [`super::dps`]（纯函数单源，guest 插件经 `#[path]` 共用）。
 //!
 //! ## rustuya 使用纪律（本 crate 的唯一使用面）
 //!
@@ -28,6 +29,7 @@ use std::time::Duration;
 use rustuya::device::Device;
 use rustuya::error::TuyaError;
 
+use super::dps::parse_dps;
 use super::store::{DeviceRow, TuyaStore};
 
 /// 单请求超时（DeviceBuilder.timeout；3–5s 区间取上限覆盖弱网握手）。
@@ -118,22 +120,6 @@ pub(crate) fn classify(err: &TuyaError) -> ControlFailure {
             )
         }
     }
-}
-
-/// DP 载荷 → `dp_id → value` 映射（纯函数）。
-///
-/// 涂鸦报文两种形状都见过：裸 `{"1":true,"2":30}` 与包裹 `{"dps":{"1":true}}`。
-pub(crate) fn parse_dps(payload: &str) -> HashMap<String, serde_json::Value> {
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(payload) else {
-        return HashMap::new();
-    };
-    let obj = match v.get("dps").filter(|d| d.is_object()) {
-        Some(dps) => dps,
-        None => &v,
-    };
-    obj.as_object()
-        .map(|m| m.iter().map(|(k, val)| (k.clone(), val.clone())).collect())
-        .unwrap_or_default()
 }
 
 /// 局域网事件汇：listener 消息（设备主动推送）经它回写 DP 缓存与在线状态。

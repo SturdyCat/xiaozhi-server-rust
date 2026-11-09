@@ -16,7 +16,8 @@
 //!   + 调试代理 `proxy_request`；2026-11-03 真凭证联调全链路验证）；
 //! - [`cloud_transport`]：云 HTTP 传输层（请求/响应形状 + reqwest 发送抽象）；
 //! - [`sync`]：同步编排（拉清单 → upsert → sync_history；60s 最小间隔全局闸门）；
-//! - [`lan`]：rustuya 会话池（懒式建连）+ 失败三归类 + DP 载荷解析；
+//! - [`lan`]：rustuya 会话池（懒式建连）+ 失败三归类；
+//! - [`dps`]：DP 载荷解析纯函数单源（native 与 guest 插件经 `#[path]` 共用）；
 //! - [`voice`]：NLU iot 域语音控制（名称匹配 / 开关 DP 识别 / 话术组装）；
 //! - [`worker`]：后台任务（定时同步 + 60s 错峰在线轮询 + 5min 发现扫描）；
 //! - [`api`]：axum 管理面（经管理鉴权，secret 永不回显）。
@@ -31,12 +32,17 @@ pub mod api;
 pub mod cloud;
 pub mod cloud_transport;
 pub mod config;
+/// DP 载荷解析单源（`#[path]` 被 guest 插件共用；无宿主依赖）。
+pub(crate) mod dps;
 pub mod lan;
+/// `connector.tuya` 的 WASM 控制策略（候选选择；LAN 数据面留 native）。
+#[cfg(feature = "wasm-plugins")]
+pub mod policy;
+/// 涂鸦云纯协议语义单源（签名/请求构造/请求响应形状；guest 经 `#[path]` 共用同一份）。
+pub(crate) mod protocol;
 pub mod store;
 pub mod sync;
 pub mod voice;
-#[cfg(feature = "wasm-plugins")]
-mod wasm;
 pub mod worker;
 
 #[cfg(test)]
@@ -44,15 +50,17 @@ mod api_tests;
 #[cfg(test)]
 mod cloud_tests;
 #[cfg(test)]
+mod dps_tests;
+#[cfg(test)]
 mod engine_tests;
 #[cfg(test)]
 mod lan_tests;
+#[cfg(all(test, feature = "wasm-plugins"))]
+mod policy_tests;
 #[cfg(test)]
 mod sync_tests;
 #[cfg(test)]
 mod voice_tests;
-#[cfg(all(test, feature = "wasm-plugins"))]
-mod wasm_tests;
 
 pub use config::TuyaConfig;
 
@@ -120,6 +128,10 @@ pub struct TuyaEngine {
     unregistered: Mutex<Vec<UnregisteredDevice>>,
     /// 已生效的凭证指纹（变化 → 丢弃 token 缓存；勿打日志，含 secret）。
     cred_fp: Mutex<String>,
+    /// WASM 宿主句柄（S3e：`[tuya].engine = "wasm-policy"` 时目录拉取经
+    /// `connector.tuya` 云链路）。native 引擎永不触碰；由 runtime 晚绑注入（一次）。
+    #[cfg(feature = "wasm-plugins")]
+    pub(crate) wasm_host: std::sync::OnceLock<Arc<crate::plugins::wasm::WasmHost>>,
 }
 
 /// 在线轮询周期（worker 每 tick 检查 next_due）。
@@ -149,6 +161,8 @@ fn assemble(data_dir: &Path) -> TuyaEngine {
         }),
         unregistered: Mutex::new(Vec::new()),
         cred_fp: Mutex::new(String::new()),
+        #[cfg(feature = "wasm-plugins")]
+        wasm_host: std::sync::OnceLock::new(),
     }
 }
 
@@ -156,6 +170,13 @@ impl TuyaEngine {
     /// **唯一**的构造入口（见 [`assemble`]）：零 IO，`Engines::assemble` 与测试共用。
     pub fn new(data_dir: &Path) -> Self {
         assemble(data_dir)
+    }
+
+    /// 晚绑注入 WASM 宿主（S3e，镜像 `WeatherService::set_wasm_host`）：
+    /// runtime 在宿主创建后调用；native 引擎与测试不注入即走全 native 路径。
+    #[cfg(feature = "wasm-plugins")]
+    pub fn set_wasm_host(&self, host: Arc<crate::plugins::wasm::WasmHost>) {
+        let _ = self.wasm_host.set(host);
     }
 
     // ============================================================
@@ -238,7 +259,7 @@ impl TuyaEngine {
         lan::with_call_timeout(device.set_value(dp_id.clone(), value.clone())).await?;
         // 控制成功 → 回读全量状态更新缓存（回读失败不影响控制成功的结论）
         let mut dps = match lan::with_call_timeout(device.status()).await {
-            Ok(Some(text)) => lan::parse_dps(&text),
+            Ok(Some(text)) => dps::parse_dps(&text),
             _ => HashMap::from([(dp_id.clone(), value.clone())]),
         };
         if dps.is_empty() {
@@ -298,7 +319,7 @@ impl TuyaEngine {
         self.lan.ensure_listener(&row.device_id);
         let ok = match lan::with_call_timeout(device.status()).await {
             Ok(Some(text)) => {
-                let dps = lan::parse_dps(&text);
+                let dps = dps::parse_dps(&text);
                 if !dps.is_empty() {
                     self.dp_cache
                         .lock()

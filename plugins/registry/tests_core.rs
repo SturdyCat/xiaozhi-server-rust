@@ -43,15 +43,14 @@ fn every_implemented_capability_has_an_impl() {
 /// 2. `REGISTRY` 里某描述符指向一个不在清单里的能力（反向缺失）。
 #[test]
 fn capability_registry_is_complete_and_consistent() {
-    // (1) 变体数硬约束：native 插件组合额外装载两个设备能力。
-    let expected = if cfg!(feature = "native-plugins") {
-        14
-    } else {
-        12
-    };
+    // (1) 变体数硬约束：12 个核心能力 + 已启用 feature 的设备能力（tuya / echomuse / esp-home）。
+    let expected = super::super::ALL_CAPABILITIES.len();
+    assert!(expected >= 12, "核心能力数不应减少：{expected}");
     assert_eq!(
-        ALL_CAPABILITIES.len(),
         expected,
+        12 + usize::from(cfg!(feature = "tuya-plugin"))
+            + usize::from(cfg!(feature = "echomuse-plugin"))
+            + usize::from(cfg!(feature = "esp_home")),
         "新增 Capability 变体须同步加入 ALL_CAPABILITIES 并改此断言"
     );
     // (2) 清单无重复。
@@ -347,11 +346,12 @@ fn credential_fields_are_marked_secret() {
 fn schema_json_shape() {
     let v = schema_json();
     let caps = v["capabilities"].as_array().expect("capabilities 数组");
-    // pure-base 只投影核心 ASR/VAD/TTS/LLM；legacy 投影全部能力。
+    // pure-base 只投影核心 ASR/VAD/TTS/LLM；携带静态设备业务的构建（ui.mode=base）
+    // 投影全部能力。判据与 schema_json/ui.mode 单源一致（static_business_present）。
     let expected: Vec<_> = ALL_CAPABILITIES
         .iter()
         .copied()
-        .filter(|&cap| !cfg!(not(feature = "native-plugins")) || cap.exposed_in_pure_base())
+        .filter(|&cap| super::super::static_business_present() || cap.exposed_in_pure_base())
         .collect();
     assert_eq!(caps.len(), expected.len());
     let tts = caps
@@ -395,7 +395,14 @@ fn schema_json_shape() {
 /// pure-base 发布契约：schema 只投影核心 ASR/VAD/TTS/LLM，
 /// 任何业务能力（含 EchoMuse/Tuya/AIUI/memory/soul/skill/wakeup/NLU）
 /// 都不得以静态 schema 出现——业务 UI 只能来自已装载的 WASM manifest。
-#[cfg(not(feature = "native-plugins"))]
+/// 仅在真正"纯底座"构建（未启用任何设备 feature）下运行；携带设备 feature 的
+/// 构建由 ui.mode 如实声明 `base`，schema 投影全部能力（schema_json_shape 守形状）。
+#[cfg(not(any(
+    feature = "native-plugins",
+    feature = "echomuse-plugin",
+    feature = "tuya-plugin",
+    feature = "esp_home"
+)))]
 #[test]
 fn pure_base_schema_exposes_core_only() {
     let v = schema_json();
@@ -417,6 +424,7 @@ fn pure_base_schema_exposes_core_only() {
         "nlu",
         "tuya",
         "echomuse",
+        "esp-home",
     ] {
         assert!(
             !ids.contains(&business),

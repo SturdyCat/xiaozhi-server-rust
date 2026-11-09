@@ -85,6 +85,11 @@ fn declared_engine_ids_match_registry_implementations() {
         Capability::Echomuse,
         crate::device::echomuse::ECHOMUSE_ENGINES,
     ));
+    #[cfg(feature = "esp_home")]
+    tables.push((
+        Capability::EspHome,
+        crate::device::esp_home::ESPHOME_ENGINES,
+    ));
     for (cap, specs) in tables {
         let registered: Vec<&str> = impls_of(cap).map(|d| impl_id(d.id)).collect();
         for spec in specs.iter() {

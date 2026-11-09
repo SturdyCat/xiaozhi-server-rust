@@ -12,12 +12,13 @@ use wasmtime::component::{Component, Linker};
 use wasmtime::Store;
 
 use super::contract::xiaozhi;
-use super::contract::{
-    ManifestDto, Plugin, ProtocolDto, RegistrationDto, TestResultDto,
-};
+use super::contract::{ManifestDto, Plugin, ProtocolDto, RegistrationDto, TestResultDto};
 use super::effects::Permissions;
 use super::host_api::HostContext;
 use super::sandbox::{arm_call_budget, SandboxLimits};
+
+/// `host-system` 实现（会话/设备事实 + 文件沙箱）拆到 [子模块](self::host_system)。
+mod host_system;
 use wasmtime::component::HasSelf;
 
 /// wasmtime::Error（非 std::error::Error）→ anyhow 的转换点。
@@ -26,6 +27,9 @@ use wasmtime::component::HasSelf;
 fn call_err(e: wasmtime::Error) -> anyhow::Error {
     anyhow::Error::msg(e)
 }
+
+/// `host-core.random` 单次上限（宿主侧第二道防线，guest SDK 侧无预检）。
+const MAX_RANDOM_BYTES: u32 = 1024;
 
 fn denied(plugin_id: &str, what: &str, perm: &str) -> String {
     format!("插件 {plugin_id} 未声明 `{perm}` 权限，拒绝 {what}")
@@ -78,6 +82,17 @@ impl xiaozhi::plugin::host_core::Host for StoreData {
             .get_or_init(std::time::Instant::now)
             .elapsed()
             .as_millis() as u64
+    }
+
+    /// 密码学随机字节：单次 1..=[`MAX_RANDOM_BYTES`]（防插件用超大分配放大），
+    /// 委托宿主 OS 熵源；熵源不可用显式 Err（插件决定降级或失败）。
+    fn random(&mut self, len: u32) -> Result<Vec<u8>, String> {
+        if len == 0 || len > MAX_RANDOM_BYTES {
+            return Err(format!(
+                "random 长度越界（{len}，允许 1..={MAX_RANDOM_BYTES}）"
+            ));
+        }
+        self.ctx.rng.fill(len as usize)
     }
 
     /// 读插件隔离 kv。未声明 `kv` 权限 → **deny-as-absent**（none + 审计告警）：
@@ -145,11 +160,7 @@ impl xiaozhi::plugin::host_core::Host for StoreData {
             .map_err(|e| e.to_string())
     }
 
-    fn publish(
-        &mut self,
-        topic: String,
-        payload: Vec<u8>,
-    ) -> std::result::Result<bool, String> {
+    fn publish(&mut self, topic: String, payload: Vec<u8>) -> std::result::Result<bool, String> {
         if !self.permissions.publish {
             return Err(denied(&self.plugin_id, "publish", "pub"));
         }
@@ -253,6 +264,18 @@ impl xiaozhi::plugin::host_net::Host for StoreData {
         self.ctx.net.peer(connection_id)
     }
 
+    /// S3l：出站 TCP 连接。`net` 权限门（与 udp-send 同口径）；协议语义
+    /// （分帧/握手/加密）在插件侧，宿主只搬运字节并回灌 `io.tcp.*` 事件。
+    fn tcp_connect(&mut self, host: String, port: u16) -> std::result::Result<u64, String> {
+        if !self.permissions.net {
+            return Err(denied(&self.plugin_id, "tcp-connect", "net"));
+        }
+        self.ctx
+            .net
+            .tcp_connect(&self.plugin_id, &host, port)
+            .map_err(|e| format!("{e:#}"))
+    }
+
     fn udp_send(
         &mut self,
         socket_handle: u64,
@@ -291,13 +314,7 @@ impl xiaozhi::plugin::host_net::Host for StoreData {
     ) -> std::result::Result<(), String> {
         self.ctx
             .net
-            .respond_http(
-                &self.plugin_id,
-                &request_id,
-                status,
-                headers,
-                body,
-            )
+            .respond_http(&self.plugin_id, &request_id, status, headers, body)
             .map_err(|e| format!("{e:#}"))
     }
 
@@ -355,130 +372,6 @@ impl xiaozhi::plugin::host_timer::Host for StoreData {
             .timers
             .clear(&self.plugin_id, timer_id)
             .map_err(|e| format!("{e:#}"))
-    }
-}
-
-// ============================================================
-// host-system：会话/设备/服务端事实 + 插件私有文件
-// ============================================================
-
-impl xiaozhi::plugin::host_system::Host for StoreData {
-    fn list_sessions(&mut self) -> Vec<xiaozhi::plugin::host_system::SessionInfo> {
-        self.ctx
-            .facts
-            .sessions()
-            .into_iter()
-            .map(|s| xiaozhi::plugin::host_system::SessionInfo {
-                id: s.id,
-                device_id: s.device_id,
-                phase: s.phase,
-                started_at_ms: s.started_at_ms,
-            })
-            .collect()
-    }
-
-    fn get_session(
-        &mut self,
-        session_id: String,
-    ) -> Option<xiaozhi::plugin::host_system::SessionInfo> {
-        self.ctx
-            .facts
-            .session(&session_id)
-            .map(|s| xiaozhi::plugin::host_system::SessionInfo {
-                id: s.id,
-                device_id: s.device_id,
-                phase: s.phase,
-                started_at_ms: s.started_at_ms,
-            })
-    }
-
-    fn list_devices(&mut self) -> Vec<xiaozhi::plugin::host_system::DeviceInfo> {
-        self.ctx
-            .facts
-            .devices()
-            .into_iter()
-            .map(|d| xiaozhi::plugin::host_system::DeviceInfo {
-                id: d.id,
-                online: d.online,
-                last_seen_ms: d.last_seen_ms,
-                client_id: d.client_id,
-            })
-            .collect()
-    }
-
-    fn get_device(
-        &mut self,
-        device_id: String,
-    ) -> Option<xiaozhi::plugin::host_system::DeviceInfo> {
-        self.ctx
-            .facts
-            .device(&device_id)
-            .map(|d| xiaozhi::plugin::host_system::DeviceInfo {
-                id: d.id,
-                online: d.online,
-                last_seen_ms: d.last_seen_ms,
-                client_id: d.client_id,
-            })
-    }
-
-    fn server_info(&mut self) -> xiaozhi::plugin::host_system::ServerFacts {
-        let f = self.ctx.facts.server();
-        xiaozhi::plugin::host_system::ServerFacts {
-            version: f.version,
-            data_dir: f.data_dir,
-            started_at_ms: f.started_at_ms,
-        }
-    }
-
-    fn data_dir(&mut self) -> String {
-        self.ctx.facts.server().data_dir
-    }
-
-    fn fs_read(&mut self, path: String) -> std::result::Result<Vec<u8>, String> {
-        if !self.permissions.fs {
-            return Err(denied(&self.plugin_id, "fs-read", "fs"));
-        }
-        self.ctx
-            .fs
-            .read(&self.plugin_id, &path)
-            .map_err(|e| format!("{e:#}"))
-    }
-
-    fn fs_write(&mut self, path: String, bytes: Vec<u8>) -> std::result::Result<(), String> {
-        if !self.permissions.fs {
-            return Err(denied(&self.plugin_id, "fs-write", "fs"));
-        }
-        self.ctx
-            .fs
-            .write(&self.plugin_id, &path, &bytes)
-            .map_err(|e| format!("{e:#}"))
-    }
-
-    fn fs_list(&mut self, dir: String) -> std::result::Result<Vec<String>, String> {
-        if !self.permissions.fs {
-            return Err(denied(&self.plugin_id, "fs-list", "fs"));
-        }
-        self.ctx
-            .fs
-            .list(&self.plugin_id, &dir)
-            .map_err(|e| format!("{e:#}"))
-    }
-
-    fn fs_delete(&mut self, path: String) -> std::result::Result<bool, String> {
-        if !self.permissions.fs {
-            return Err(denied(&self.plugin_id, "fs-delete", "fs"));
-        }
-        self.ctx
-            .fs
-            .delete(&self.plugin_id, &path)
-            .map_err(|e| format!("{e:#}"))
-    }
-
-    fn fs_stat(&mut self, path: String) -> Option<u64> {
-        if !self.permissions.fs {
-            return None;
-        }
-        self.ctx.fs.stat(&self.plugin_id, &path)
     }
 }
 

@@ -17,16 +17,18 @@
 //! - [`registry`] / [`lifecycle`]：`WasmHost` 门面、每插件 Runner/入站队列/泵任务、三态生命周期；
 //! - [`event_bus`] / [`services`] / [`net`] / [`timers`] / [`fs`] / [`mdns`] / [`config_store`]：
 //!   订阅路由、服务调用、socket 监听、定时器、文件沙箱、广播与配置命名空间；
-//! - [`effects`]：声明式效果 + 权限门（log/kv-put/kv-delete/http-request + legacy lan）；
-//! - [`bridge`] / [`waterfall`]：遗留策略桥与事件瀑布，阶段二删除，新代码不要再接。
+//! - [`effects`]：声明式效果 + 权限门（log/kv-put/kv-delete/http-request）。
+//!
+//! 阶段二收口：遗留策略桥 `bridge*` 与事件瀑布 `waterfall` 已删除——各能力/设备
+//! 域的 prepare 派发归位到各自模块（asr/tts/vad 引擎适配器、weather、
+//! workflow/session/hooks、device/{tuya,echomuse}/policy），宿主 crate 不再持有
+//! 任何业务扩展点名。
 //!
 //! 静态注册表（`plugins/registry`）回答「内置能力现状」，本模块回答「动态插件供给」，
 //! 两者在 `/api/plugins` 合并为同一张清单；静态表与 native 业务 feature 的剥离属阶段二。
 
 #[cfg(feature = "wasm-plugins")]
 pub mod artifacts;
-#[cfg(feature = "wasm-plugins")]
-pub mod bridge;
 #[cfg(feature = "wasm-plugins")]
 pub mod config_store;
 #[cfg(feature = "wasm-plugins")]
@@ -59,22 +61,19 @@ pub mod sandbox;
 pub mod services;
 #[cfg(feature = "wasm-plugins")]
 pub mod timers;
-#[cfg(feature = "wasm-plugins")]
-pub mod waterfall;
 
 #[cfg(test)]
 #[cfg(feature = "wasm-plugins")]
 pub(crate) mod tests;
 
 pub(crate) use contract::version_at_least;
-pub use effects::{Effect, LanSocketCommand, PermissionError, Permissions};
+pub use effects::{Effect, PermissionError, Permissions};
 pub use lifecycle::{
     ActivateError, DeactivateError, DependencyGap, Lifecycle, RemoveError, StageError, StageOutcome,
 };
 pub use registry::{Phase, WasmHost};
 pub use resolver::{Resolution, ResolutionTable};
 pub use sandbox::{SandboxLimits, TrapKind};
-pub use waterfall::{Strength, Waterfall};
 
 // ============================================================
 // 进程级宿主槽（晚绑）：boot 期构建的引擎（如 WasmAsrEngine）在宿主创建后

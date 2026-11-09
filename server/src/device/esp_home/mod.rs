@@ -8,6 +8,10 @@
 //!   的 `volume_set` 下发）。**静音只有上报没有下发**（协议无 `mute_set`），故为只读传感器；
 //! - **`bluetooth_proxy`**：把 Dot 2 的 BLE 无线电暴露给 native-api 客户端（[`bluetooth`]）。
 //!   能力边界严格按设备侧实测结果宣告——配对/清缓存/描述符读写设备没有，就不报；
+//! - **目录策略（阶段三第一切片）**：`[esp_home].engine = "wasm-policy"` 时，桥在绑定端口前
+//!   经 `connector.esp-home` 扩展点向 WASM 策略插件征询「实体放行 + 显示名」决策
+//!   （[`policy`]，fail-closed：插件不可用桥不启动）；协议握手、加密、状态采集与命令执行
+//!   仍由 native 承载，key 语义不变；
 //! - 编译期开关 `--features esp_home`，运行期开关 `[esp_home].enabled`；默认关闭，
 //!   关闭时零依赖、零监听、零行为变化。
 //!
@@ -17,16 +21,22 @@
 
 pub mod config;
 
+pub use config::EspHomeConfig;
+pub use config::ESPHOME_ENGINES;
+
 #[cfg(feature = "esp_home")]
 pub mod actions;
 #[cfg(feature = "esp_home")]
 pub mod bluetooth;
+#[cfg(feature = "wasm-plugins")]
+pub mod policy;
 #[cfg(feature = "esp_home")]
 pub mod server;
 #[cfg(feature = "esp_home")]
 pub mod state;
 
-pub use config::EspHomeConfig;
+#[cfg(all(test, feature = "wasm-plugins"))]
+mod policy_tests;
 
 /// `[esp_home].enabled` 时由 `main` 调用：后台起桥，失败只记日志（不阻断主服务）。
 ///

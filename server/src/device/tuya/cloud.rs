@@ -35,14 +35,22 @@
 use std::time::{Duration, Instant};
 
 use super::cloud_transport::ReqwestSender;
-pub use super::cloud_transport::{CloudRequest, CloudResponse, HttpSender};
 
-use hmac::Hmac;
-// hmac 0.13：`new_from_slice` 来自 digest 树的 KeyInit，`update`/`finalize` 来自
-// digest 的 `Mac` trait（hmac 以 `pub use digest` 转出，二者都必须在作用域内）
-use hmac::digest::{KeyInit, Mac};
+pub use super::cloud_transport::HttpSender;
+// 协议语义单源：常量/签名/请求构造在 [`super::protocol`]（host 与 guest 共用，
+// 阶段三 S3b）；本文件只保留解析、token 生命周期与 HTTP 编排。
+pub(crate) use super::protocol::{
+    build_devices_request, build_proxy_request, build_token_request, CloudResponse, MAX_PAGES,
+    PAGE_SIZE,
+};
+// 签名与请求常量仅 cloud_tests 消费（历史 `super::cloud::*` 导入路径不迁移）
+#[cfg(test)]
+pub(crate) use super::protocol::{
+    devices_path_query, official_sign, region_host, sha256_hex_lower, sign_hmac_hex, CloudRequest,
+    PATH_DEVICES, PATH_TOKEN,
+};
+
 use serde_json::Value;
-use sha2::Sha256;
 
 /// 云侧设备目录一行（authorized-devices 回包投影）。
 #[derive(Debug, Clone, PartialEq)]
@@ -82,69 +90,8 @@ impl CloudError {
     }
 }
 
-// ---- 协议常量（涂鸦云 OpenAPI；待真机验证项集中在此，勿散落）----
-
-/// token 端点（grant_type=1 = 简单模式 token；`/v1/token` 会 1108）。
-pub(crate) const PATH_TOKEN: &str = "/v1.0/token?grant_type=1";
-/// 账号授权设备清单端点（免 uid，含 local_key；2026-11-03 cn 区真机验证通过）。
-pub(crate) const PATH_DEVICES: &str = "/v1.0/iot-01/associated-users/devices";
-/// 分页大小（架构口径 50）。
-pub(crate) const PAGE_SIZE: u32 = 50;
-/// 翻页硬上限（5000 台设备的家，护住"服务端忽略游标"场景下的死循环）。
-pub(crate) const MAX_PAGES: u32 = 100;
 /// token 默认有效期 7200s，提前 300s 刷新。
 const TOKEN_REFRESH_MARGIN_SECS: i64 = 300;
-
-/// 区域 → OpenAPI host。未识别区域由调用方 normalize 收敛，这里兜底 cn。
-pub(crate) fn region_host(region: &str) -> String {
-    match region {
-        "us" => "https://openapi.tuyaus.com".into(),
-        "eu" => "https://openapi.tuyaeu.com".into(),
-        "in" => "https://openapi.tuyain.com".into(),
-        _ => "https://openapi.tuyacn.com".into(),
-    }
-}
-
-/// HMAC-SHA256 → **大写** hex（涂鸦 sign 值口径）。
-pub(crate) fn sign_hmac_hex(secret: &str, payload: &str) -> String {
-    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("HMAC 接受任意长度密钥");
-    mac.update(payload.as_bytes());
-    hex_upper(&mac.finalize().into_bytes())
-}
-
-/// SHA-256 → **小写** hex（涂鸦签名字符串里的 Content-SHA256 段口径）。
-pub(crate) fn sha256_hex_lower(data: &str) -> String {
-    use sha2::Digest;
-    let mut hash = Sha256::new();
-    hash.update(data.as_bytes());
-    hash.finalize().iter().map(|b| format!("{b:02x}")).collect()
-}
-
-/// 涂鸦官方 v1.0 签名（与 tuya-connector-python `_calculate_sign` 逐字节一致）。
-///
-/// `path_query` 必须与实际发送的 URL 路径+query **完全一致**（query 字典序）；
-/// `body` 为原始 JSON 文本（GET 传空串）。
-pub(crate) fn official_sign(
-    secret: &str,
-    access_id: &str,
-    access_token: &str,
-    t: &str,
-    method: &str,
-    path_query: &str,
-    body: &str,
-) -> String {
-    let content_sha = sha256_hex_lower(body);
-    let message = format!("{access_id}{access_token}{t}{method}\n{content_sha}\n\n{path_query}");
-    sign_hmac_hex(secret, &message)
-}
-
-fn hex_upper(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        out.push_str(&format!("{b:02X}"));
-    }
-    out
-}
 
 /// 13 位毫秒时间戳（字符串，直接进头）。
 pub(crate) fn timestamp_ms() -> String {
@@ -153,112 +100,6 @@ pub(crate) fn timestamp_ms() -> String {
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0);
     format!("{ms}")
-}
-
-/// 构造 token 请求（纯函数：t 由调用方传入，测试可断言确定性）。
-pub(crate) fn build_token_request(
-    region: &str,
-    access_id: &str,
-    access_secret: &str,
-    t: &str,
-) -> CloudRequest {
-    let sign = official_sign(access_secret, access_id, "", t, "GET", PATH_TOKEN, "");
-    CloudRequest {
-        method: "GET",
-        url: format!("{}{PATH_TOKEN}", region_host(region)),
-        body: String::new(),
-        headers: vec![
-            ("client_id".into(), access_id.to_string()),
-            ("access_token".into(), String::new()),
-            ("t".into(), t.to_string()),
-            ("sign_method".into(), "HMAC-SHA256".into()),
-            ("sign".into(), sign),
-            ("lang".into(), "zh".into()),
-        ],
-    }
-}
-
-/// 设备清单请求的 path?query（纯函数，签名与 URL 共用同一串，测试直驱）。
-/// query 字典序：`last_row_key` 在 `size` 前；无游标时只有 `size`。
-pub(crate) fn devices_path_query(last_row_key: &str) -> String {
-    if last_row_key.is_empty() {
-        format!("{PATH_DEVICES}?size={PAGE_SIZE}")
-    } else {
-        format!("{PATH_DEVICES}?last_row_key={last_row_key}&size={PAGE_SIZE}")
-    }
-}
-
-/// 构造设备清单请求（带游标翻页）。
-pub(crate) fn build_devices_request(
-    region: &str,
-    access_id: &str,
-    access_secret: &str,
-    access_token: &str,
-    t: &str,
-    last_row_key: &str,
-) -> CloudRequest {
-    let path_query = devices_path_query(last_row_key);
-    let sign = official_sign(
-        access_secret,
-        access_id,
-        access_token,
-        t,
-        "GET",
-        &path_query,
-        "",
-    );
-    CloudRequest {
-        method: "GET",
-        url: format!("{}{}", region_host(region), path_query),
-        body: String::new(),
-        headers: vec![
-            ("client_id".into(), access_id.to_string()),
-            ("access_token".into(), access_token.to_string()),
-            ("t".into(), t.to_string()),
-            ("sign_method".into(), "HMAC-SHA256".into()),
-            ("sign".into(), sign),
-            ("lang".into(), "zh".into()),
-        ],
-    }
-}
-
-/// 调试代理请求构造（纯函数）：官方签名统一入口，签名与发送共用同一串 body。
-pub(crate) fn build_proxy_request(
-    region: &str,
-    access_id: &str,
-    access_secret: &str,
-    access_token: &str,
-    method: &'static str,
-    path_query: &str,
-    body_json: &str,
-    t: &str,
-) -> CloudRequest {
-    let sign = official_sign(
-        access_secret,
-        access_id,
-        access_token,
-        t,
-        method,
-        path_query,
-        body_json,
-    );
-    let mut headers = vec![
-        ("client_id".into(), access_id.to_string()),
-        ("access_token".into(), access_token.to_string()),
-        ("t".into(), t.to_string()),
-        ("sign_method".into(), "HMAC-SHA256".into()),
-        ("sign".into(), sign),
-        ("lang".into(), "zh".into()),
-    ];
-    if !body_json.is_empty() {
-        headers.push(("Content-Type".into(), "application/json".into()));
-    }
-    CloudRequest {
-        method,
-        url: format!("{}{}", region_host(region), path_query),
-        body: body_json.to_string(),
-        headers,
-    }
 }
 
 // ---- 回包解析（纯函数，测试直驱）----

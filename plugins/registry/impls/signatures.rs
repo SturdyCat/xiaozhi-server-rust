@@ -66,6 +66,10 @@ pub(super) fn sig_tuya(cfg: &Config) -> String {
 pub(super) fn sig_echomuse(cfg: &Config) -> String {
     format!("{}|{}", cfg.echomuse.engine_id(), cfg.echomuse.enabled)
 }
+#[cfg(feature = "esp_home")]
+pub(super) fn sig_esp_home(cfg: &Config) -> String {
+    format!("{}|{}", cfg.esp_home.engine_id(), cfg.esp_home.enabled)
+}
 pub(super) fn sig_aiui(cfg: &Config) -> String {
     let a = &cfg.aiui;
     format!(

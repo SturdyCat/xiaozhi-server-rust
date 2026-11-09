@@ -242,6 +242,43 @@ pub const ECHOMUSE_WASM_POLICY: PluginDescriptor = PluginDescriptor {
     selected: sel_echomuse_wasm_policy,
 };
 
+/// 原生 ESPHome 桥：协议握手、加密、状态采集与命令执行全由 native 承载。
+#[cfg(feature = "esp_home")]
+pub const ESPHOME_NATIVE: PluginDescriptor = PluginDescriptor {
+    id: "esp-home.native",
+    capability: Capability::EspHome,
+    display: "ESPHome 原生桥（全 native）",
+    local: true,
+    hot: HotReload::RestartOnly,
+    requires: &[],
+    fields_path: &[],
+    fields: &[],
+    signature: sig_esp_home,
+    validate: |_| Ok(()),
+    build: None,
+    warn_if: None,
+    selected: sel_esp_home_native,
+};
+
+/// ESPHome 的 WASM 目录策略：启动期实体放行/显示名经 `connector.esp-home` 决策，
+/// 协议与数据面留 native（阶段三 ESPHome 第一切片）。
+#[cfg(feature = "esp_home")]
+pub const ESPHOME_WASM_POLICY: PluginDescriptor = PluginDescriptor {
+    id: "esp-home.wasm-policy",
+    capability: Capability::EspHome,
+    display: "WASM ESPHome 目录策略 + 原生桥",
+    local: false,
+    hot: HotReload::RestartOnly,
+    requires: &[],
+    fields_path: &[],
+    fields: &[],
+    signature: sig_esp_home,
+    validate: |_| Ok(()),
+    build: None,
+    warn_if: None,
+    selected: sel_esp_home_wasm_policy,
+};
+
 pub const AIUI_FULLCHAIN: PluginDescriptor = PluginDescriptor {
     id: "fullchain.aiui",
     capability: Capability::FullChain,

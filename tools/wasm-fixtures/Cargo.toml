@@ -9,7 +9,7 @@
 # 构建：./build.sh → server/tests/fixtures/wasm/*.wasm（wasm-tools component new）
 [workspace]
 resolver = "2"
-members = ["guest-alloc", "greeter-user", "hello", "trap"]
+members = ["guest-alloc", "greeter-user", "hello", "trap", "tuyasign"]
 
 # 夹具体积最小化（测试断言不依赖优化级别）
 [profile.release]

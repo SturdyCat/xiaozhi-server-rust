@@ -10,7 +10,6 @@
 //! `mute_state`，没有对应的 `mute_set`。因此静音在实体表里是只读 `binary_sensor`，
 //! 不做"点了没反应"的假 `switch`。
 
-use crate::device::capabilities::shared::quantize_volume;
 use crate::device::echomuse::{hub_ctl, hub_live, hub_status, ControlOut};
 
 /// 设备遥测快照（**每一项都可为 `None`**：设备尚未上报该字段）。

@@ -207,11 +207,11 @@ fn probe_report_json_shape() {
 #[test]
 fn every_capability_is_matched() {
     let cfg = Config::default();
-    let expected = if cfg!(feature = "native-plugins") {
-        14
-    } else {
-        12
-    };
+    // 12 个核心能力 + 已启用 feature 的设备能力（tuya / echomuse / esp-home）。
+    let expected = 12
+        + usize::from(cfg!(feature = "tuya-plugin"))
+        + usize::from(cfg!(feature = "echomuse-plugin"))
+        + usize::from(cfg!(feature = "esp_home"));
     assert_eq!(crate::plugins::registry::ALL_CAPABILITIES.len(), expected);
     for &cap in crate::plugins::registry::ALL_CAPABILITIES {
         let _ = probe(&cfg, cap); // 只要不 panic 即覆盖

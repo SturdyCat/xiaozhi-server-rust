@@ -7,6 +7,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::{Arc, OnceLock};
 
+// dispatch 单源（mod.rs 共用同一文件，`#[path]` 显式指路）。
+#[cfg(feature = "wasm-plugins")]
+#[path = "dispatch.rs"]
+pub(crate) mod dispatch;
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct WeatherConfig {
@@ -58,7 +63,7 @@ impl WeatherService {
         }
         #[cfg(feature = "wasm-plugins")]
         if let Some(host) = self.wasm.get() {
-            return crate::plugins::wasm::bridge::forecast(host, city, province, range);
+            return dispatch::forecast_via_plugin(host, city, province, range);
         }
         let _ = (city, province, range);
         json!({

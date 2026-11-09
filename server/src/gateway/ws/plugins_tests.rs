@@ -26,6 +26,35 @@ fn base_does_not_advertise_static_business() {
     assert!(ids.iter().all(|id| !matches!(*id, "echomuse" | "tuya")));
 }
 
+/// 阶段二收口：默认构建必须声明 `pure-base`（客户端据此隐藏静态业务导航），
+/// 且 `static_business=false` 与底座事实一致（此前恒返回 `base`，与客户端漂移）。
+#[cfg(not(any(
+    feature = "native-plugins",
+    feature = "echomuse-plugin",
+    feature = "tuya-plugin",
+    feature = "esp_home"
+)))]
+#[test]
+fn base_ui_projection_declares_pure_base() {
+    let ui = super::plugins::ui_projection_json();
+    assert_eq!(ui["mode"], "pure-base");
+    assert_eq!(ui["static_business"], false);
+}
+
+/// native 设备插件构建如实声明 `base` + `static_business=true`（不谎报纯底座）。
+#[cfg(any(
+    feature = "native-plugins",
+    feature = "echomuse-plugin",
+    feature = "tuya-plugin",
+    feature = "esp_home"
+))]
+#[test]
+fn plugin_build_ui_projection_declares_static_business() {
+    let ui = super::plugins::ui_projection_json();
+    assert_eq!(ui["mode"], "base");
+    assert_eq!(ui["static_business"], true);
+}
+
 #[cfg(any(
     feature = "native-plugins",
     feature = "echomuse-plugin",

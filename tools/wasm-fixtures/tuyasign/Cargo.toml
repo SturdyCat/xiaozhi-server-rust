@@ -1,0 +1,20 @@
+# tuyasign：涂鸦云协议语义单源对拍夹具（阶段三 S3b 证据）。
+#
+# 用 `#[path]` 直接引用 server/src/device/tuya/protocol.rs（与宿主同一份源码），
+# 在 guest 内执行 official_sign 并把结果写回 kv——由 plugins/wasm/tests/protocol.rs
+# 与宿主侧黄金向量逐字节对拍，证明「协议语义在插件侧可执行」不是纸面承诺。
+[package]
+name = "tuyasign"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# hmac/sha2 版本与宿主 server/Cargo.toml 钉版一致，保证两侧摘要链路同源
+hmac = "0.13.0"
+sha2 = "0.11.0"
+serde_json = "1"
+xiaozhi-plugin-sdk = { path = "../../../server/crates/xiaozhi-plugin-sdk" }
+guest-alloc = { path = "../guest-alloc" }

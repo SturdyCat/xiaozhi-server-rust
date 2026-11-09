@@ -205,3 +205,137 @@ fn load_primitive_keeps_active_semantics_for_policy_engines() {
         .expect("load");
     assert_eq!(lifecycle_of(&host, "greeter.usermade"), "active");
 }
+
+/// 契约 0.2 投影补齐（阶段二收口）：每条目携带 manifest/registration 的 0.2 面，
+/// 宿主级携带 bus 统计 / 服务表 / 已武装端点 / 配置命名空间——键恒存在，
+/// 值形状按声明投影（hello 未声明订阅/端点/服务 → 空数组）。
+#[test]
+fn snapshot_projects_contract_02_surface() {
+    let host = host();
+    host.stage("hello.official", &fixture("hello"))
+        .expect("stage");
+    host.register("hello.official", &fixture("hello"))
+        .expect("register");
+    host.activate_checked("hello.official", &fixture("hello"))
+        .expect("activate");
+    let snap = host.snapshot_json();
+    let row = &snap["plugins"][0];
+    for key in [
+        "subscriptions",
+        "endpoints",
+        "resources",
+        "config_namespace",
+        "provides",
+        "services",
+    ] {
+        assert!(
+            row.get(key).is_some(),
+            "插件条目缺少 0.2 投影键 {key}：{row}"
+        );
+    }
+    assert!(row["subscriptions"].is_array());
+    assert!(row["endpoints"].is_array());
+    assert!(row["resources"].is_object(), "resources 是配额对象：{row}");
+    assert!(row["provides"].is_array());
+    assert!(row["services"].is_array());
+    // 宿主级投影
+    assert!(snap["bus"].is_object(), "bus 统计：{snap}");
+    assert!(snap["services"].is_array());
+    assert!(snap["endpoints"].is_object());
+    let namespaces = snap["config_namespaces"].as_array().expect("namespaces");
+    assert!(
+        namespaces.iter().any(|n| n == "hello.official"),
+        "config_namespaces 应含已登记命名空间：{namespaces:?}"
+    );
+}
+
+// ============================================================
+// P3：[plugins] 配置门（装载期过滤 + 引导跳过）
+// ============================================================
+
+#[test]
+fn assemble_skips_artifact_with_mismatched_persisted_pin() {
+    use crate::config::store::sqlite::SqliteConfigStore;
+    use crate::config::store::ConfigStore;
+    use crate::config::{Config, PluginEntryConfig};
+
+    let dir = std::env::temp_dir().join(format!("xz-plugin-pin-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).expect("tmp dir");
+    let db = dir.join("data.db");
+    let store = SqliteConfigStore::open(db.to_str().unwrap()).expect("store");
+    let bytes = fixture("hello");
+    let mut cfg = Config::default();
+    cfg.plugins.entries.insert(
+        "hello.official".into(),
+        PluginEntryConfig {
+            enabled: true,
+            artifact: Some("00".repeat(32)),
+            attestation: None,
+        },
+    );
+    store.persist(&cfg).expect("persist");
+    let artifacts = crate::plugins::wasm::artifacts::ArtifactDir::for_location(store.location())
+        .expect("location 有值");
+    artifacts
+        .save("hello.official", &bytes)
+        .expect("save hello");
+
+    let engines = crate::runtime::Engines::new_dev(&cfg, store).expect("dev engines");
+    let host = engines.wasm.as_ref().expect("feature 编入宿主必在");
+    assert!(
+        host.snapshot_json()["plugins"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|p| p["id"] != "hello.official"),
+        "摘要不匹配的产物不得在启动时激活"
+    );
+}
+
+#[test]
+fn assemble_skips_config_disabled_artifacts() {
+    use crate::config::store::sqlite::SqliteConfigStore;
+    use crate::config::store::ConfigStore;
+    use crate::config::{Config, PluginsConfig};
+
+    // 落盘配置库（有 location → ArtifactDir 生效）+ 两份产物：启用=hello 真件、禁用=垃圾件
+    let dir = std::env::temp_dir().join(format!("xz-plugin-gate-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).expect("tmp dir");
+    let db = dir.join("data.db");
+    let store = SqliteConfigStore::open(db.to_str().unwrap()).expect("store");
+    let mut cfg = Config::default();
+    let mut off = PluginsConfig::default();
+    off.entries.insert(
+        "junk.garbage".into(),
+        crate::config::PluginEntryConfig {
+            enabled: false,
+            ..Default::default()
+        },
+    );
+    cfg.plugins = off;
+    store.persist(&cfg).expect("persist");
+
+    let artifacts = crate::plugins::wasm::artifacts::ArtifactDir::for_location(store.location())
+        .expect("location 有值 → 产物目录生效");
+    artifacts
+        .save("hello.official", &fixture("hello"))
+        .expect("save hello");
+    artifacts
+        .save("junk.garbage", &[0u8; 16])
+        .expect("save junk");
+
+    let engines = crate::runtime::Engines::new_dev(&cfg, store).expect("dev engines");
+    let host = engines.wasm.as_ref().expect("feature 编入宿主必在");
+    let snap = host.snapshot_json();
+    let ids: Vec<&str> = snap["plugins"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|p| p["id"].as_str())
+        .collect();
+    assert!(ids.contains(&"hello.official"), "启用产物应装载：{ids:?}");
+    assert!(
+        !ids.contains(&"junk.garbage"),
+        "禁用产物不得装载（即使落盘存在）：{ids:?}"
+    );
+}

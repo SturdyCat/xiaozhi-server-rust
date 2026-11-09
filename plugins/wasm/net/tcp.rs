@@ -2,7 +2,6 @@
 //!
 //! 事件：`io.tcp.opened` / `io.tcp.data`（原始字节）/ `io.tcp.closed`。
 
-use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -41,18 +40,23 @@ pub(super) fn spawn(
         let Ok(listener) = tokio::net::TcpListener::from_std(listener) else {
             return;
         };
-        let counter = Arc::new(AtomicU64::new(1));
         loop {
             tokio::select! {
                 _ = &mut shutdown_rx => break,
                 accepted = listener.accept() => {
                     let Ok((stream, peer)) = accepted else { continue };
-                    let conn_id = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    // 连接 id 走全局分配器：与端点 id / 出站连接同一命名空间
+                    // （曾用每端点局部计数器，跨端点首连接会在 conns 表相撞）。
+                    let conn_id = net.alloc_id();
+                    let peer_s = peer.to_string();
+                    // 注册同步完成（S3m 勘误）：guest 收到 opened 后立刻 net_send
+                    // 不应与 spawn 的 IO 任务赛跑。
+                    let (tx, rx) = mpsc::channel(64);
+                    net.register_conn(conn_id, &plugin, &peer_s, tx);
                     let net2 = Arc::clone(&net);
                     let plugin2 = plugin.clone();
-                    let peer_s = peer.to_string();
                     tokio::spawn(async move {
-                        let _ = serve_conn(net2, &plugin2, conn_id, stream, peer_s).await;
+                        let _ = serve_conn(net2, &plugin2, conn_id, stream, peer_s, rx).await;
                     });
                 }
             }
@@ -62,16 +66,50 @@ pub(super) fn spawn(
     Ok((port, shutdown_tx))
 }
 
+/// 出站 TCP 连接（`tcp-connect`，S3l）：同步签名——宿主函数跑在 guest 泵的
+/// `spawn_blocking` 线程里，回环/局域网 connect 阻塞可接受；解析 + 连接失败
+/// 显式报错。成功后与入站连接同表同事件口径。
+pub(super) fn connect(
+    net: &Arc<NetManager>,
+    plugin_id: &str,
+    host: &str,
+    port: u16,
+) -> Result<u64> {
+    let Some(handle) = net.runtime().cloned() else {
+        anyhow::bail!("宿主未绑定 tokio 运行时，无法出站连接");
+    };
+    let addr = super::resolve_socket_addr(&format!("{host}:{port}"))?;
+    let stream = std::net::TcpStream::connect(addr)
+        .map_err(|e| anyhow::anyhow!("TCP 连接 {host}:{port} 失败：{e}"))?;
+    stream.set_nonblocking(true)?;
+    let peer = stream
+        .peer_addr()
+        .map(|a| a.to_string())
+        .unwrap_or_else(|_| addr.to_string());
+    let stream = tokio::net::TcpStream::from_std(stream)?;
+
+    let conn_id = net.alloc_id();
+    // 注册同步完成（S3m 勘误）：guest 拿到 connection-id 后立即 net-send，
+    // 不与 spawn 的 IO 任务赛跑。
+    let (tx, rx) = mpsc::channel(64);
+    net.register_conn(conn_id, plugin_id, &peer, tx);
+    let net = Arc::clone(net);
+    let plugin = plugin_id.to_string();
+    handle.spawn(async move {
+        let _ = serve_conn(net, &plugin, conn_id, stream, peer, rx).await;
+    });
+    Ok(conn_id)
+}
+
 async fn serve_conn(
     net: Arc<NetManager>,
     plugin_id: &str,
     conn_id: u64,
     stream: tokio::net::TcpStream,
     peer: String,
+    mut rx: mpsc::Receiver<Vec<u8>>,
 ) -> Result<()> {
     let (mut read_half, mut write_half) = stream.into_split();
-    let (tx, mut rx) = mpsc::channel::<Vec<u8>>(64);
-    net.register_conn(conn_id, plugin_id, &peer, tx);
 
     net.deliver(
         plugin_id,
@@ -116,12 +154,17 @@ async fn serve_conn(
 
     net.unregister_conn(conn_id);
     let _ = write_half.shutdown().await;
+    // S3p：closed 也带 correlation-id=connection-id（S3l 文档承诺的生命周期
+    // 事件口径；此前只有 data 带，guest 无法把关闭映射回具体连接/设备）。
     net.deliver(
         plugin_id,
-        Envelope::json(
-            "io.tcp.closed",
-            &json!({ "connection_id": conn_id, "peer": peer, "reason": reason }),
-        ),
+        Envelope {
+            topic: "io.tcp.closed".to_string(),
+            correlation_id: Some(conn_id.to_string()),
+            payload: json!({ "connection_id": conn_id, "peer": peer, "reason": reason })
+                .to_string()
+                .into_bytes(),
+        },
     );
     Ok(())
 }

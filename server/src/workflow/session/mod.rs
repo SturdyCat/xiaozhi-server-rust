@@ -51,6 +51,8 @@ mod delivery;
 #[cfg(feature = "native-plugins")]
 mod delivery_audio;
 mod hooks;
+#[cfg(all(test, feature = "wasm-plugins"))]
+mod hooks_tests;
 mod mcp;
 mod media;
 mod observe;

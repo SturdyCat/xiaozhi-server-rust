@@ -106,11 +106,12 @@ impl NetManager {
     pub fn listen(self: &Arc<Self>, plugin_id: &str, spec: &EndpointSpecDto) -> Result<(u64, u16)> {
         // 端口冲突检测：同端口同协议已存在则拒绝
         {
-            let eps = self.endpoints.lock().map_err(|_| anyhow::anyhow!("端点锁中毒"))?;
+            let eps = self
+                .endpoints
+                .lock()
+                .map_err(|_| anyhow::anyhow!("端点锁中毒"))?;
             for e in eps.values() {
-                if e.spec.port != 0
-                    && e.spec.port == spec.port
-                    && e.spec.protocol == spec.protocol
+                if e.spec.port != 0 && e.spec.port == spec.port && e.spec.protocol == spec.protocol
                 {
                     bail!(
                         "端口冲突：{}:{} 已被插件 {} 的端点 {} 占用",
@@ -151,7 +152,10 @@ impl NetManager {
 
     /// 撤销端点（连接随之关闭）。
     pub fn unlisten(&self, plugin_id: &str, endpoint_id: u64) -> Result<()> {
-        let mut eps = self.endpoints.lock().map_err(|_| anyhow::anyhow!("端点锁中毒"))?;
+        let mut eps = self
+            .endpoints
+            .lock()
+            .map_err(|_| anyhow::anyhow!("端点锁中毒"))?;
         match eps.get(&endpoint_id) {
             Some(e) if e.plugin_id == plugin_id => {
                 eps.remove(&endpoint_id);
@@ -209,7 +213,10 @@ impl NetManager {
 
     /// 出站写（TCP / WS）。返回入队字节数。
     pub fn send(&self, plugin_id: &str, conn_id: u64, payload: &[u8]) -> Result<u64> {
-        let conns = self.conns.lock().map_err(|_| anyhow::anyhow!("连接表锁中毒"))?;
+        let conns = self
+            .conns
+            .lock()
+            .map_err(|_| anyhow::anyhow!("连接表锁中毒"))?;
         let conn = conns
             .get(&conn_id)
             .ok_or_else(|| anyhow::anyhow!("连接 {conn_id} 不存在"))?;
@@ -239,6 +246,12 @@ impl NetManager {
         self.conn_owner(conn_id).map(|(_, peer)| peer)
     }
 
+    /// 出站 TCP 连接（`tcp-connect`，S3l）。与入站连接同表同事件口径；权限门
+    /// 在 instance.rs 宿主函数层（`net` 权限）。
+    pub fn tcp_connect(self: &Arc<Self>, plugin_id: &str, host: &str, port: u16) -> Result<u64> {
+        tcp::connect(self, plugin_id, host, port)
+    }
+
     // ---------------- UDP ----------------
 
     /// 注册 UDP 句柄（`udp::spawn` 调用；出站与组播复用同一 fd）。
@@ -264,7 +277,10 @@ impl NetManager {
             .get(&socket_id)
             .ok_or_else(|| anyhow::anyhow!("UDP 句柄 {socket_id} 不存在"))?;
         if h.plugin_id != plugin_id {
-            bail!("UDP 句柄 {socket_id} 属于插件 {}，非 {plugin_id}", h.plugin_id);
+            bail!(
+                "UDP 句柄 {socket_id} 属于插件 {}，非 {plugin_id}",
+                h.plugin_id
+            );
         }
         Ok(Arc::clone(&h.socket))
     }
@@ -324,12 +340,7 @@ impl NetManager {
     }
 
     /// 投递插件给的 HTTP 响应。
-    fn resolve_http(
-        &self,
-        plugin_id: &str,
-        request_id: &str,
-        reply: HttpReply,
-    ) -> Result<()> {
+    fn resolve_http(&self, plugin_id: &str, request_id: &str, reply: HttpReply) -> Result<()> {
         let mut map = self
             .pending_http
             .lock()

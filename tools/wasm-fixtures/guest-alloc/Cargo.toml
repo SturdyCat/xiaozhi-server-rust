@@ -1,5 +1,11 @@
-# guest-alloc：wasm32-unknown-unknown 极简增长式分配器（测试 guest 共用）
+# guest-alloc：wasm32-unknown-unknown 分配器（官方插件与测试 guest 共用）
+# S3n 修正：原 GrowingBump 只增不回收，长跑/高频事件下累积到沙箱内存上限 →
+# wasm OOM trap（实测：会话数据面处理第 2 帧后的分配即触发）。改为委托 dlmalloc
+# （支持 free 回收），类型名保留以免 15 个插件源码改动。
 [package]
 name = "guest-alloc"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
+
+[dependencies]
+dlmalloc = { version = "0.2", features = ["global"] }

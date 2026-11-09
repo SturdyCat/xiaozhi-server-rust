@@ -112,6 +112,8 @@ pub fn probe(cfg: &Config, cap: Capability) -> Option<ProbeReport> {
         Capability::Tuya => None,
         #[cfg(feature = "echomuse-plugin")]
         Capability::Echomuse => None,
+        #[cfg(feature = "esp_home")]
+        Capability::EspHome => None,
     }
 }
 

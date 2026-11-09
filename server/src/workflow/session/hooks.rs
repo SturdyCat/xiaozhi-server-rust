@@ -3,6 +3,31 @@ use super::{plan::hook_result, Session};
 use crate::plugins::prompt::TurnPrompt;
 use crate::workflow::protocol::Transport;
 
+/// 会话**观察者挂钩**派发（P2d）：绑定到 hook 位的 wasm 插件在此收
+/// `hook.<position>` 事件（payload `{session_id, device_id, position, text?}`），
+/// 返回效果由宿主**异步执行**（fire-and-forget），不阻塞对话轮、不回灌、
+/// 任何失败只告警——旁路观察者永不打断轮次。调用方须在 spawn_blocking 内。
+/// （阶段二收口：从 wasm 宿主 crate 的 bridge 归位到会话层——`hook.*` 是
+/// 工作流域约定，宿主 crate 不持业务事件名。）
+#[cfg(feature = "wasm-plugins")]
+pub(crate) fn observe_hook(
+    host: &crate::plugins::wasm::WasmHost,
+    plugin_id: &str,
+    position: &str,
+    payload: &str,
+) {
+    let event = format!("hook.{position}");
+    match host.try_dispatch(plugin_id, &event, payload) {
+        Ok(Some(effects)) => host.spawn_deferred(plugin_id, effects),
+        Ok(None) => {}
+        Err(e) => tracing::warn!(
+            plugin = plugin_id,
+            position,
+            "观察者挂钩失败（轮次继续）：{e:#}"
+        ),
+    }
+}
+
 impl<'a, T: Transport> Session<'a, T> {
     /// wasm **观察者挂钩**派发（P2d）：绑定到本位的 wasm 插件收
     /// `hook.<position>` 事件（payload `{session_id, device_id, position, text?}`）。
@@ -27,7 +52,7 @@ impl<'a, T: Transport> Session<'a, T> {
             let plugin_id = plugin_id.to_string();
             let position = position.to_string();
             tokio::task::spawn_blocking(move || {
-                crate::plugins::wasm::bridge::observe_hook(&host, &plugin_id, &position, &payload);
+                observe_hook(&host, &plugin_id, &position, &payload);
             });
         }
         #[cfg(not(feature = "wasm-plugins"))]

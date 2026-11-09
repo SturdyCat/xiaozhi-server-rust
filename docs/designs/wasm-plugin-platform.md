@@ -14,7 +14,7 @@
 
 - 包名 `xiaozhi:plugin@0.2.0`；`world plugin { import host-core; import host-net; import host-timer; import host-system; export lifecycle }`。
 - 新增 `subscription / protocol / endpoint-spec / resource-limits / config-field / service-method / service-decl / event / effect-kv-delete / effect-http-request`；manifest 增 `subscriptions / endpoints / resources / config-namespace / provides`，registration 增 `services`。
-- `handle-event(ev: event)` 类型化信封（取代旧字符串双参），新增 `handle-service`；`effect-http-get` 由 `effect-http-request` 取代，`effect-lan-*` 仅作 legacy 保留到阶段三。
+- `handle-event(ev: event)` 类型化信封（取代旧字符串双参），新增 `handle-service`；`effect-http-get` 由 `effect-http-request` 取代；`effect-lan-*` legacy 已随阶段三收口删除（宿主效果面、`lan-socket` 权限名、native Tuya consumer 与官方 tuya 插件同步清理）。
 - 宿主新增 `host_api / event_bus / services / timers / fs / mdns / config_store / net/{http,ws,tcp,udp} / contract/validate`；`registry` 改为「条目表锁只做查找 + 每插件 Runner / 有界入站队列 / 泵任务」，`instance` 改为四个 Host trait。
 - ⛔ 0.2 是破坏性升级：**远端已部署插件不会自动迁移**，必须重建产物并重新 `upload/raw → register → activate`。
 
@@ -553,3 +553,694 @@ P8c 当前建立删除门槛并明确不删除 native 数据面；架构守卫�
   `usermade_plugin_replaces_official_and_falls_back_on_unload`。
 - 测试：默认 feature 1227 passed / 0 failed（不变）；`--features wasm-plugins`
   **1247 passed / 0 failed**（wasm:: 20 项：+kv 闭环、+deny-as-absent、+替换演练）。
+
+### S3a（阶段三 ESPHome 第一切片 + geo/天气归属裁决，2026-11-09）
+
+阶段二收口（策略桥删除、ui.mode、0.2 投影、legacy lan effect）完成后的阶段三首步。
+
+- **ESPHome 目录策略**：`[esp_home].engine = "wasm-policy"` 时，桥在绑定端口**之前**经
+  `connector.esp-home` 扩展点征询「实体放行 + 显示名」决策（`server/src/device/esp_home/policy.rs`
+  + `state.rs::CatalogPlan`）；fail-closed——缺 feature/宿主/插件显式报错、桥不启动，不静默降级。
+  未放行实体不进 `ListEntities`、不发状态、命令被忽略；key 恒为静态实体表索引，协议、noise_psk
+  加密、状态采集、音量命令与 BLE 代理全部留 native。`engine = "native"`（默认）逐字节保持原行为。
+- **注册表**：`Capability::EspHome`（`esp_home` feature 门控）+ `esp-home.native` /
+  `esp-home.wasm-policy` 描述符 + `[esp_home].engine` 引擎表（`ESPHOME_ENGINES`，旧值 `wasm`
+  兼容读）；一致性由 `config/tests.rs::declared_engine_ids_match_registry_implementations`
+  与注册表覆盖度测试钉住。
+- **官方插件**：新增 `esphome.official`（`plugins-src/esphome`，`connector.esp-home`，默认全放行
+  直通）；`hello.official` 探针同步声明 14 个扩展点（保持 Registered）。插件总数 15 个业务 +
+  hello = 16 个 `.wasm`。
+- **geo/天气归属裁决**（用户阶段二目标项收口）：`plugins/geo` 归属底座（服务器事实/观测能力：
+  出口 IP 定位 → 管理台展示 + 天气默认定位预填）；天气业务本体只在 native-plugins（NMC）或
+  WASM 插件（`skill.weather`）；`server/src/skills/weather_ops.rs` 是不联网的通用技能步执行器，
+  由新架构守卫 `weather_skill_entry_stays_plugin_dispatched_without_native_networking` 钉住。
+- **投影单源**：`ui.mode` 与静态 schema 投影收敛到 `registry::static_business_present` 单一判据
+  （此前 `schema_json` 用宽 `cfg!(any(...))` 而纯底座契约测试只认 `native-plugins`，部分设备
+  feature 组合下两表漂移；`--features esp_home` 组合此前因 `actions.rs` 双重导入等本就编译不过，
+  本轮一并修复并纳入验证矩阵）。
+- **文件规模整改**：`esp_home/server.rs` 逻辑 524 行 + 协议往返测试外置 `server_tests.rs`（340 行），
+  恢复「测试一律独立文件」与 ≤600 行约定。
+- 验证（本机实测）：default **762**/0；`wasm-plugins` **853**/0（含 8 项架构守卫）；
+  `esp_home` **991**/0；`esp_home,wasm-plugins` **1086**/0（含策略 fail-closed/直通回归）；
+  `native-plugins` **1281**/0；`native-plugins,wasm-plugins` **1377**/0。
+- 剩余：设备**协议面**迁插件（ESPHome protobuf/noise、Tuya LAN、EchoMuse WS 经 `net` 权限宿主
+  服务承载），按 P8c 删除门槛矩阵逐域取证后再删 native 路径。
+
+### S3b（阶段三协议面证据基线：Tuya 云协议语义单源 guest 对拍，2026-11-09）
+
+S3a 之后对「设备协议面迁插件」做的第一块**可回归验证**的证据切片（P8c 逐域取证的
+Tuya 域第一步），同时给出分域迁移的可行性结论。
+
+- **协议语义单源**：涂鸦云官方 v1.0 签名、请求构造与请求/响应形状从 `cloud.rs` /
+  `cloud_transport.rs` 抽到 [`server/src/device/tuya/protocol.rs`](../../server/src/device/tuya/protocol.rs)——
+  仅 hmac + sha2，**零宿主依赖**（不 import `crate::`，无 reqwest/tokio/serde_json），
+  宿主 `cloud.rs` 经 `pub(crate) use` 继续消费（历史导入路径不变，行为纯位移）。
+- **guest 对拍**：新夹具 `tuyasign`（tools/wasm-fixtures/tuyasign）用 `#[path]` 引入
+  **同一份** `protocol.rs`，在 WASM 内执行 `official_sign` 并写回 kv；
+  `plugins/wasm/tests/protocol.rs` 与宿主黄金向量逐字节对拍（v1 = 2026-11-03 python
+  参照实现同源向量、v2 覆盖 Content-SHA256 段）+ 缺参 fail-closed（业务性 Err 不写
+  结果键、不降级）。「协议语义在插件侧可执行且与宿主一致」从纸面承诺变成回归护栏。
+- **边界不变**：`access_secret` 永不跨 WASM 边界（tuya policy seam 铁律）；生产签名
+  调用方仍是持有凭证的 native `CloudClient`。插件承接完整云签名链路的**前置条件 =
+  契约 `config-read` 落地**（插件经自身配置命名空间持有凭证）。
+- **分域结论（P8c 取证基线，迁移前必读）**：
+  | 域 | 协议栈现状 | 迁插件路径 | 前置/门槛 |
+  |---|---|---|---|
+  | Tuya 云 API | 本仓 `cloud.rs`（签名/解析纯函数 + HttpSender 抽象） | 单源已共享（S3b），链路整体迁移待 config-read | 契约 config-read；真凭证回归 |
+  | Tuya LAN | **外部 crate `rustuya`**（async facade + 失败三归类是我们自己的） | guest 侧重写整个 LAN 协议栈（AES/HMAC/握手/DP 帧） | 真机固件回归（P8c：无证据不删 native） |
+  | ESPHome | **外部 crate `esphome-native-api`**（protobuf + noise_psk） | guest 需 protobuf + noise 纯 Rust 栈；目录策略已先行（S3a） | 真机 + HA 客户端回归 |
+  | EchoMuse | 本仓 native（WS/keepalive/hub/PTY），**按设计保留 native** | 不迁（文档既定），仅入口策略（P6a） | — |
+- **验证（本机实测）**：`tuya-plugin` tuya 模块 **74**/0（纯位移，同数同结果）；
+  default **762**/0；`wasm-plugins` **856**/0（含 protocol 对拍 3 项）。
+
+### S3c（tuya.official 云签名链路插件侧闭环，2026-11-09）
+
+S3b 证明「语义可执行」之后，本切片证明「链路可闭环」：真实官方插件 tuya.official
+（0.3.0）完成 **config 凭证 → 单源签名 → 宿主代发 → 回灌解析 → kv 结果** 全链路。
+
+- **凭证面**：插件配置命名空间新增 `region`（enum cn/us/eu/in）/ `access_id` /
+  `access_secret`（secret 字段，`config-secret` 读取写审计）；manifest 声明 `config`
+  权限 + 四区域 `http-out:<host>`。**凭证永不离开插件命名空间**，宿主只见签名后的请求。
+- **链路**：`connector.tuya.cloud-token` 事件 → 单源协议 `build_token_request` 签名
+  → `effect-http-request`（request-id `cloud-token|<req_id>` 承载上下文）→ 宿主
+  `http.responses` 批量回灌 → 单源 `parse_token_ok` 解析 → `tuya-cloud-token:<req_id>`
+  结果通道（成功 `{ok,access_token,expires_in,route:"plugin"}`；失败也落 `ok:false`）。
+  缺凭证 fail-closed：不发 HTTP、不写结果键。宿主代发替换为 `net` 直连的迁移位已就绪。
+- **单源扩展**：`protocol.rs` 增加 `parse_token_ok`（成功形态提取；Auth/Api 错误
+  **分类**属宿主业务语义，保留在 `cloud.rs::api_error`，不进单源）。
+- **测试**（真实插件源，`plugins/wasm/tests/tuya_cloud.rs`，3 passed）：
+  ① 全链路（端点/签名 URL、token/有效期/route 断言）；② 缺凭证 fail-closed；
+  ③ 云端业务错误走结果通道不静默。
+- **边界如实声明**：生产**同步编排**（token 生命周期、分页拉取、SQLite 落库）仍由
+  native `CloudClient` 持有；插件接管编排的下一步是 devices 目录拉取/分页解析与
+  同步语义迁移，之后才谈 P8c 删除门槛。
+- 验证（本机实测）：default **762**/0；`wasm-plugins` **859**/0（含 S3c 3 项）；
+  tuya 模块 **74**/0。tuya.official 版本 0.2.0 → 0.3.0（同 id 重传严格递增纪律）。
+
+### S3d（tuya.official 设备清单分页链路插件侧闭环 + 夹具重建互斥，2026-11-09）
+
+S3c 之后把云链路推进到**业务数据**：设备目录的单页拉取与形状解析进插件。
+
+- **单源扩展**：`protocol.rs` 新增 `parse_devices_page_ok`——页形状事实进单源
+  （真机 `result.devices`、兼容旧文档 `result.list` / 裸数组、`has_more` 满页近似、
+  游标 `last_row_key`/`last_row_id`）；设备行保持原始 JSON Value（字段投影到
+  `CloudDevice` 是宿主业务语义，留在 `cloud.rs`）。
+- **插件链路**：`connector.tuya.cloud-devices` 单页契约——payload 带 token 直接取页；
+  不带则自动先取 token（`devices-token|<rid>|<t>|<cursor>` 上下文随波，回灌链 2 步，
+  宿主深度上限 4 之内）；`has_more`/`last_row_key` 由调用方决定续页，插件不做无界
+  循环。设备行（含 local_key，凭证材料）只留在插件隔离 kv，宿主同步编排接管前不外溢。
+- **夹具重建互斥**（实测教训）：`ensure_fixture` 过期重建与并行测试线程读产物存在
+  竞态，本轮两度造成全量套件间歇失败——重建全程加进程级 Mutex，强制过期场景复跑
+  确认不再复现。
+- 验证（本机实测）：`wasm-plugins` **862**/0（tuya_cloud 6 passed：S3c 3 + S3d 3，
+  强制过期重建后复跑同样全绿）；default **762**/0；tuya 模块 **74**/0；
+  16 个系统产物重建 ✅。
+
+### S3e（tuya 目录同步生产接线：wasm-policy 引擎经插件云链路，2026-11-09）
+
+S3c/S3d 的插件云链路从「证据」升级为「生产路径」：`[tuya].engine = "wasm-policy"` 时，
+native 同步编排（60s 闸门 / token 一次 / 翻页 ≤ MAX_PAGES / SQLite upsert / 四归类）
+通过 `connector.tuya` 插件链路取目录——**协议语义在插件、编排与存储在宿主**。
+
+- **接线形态**：`TuyaEngine` 晚绑注入 WASM 宿主（`set_wasm_host`，镜像
+  `WeatherService::set_wasm_host`；runtime 装配期注入，两 feature 门控）；取数步
+  `spawn_blocking`（阻塞 guest + 效果 HTTP，与 weather/dispatch 同纪律）。
+- **凭证面**：插件路径读插件配置命名空间（管理台插件配置），**不读 [tuya] 段**——
+  两套凭证互不混淆；缺宿主/缺 feature 显式 `network_error`（消息指明"宿主未注入"/
+  "需要 wasm-plugins"），不静默回退 native。
+- **归类口径**：插件路径错误统一 `network_error`（Auth 分类是 native 客户端业务
+  语义，不跨插件边界）；partial 语义同 native（已取到的设备照常落库）。
+- **边界如实声明**：LAN 数据面（worker/lan）、控制面（voice/policy seam）与
+  sync 编排的**落库**仍 native——架构守卫不受影响（worker/lan 不含 plugins::wasm
+  的所有权断言继续成立；sync 是低频控制面，允许派发 WASM）。
+- 验证（本机实测）：wasm-plugins,tuya-plugin **942**/0（sync_tests 9，含
+  插件链路同步落库 2 台 + 缺宿主显式失败）；`wasm-plugins` **862**/0；
+  `native-plugins` **1281**/0（native 路径逐字节不变）；default **762**/0；
+  tuya 模块 **74**/0；DOCS_RS+sherpa check 通过。
+
+### S3f（Tuya LAN 0x55AA 帧编解码进插件：rustuya 黄金帧对拍，2026-11-09）
+
+LAN 域（P8c 矩阵里唯一以**外部 crate** 为协议栈所有者的数据面）第一块无需真机的
+迁移证据：帧编解码协议语义落到插件侧并与 rustuya 本尊逐字节对拍。
+
+- **单源**：[`plugins-src/tuya/src/lan_codec.rs`](../../plugins-src/tuya/src/lan_codec.rs)
+  （guest 域内单源，hmac+sha2 + 手写 CRC-32/ISO-HDLC 位循环，不引 crc crate）——
+  0x55AA pack/parse：头长度谎报拒绝（MAX_PAYLOAD_LEN=256KB）、CRC/HMAC 双尾、
+  retcode 启发式逐条对齐 rustuya `unpack_message`；0x6699（3.5/AES-GCM）未实现
+  （guest 无 rand，IV 策略待定）。
+- **为什么不在 guest 直接依赖 rustuya**：其 tokio(rt-multi-thread/net)/socket2/rand
+  依赖无 feature 可关，无法编译 wasm32-unknown-unknown——协议语义只能以
+  「重实现 + 黄金帧对拍」方式迁移，这正是本切片的做法。
+- **对拍**：`plugins/wasm/tests/tuya_lan.rs`（5 passed）——宿主用 rustuya
+  `pack_message` 生成黄金帧，guest `lan-pack`/`lan-parse` 事件经 kv 结果通道回读
+  后逐字节比较（明文 CRC 帧、HMAC-SHA256 帧、retcode 启发式两种形态、CRC 翻转
+  拒绝、外来前缀拒绝）。
+- **边界如实声明**：native LAN 数据面（`worker`/`lan`，rustuya async facade）不变，
+  架构守卫所有权断言继续成立；删除门槛仍是 P8c 的真机固件回归。完整 LAN 会话层
+  （握手/心跳/重连，即 rustuya actor 部分）未迁移。
+- 验证（本机实测）：wasm-plugins,tuya-plugin **947**/0（含 S3f 5 项）；
+  `wasm-plugins` **863**/0；tuya 模块 **74**/0；16 个系统产物重建 ✅。
+
+### S3g（LAN 0x6699/3.5 帧编解码进插件：AES-128-GCM 对拍 + 构建环境加固，2026-11-09）
+
+S3f 之后补齐 3.5 帧，**LAN 编解码层（55AA CRC/HMAC + 6699 GCM）在插件侧完整**。
+
+- **单源扩展**：`lan_codec.rs` 新增 `pack_frame_6699` / `parse_frame_6699`——
+  AES-128-GCM（nonce = iv 12B，AAD = 头 `data[4..18]`，tag 附于 ct 尾）；retcode
+  启发式与 55AA 不同（**正向**要求 `payload[4] ∈ {'{','3'}`，rustuya 同款）；
+  guest 无 rand，IV 由调用方传入（rustuya 参考 `msg.iv` 同语义，对拍用固定 IV）。
+  guest 依赖新增 `aes-gcm 0.11`（`default-features=false`，关闭 getrandom）。
+- **双向对拍**（`tests/tuya_lan.rs`，LAN 全套 9 passed）：guest pack ↔ rustuya
+  pack 逐字节一致；rustuya 帧 → guest parse 字段全对齐；**guest 帧 → rustuya
+  unpack 解开**（双向等价公民）；GCM tag 篡改拒绝。
+- **过程实录（两处环境地雷，均已钉死）**：
+  1. `~/.cargo/config.toml` 的 `[env] CARGO_PROFILE_DEV_DEBUG` 会被 cargo 注入
+     测试进程并传给子 cargo，非法值导致 `ensure_fixture` 的子构建直接报
+     "could not load config key profile.dev"——`ensure_fixture` 对子构建
+     `env_remove` 全部 `CARGO_PROFILE_*` 与 `RUSTC_WRAPPER`（sccache 在测试
+     沙盒下 rmeta 写入间歇 EPERM，一并隔离）；
+  2. 同秒 mtime 让 cargo 指纹误判「未变更」→ 旧产物被静默沿用：构建一律
+     **不经管道直接落日志**（管道 grep|head 会 SIGPIPE 杀掉 cargo），
+     `plugins-src/tuya/build.sh` 默认 `CARGO_TARGET_DIR=/tmp/xiaozhi-guest-target`
+     （可覆盖），并以行为验证代替字符串 forensics。
+- 验证（本机实测）：wasm-plugins,tuya-plugin **950**/0；`wasm-plugins` **863**/0；
+  `native-plugins` **1281**/0；default **762**/0；tuya 模块 **74**/0。
+
+### S3h（v3.3 控制命令全链路进插件：命令帧 rustuya 对拍，2026-11-09）
+
+S3f/S3g 只覆盖「帧的壳」，本切片把「命令的心脏」搬进插件：**DP 控制命令的载荷形状
+与加密组装**（`lan_command` 事件，`plugins-src/tuya/src/lan_codec.rs`）。
+
+- **载荷形状**（镜像 rustuya `ProtocolV33::generate_payload` + 共享 helper）：
+  基础载荷 `{gwId, devId, uid, [cid], t, dps}`，**t 为字符串**（rustuya
+  `t.to_string().into()`——首块 ECB 一致而次块分歧的对拍抓出的口径差异）；
+  `Control`(0x07) 去 `gwId`；`UpdateDps`(0x12) 只留 `cid` 并插 `dpId`
+  （data 或缺省 `[18,19,20]`）。
+- **加密与帧**：AES-128-ECB + PKCS7（对齐 `cipher.encrypt(padding=true)`）；
+  非裸头命令（NO_PROTOCOL_HEADER_CMDS 之外，如 Control）前插 `"3.3"+12×0`
+  协议头；帧组装 = `pack_frame_55aa`（v3.3 `get_hmac_key`=None → CRC32 尾）。
+- **对拍**（`tests/tuya_lan.rs`，LAN 全套 11 passed）：Control 与 UpdateDps 两条
+  命令帧与 rustuya `generate_payload → pack_payload → pack_message` 参考链
+  **逐字节一致**（effective cmd 亦一致）。对拍第一次失败即抓出上述 t 字符串口径
+  ——parity 测试本身就是语义勘误器。
+- **边界如实声明**：会话层（TCP 连接、版本协商、心跳、重连）未实现——这是
+  LAN 域剩余的主体；native 数据面不变。
+- 验证（本机实测）：wasm-plugins,tuya-plugin **952**/0；`wasm-plugins` **863**/0；
+  `native-plugins` **1281**/0；default **762**/0；DOCS_RS+sherpa 0 error；
+  16 个系统产物重建 ✅（本机需 `CARGO_TARGET_DIR=/tmp/xiaozhi-guest-target`
+  环境变量，见 S3g 加固记录）。
+
+### S3i（v3.4 TCP 会话协商状态机进插件：会话/命令帧 rustuya 对拍，2026-11-09）
+
+S3h 覆盖 v3.3「命令的心脏」后，本切片把 **v3.4 TCP 会话层的密码学状态机**搬进插件
+（`plugins-src/tuya/src/lan_session.rs` + `lan_events.rs` 事件面）。规格权威 =
+rustuya `device/actor.rs::negotiate_session_key` + `protocol/v34.rs` + `crypto.rs`。
+
+- **三步握手（纯函数）**：`session_start_frame`——SessKeyNegStart(0x03)，payload =
+  16B nonce 经 local_key ECB+PKCS7 加密（裸头命令），0x55AA **HMAC 尾**；
+  `session_finish`——验证回包（解密后 48B = `remote_nonce(16)‖HMAC-SHA256(local_key,
+  local_nonce)(32)`，不足 48B / HMAC 不符显式报错）→ `finish_hmac = HMAC(local_key,
+  remote_nonce)` → 签发 SessKeyNegFinish(0x05)；会话密钥 = `local_nonce ⊕ remote_nonce`
+  循环 XOR，**密钥库形态** = 再经 local_key ECB **无填充**加密的 16B blob
+  （rustuya `encrypt_session_key(padding=false)` 同款怪癖；后续帧以 blob 作 AES 与
+  HMAC 密钥，`get_cipher` 同口径）。
+- **会话模式命令帧**：`lan-command` 增 `version:"3.4"`——modern envelope
+  `{protocol:5, t(数值), data:{cid?,ctype?,dps?}}`（Control 生效为 ControlNew 0x0d）、
+  UpdateDps 同 v3.3 形状、heartbeat 去 uid/t 且无需 t；帧尾 = **HMAC**（v3.4
+  `get_hmac_key`=Some，与 v3.3 CRC 尾不同）。
+- **parity 实测两处语义勘误**（parity 作为勘误器的再次证明）：
+  ① **协议头位置两代不同**——v3.3 `pack_payload` 先加密后拼头（头以明文在密文外），
+  v3.4 先拼头再整体加密（头进密文）；初版统一成 v3.3 语义被对拍抓出（actual 帧头
+  可见 `"3.4"` 明文、长度差 1 字节）。
+  ② `dps` 为 null 时不得插 `dps` 键（rustuya `create_base_payload` 仅 `data` 为
+  Some 才插入）——heartbeat 帧 16 字节后分歧的对拍抓出。
+- **对拍**（`tests/tuya_lan_session.rs`，8 passed）：start 帧 / finish 流（finish 帧 +
+  blob + remote_nonce 三路一致）/ 篡改 HMAC 拒绝 / 短回包拒绝 / control（含 cid）/
+  update_dps / heartbeat，全部与 rustuya `TuyaProtocol`(V3_4) + `TuyaCipher` +
+  `pack_message` 参考链逐字节一致。LAN 全套 **19 passed**。
+- **边界如实声明**：TCP 传输（连接、心跳节拍、重连）仍 native——WIT 契约暂无 TCP
+  出站能力，完整会话编排归属裁决留待契约决策；v3.5（0x6699/GCM 会话协商，密钥库为
+  GCM[12..28] 形态）未实现；nonce 由调用方传入（guest 无随机源，生产编排接宿主随机源）。
+- **600 行红线收口**：`plugins-src/tuya/src/lib.rs` LAN 事件处理器（S3f 起积累的
+  hex/编解码/命令 handler）迁出至 `lan_events.rs`（649→522 行），新增
+  `lan_session.rs`/`lan_events.rs` 均 <600。
+- 验证（本机实测）：wasm-plugins,tuya-plugin **960**/0；`wasm-plugins` **863**/0；
+  `native-plugins` **1281**/0；default **762**/0；`tuya_` 过滤 **29**/0（含会话 8 +
+  LAN 11 + 云链路等）；本轮改动文件 rustfmt clean；`git diff --check`
+  干净。
+
+### S3j（v3.5 TCP 会话协商进插件：两代会话语义齐备，2026-11-09）
+
+S3i 覆盖 v3.4 后，本切片补齐 **v3.5（0x6699/GCM）会话**（`lan_session.rs` 增
+`session_start_frame_35` / `session_finish_35`，规格 = rustuya `protocol/v35.rs`）。
+
+- **两代共享面**（抽取 `verify_and_derive`）：回包验证（48B =
+  `remote_nonce‖HMAC-SHA256(local_key, local_nonce)`，不足/HMAC 不符显式报错）、
+  finish HMAC、会话密钥 `local ⊕ remote` 循环 XOR——rustuya 的 trait 默认实现
+  本就版本无关，guest 侧同构。
+- **v3.5 差异面**：
+  - 打包：0x6699 **帧级 AES-128-GCM**（nonce = 调用方传 IV，AAD = 帧头 [4..18]），
+    载荷只拼 "3.5" 头**不做帧前加密**（rustuya v35 `pack_payload` 语义，与 v3.4
+    的「头进明文整体 ECB 加密」形成三代三样：3.3 头在密文外、3.4 头进密文、
+    3.5 无帧前加密）；
+  - 密钥库 blob：`GCM(local_key, nonce=local_nonce[..12])` 输出 `iv‖ct‖tag` 取
+    **[12..28]**（密文前 16 字节、无 tag——rustuya v35 `encrypt_session_key`
+    切片怪癖），后续帧以 blob 作 GCM 密钥（`get_cipher` 同口径）；
+  - start 帧 payload = nonce **明文**进 6699 帧（裸头命令无头、无帧前加密）。
+- **事件面**：`lan-session-start` / `lan-session-finish` / `lan-command` 的
+  `version` 增 `"3.5"`（3.5 会话与命令需 `iv_hex` 12B）；命令载荷臂与 3.4
+  完全同款（rustuya 两代共享同一批 generate_payload helper，guest 复用同一
+  builder）。
+- **对拍**（`tests/tuya_lan_session_v35.rs`，与 v3.4 文件共享 host/call_lan/
+  回包构造，5 passed）：start 帧 / finish 三路一致（帧 + blob + remote_nonce）/
+  篡改拒绝 / control（blob 密钥）/ heartbeat——与 rustuya `TuyaProtocol`(V3_5) +
+  `pack_message` 6699 分支逐字节一致。会话全套 **13 passed**。
+- **600 行红线**：v3.5 测试独立成文件（兄弟模块 `super::` 复用助手，整文件按
+  `tuya-plugin` feature 门控）；`lan_codec.rs` 内联 pack_payload_33 wrapper
+  收回 603→595。
+- 验证（本机实测）：wasm-plugins,tuya-plugin **965**/0；`wasm-plugins` **863**/0；
+  `native-plugins` **1281**/0；default **762**/0；16 个系统产物重建 ✅；
+  `git diff --check` 干净；改动文件 rustfmt clean。
+- **里程碑**：v3.3–v3.5 三代 LAN 协议语义（帧编解码 + 控制命令 + 会话协商）
+  **全部进插件**且逐字节对拍；Tuya LAN 域剩余 = TCP 传输归属裁决（WIT 暂无
+  TCP 出站；连接/心跳节拍/重连仍 native）与真机固件回归（P8c 门槛）。
+
+### S3k（ESPHome 明文帧编解码 + 核心消息 protobuf 进插件：真连接双向对拍，2026-11-09）
+
+Tuya LAN 三代语义收口（S3f–S3j）后，协议面迁移按 P8c 矩阵推进到 **ESPHome 域**。
+规格权威 = 外部 crate `esphome-native-api` 3.0.0（native 栈所有者）的 `frame.rs`
+（FrameCodec 明文分支）+ `parser.rs`（类型映射）+ `proto/*.rs`（prost 派生）。
+落点 `plugins-src/esphome/src/api_frame.rs`（guest 单源，零新依赖：varint/protobuf
+手写）+ 事件 `connector.esp-home.frame-pack` / `frame-parse`（esphome.official
+v0.2.0，结果键 `esphome-frame:<req_id>`）。
+
+- **对拍方法升级**：前序切片用参考 crate 的纯函数（rustuya pack/unpack）做黄金
+  帧；ESPHome 的 FrameCodec 是 crate 私有——改用 **真连接对拍**：宿主测试把
+  `EspHomeApi::start`（设备角色，无加密 → 明文路径）跑在 tokio 内存 duplex 上，
+  guest 帧作为对端输入、参考帧从对端读出。证据面（5 passed，整文件 `esp_home`
+  feature 门控）：
+  ① guest HelloRequest 载荷 ↔ 公开 `parser::proto_to_vec`（prost）逐字节一致；
+  ② **真握手消费 guest 帧**（HelloRequest 被参考解析器接受、握手完成）；
+  ③ guest 解码参考侧真实发出的 HelloResponse（字段与 builder 配置一致）；
+  ④ 真连接经参考 FrameCodec 发出的 PingResponse 帧 ↔ guest 输出**逐字节一致**；
+  ⑤ guest SwitchCommandRequest 帧被真连接广播还原同值（key/state/device_id）；
+  另有加密帧（0x01）/垃圾起始字节显式拒绝。
+- **对拍实证第四处语义勘误**：明文帧 wire 长度标记 **不含类型字节**（varint
+  载荷长度）；参考实现编码器写 `item.len()-1`、解码器读 `varint+1` 还原——
+  编码/解码不对称的怪癖。初版按「含类型字节」实现，真连接对拍当场暴露（握手
+  停滞 + PingResponse 帧形状 `[0,0,8]` vs `[0,1,8]`）。
+- **guest 手写 protobuf**（prost 语义对齐：字段按声明序编码、默认值跳过——
+  0/false/空串不写 wire）：HelloRequest（client_info/major/minor）、
+  SwitchCommandRequest（key fixed32/state/device_id）；HelloResponse 字段解码
+  （未知字段按 wire type 跳过，向后兼容固件加字段）；消息类型映射收录桥策略面
+  相关核心子集（1/2/5/6/7/8/9/11/19/20/33）。
+- **工程面**：esphome 夹具源加入 `ensure_fixture`（SOURCE_ROOTS=5，build.sh 补
+  `CARGO_TARGET_DIR` 默认规避 EPERM）；测试文件整文件 `esp_home` feature 门控
+  （wasm-plugins 单独组合不编译该模块）。
+- 验证（本机实测）：`wasm-plugins,esp_home` **1101**/0；`wasm-plugins,tuya-plugin`
+  **965**/0；`wasm-plugins` **863**/0；`native-plugins` **1281**/0；default
+  **762**/0；16 个系统产物重建 ✅；改动文件 rustfmt clean；`git diff --check`
+  干净。
+- **边界如实声明**：ESPHome 完整 protobuf 目录/状态消息面（ListEntities* /
+  *StateResponse / BLE / VoiceAssistant 共 123 类）与 noise_psk 加密握手仍
+  native；TCP 传输归属裁决与 Tuya 域共用（WIT 暂无 TCP 出站）。
+
+### S3l（宿主通用 TCP 出站能力：已迁协议语义的生产前提，2026-11-09）
+
+Tuya/ESPHome 两个域的协议语义已大量进插件（S3b–S3k），但都卡在同一处：**WIT 契约
+没有 TCP 出站**，生产编排无从接管。本切片补上这块通用能力面——它是底座能力而非
+业务：宿主只搬运字节，不认识任何协议（纯净性硬边界的正题）。
+
+- **WIT**：`host-net` 增 `tcp-connect(host, port) → connection-id`。**0.2 内加性
+  扩展，不升 0.3**：wit-bindgen guest 只 import 实际引用的函数，旧产物装载不受
+  影响（本机全量重建后亦验证兼容）。需 `net` 权限（与 udp-send 同口径，instance.rs
+  门禁 + 审计）。
+- **宿主实现**（`net/tcp.rs::connect`）：同步签名（guest 泵 spawn_blocking 线程
+  内阻塞可接受）→ 解析 + `std` connect → 转 tokio → 复用 `serve_conn` 读写循环。
+  连接 id 走**全局分配器**——顺带修掉入站连接每端点局部计数器的潜在 bug（跨端点
+  首连接在 conns 表相撞）。入站/出站同表：`net-send` / `net-close` / `net-peer`
+  同口径复用，事件 `io.tcp.opened / io.tcp.data / io.tcp.closed` 一致
+  （correlation-id = connection-id）。
+- **回归**（`tests/net_connect.rs`，NetManager 回环 3 passed）：opened/data
+  （echo 逐字节）/closed 全生命周期 + 跨插件归属校验拒绝 + 连接拒绝显式报错 +
+  连接 id 全局唯一；guest→host 全链心证 = hello 探针 self-test 增
+  `tcp-connect-probe`（对 127.0.0.1:1 发起真实调用、预期拒绝——证明 bindgen
+  链路、权限门与调用语义可用）。
+- **纪律执行**：SDK 与全部夹具、16 个系统产物随契约变更重建（本机带
+  `CARGO_TARGET_DIR=/tmp/xiaozhi-guest-target`）。
+- 验证：`wasm-plugins` **866**/0（+3 net_connect）；`wasm-plugins,tuya-plugin`
+  **968**/0；`wasm-plugins,esp_home` **1104**/0；`native-plugins` **1281**/0；
+  default **762**/0；改动文件 rustfmt clean；`git diff --check` 干净。
+- **打开的门**：Tuya LAN 会话编排（连接/心跳节拍/重连）进插件的实施切片——
+  会话状态机（S3i/S3j）与传输能力（本片）均已就位，下一步是把编排状态机接上
+  `tcp-connect` + `io.tcp.*` 事件；生产接管仍以 P8c 真机回归为最终门槛。
+
+### S3m（v3.4 会话编排进插件：guest 状态机接真 TCP，2026-11-09）
+
+S3l 补齐 TCP 出站后，本切片把 **Tuya LAN v3.4 的连接与三步握手编排**搬进插件
+（`lan_events.rs` 编排处理器 + `lan_session.rs` 的 `wire_resp_to_payload` /
+`derive_nonce`），tuya.official 升 v0.4.0（声明 `net` 权限 + 订阅 `io.tcp.*`）。
+
+- **编排状态机**（kv `tuya-lan-state:<device_id>`，凭证材料只留插件隔离 kv）：
+  `lan-connect` → `tcp-connect` 出站 → 发 SessKeyNegStart（nonce = SHA-256
+  (local_key‖device‖now_ms) 确定性派生，guest 无随机源）→ `WaitResp`；
+  `io.tcp.data`（correlation-id = connection-id）→ `wire_resp_to_payload`（exact
+  解析不剥 retcode + ECB 解密去填充）→ 验证派生 → 发 finish → `Established`
+  （blob 落 kv）；`io.tcp.closed` → `Closed`；失败置 `Failed` 并落结果通道
+  （泵路径对 guest 业务 Err 静默，结果通道是编排的可观测面）。
+- **对拍升级为端到端**：`tests/tuya_lan_orchestrate.rs` 用 **rustuya 原语搭的
+  v3.4 模拟设备**（真 TCP，TuyaCipher/pack_message/hmac 全参考实现）跑通三步
+  握手全链——guest 帧被设备侧解密消费、finish_hmac 在设备侧验证通过、重复会话
+  fail-closed（结果通道 ok:false）。2 passed。
+- **顺带修掉三处平台缺陷**（编排端到端暴露）：
+  ① 订阅 topic 校验的字符白名单先于通配检查，尾部 `.*` 订阅**永远无法声明**
+  （文档承诺的通配订阅是死路）——通配形状先判，白名单作用于前缀；
+  ② 泵路径 `call_guest_event` 硬编码 `correlation_id: None`——socket 回灌事件的
+  关联键全部丢失（HTTP 面靠 payload 里的 id 未暴露此坑）；
+  ③ TCP 连接注册在 spawn 的 IO 任务内完成，guest 拿到 connection-id 立即
+  `net-send` 会赛跑"连接不存在"——注册提前到 accept/connect 同步完成（入站/
+  出站一致）。
+- **帧解析口径分裂**：`parse_frame_55aa`（剥 retcode，JSON 面既有行为）与
+  `parse_frame_55aa_exact`（不剥，二进制会话载荷专用）——rustuya 接收路径把
+  retcode 启发式作用在二进制密文上属实现缺陷（几乎必剥 4 字节导致解密失败），
+  编排按协议语义实现并如实记录偏差。
+- 验证：`wasm-plugins,tuya-plugin` **970**/0（+2 编排）；`wasm-plugins` **866**/0；
+  `wasm-plugins,esp_home` **1104**/0；`native-plugins` **1281**/0；default
+  **762**/0；改动文件 rustfmt clean；`git diff --check` 干净。
+- **边界如实声明**：心跳节拍、数据面帧解密（Established 后的会话密钥解帧）、
+  重连与 v3.5 编排留下一片；生产接管仍以 P8c 真机回归为最终门槛。
+
+### S3n（Tuya LAN 会话编排剩余面：流式帧切分 / 心跳节拍 / 数据面解帧，2026-11-09）
+
+S3m 打通「连接 + 三步握手」后，本切片补齐 v3.4 会话的**运行期面**：
+
+- **流式帧切分**（`lan_stream.rs`，新）：TCP 只给原始字节（宿主纯净性边界），
+  分帧是协议语义 → 插件侧。`feed_split` 处理粘包/半包，缓冲经状态 kv 持久化
+  （事件间无内存态），前导垃圾按 `00 00 55 AA` 32-bit 前缀逐字节滑动丢弃，
+  长度谎报/缓冲超限显式报错清空（防放大）。`data_frame_decode` 用会话 blob
+  做 exact 解帧 + ECB 解密去填充 + `"3.4"` 头剥离。
+- **心跳节拍**：`lan-connect` 增 `heartbeat_ms`（缺省 30s，下限 200ms）→ 单全局
+  interval timer（省配额）→ `host.timer.fired` → 遍历 Established 设备，距上次
+  心跳 ≥ 间隔才发（防 timer 抖动重复）→ `command_frame_34` heartbeat 帧（会话
+  blob 密钥）。陈旧 timer id 忽略（重建后残留）。
+- **数据面步进**：Established 态 `io.tcp.data` → 帧切分 → 解密 → 心跳应答识别，
+  `last_pong_ms`/`data_frames`/`rx_buf_hex` 落状态 kv；单帧解析失败不断链
+  （记 `last_error`、丢缓冲防错位连锁）。
+- **对拍 = rustuya 模拟设备真 TCP**（`tests/tuya_lan_orchestrate.rs` 2 passed，
+  5 连跑稳定）：心跳帧在设备侧解密验证 `{"devId":"ivf9id","gwId":"ivf9id"}`
+  逐字节；pong 以**半包（10+90 分两次写）+ 粘包（两帧一次写）**两种注入回灌，
+  guest 帧切分重组后识别应答（`data_frames ≥ 3`、`last_pong_ms > 0`）。LAN 全套
+  **25 passed**。
+- **排查实录（教训归档）**：① 帧前缀是完整 32-bit `00 00 55 AA`（wire 前两字节
+  0x00），切分器与 mock 同错只查 `55 AA` → 头错位；② 模拟设备应答后立即 drop
+  可能 RST 丢弃未读字节 → 假失败，必须保持连接；③ **清理临时插桩的裸正则误删
+  `state_write`**，数据面处理全在内存完成从未落盘，表现为「无 trap、无写、phase
+  active」的静默失败——排查耗时极长。教训：成对标记（写前/写后）替代裸正则，
+  删除后必须跑行为断言。④ 顺带加固：`guest-alloc` 由只增不回收的 bump 换成
+  **dlmalloc**（类型名保留，15 插件零改动）——原实现长跑/高频事件下堆持续增长
+  撞 64MB 沙箱上限会 OOM trap 并静默中断整个 handle_event（属长跑隐患）。
+- 验证（本机实测）：`wasm-plugins,tuya-plugin` **970**/0（LAN 25、orchestrate 2）；
+  `wasm-plugins` **866**/0；`wasm-plugins,esp_home` **1104**/0；`native-plugins`
+  **1281**/0；default **762**/0；16 个系统产物重建 ✅；改动文件 rustfmt clean；
+  `git diff --check` 干净；600 行红线（`lan_events.rs` 660→拆分为
+  `lan_events.rs` 298 + `lan_orchestrate.rs` 390）。
+- **剩余**：自动重连/退避（需要真实网络故障证据）、v3.5 编排放接入（纯函数已在
+  S3j）、设备主动上报（Status）业务接线；生产接管仍以 P8c 真机回归为门槛。
+
+### S3o（Tuya LAN v3.5 会话编排接入：两代会话编排齐备，2026-11-09）
+
+S3n 补齐 v3.4 运行期面后，本切片把**同一 guest 状态机**接到 v3.5 的 0x6699/GCM
+wire 布局上，并补上「一张网卡两代设备」需要的公共件；协议语义仍全部在插件侧，
+宿主只搬字节：
+
+- **双布局流式切分**（`lan_stream.rs`）：切分器泛化为 `FrameLayout`（前缀 4B / 头长 /
+  len 之外尾长）——0x55AA `total = 16 + len`（HMAC/CRC 尾在 len 内），0x6699
+  `total = 18 + len + 4`（suffix 在 len 外）；`feed_split_55aa` / `feed_split_v35`
+  共用 32-bit 前缀扫描（前导垃圾逐字节滑动）。
+- **v3.5 帧模块拆分**（`lan_frame_6699.rs`，新）：`pack_frame_6699` /
+  `parse_frame_6699` / `command_frame_35` 从 `lan_codec.rs` 迁出（589→412 行，600
+  红线余量），该文件回到 55AA + v3.3/v3.4 命令面；同时新增
+  `parse_frame_6699_exact`（**不剥 retcode**，会话/数据面二进制载荷面，与 S3m 的
+  55AA exact 口径一致——retcode 启发式是 JSON 面语义）。
+- **确定性 IV**（`lan_session::derive_iv`）：guest 无随机源，v3.5 每帧 GCM 却要求
+  IV 唯一——`SHA-256(seed ‖ seqno_be ‖ tag)[..12]`。握手 `seed` = 本连接 nonce
+  （含宿主时钟，跨连接唯一）；Established `seed` = 会话 blob（两侧 nonce 派生，
+  跨连接唯一）+ seqno 单调递增 + tag 区分用途 → 同密钥下 IV 不重复（GCM 硬要求）。
+- **编排状态机泛化**（`lan_orchestrate.rs`）：`lan-connect` 接受 `version:"3.5"`；
+  WaitResp 按版本走 `wire_resp_to_payload_35` + `session_finish_35`，Established
+  心跳用 `command_frame_35` + `derive_iv(blob, seqno, "hb")`，数据面
+  `data_frame_decode_35`（exact 解帧 + 剥 "3.5" 头，心跳应答识别同款）。
+- **握手阶段也走流式重组**（S3o 起）：WaitResp 先把入站字节并入持久缓冲再切帧，
+  半包只落缓冲、保持 WaitResp；多余完整帧回填缓冲交 Established 处理。此前
+  v3.4 隐含「握手回包一次到齐」的未声明假设，现由 mock 的 20B+剩余两次写验证。
+- **对拍 = rustuya 模拟 v3.5 设备真 TCP**（`tests/tuya_lan_orchestrate.rs` +1）：
+  设备侧 `unpack_message(no_retcode=true)` 解 guest 的 0x6699 帧、
+  `ProtocolV35::encrypt_session_key` 派生会话 blob、finish HMAC 独立校验；心跳明文
+  逐字节 `{"devId":"ivf9id","gwId":"ivf9id"}`；pong ×2 粘包一次写 → guest
+  `data_frames ≥ 2`。LAN 全套 **26 passed**（3 连跑稳定）。
+- **fail-closed 意外实证**：首轮 mock 的 remote nonce 常量实为 15 字节（"恰 16
+  字节"注释误判），回包 47B 被编排的 `≥48` 长度校验拒绝并置 `Failed`
+  （`会话回包过短（47 < 48）`）——校验本身即回归护栏，修复后一次通过。
+- 验证（本机实测）：`wasm-plugins,tuya-plugin` **971**/0；`wasm-plugins`
+  **866**/0；`wasm-plugins,esp_home` **1104**/0；`native-plugins`
+  **1281**/0；default **762**/0；改动文件 rustfmt clean；
+  `git diff --check` 干净；600 行红线（`lan_codec.rs` 412 / `lan_frame_6699.rs` 214 /
+  `lan_orchestrate.rs` 484 / `lan_stream.rs` 124）。
+- **剩余**：自动重连/退避（`io.tcp.closed` 只置 `Closed`，需显式重 `lan-connect`；
+  需要真实网络故障证据）；设备主动上报（Status）业务接线；生产接管仍以 P8c 真机
+  回归为门槛。
+
+### S3p（Tuya LAN 自动重连 / 指数退避 + `io.tcp.closed` 关联修复，2026-11-09）
+
+S3o 让两代会话编排齐备后，本切片补齐**断链恢复**，并顺带修掉一个被重连状态机
+首次触发的宿主平台缺陷：
+
+- **重连策略**（显式、缺省关闭）：`lan-connect` 增 `reconnect_attempts`（缺省 0
+  = 不重连，上限 10）/ `reconnect_base_ms`（缺省 1s，下限 50ms）/
+  `reconnect_max_ms`（缺省 30s，退避封顶）。策略随连接上下文落状态 kv，重连
+  复用；凭证仍只留插件隔离 kv。
+- **状态转移**：活跃连接（`WaitResp|Established`）失败或关闭 → `Reconnecting`
+  （attempt+1、延迟 `base·2^(attempt-1)` 封顶 max、一次性 `set-timeout`）→
+  timer 到期从状态 kv 恢复凭证重走建链；握手成功 attempt 归零、`reconnects`+1；
+  重试耗尽 → `Failed`（保留最后一次 `next_retry_ms` 诊断）。退避 timer 每设备
+  至多一个，远低于宿主单插件 ≤64 配额。
+- **模块拆分**（600 行红线）：`lan_state`（状态 kv 访问）/ `lan_reconnect`
+  （策略与退避）/ `lan_connect`（建链 + 握手首帧，首连与重连同路径）/
+  `lan_heartbeat`（心跳节拍 + timer 分发）/ `lan_orchestrate`（`io.tcp.*` 步进，
+  484→274 行）。
+- **宿主平台缺陷（本轮发现并修复）**：`io.tcp.closed` 由 `Envelope::json` 按
+  载荷里的 `id`/`request_id` 推关联键，而其载荷字段是 `connection_id` →
+  correlation-id 恒为 `None`。S3l 文档承诺「生命周期事件关联口径一致」并未落实：
+  guest 能收到 data 的 correlation-id，却永远无法把 closed 映射回具体连接/设备，
+  自动重连无从触发。现 closed 与 data 同口径携带 `correlation-id=connection-id`，
+  `tests/net_connect.rs` 补断言（3 passed）。
+- **对拍 ①（断链重连）**：rustuya 模拟设备支持**两次连接**——首连三步握手成功后
+  主动断链 → guest `io.tcp.closed` → 退避 timeout → 自动重连并第二次握手成功：
+  新 conn_id、`reconnects ≥ 1`、attempt 归零、新会话心跳 pong 正常（`last_pong_ms > 0`）。
+- **对拍 ②（重试耗尽）**：连接被拒的死端口 + `reconnect_attempts=2` → 首连失败即
+  落结果通道 ok:false → 两次退避重试后 `Failed`：`attempt=2`、`next_retry_ms`
+  50→100 指数递增、无残留 timer。
+- **顺带加固**：`observability/events/tests.rs` 的 `summary_marks_missing_stages_with_dash`
+  原断言「llm首字=1 或 =2」在并行全量套件高负载下会把 15ms 睡拖成 3 位毫秒而误报
+  （本轮 5 套件连跑时命中一次，单跑 3 连绿）；改为解析数值并断言 ≥5ms，保留原意。
+- 验证（本机实测）：`wasm-plugins,tuya-plugin` **973**/0（LAN 全套 **28**、重连
+  **2**，5 连跑稳定）；`wasm-plugins` **866**/0；`wasm-plugins,esp_home`
+  **1104**/0（首次 5 套件连跑时命中上述时延误报，单跑复检绿）；`native-plugins`
+  **1281**/0；default **762**/0；改动文件 rustfmt clean；`git diff --check` 干净。
+- **剩余**：设备主动上报（Status）业务接线；生产接管仍以 P8c 真机回归为门槛。
+
+### S3q（Tuya LAN 设备主动上报 DP 状态接线 + DP 解析单源，2026-11-09）
+
+S3p 打通断链恢复后，本切片把**设备主动上报（DP 状态）**的业务语义接到插件，
+并把 DP 解析收敛为 native/guest 单源：
+
+- **单源解析**（`server/src/device/tuya/dps.rs`，新）：`parse_dps` 从 `lan.rs`
+  迁出为纯函数模块（仅 `serde_json` + std，无宿主依赖）；native `lan`/`voice`/
+  `tuya/mod` 全部改引该处（原测试迁入 `dps_tests`），guest 经 `#[path]` 共用
+  同一份源码（与 `protocol.rs` 同模式）——「DP 语义在插件侧可执行」由编译期
+  单源 + 两侧测试共同钉住。
+- **上报接线**（`lan_status.rs`，guest）：Established 数据面每帧解密后按命令过滤
+  （Status 0x08 / DpQuery 0x0a / DpQueryNew 0x10 / UpdateDps 0x12）→ `parse_dps`
+  → 状态 kv **增量合并** `dps`（上限 128 键）+ `online` / `last_seen_ms` /
+  `status_count` / `last_status_ms` → 发布 `tuya.official.lan-status` 事件
+  （插件命名空间，新增 `pub` 权限；载荷 `{device_id,cmd,count,dps,online,at_ms}`，
+  8KB 上界；发布失败只告警不断链）。心跳 pong 等非上报命令不再套 DP 解析。
+- **两处对 native 的语义修正（第 6/7 处语义勘误）**：
+  ① native `LanSink::on_message` 对**任意** JSON 载荷套 `parse_dps`，心跳回显
+  `{"devId","gwId"}` 会被当成 DP 写进缓存；插件只接设备上报类命令。
+  ② native 用 `dp_cache.insert(device_id, dps)` **整表替换**，设备只报增量 DP 时
+  先前状态会被丢掉；插件按 DP id 增量合并。
+- **对拍 = rustuya 模拟设备推 Status**（`"3.4"` 协议头进明文、ECB+PKCS7 加密 +
+  HMAC 帧）：状态 kv 三 DP/在线/计数正确、`tuya.official.lan-status` 事件载荷与
+  kv 快照一致；**心跳 pong 后 `status_count` 仍为 1、DP 键仍 3 个且无 `devId`**
+  ——命令过滤与增量合并在真 TCP 链路上可验证。宿主测试面新增
+  `WasmHost::subscribe_topic`（`#[cfg(test)]`，验证 guest 发布面）。
+- 验证（本机实测）：`wasm-plugins,tuya-plugin` **974**/0（LAN 全套
+  **29**、状态上报 **1**，5 连跑稳定）；`wasm-plugins` **866**/0；
+  `wasm-plugins,esp_home` **1104**/0；`native-plugins` **1281**/0；
+  default **762**/0；改动文件 rustfmt clean；`git diff --check` 干净。
+- **剩余**：Tuya 协议面已完整进插件（连接/握手/心跳/数据面/重连/设备上报），
+  **生产接管（删除 native LAN worker）以 P8c 真机固件回归为门槛**；EchoMuse WS
+  经宿主 `net` 服务承载待做；ESPHome protobuf 全目录/noise 待做。
+
+### S3r（ESPHome 服务端面消息面进插件：实体目录 / 状态 / 控制应答，2026-11-09）
+
+S3k 只覆盖了明文帧 + 核心握手子集（客户端 HelloRequest / SwitchCommand 与
+HelloResponse 解码）。本切片把 **native `esp_home` 桥实际使用的服务端消息全集**
+收进插件，并逐字节对拍参考 prost 编码：
+
+- **规格权威**：`esphome-native-api` 3.0.0 默认版本 `proto::version_2026_6_2`
+  的 prost 派生语义——字段声明序（= tag 升序）编码、默认值跳过（0 / 0.0 /
+  false / 空串）、float = fixed32（IEEE-754 位模式 LE）、enum = varint。
+- **新模块** `api_catalog.rs`（guest 单源）：
+  - 编码：`HelloResponse` / `PingResponse` / `ListEntitiesBinarySensorResponse` /
+    `ListEntitiesNumberResponse` / `ListEntitiesDoneResponse` /
+    `BinarySensorStateResponse` / `NumberStateResponse` / `NumberCommandRequest`；
+  - 解码：`HelloRequest` / `NumberCommandRequest` / `SwitchCommandRequest`
+    （未知字段按 wire type 跳过、坏 wire 显式报错）。
+  - `api_frame` 消息类型表补齐 2/12/17/21/26/49/50/51，并公开 protobuf 原语
+    （varint / 字段写 / float）供 catalog 复用。
+- **事件面扩展**：`connector.esp-home.frame-pack` / `frame-parse` 的消息名与字段
+  扩到上述全集；`frame-parse` 对 `type=1/33/51` 分别解出 `hello_request` /
+  `switch_command` / `number_command` 结构化字段（其余类型仍透传 `payload_hex`）。
+- **对拍 = 参考 crate 本尊**（`tests/esphome_frame.rs` 8 passed）：
+  ① 7 条服务端消息的 guest 载荷与 `proto_to_vec` prost 编码**逐字节一致**
+  （含 `min=0.0` 默认跳过与中文字符串）；② `parse_proto_message` 解析 guest 载荷
+  逐字段一致；③ 3 条客户端消息用参考 prost 编码 → 手组明文帧 → guest 解码字段
+  一致；④ 既有「真连接」用例（真握手 / PingResponse 逐字节 / SwitchCommand
+  广播还原 / 加密帧拒绝）继续绿。
+- **插件版本** 0.2.0 → **0.3.0**（消息面新增）。
+- 验证（本机实测）：`wasm-plugins,esp_home` **1107**/0（esphome_frame **8**，
+  3 连跑稳定）；`wasm-plugins,tuya-plugin` **974**/0；`wasm-plugins` **866**/0；
+  `native-plugins` **1281**/0；default **762**/0；改动文件 rustfmt clean；
+  `git diff --check` 干净。
+- **剩余**：ESPHome noise 加密握手（`0x01` 帧，目前显式拒绝）与桥外更多消息
+  类型；生产接管仍以 P8c 真机回归为门槛。
+
+### S3s（宿主随机源能力 `host-core.random`，2026-11-09）
+
+S3o/S3m 时期 guest 无熵源，Tuya nonce/IV 只能确定性派生（含宿主墙上时钟）。
+本切片补上**通用随机能力**，这是 ESPHome noise 加密握手（临时密钥需要熵）与后续
+任何加密类插件的平台前提：
+
+- **WIT（0.2 内加性扩展，不升 0.3）**：`host-core` 增
+  `random(len: u32) -> result<list<u8>, string>`；单次 **1..=1024** 字节，
+  越界/熵源不可用显式 Err。**不设权限门**——与 `now-ms` 同为无副作用只读能力，
+  不触达日志/文件/网络；旧 guest 不引用新函数装载不受影响。
+- **宿主**：`RandomSource` trait + `OsRandom`（`getrandom` crate：Linux
+  getrandom / macOS getentropy / Windows BCrypt）；`HostContext` 持有共享随机源；
+  `instance.rs` 实现 `host_core.random`（长度上限为宿主第二道防线，guest 无预检）。
+- **guest 全链心证**：hello 探针 self-test 增 `random-probe`——16B×2 两次互异 +
+  `random(4096)` 越界必须被拒绝；由既有 `hello_self_test_via_validate` 与
+  `tests/random.rs` 双向覆盖（OS 源填充/互异 + 探针全链）。
+- **tuya.official 生产 nonce 升级**：`lan_session::random_nonce` 优先宿主随机源
+  （16B），熵源不可用时回退确定性派生（不因熵源故障无法建链）。S3o 的 v3.5 每帧
+  IV seed 因此获得**不可预测性**（同连接内仍以 seqno 保证唯一，GCM 纪律不变）。
+- **顺带整改**：宿主 `plugins/wasm/instance.rs` 已 641 行（超 600 红线）→ 把
+  `host-system` 实现拆到 `instance/host_system.rs`（520 + 127 行），行为不变
+  （五个 feature 组合全绿）。
+- 验证（本机实测）：`wasm-plugins,tuya-plugin` **976**/0；`wasm-plugins`
+  **868**/0；`wasm-plugins,esp_home` **1109**/0；`native-plugins` **1281**/0；
+  default **762**/0；`tests/random.rs` **2 passed**；改动文件 rustfmt clean；
+  `git diff --check` 干净。
+- **剩余**：ESPHome noise 加密握手状态机（随机源已就绪）；EchoMuse WS 经 `net`；
+  Tuya 生产接管以 P8c 真机回归为门槛。
+
+### S3t（ESPHome Noise NNpsk0 加密握手 + AEAD 传输帧进插件，2026-11-09）
+
+S3s 补上宿主随机源后，ESPHome 协议面的最后一块非硬件门槛落地：**加密协议语义
+（Noise 握手 + 传输帧）与明文帧一样归插件侧**，宿主仍只搬字节。
+
+- **协议面（guest 单源，`plugins-src/esphome/src/`）**：
+  - `noise_crypto.rs`：Noise rev 34 原语——SHA-256 哈希 / HMAC-SHA256 HKDF（`mix_key`
+    两段、`mix_key_and_hash` 三段，与 `noise-protocol` 的 `Hash::hkdf` 同口径）、
+    ChaCha20-Poly1305 CipherState（nonce = 4 零字节 ‖ u64 LE，每帧自增）、X25519
+    （`x25519-dalek`，DH 全零共享密钥显式拒绝）；
+  - `noise_wire.rs`：ESPHome 线格式——ClientHello 固定 `01 00 00`；加密帧
+    `0x01 ‖ u16 BE 密文长 ‖ 密文`；ServerHello 内容 `01 ‖ name ‖ 00 [‖ mac ‖ 00]`；
+    握手帧内容 `00 ‖ noise 消息`；传输帧明文 `type(u16 BE) ‖ len(u16 BE) ‖ protobuf`
+    （长度字段与参考实现同口径不信任、载荷取余量）；流式缓冲半包/粘包切分；
+  - `noise.rs`：NNpsk0 状态机（initiator / responder 双角色）——`-> psk, e` /
+    `<- e, ee`，Split 后 initiator 发送 c1 / responder 发送 c2；相位
+    `await-server-hello | await-msg2 | await-msg1 | ready`；状态 JSON 可序列化
+    （h/ck/临时私钥/psk/传输密钥/nonce/接收缓冲）；
+  - `noise_event.rs`：`connector.esp-home.noise` 事件面（`start / step / seal / open /
+    close`），会话状态在插件隔离 kv `esphome-noise-state:<session>`——事件间无内存态
+    （与 tuya LAN 编排同纪律），并发会话上限 64，`close` 回收；psk 随事件载荷传入
+    （与 tuya `lan-connect` 的 `local_key` 同口径），临时密钥每次 `start` 经宿主
+    `host-core.random` 现取，**熵源不可用显式失败**（不做确定性降级——可预测临时
+    密钥会同时破坏前向保密与 nonce 纪律）。
+- **对拍 = 两层独立实现**（`plugins/wasm/tests/esphome_noise.rs`，**6 passed**）：
+  ① `noise-protocol` + `noise-rust-crypto` 参考实现**双角色逐字节**——guest initiator ↔
+  参考 responder、guest responder ↔ 参考 initiator，握手消息（含 ServerHello 身份解析
+  与半包/粘包重组）与**双向 AEAD 传输帧逐字节一致**（HelloRequest / HelloResponse /
+  BinarySensorStateResponse / NumberCommandRequest 的 prost 载荷来自参考 crate）；
+  ② `esphome-native-api` 本尊**真实加密连接**（`EspHomeApi` + base64 `encryption_key`，
+  内存 duplex）：guest initiator 完成真实握手并收发加密 HelloRequest/HelloResponse；
+  错误 psk 场景识别设备侧 `Handshake MAC failure` 错误帧并显式失败（fail-closed，
+  不降级明文）。
+- **guest 内自检**：新 `noise-nnpsk0-handshake`（双角色握手 + 双向传输帧 + 错误 psk
+  MAC 失败；不触网、不读写 kv），随 `validate` 全绿。
+- **宿主侧**：`server/Cargo.toml` 在 `esp_home` feature 下把 `noise-protocol` /
+  `noise-rust-crypto` 作为**测试参考实现**引入（生产路径不引用；插件侧自持等价纯 Rust
+  密码学栈）；无新 WIT 能力、无新权限。
+- **插件版本** 0.3.0 → **0.4.0**（加密会话事件面新增）；guest 新增纯 Rust 依赖
+  sha2 / hmac / chacha20poly1305（关 getrandom）/ x25519-dalek，wasm 产物 243KB。
+- 验证（本机实测）：`wasm-plugins,esp_home` **1115**/0（esphome_frame **8** +
+  esphome_noise **6**）；`wasm-plugins,tuya-plugin` **976**/0；`wasm-plugins`
+  **868**/0；`native-plugins` **1281**/0；default **762**/0；改动文件 rustfmt clean；
+  `git diff --check` 干净。
+- **剩余**：ESPHome **TCP 会话编排进插件**（`io.tcp.*` 驱动握手/分帧、生产接管）与
+  桥外更多消息类型，以 P8c 真机 + HA 客户端回归为删除门槛；Tuya LAN native worker 删除
+  同以真机回归为门槛；EchoMuse 协议栈按设计保留 native、仅入口策略面经插件。
+
+### S3u（ESPHome 设备侧会话进插件：握手之后的消息派发与实体面应答，2026-11-09）
+
+S3t 补上随机源、加密握手与传输帧之后，本切片把 ESPHome **设备侧（responder）会话语义**
+收进插件——native `esp_home` 桥的连接内状态机在插件侧的等价实现（`session.rs` +
+`session_event.rs` + `session_catalog.rs`，无 I/O，字节搬运仍由宿主 `net`/`io.tcp.*`
+承载）。esphome.official 升 **0.5.0**。
+
+- **会话状态机**（`Session`，明文 / Noise NNpsk0 加密双模式）：
+  - `feed`：对端字节 →（加密模式先推进握手）流式解帧 → 逐消息派发——`HelloRequest`→
+    `HelloResponse`（API 版本 1.10、`server_info`）、兼容旧客户端的 `AuthenticationRequest`
+    →空成功应答、`DeviceInfoRequest`→`DeviceInfoResponse`（身份面）、`PingRequest`→
+    `PingResponse`、`ListEntitiesRequest`→逐实体定义 + Done、`SubscribeStatesRequest`→
+    全量状态快照并置订阅态、`DisconnectRequest`→应答并关闭；`NumberCommandRequest` /
+    `SwitchCommandRequest` 只解码不回包——数据面仍宿主执行；
+  - `apply_states`：订阅态下状态推送 → 对应实体的状态响应帧（未订阅只更新目录不产出帧）；
+  - 状态（身份 / 实体目录 / 订阅态 / 加密握手状态 / 流式缓冲）JSON 序列化落插件隔离 kv
+    `esphome-session-state:<session>`（事件间无内存态，与 tuya LAN 编排同纪律），结果通道
+    `esphome-session:<req_id>`；**fail-closed**：协议/认证失败即销毁状态（不可重试旧状态或
+    重用 nonce，不降级明文）。
+- **事件面** `connector.esp-home.session` 四 op（open/feed/state/close）：身份与实体目录随
+  `open` 载荷传入（binary_sensor + number，≤64，key 唯一且为静态索引；state update 未知
+  key / 类型漂移拒绝），psk 与 `connector.esp-home.noise` 同口径随载荷传入；加密模式临时
+  密钥每次经宿主 `host-core.random` 现取，熵源不可用显式失败；并发会话上限 64，`close` 回收。
+- **guest 自检**：validate 增 `esphome-device-session`（明文 Hello/目录/状态/断开全链；
+  不触网、不读写 kv），随 `validate` 全绿。
+- **对拍 = 参考 crate 同源（5 passed，真 TCP，localhost 随机端口）**：对拍权威口径——
+  `esphome-native-api` 3.0.0 的 `EspHomeApi::start` 只实现**设备侧**握手（先读对端
+  ClientHello 再回 ServerHello，明文模式也只应答不发起），无法充当 HA 客户端角色，故加密
+  对拍客户端用其**同源原语** `noise-protocol` + `noise-rust-crypto` 搭建（S3t 已证与
+  EspHomeApi 设备侧真实互通）；protobuf 层对拍直接用该 crate 本尊的 `proto_to_vec` /
+  `parse_proto_message`。用例（`tests/esphome_session.rs` / `esphome_session_encrypted.rs`
+  / `esphome_session_guards.rs`，整文件 `esp_home` feature 门控）：
+  ① 明文全链：HelloRequest **半包两写** → HelloResponse 载荷与参考 prost **逐字节一致** +
+  解析器字段还原；目录 + 订阅**粘包一次写**（2 实体 + Done + 全量快照逐字节）；DeviceInfo/
+  Ping 粘包（身份面字段核对）；`state` op 状态推送逐字节；Number/Switch 命令解码不回包；
+  Disconnect → closed → 关闭后 feed 显式失败并销毁状态；
+  ② 加密全链：open 返回 ServerHello（`01‖name‖00[‖mac‖00]` 布局）→ 参考客户端握手（msg1
+  半包两写）→ 应答帧与参考 CipherState **AEAD 逐字节一致**（镜像密钥 + 同 nonce）且被客户端
+  密钥真实解密还原 protobuf → SubscribeStates 快照 / 状态推送解密对拍 → 错误 psk 显式
+  "AEAD 认证失败"并销毁状态；
+  ③ 守卫面：重复 open / 未知会话 feed / 非法 psk 长度 / 非法 session 字符集 / 未知 op /
+  实体 key 重复与未知 / 订阅前 state 空输出 / close 回收全链。**对拍未抓出 guest 语义偏差**
+  （明文帧、prost 编码、NNpsk0 握手、AEAD nonce 自增序列、fail-closed 语义全部与参考一致）。
+- **验证（本机实测，QA 独立复核确认）**：esphome_session 过滤 **5 passed**（3 连跑稳定）；
+  `wasm-plugins,esp_home` **1120**/0；`wasm-plugins` **868**/0；`wasm-plugins,tuya-plugin`
+  **976**/0；`native-plugins` **1281**/0；default **762**/0；改动文件 rustfmt clean；
+  `git diff --check` 干净；产物 esphome.wasm **296940 字节**。
+- **剩余**：生产接管（宿主桥把 `io.tcp.*`/真连接编排接进 session 事件、psk 改插件配置
+  命名空间提供）仍以 P8c 真机 + HA 客户端回归为删除门槛；桥外更多消息类型未收录；
+  EchoMuse 协议栈按设计保留 native、仅入口策略面经插件。

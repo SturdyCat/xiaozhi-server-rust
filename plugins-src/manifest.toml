@@ -50,6 +50,11 @@ dir = "echomuse"
 package = "echomuse-official"
 
 [[plugins]]
+id = "esphome.official"
+dir = "esphome"
+package = "esphome-official"
+
+[[plugins]]
 id = "soul.official"
 dir = "soul"
 package = "soul-official"

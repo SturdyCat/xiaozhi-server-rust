@@ -8,8 +8,11 @@
 ./build.sh   # 前置：rustup target add wasm32-unknown-unknown；brew install wasm-tools
 ```
 
-- crate：`hello`（官方默认：全链路 + kv 读写闭环）、`greeter-user`（用户自建：同扩展点替换演练 +
-  无权限对照面）、`trap`（作恶：无限循环/无限分配）、`guest-alloc`（共用分配器）。
+- crate：`hello`（官方默认：全链路 + kv 读写闭环 + S3l `tcp-connect-probe / random-probe（S3s 宿主随机源：长度 + 两次互异 + 越界拒绝）` 自检心证）、`greeter-user`（用户自建：同扩展点替换演练 +
+  无权限对照面）、`trap`（作恶：无限循环/无限分配）、`tuyasign`（**协议语义单源对拍**：`#[path]`
+  引入 `server/src/device/tuya/protocol.rs`，guest 内执行官方 v1.0 签名，由
+  `plugins/wasm/tests/protocol.rs` 与宿主黄金向量逐字节对拍——阶段三 S3b 证据）、
+  `guest-alloc`（共用分配器：dlmalloc 可回收实现，S3n 起；此前 bump 只增不回收属长跑 OOM 隐患）。
 - 三个夹具（hello / greeter-user / trap）与 `guest-alloc` 共用分配器**已全部迁到 0.2**：`host_core as host`、类型化 `handle_event(ev)`、`EffectHttpGet` → `EffectHttpRequest`，并补齐 `handle_service` 桩。
 - hello/greeter-user 经 **guest SDK**（`server/crates/xiaozhi-plugin-sdk`）取契约绑定与构建器；
   trap 刻意走裸 `wit_bindgen::generate!`——证明契约不绑死 SDK（等价公民的另一形态）。

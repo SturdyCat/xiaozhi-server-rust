@@ -104,10 +104,10 @@ fn registration_happy_path() {
 
 #[test]
 fn registration_rejects_duplicates_and_unknown_shapes() {
-    // 未知槽位
+    // 槽位形状非法（0.2 起槽位不设白名单，只校验 `<域>.<名>` 形状）
     assert!(
         RegistrationBuilder::new()
-            .menu_entry("sidebar.secret", "a", "标签", "插件", 1, "settings")
+            .menu_entry("no-separator", "a", "标签", "插件", 1, "settings")
             .is_err()
     );
     // 槽内重复 id

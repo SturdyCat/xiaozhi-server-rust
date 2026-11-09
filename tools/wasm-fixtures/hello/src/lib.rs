@@ -38,10 +38,10 @@ impl Guest for Component {
             .description("P1b 冒烟：SDK 构建器 + kv 读写闭环 + http-get 两段式回灌")
             .permission("kv")
             .expect("kv 权限")
-            .permission("lan-socket")
-            .expect("lan-socket 权限")
             .permission("http-out:example.com")
             .expect("http-out 权限")
+            .permission("net")
+            .expect("net 权限（S3l tcp-connect 探针自检）")
             .implements("demo.greeter")
             .expect("扩展点")
             .implements("asr.provider")
@@ -56,6 +56,8 @@ impl Guest for Component {
             .expect("扩展点（P5 控制策略演示）")
             .implements("device.echomuse")
             .expect("扩展点（P6 会话入口策略演示）")
+            .implements("connector.esp-home")
+            .expect("扩展点（阶段三 ESPHome 目录策略演示）")
             .implements("prompt.soul")
             .expect("扩展点（P7 有界人格策略演示）")
             .implements("wakeup.strategy")
@@ -182,13 +184,13 @@ impl Guest for Component {
                 // 无 JSON 库的夹具级判别：payload 形如 {"id":"loop",...}
                 if payload.contains("\"id\":\"loop\"") {
                     effects.push(types::Effect::HttpRequest(types::EffectHttpRequest {
-                request_id: "loop".to_string(),
-                method: "GET".to_string(),
-                url: "https://example.com/again".to_string(),
-                headers: vec![],
-                body: vec![],
-                timeout_ms: 0,
-            }));
+                        request_id: "loop".to_string(),
+                        method: "GET".to_string(),
+                        url: "https://example.com/again".to_string(),
+                        headers: vec![],
+                        body: vec![],
+                        timeout_ms: 0,
+                    }));
                 }
                 Ok(effects)
             }
@@ -237,23 +239,6 @@ impl Guest for Component {
                     value: format!("{{\"route\":\"native\",\"candidate_index\":{index},\"action\":\"{action}\"}}").into_bytes(),
                 })])
             }
-            // P5b：仅产生高层 LAN 命令；句柄/DP/value 均受宿主边界校验。
-            "connector.tuya.status" => {
-                let req_id = json_str_field(&payload, "req_id").unwrap_or_default();
-                Ok(vec![types::Effect::LanStatus(types::EffectLanStatus {
-                    request_id: req_id,
-                    device_handle: "fixture-handle".to_string(),
-                })])
-            }
-            "connector.tuya.set-dp" => {
-                let req_id = json_str_field(&payload, "req_id").unwrap_or_default();
-                Ok(vec![types::Effect::LanSetDp(types::EffectLanSetDp {
-                    request_id: req_id,
-                    device_handle: "fixture-handle".to_string(),
-                    dp: "1".to_string(),
-                    value_json: "true".to_string(),
-                })])
-            }
             "device.echomuse.prepare" => {
                 let req_id = json_str_field(&payload, "req_id").unwrap_or_default();
                 let welcome = json_str_field(&payload, "welcome").unwrap_or_default();
@@ -261,6 +246,15 @@ impl Guest for Component {
                     key: format!("echomuse-result:{req_id}"),
                     value: format!("{{\"route\":\"native\",\"welcome\":\"{welcome}\"}}")
                         .into_bytes(),
+                })])
+            }
+            // 阶段三 ESPHome：目录策略探针——空 entities = 全放行直通（不隐藏、不改名），
+            // 实体目录由宿主静态表提供，探针不解释实体元数据。
+            "connector.esp-home.prepare" => {
+                let req_id = json_str_field(&payload, "req_id").unwrap_or_default();
+                Ok(vec![types::Effect::KvPut(types::EffectKvPut {
+                    key: format!("esphome-result:{req_id}"),
+                    value: b"{\"route\":\"native\",\"entities\":[]}".to_vec(),
                 })])
             }
             // P7a：只返回 native 问候目录中的索引，不生成文本或音频。
@@ -300,7 +294,8 @@ impl Guest for Component {
                 let req_id = json_str_field(&payload, "req_id").unwrap_or_default();
                 Ok(vec![types::Effect::KvPut(types::EffectKvPut {
                     key: format!("memory-result:{req_id}"),
-                    value: br#"{"route":"native","allow":true,"max_items":4,"max_chars":512}"#.to_vec(),
+                    value: br#"{"route":"native","allow":true,"max_items":4,"max_chars":512}"#
+                        .to_vec(),
                 })])
             }
             // P7g：nlu catalog may filter catalog presentation only; recognition stays native.
@@ -349,11 +344,50 @@ impl Guest for Component {
     }
 
     fn self_test() -> Result<Vec<types::TestResult>, String> {
-        Ok(vec![types::TestResult {
-            name: "roundtrip".to_string(),
-            ok: true,
-            detail: "ok".to_string(),
-        }])
+        // S3l：tcp-connect guest→host 全链心证——函数存在、调用返回、回环拒绝
+        // 语义正确（127.0.0.1:1 无监听 → Err）。探针不真连外网。
+        use xiaozhi_plugin_sdk::xiaozhi::plugin::host_net as net;
+        let (ok, detail) = match net::tcp_connect("127.0.0.1", 1) {
+            Ok(_) => (false, "127.0.0.1:1 竟然连上了（异常）".to_string()),
+            Err(e) => (true, format!("tcp-connect 全链可用（预期拒绝：{e}）")),
+        };
+        // S3s：host random 全链心证——长度正确、两次互异、越界显式拒绝。
+        use xiaozhi_plugin_sdk::xiaozhi::plugin::host_core as host;
+        let (random_ok, random_detail) = match (host::random(16), host::random(16)) {
+            (Ok(a), Ok(b)) => {
+                let varies = a != b;
+                let capped = host::random(4096).is_err();
+                (
+                    a.len() == 16 && b.len() == 16 && varies && capped,
+                    format!("len={} 两次互异={varies} 越界拒绝={capped}", a.len()),
+                )
+            }
+            (a, b) => (
+                false,
+                format!(
+                    "random 调用失败：a={} b={}",
+                    a.err().unwrap_or_default(),
+                    b.err().unwrap_or_default()
+                ),
+            ),
+        };
+        Ok(vec![
+            types::TestResult {
+                name: "roundtrip".to_string(),
+                ok: true,
+                detail: "ok".to_string(),
+            },
+            types::TestResult {
+                name: "tcp-connect-probe".to_string(),
+                ok,
+                detail,
+            },
+            types::TestResult {
+                name: "random-probe".to_string(),
+                ok: random_ok,
+                detail: random_detail,
+            },
+        ])
     }
 }
 

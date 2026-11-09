@@ -111,6 +111,58 @@ pub const MUTED: usize = 4;
 /// 音量实体 key（同时也是 `ENTITIES` 索引）。
 pub const VOLUME: usize = BINARY_COUNT;
 
+/// 实体目录放行计划（阶段三 ESPHome 第一切片）。
+///
+/// native 引擎 = 全放行直通（与历史行为逐字节一致）；`wasm-policy` 引擎由
+/// [`super::policy`] 在桥启动期向 `connector.esp-home` 策略插件征询后构建：
+/// 决定哪些实体对外暴露（不列出的实体不进 `ListEntities`、不发状态、命令被忽略）
+/// 以及显示名覆盖。**协议、加密、状态采集与命令执行不在此层**——key 仍是
+/// [`ENTITIES`] 索引，插件不能增删实体或改动 key 语义。
+#[derive(Debug, Clone, PartialEq)]
+pub struct CatalogPlan {
+    exposed: Vec<bool>,
+    names: Vec<Option<String>>,
+}
+
+impl CatalogPlan {
+    /// 全放行直通：`engine = "native"`（默认）的目录计划，行为与引入策略前一致。
+    pub fn passthrough() -> Self {
+        Self {
+            exposed: vec![true; BINARY_COUNT + NUMBER_COUNT],
+            names: vec![None; BINARY_COUNT + NUMBER_COUNT],
+        }
+    }
+
+    /// 从「逐实体覆盖」构建；未列出的索引保持直通。越界索引由 policy 层拒绝，
+    /// 这里只做兜底（防御未来调用方）。
+    pub fn from_overrides(
+        overrides: impl IntoIterator<Item = (usize, bool, Option<String>)>,
+    ) -> Self {
+        let mut plan = Self::passthrough();
+        for (index, exposed, name) in overrides {
+            if index >= plan.exposed.len() {
+                continue;
+            }
+            plan.exposed[index] = exposed;
+            plan.names[index] = name;
+        }
+        plan
+    }
+
+    /// 实体是否对外暴露（key 越界 = 不暴露）。
+    pub fn is_exposed(&self, key: usize) -> bool {
+        self.exposed.get(key).copied().unwrap_or(false)
+    }
+
+    /// 实体显示名：策略覆盖优先，否则回落 [`ENTITIES`] 静态名。
+    pub fn display_name(&self, key: usize) -> &str {
+        if let Some(Some(name)) = self.names.get(key) {
+            return name.as_str();
+        }
+        ENTITIES.get(key).map(|spec| spec.name).unwrap_or("unknown")
+    }
+}
+
 struct State {
     binary: [AtomicBool; BINARY_COUNT],
     /// 数值实体的 `f32::to_bits()`（`AtomicU32` 无浮点原子类型）。
