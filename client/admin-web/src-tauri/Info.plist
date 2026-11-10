@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  预留模板：本阶段文件未被 tauri.conf.json 引用，也未写入 bundle 配置。
+  后续接入麦克风采集 / 局域网发现硬件命令时，按 Tauri 2 的 macOS bundle
+  配置方式显式引用，并把占位文案替换成正式说明后再上线。
+-->
+<plist version="1.0">
+<dict>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>小智管理台需要使用麦克风进行设备语音调试</string>
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>小智管理台需要访问局域网以发现设备</string>
+  <key>NSBonjourServices</key>
+  <array>
+    <string>_xiaozhi._tcp</string>
+  </array>
+</dict>
+</plist>

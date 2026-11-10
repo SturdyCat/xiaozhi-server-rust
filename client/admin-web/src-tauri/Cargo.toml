@@ -1,0 +1,20 @@
+[package]
+name = "xiaozhi-admin-web"
+version = "0.1.0"
+description = "小智管理台 Tauri 2 桌面壳（仅壳与窄命令，业务逻辑在前端）"
+authors = ["xiaozhi-server"]
+edition = "2021"
+
+[lib]
+name = "xiaozhi_admin_web_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# 与 tauri-utils 使用的 url 2.5.x 同系列，用于解析并校验 WebviewUrl::External 的 scheme。
+url = "2"

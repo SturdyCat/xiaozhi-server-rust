@@ -47,3 +47,21 @@ __pycache__/
 server/tests/fixtures/wasm/*.wasm
 # tools/build-system-plugins.sh 的统一产物目录同样不入库
 /build/
+
+# client/admin-web（React + shadcn/ui + Tauri 2 管理台）本地产物
+client/admin-web/node_modules/
+client/admin-web/dist/
+client/admin-web/.vite/
+client/admin-web/.env.local
+client/admin-web/.env.*.local
+client/admin-web/src-tauri/gen/
+# client/admin-web/src-tauri/target 由上方通用 target 规则覆盖
+
+# WorkBuddy safe-delete shim 的删除链路异常时，Python tempfile._get_default_tempdir()
+# 会把候选目录一路试到 cwd，在仓库根留下 8 字符随机名、内容为 b"blat" 的 4 字节
+# 探测文件（偶尔另有 _tmp_<pid>_* 的 0 字节占位）。这些不是项目产物，忽略以免污染
+# git status；清理时先核对再删：
+#   find . -maxdepth 1 -type f -size 4c -name '????????' -print
+#   find . -maxdepth 1 -type f -size 4c -name '????????' -delete
+/[a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_]
+/_tmp_*

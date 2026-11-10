@@ -30,3 +30,4 @@ publishWeb 不覆盖 macOS 源集；原生运行另重建框架。[macOS 构建�
 
 - [macOS 宿主](<apps/macosApp/AGENTS.md>)：Mac Catalyst 原生桥与语音测试台。
 - [公共管理台](<shared/src/commonMain/kotlin/com/xiaozhi/admin/AGENTS.md>)：跨端页面、表单与配置契约。
+- [Admin Web](<admin-web/AGENTS.md>)：React + shadcn/ui + Tauri 2 管理台开发环境（占位骨架，不参与 Gradle 构建）。
