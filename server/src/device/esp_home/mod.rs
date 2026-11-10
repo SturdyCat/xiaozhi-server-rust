@@ -12,6 +12,13 @@
 //!   经 `connector.esp-home` 扩展点向 WASM 策略插件征询「实体放行 + 显示名」决策
 //!   （[`policy`]，fail-closed：插件不可用桥不启动）；协议握手、加密、状态采集与命令执行
 //!   仍由 native 承载，key 语义不变；
+//! - **生产接管（S3v）**：`[esp_home].engine = "wasm-session"` 时协议面（握手/加密/
+//!   消息派发/实体应答）也整体迁入 esphome.official 插件（[`session`]）：宿主桥只做
+//!   TCP accept、原始字节搬运、状态观测注入与命令执行；psk 改由插件配置命名空间的
+//!   `noise_psk`（secret 字段）提供，`[esp_home].encryption_key` 不参与协议。
+//!   缺 wasm-plugins feature / 缺宿主 / 缺插件、或与 `ble_proxy=true` 组合，桥不启动
+//!   （fail-closed）；native 默认路径不变，native 删除仍以 P8c 真机 + HA 客户端回归
+//!   为门槛；
 //! - 编译期开关 `--features esp_home`，运行期开关 `[esp_home].enabled`；默认关闭，
 //!   关闭时零依赖、零监听、零行为变化。
 //!
@@ -32,6 +39,9 @@ pub mod bluetooth;
 pub mod policy;
 #[cfg(feature = "esp_home")]
 pub mod server;
+/// S3v：`engine = "wasm-session"` 的连接编排（协议面进插件；依赖 WASM 宿主）。
+#[cfg(all(feature = "esp_home", feature = "wasm-plugins"))]
+pub mod session;
 #[cfg(feature = "esp_home")]
 pub mod state;
 

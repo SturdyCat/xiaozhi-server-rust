@@ -36,11 +36,23 @@ use super::{actions, bluetooth, state};
 ///
 /// 单一真相源是 `echomuse.ble_proxy`（设备扫描/连接的总闸），`[esp_home].ble_proxy`
 /// 只是允许桥把它宣告出去。二者任一为假就不宣告，避免客户端看到必然失败的能力。
-fn ble_proxy_enabled(
+/// （`wasm-session` 引擎不走这里——它与 BLE 代理不兼容，启动期守卫直接拒绝。）
+pub(crate) fn ble_proxy_enabled(
     cfg: &EspHomeConfig,
     engines: Option<&std::sync::Arc<crate::runtime::Engines>>,
 ) -> bool {
     cfg.ble_proxy && engines.is_some_and(|e| e.config.echomuse.ble_proxy)
+}
+
+/// 每连接的协议引擎（S3v）：native = `EspHomeApi` 托管（含 `wasm-policy`——协议仍
+/// native）；`wasm-session` = 协议面进 esphome.official 插件，由 [`super::session`]
+/// 编排（测试直接构造 `WasmSession` 变体注入真实插件宿主，不经 `Engines`）。
+enum ConnEngine {
+    /// native 协议面。`None` = 协议往返测试（不启动 BLE 代理任务）。
+    Native(Option<std::sync::Arc<crate::runtime::Engines>>),
+    /// wasm-session：真连接由插件会话编排（真宿主在位由启动期守卫保证）。
+    #[cfg(feature = "wasm-plugins")]
+    WasmSession(std::sync::Arc<crate::plugins::wasm::WasmHost>),
 }
 
 /// 启动桥：绑定 `port` 并无限 accept。`main` 在 `[esp_home].enabled` 时调用。
@@ -48,18 +60,42 @@ pub async fn serve(
     cfg: EspHomeConfig,
     engines: std::sync::Arc<crate::runtime::Engines>,
 ) -> Result<()> {
+    let wasm_session = cfg.engine_id() == "wasm-session";
+
+    // 每连接协议引擎（S3v）：wasm-session 在绑定端口**之前**过启动期守卫
+    // （缺 feature/宿主/插件、ble_proxy 组合都显式失败——起一个"能力与配置
+    // 不符"的桥不如明确失败，不静默降级）。
+    #[cfg(feature = "wasm-plugins")]
+    let conn_engine = if wasm_session {
+        ensure_wasm_session_ready(&cfg, engines.wasm.as_ref())?;
+        ConnEngine::WasmSession(engines.wasm.clone().expect("守卫已校验宿主在位"))
+    } else {
+        ConnEngine::Native(Some(engines.clone()))
+    };
+    #[cfg(not(feature = "wasm-plugins"))]
+    let conn_engine = if wasm_session {
+        anyhow::bail!(
+            "[esp_home].engine = \"wasm-session\" 需要以 wasm-plugins feature 构建的服务端（当前二进制未编入）"
+        );
+    } else {
+        ConnEngine::Native(Some(engines.clone()))
+    };
+
     // BLE 代理要两个开关同时为真才宣告：桥自己的 `[esp_home].ble_proxy` 与设备侧的
     // `[echomuse].ble_proxy`。后者才是设备扫描/连接的总闸，只开前者会造成
     // 「客户端看到代理能力、点进去却没有设备可用」——§7 不做清单里明令不谎报能力。
     let ble_proxy = ble_proxy_enabled(&cfg, Some(&engines));
 
-    // 实体目录计划：native = 全放行直通；`wasm-policy` = 启动期向 `connector.esp-home`
-    // 策略插件征询（fail-closed：插件不可用桥不启动，不静默降级为全放行）。
-    // 在绑定端口**之前**决策——起一个"目录与配置不符"的桥不如明确失败。
+    // 实体目录计划：native = 全放行直通；`wasm-policy` / `wasm-session` = 启动期向
+    // `connector.esp-home` 策略插件征询（fail-closed：插件不可用桥不启动，不静默
+    // 降级为全放行）。在绑定端口**之前**决策。
     let plan = catalog_plan(&cfg, Some(&engines))?;
 
-    // 启动前校验（`build()` 会解码 base64 密钥；非法则直接暴露，不带着坏配置起服务）
-    let _ = build_api(&cfg, ble_proxy)?;
+    // 启动前校验（`build()` 会解码 base64 密钥；非法则直接暴露，不带着坏配置起服务）。
+    // wasm-session 引擎不经 native crate，`encryption_key` 不参与协议——跳过。
+    if !wasm_session {
+        let _ = build_api(&cfg, ble_proxy)?;
+    }
 
     let listener = TcpListener::bind(("0.0.0.0", cfg.port))
         .await
@@ -67,17 +103,21 @@ pub async fn serve(
     let exposed = (0..state::ENTITIES.len())
         .filter(|key| plan.is_exposed(*key))
         .count();
+    // wasm-session 的加密由插件配置（noise_psk）决定，桥不读插件配置（凭证隔离）。
+    let encryption = if wasm_session {
+        "插件配置决定（noise_psk）"
+    } else if cfg.encryption_key.is_empty() {
+        "明文"
+    } else {
+        "noise_psk"
+    };
     tracing::info!(
         "[esp_home] ESPHome Native API 已监听 0.0.0.0:{}（实体 {} 放行 / {}，目录={}，加密={}，mDNS={}，bluetooth_proxy={}）",
         cfg.port,
         exposed,
         state::ENTITIES.len(),
         cfg.engine_id(),
-        if cfg.encryption_key.is_empty() {
-            "明文"
-        } else {
-            "noise_psk"
-        },
+        encryption,
         cfg.mdns,
         if ble_proxy { "已宣告" } else { "未宣告" }
     );
@@ -86,30 +126,35 @@ pub async fn serve(
     // 桥只做只读观测并翻译，不自己推导——避免出现第二份会漂移的状态。
     spawn_state_probe(engines.registry.clone());
 
+    // mDNS 的 api_encryption 宣告只在 native 引擎且配置了密钥时给出；
+    // wasm-session 下桥不知道插件配置，如实"不宣告"（连接后由 DeviceInfo
+    // 如实上报 api_encryption_supported）。
     if cfg.mdns {
-        spawn_mdns(&cfg);
+        spawn_mdns(&cfg, !wasm_session && !cfg.encryption_key.is_empty());
     }
 
-    accept_loop(listener, cfg, engines, plan).await
+    accept_loop(listener, cfg, conn_engine, plan).await
 }
 
-/// 构建实体目录计划（阶段三 ESPHome 第一步：目录放行/改名走 WASM 策略，数据面留 native）。
+/// 构建实体目录计划。
 ///
 /// - `engine = "native"`（默认）：全放行直通，与引入策略前行为逐字节一致；
-/// - `engine = "wasm-policy"`：向 `connector.esp-home` 策略插件征询；缺 feature、
-///   缺宿主或缺插件都显式报错（桥不启动），与 echomuse/tuya 的策略纪律同口径。
+/// - `engine = "wasm-policy"` / `"wasm-session"`：向 `connector.esp-home` 策略插件
+///   征询（同一插件同一决策面，目录口径不因协议引擎分叉）；缺 feature、缺宿主或
+///   缺插件都显式报错（桥不启动），与 echomuse/tuya 的策略纪律同口径。
 fn catalog_plan(
     cfg: &EspHomeConfig,
     engines: Option<&std::sync::Arc<crate::runtime::Engines>>,
 ) -> Result<state::CatalogPlan> {
-    if cfg.engine_id() != "wasm-policy" {
+    let engine = cfg.engine_id();
+    if !matches!(engine.as_str(), "wasm-policy" | "wasm-session") {
         return Ok(state::CatalogPlan::passthrough());
     }
     #[cfg(not(feature = "wasm-plugins"))]
     {
         let _ = engines;
         anyhow::bail!(
-            "[esp_home].engine = \"wasm-policy\" 需要以 wasm-plugins feature 构建的服务端（当前二进制未编入）"
+            "[esp_home].engine = \"{engine}\" 需要以 wasm-plugins feature 构建的服务端（当前二进制未编入）"
         )
     }
     #[cfg(feature = "wasm-plugins")]
@@ -117,7 +162,7 @@ fn catalog_plan(
         let host = engines
             .and_then(|engines| engines.wasm.clone())
             .ok_or_else(|| {
-                anyhow::anyhow!("[esp_home].engine = \"wasm-policy\" 但 WASM 宿主未装载")
+                anyhow::anyhow!("[esp_home].engine = \"{engine}\" 但 WASM 宿主未装载")
             })?;
         let plan = super::policy::esp_home_catalog(&host)
             .map_err(|e| anyhow::anyhow!("ESPHome 目录策略不可用：{e}"))?;
@@ -128,7 +173,7 @@ fn catalog_plan(
             .filter(|key| plan.display_name(*key) != state::ENTITIES[*key].name)
             .count();
         tracing::info!(
-            "[esp_home] 目录策略已应用：放行 {}/{} 个实体，改名 {renamed} 个",
+            "[esp_home] 目录策略已应用（engine={engine}）：放行 {}/{} 个实体，改名 {renamed} 个",
             exposed,
             state::ENTITIES.len()
         );
@@ -136,21 +181,78 @@ fn catalog_plan(
     }
 }
 
+/// `engine = "wasm-session"` 的启动期守卫（S3v，fail-closed：桥不启动而非静默降级）。
+///
+/// - WASM 宿主未装载 → 显式报错（缺 `wasm-plugins` feature 的构建在 `serve` 处
+///   已先行显式报错，进不到这里）；
+/// - `connector.esp-home` 未解析到 `esphome.official`（未装载/未激活，或被探针类
+///   实现顶替）→ 显式报错——会话事件只有官方插件会处理；
+/// - `ble_proxy = true` 组合 → 显式报错：BLE 消息面未进插件会话子集（§7 不谎报
+///   能力），请改回 `native` / `wasm-policy` 或关闭 ble_proxy。
+#[cfg(all(feature = "esp_home", feature = "wasm-plugins"))]
+fn ensure_wasm_session_ready(
+    cfg: &EspHomeConfig,
+    wasm: Option<&std::sync::Arc<crate::plugins::wasm::WasmHost>>,
+) -> Result<()> {
+    use crate::plugins::wasm::Resolution;
+
+    let host = wasm.ok_or_else(|| {
+        anyhow::anyhow!("[esp_home].engine = \"wasm-session\" 但 WASM 宿主未装载")
+    })?;
+    let plugin = match host.resolve(super::session::EXTENSION_POINT) {
+        Resolution::Resolved(id) => id,
+        other => anyhow::bail!(
+            "wasm-session 引擎需要 {} 已装载并激活（{} 解析结果：{other:?}）",
+            super::session::SESSION_PLUGIN,
+            super::session::EXTENSION_POINT
+        ),
+    };
+    if plugin != super::session::SESSION_PLUGIN {
+        anyhow::bail!(
+            "wasm-session 引擎要求 {} 由 {} 实现，当前解析到 {plugin}",
+            super::session::EXTENSION_POINT,
+            super::session::SESSION_PLUGIN
+        );
+    }
+    if cfg.ble_proxy {
+        anyhow::bail!(
+            "[esp_home].engine = \"wasm-session\" 与 ble_proxy = true 不兼容：\
+             BLE 消息面未进插件会话子集，桥不谎报能力。\
+             请将 [esp_home].ble_proxy 设为 false，或改用 native / wasm-policy 引擎"
+        );
+    }
+    tracing::info!(
+        "[esp_home] wasm-session 引擎就绪：插件={plugin}（加密密钥 noise_psk 由插件配置提供）"
+    );
+    Ok(())
+}
+
 /// accept 循环。**单独抽出**是为了让测试能绑 `127.0.0.1:0`（随机端口）跑真实协议往返，
 /// 不必经过 `serve` 的固定端口与 mDNS 广播。
 async fn accept_loop(
     listener: TcpListener,
     cfg: EspHomeConfig,
-    engines: std::sync::Arc<crate::runtime::Engines>,
+    engine: ConnEngine,
     plan: state::CatalogPlan,
 ) -> Result<()> {
     loop {
         let (stream, peer) = listener.accept().await?;
         let cfg = cfg.clone();
-        let engines = engines.clone();
+        let engine = match &engine {
+            ConnEngine::Native(bt) => ConnEngine::Native(bt.clone()),
+            #[cfg(feature = "wasm-plugins")]
+            ConnEngine::WasmSession(host) => ConnEngine::WasmSession(std::sync::Arc::clone(host)),
+        };
         let plan = plan.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_conn(stream, &cfg, Some(engines), plan).await {
+            let result = match engine {
+                ConnEngine::Native(bt) => handle_conn(stream, &cfg, bt, plan).await,
+                #[cfg(feature = "wasm-plugins")]
+                ConnEngine::WasmSession(host) => {
+                    super::session::handle_conn(stream, &cfg, host, plan).await
+                }
+            };
+            if let Err(e) = result {
                 tracing::debug!("[esp_home] 连接 {peer} 结束：{e:#}");
             }
         });
@@ -391,8 +493,8 @@ async fn send_all_states(tx: &mpsc::Sender<ProtoMessage>, plan: &state::CatalogP
 /// `number` 命令的分派规则：**只有音量实体接受命令**，其余返回 `None`（忽略）。
 ///
 /// 抽成纯函数便于测试"命令落到哪个动作"——协议解析（`handle_conn`）与业务翻译
-/// （[`actions`]）分离。
-fn number_command_target(key: u32, state: f32) -> Option<u8> {
+/// （[`actions`]）分离。wasm-session 引擎（[`super::session`]）复用同一规则。
+pub(crate) fn number_command_target(key: u32, state: f32) -> Option<u8> {
     (key as usize == state::VOLUME).then(|| actions::quantize_volume(state))
 }
 
@@ -432,13 +534,16 @@ fn spawn_state_probe(registry: crate::device::registry::Registry) {
 }
 
 /// 广播 mDNS `_esphomelib._tcp`（HA 自动发现）。失败只告警：客户端仍可填 IP:port 手动添加。
-fn spawn_mdns(cfg: &EspHomeConfig) {
+///
+/// `announce_encryption`：是否在 TXT 里宣告 `api_encryption`。只有 native 引擎且
+/// 配置了密钥才为真；wasm-session 引擎的密钥在插件配置里、桥不读插件配置（凭证
+/// 隔离），如实不宣告——连接后由 DeviceInfo 的 `api_encryption_supported` 如实上报。
+fn spawn_mdns(cfg: &EspHomeConfig, announce_encryption: bool) {
     let device_name = cfg.device_name.clone();
     let friendly_name = cfg.friendly_name.clone();
     let manufacturer = cfg.manufacturer.clone();
     let model = cfg.model.clone();
     let port = cfg.port;
-    let encrypted = !cfg.encryption_key.is_empty();
     let mac = fake_mac(&device_name);
 
     tokio::task::spawn_blocking(move || {
@@ -471,7 +576,7 @@ fn spawn_mdns(cfg: &EspHomeConfig) {
         props.insert("friendly_name".to_string(), friendly_name);
         props.insert("manufacturer".to_string(), manufacturer);
         props.insert("model".to_string(), model);
-        if encrypted {
+        if announce_encryption {
             props.insert(
                 "api_encryption".to_string(),
                 "Noise_NNpsk0_25519_ChaChaPoly_SHA256".to_string(),
@@ -503,8 +608,9 @@ fn spawn_mdns(cfg: &EspHomeConfig) {
     });
 }
 
-/// 稳定的伪 MAC（FNV-1a 32 位 + 固定前缀），仅供 mDNS 展示，不参与协议。
-fn fake_mac(seed: &str) -> String {
+/// 稳定的伪 MAC（FNV-1a 32 位 + 固定前缀），仅供 mDNS 展示与 wasm-session 身份面，
+/// 不参与协议加密。
+pub(crate) fn fake_mac(seed: &str) -> String {
     let mut h: u32 = 0x811c_9dc5;
     for b in seed.as_bytes() {
         h ^= u32::from(*b);
@@ -524,3 +630,8 @@ fn fake_mac(seed: &str) -> String {
 #[cfg(test)]
 #[path = "server_tests.rs"]
 mod tests;
+
+/// S3v：wasm-session 引擎的真 TCP 回归（依赖 WASM 宿主与真实 esphome.wasm 产物）。
+#[cfg(all(test, feature = "wasm-plugins"))]
+#[path = "session_engine_tests.rs"]
+mod session_engine_tests;

@@ -60,6 +60,10 @@ pub(super) fn sel_esp_home_native(cfg: &Config) -> bool {
 pub(super) fn sel_esp_home_wasm_policy(cfg: &Config) -> bool {
     cfg.esp_home.enabled && cfg.esp_home.engine_id() == "wasm-policy"
 }
+#[cfg(feature = "esp_home")]
+pub(super) fn sel_esp_home_wasm_session(cfg: &Config) -> bool {
+    cfg.esp_home.enabled && cfg.esp_home.engine_id() == "wasm-session"
+}
 pub(super) fn sel_aiui(cfg: &Config) -> bool {
     cfg.aiui.enabled
 }

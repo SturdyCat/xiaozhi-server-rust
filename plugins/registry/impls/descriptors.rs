@@ -279,6 +279,28 @@ pub const ESPHOME_WASM_POLICY: PluginDescriptor = PluginDescriptor {
     selected: sel_esp_home_wasm_policy,
 };
 
+/// ESPHome 的 WASM 会话引擎（S3v 生产接管）：目录决策之外，协议面（握手/加密/消息
+/// 派发/实体应答）整体迁入 esphome.official 插件——宿主桥只做 TCP accept、原始字节
+/// 搬运、状态观测注入与命令执行。运行期依赖（wasm-plugins feature / WASM 宿主 /
+/// 插件装载）由桥启动期守卫显式校验（fail-closed，不静默降级）；BLE 代理与该引擎
+/// 不兼容（BLE 消息面未进插件会话子集），`ble_proxy=true` 组合启动期拒绝。
+#[cfg(feature = "esp_home")]
+pub const ESPHOME_WASM_SESSION: PluginDescriptor = PluginDescriptor {
+    id: "esp-home.wasm-session",
+    capability: Capability::EspHome,
+    display: "WASM ESPHome 会话引擎（协议面进插件）",
+    local: false,
+    hot: HotReload::RestartOnly,
+    requires: &[],
+    fields_path: &[],
+    fields: &[],
+    signature: sig_esp_home,
+    validate: |_| Ok(()),
+    build: None,
+    warn_if: None,
+    selected: sel_esp_home_wasm_session,
+};
+
 pub const AIUI_FULLCHAIN: PluginDescriptor = PluginDescriptor {
     id: "fullchain.aiui",
     capability: Capability::FullChain,

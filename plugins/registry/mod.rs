@@ -533,6 +533,8 @@ pub static REGISTRY: &[PluginDescriptor] = &[
     ESPHOME_NATIVE,
     #[cfg(feature = "esp_home")]
     ESPHOME_WASM_POLICY,
+    #[cfg(feature = "esp_home")]
+    ESPHOME_WASM_SESSION,
     AIUI_FULLCHAIN,
     VOICES_CATALOG,
     FIRMWARE_HOST,

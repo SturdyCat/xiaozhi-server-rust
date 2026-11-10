@@ -18,7 +18,7 @@
 ## 直属下级
 
 - [EchoMuse](<echomuse/AGENTS.md>) `echomuse/`
-- [ESPHome 桥](<esp_home/mod.rs>) `esp_home/`：把 Dot 2 暴露为标准 ESPHome 节点（`--features esp_home`，默认关闭）；`[esp_home].engine = "wasm-policy"` 时实体目录放行/改名经 `connector.esp-home` 插件决策（fail-closed，数据面留 native）。
+- [ESPHome 桥](<esp_home/mod.rs>) `esp_home/`：把 Dot 2 暴露为标准 ESPHome 节点（`--features esp_home`，默认关闭）；`[esp_home].engine = "wasm-policy"` 时实体目录放行/改名经 `connector.esp-home` 插件决策（fail-closed，数据面留 native）；`engine = "wasm-session"` 为生产接管——桥只搬字节与状态，协议面（握手/编解码/会话）在 esphome.official 插件侧，psk 由插件配置命名空间 `noise_psk` 提供（缺省=明文、非法=显式失败），见 `esp_home/session.rs`。
 - [固件 OTA](<firmware/AGENTS.md>) `firmware/`
 - [音色](<voices/AGENTS.md>) `voices/`
 - [Tuya IoT](<tuya/mod.rs>) `tuya/`

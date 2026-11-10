@@ -14,6 +14,9 @@
 // 派发（Hello/DeviceInfo/Ping/ListEntities/SubscribeStates/Disconnect）与实体面应答，
 // 会话状态同样只留插件隔离 kv。状态采集/音量命令执行/BLE 代理仍是 native 数据面
 // （P8c 真机回归后逐域收口）。
+// S3v：**psk 改由本插件配置命名空间提供**（`noise_psk`，secret 字段，config-secret
+// 读取写审计）——宿主桥不再传 psk，`[esp_home].encryption_key` 在 wasm-session
+// 引擎下不参与协议（配置密钥的归属权随协议面一起进插件）。
 
 #[global_allocator]
 static ALLOC: guest_alloc::GrowingBump = guest_alloc::GrowingBump::new();
@@ -24,6 +27,8 @@ mod api_frame;
 mod api_catalog;
 // S3t：Noise NNpsk0 加密握手（协议原语 / 线格式 / 会话状态机 / 事件面）。
 mod hex;
+// S3v：base64 严格解码（插件配置命名空间的 noise_psk 读取专用）。
+mod base64;
 mod noise;
 mod noise_crypto;
 mod noise_event;
@@ -34,7 +39,7 @@ mod session_catalog;
 mod session_event;
 
 use serde_json::{json, Value};
-use xiaozhi_plugin_sdk::builder::{ManifestBuilder, RegistrationBuilder};
+use xiaozhi_plugin_sdk::builder::{FieldSpec, ManifestBuilder, RegistrationBuilder};
 use xiaozhi_plugin_sdk::exports::lifecycle::Guest;
 use xiaozhi_plugin_sdk::xiaozhi::plugin::{host_core as host, types};
 
@@ -80,12 +85,14 @@ impl Guest for Component {
     fn manifest() -> types::PluginManifest {
         ManifestBuilder::new(PLUGIN_ID, "ESPHome 桥实体目录策略")
             .expect("静态构建：id/title 已内联校验")
-            .version("0.5.0")
+            .version("0.6.0")
             .description(
-                "connector.esp-home 扩展点：实体放行/显示名决策 + 明文/加密帧编解码 + 设备侧会话",
+                "connector.esp-home 扩展点：实体放行/显示名决策 + 明文/加密帧编解码 + 设备侧会话（psk 经插件配置）",
             )
             .permission("kv")
             .expect("kv 权限")
+            .permission("config")
+            .expect("config 权限（S3v：noise_psk 会话密钥经本插件配置命名空间读取）")
             .implements("connector.esp-home")
             .expect("扩展点")
             .official(true)
@@ -102,6 +109,17 @@ impl Guest for Component {
                 "插件",
                 116,
                 "settings",
+            )
+            .expect("静态构建")
+            .config_field(
+                FieldSpec::str("noise_psk", "Noise PSK")
+                    .hint("")
+                    .secret()
+                    .help(
+                        "wasm-session 引擎的会话加密密钥（base64 的 32 字节，ESPHome 生成的那串）；\
+                         只写不读，config-secret 读取并审计；留空 = 明文会话",
+                    )
+                    .build(),
             )
             .expect("静态构建")
             .action("ping", "连通性自检", false, "返回插件 id、扩展点与契约版本")
@@ -194,6 +212,7 @@ impl Guest for Component {
             .unwrap_or(0);
         let noise = noise::self_check();
         let session = session::self_check();
+        let b64 = base64::self_check();
         Ok(vec![
             types::TestResult {
                 name: "req-id-and-catalog-parse".to_string(),
@@ -216,6 +235,16 @@ impl Guest for Component {
                 ok: session.is_ok(),
                 detail: match &session {
                     Ok(()) => "明文会话 Hello/目录/状态/断开全链通过".to_string(),
+                    Err(e) => format!("失败：{e}"),
+                },
+            },
+            types::TestResult {
+                name: "noise-psk-base64".to_string(),
+                ok: b64.is_ok(),
+                detail: match &b64 {
+                    Ok(()) => {
+                        "noise_psk 配置值的 base64 严格解码（黄金向量 + 非法输入拒绝）".to_string()
+                    }
                     Err(e) => format!("失败：{e}"),
                 },
             },

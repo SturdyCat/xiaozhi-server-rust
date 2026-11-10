@@ -14,13 +14,18 @@
 //! - `state`：`{session, updates:[{key, state}]}` → 订阅态下输出状态响应帧 `out_hex`；
 //! - `close`：删除会话状态（连接关闭/失败时调用，失败也好回收）。
 //!
-//! 边界：身份与实体目录随 `open` 载荷传入（数据面真相源仍 native：
-//! `[esp_home]` 配置 + 实体状态观测，由宿主桥在后续切片接线）；psk 与
-//! `connector.esp-home.noise` 同口径随载荷传入，生产接管时改由插件配置命名空间提供。
+//! 边界：身份与实体目录随 `open` 载荷传入（数据面真相源仍 native：`[esp_home]`
+//! 配置 + 实体状态观测，由宿主桥接线）。psk 来源（S3v 生产接管）：显式
+//! `psk_hex` 优先（对拍测试 / 宿主直驱保留）；缺省时读本插件配置命名空间的
+//! `noise_psk`（`config-secret` 读取写审计，镜像 tuya access_secret 口径；
+//! 值为 base64 的 32 字节，与 ESPHome 官方 key 同格式）。未配置 / 为空 /
+//! 无 `config` 权限 → 明文会话；配置了但 base64 非法或长度不是 32 字节 →
+//! 业务性失败（fail-closed，绝不静默降级明文——那等于把坏密钥变成降级攻击面）。
 
 use serde_json::{json, Value};
 use xiaozhi_plugin_sdk::xiaozhi::plugin::{host_core as host, types};
 
+use crate::base64;
 use crate::checked_req_id;
 use crate::hex::{hex_decode, hex_encode};
 use crate::noise::PSK_LEN;
@@ -133,7 +138,7 @@ fn open(value: &Value) -> Result<Value, String> {
     let entities =
         session_catalog::validate_entities(value.get("entities").ok_or("载荷缺少 entities")?)?;
     let psk = match value.get("psk_hex") {
-        None | Some(Value::Null) => None,
+        None | Some(Value::Null) => config_psk()?,
         Some(_) => Some(fixed_hex(value, "psk_hex")?),
     };
     identity["api_encryption_supported"] = json!(psk.is_some());
@@ -259,4 +264,30 @@ fn fixed_hex(value: &Value, key: &str) -> Result<[u8; PSK_LEN], String> {
     let mut out = [0u8; PSK_LEN];
     out.copy_from_slice(&bytes);
     Ok(out)
+}
+
+/// 从本插件配置命名空间读 `noise_psk`（S3v：生产接管的 psk 来源）。
+///
+/// - `config-secret` 读取写宿主审计（镜像 tuya access_secret 口径）；
+/// - 未配置 / 为空 / 无 `config` 权限（宿主对未声明权限返回 `None`）→ 明文会话；
+/// - 配置了但 base64 非法或解码后不是 32 字节 → 业务性失败（fail-closed：
+///   坏密钥静默降级明文 = 把配置错误变成可被利用的降级攻击面）。
+fn config_psk() -> Result<Option<[u8; PSK_LEN]>, String> {
+    let Some(raw) = host::config_secret("noise_psk") else {
+        return Ok(None);
+    };
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    let bytes = base64::decode(raw, PSK_LEN, "noise_psk")?;
+    if bytes.len() != PSK_LEN {
+        return Err(format!(
+            "noise_psk 长度非法（解码后 {} 字节，应为 {PSK_LEN}）",
+            bytes.len()
+        ));
+    }
+    let mut out = [0u8; PSK_LEN];
+    out.copy_from_slice(&bytes);
+    Ok(Some(out))
 }

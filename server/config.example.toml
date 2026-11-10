@@ -367,6 +367,10 @@ enabled = false                     # true = 在 port 上提供 ESPHome Native A
 engine = "native"                   # "native" = 全原生；"wasm-policy" = 桥启动期实体目录放行/改名
                                     # 经 connector.esp-home 策略插件决策（需 wasm-plugins feature
                                     # 且已激活 esphome.official；插件不可用桥不启动，不静默降级）。
+                                    # "wasm-session" = 协议面（握手/加密/消息派发/实体应答）也整体
+                                    # 迁入 esphome.official 插件（S3v）：加密密钥改由管理台插件
+                                    # 配置的 noise_psk（secret 字段）提供，下方 encryption_key
+                                    # 不参与协议；与 ble_proxy=true 组合不兼容（启动期显式报错）。
                                     # 旧值 "wasm" 仍可读；改动需重启。
 port = 6053                         # ESPHome 官方默认端口；与 [server].port 无关、互不影响
 encryption_key = ""                 # noise_psk（base64 的 32 字节，ESPHome 生成的那串）；

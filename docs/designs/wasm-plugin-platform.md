@@ -1244,3 +1244,55 @@ S3t 补上随机源、加密握手与传输帧之后，本切片把 ESPHome **�
 - **剩余**：生产接管（宿主桥把 `io.tcp.*`/真连接编排接进 session 事件、psk 改插件配置
   命名空间提供）仍以 P8c 真机 + HA 客户端回归为删除门槛；桥外更多消息类型未收录；
   EchoMuse 协议栈按设计保留 native、仅入口策略面经插件。
+
+### S3v（ESPHome 生产接管：宿主桥接进插件 session 事件 + psk 插件配置命名空间，2026-11-09）
+
+S3u 把设备侧会话语义收进插件后，本切片打通**生产接管**最后一环：`[esp_home].engine =
+"wasm-session"` 时真实 TCP 连接由宿主桥编排进 `connector.esp-home.session` 事件——协议面
+（握手/编解码/会话状态机）全在插件，宿主只搬字节与状态。esphome.official 升 **0.6.0**。
+
+- **配置面（`[esp_home]`）**：`ESPHOME_ENGINES` 增 `wasm-session`（无别名）；静态注册表
+  增 `esp-home.wasm-session` 描述符（`local: false`、RestartOnly，与其他引擎同纪律）。
+  启动期守卫 fail-closed：WASM 宿主未装载 / `connector.esp-home` 解析结果非
+  `esphome.official` / `ble_proxy = true` 组合（BLE 消息面未进插件会话子集，不谎报能力）
+  都显式拒绝启动，不做静默降级。
+- **连接编排**（`server/src/device/esp_home/session.rs`，桥侧单源）：accept → `op=open`
+  （身份取 cfg 同源字段、实体目录 = `state::ENTITIES` × 目录计划的**放行过滤** + 当前
+  快照，key 恒为静态索引）→ 双向泵（tokio::select!）：客户端字节**原样**进 `op=feed`
+  （桥零协议解析，半包/粘包重组在 guest 流式缓冲），`out_hex` 严格 hex 解码后**原样**
+  写回 socket；`state::subscribe()` 的变化组 → `op=state` 单实体 updates（Lagged 即全量
+  补推，仅放行实体）；feed 结果的 `messages` 里 guest 解出的 number 命令 → 计划过滤 +
+  `number_command_target` → `actions::set_volume`（数据面与 native 分支同一条翻译缝）。
+  guest 调用是阻塞的（wasmtime 同步 API）：泵循环里一律 `spawn_blocking` 隔离。
+  会话 id 每连接唯一（`conn-<序号>-<对端端口>`，满足 guest 侧白名单与 ≤64）；
+  `op=close` 兜底回收**覆盖所有退出路径**（open/feed/写回/推送失败都先经 pump 返回，
+  最后无条件 best-effort close——kv 会话是有限资源，不因早退路径泄漏）。
+- **psk 语义边界（关键决策）**：psk 源 = **插件配置命名空间** `noise_psk`（secret 字段，
+  经 `config-secret` 审计读取，与 tuya `access_secret` 同口径；宿主桥不读、不传凭证）。
+  guest 侧 `session_event::open` 语义：载荷无 psk → 读自身配置；**配置缺省/为空 = 明文
+  会话（合法选择，如无 HA 部署场景）**；**配置存在但 base64 非法或长度 ≠ 32 字节 = 显式
+  失败（fail-closed，不静默降级明文）**——「没配」与「配坏了」是两种语义，后者掩盖会
+  造成用户以为加密了实则明文的静默事故。宿主侧 `[esp_home].encryption_key` 在
+  wasm-session 下不参与（不读、不校验），`psk_hex` 显式传入路径保留优先（测试面直控）。
+- **mDNS 不宣告 `api_encryption`**：wasm-session 下桥不读插件配置（凭证隔离——
+  `config-secret` 读取只对插件自身审计），加密能力由 DeviceInfoResponse 的
+  `api_encryption_supported` 如实上报（guest 依 psk 有无自填）。
+- **边界完整性（本轮小修）**：桥侧 `hex_decode` 从 `unwrap_or_default()` 静默补零改为
+  **严格解码**——guest `out_hex` 非法是宿主/guest 边界的完整性问题，按连接级错误显式
+  失败（fail-closed），与模块注释口径一致；状态推送路径的 hex 错误同样按连接级失败
+  （插件业务 `ok:false` 仍只告警不断连）。
+- **回归（7 passed，真 TCP + 真 esphome.wasm 夹具，`session_engine_tests.rs`）**：
+  ① 明文全链（放行过滤隐藏 muted 实体贯穿目录/快照/推送、Hello/DeviceInfo/Ping、
+  音量命令 30 落 actions、Disconnect → EOF → 会话状态回收）；② 加密全链（psk 只在
+  插件配置、noise-protocol 参考客户端、逐字节解密核对、快照 6 键、命令 55 落 actions）；
+  ③ 错误 psk fail-closed 不降级明文；④-⑦ 四条启动守卫（缺宿主 / 缺插件 / ble_proxy
+  组合拒绝 / 合法组合放行）。测试侧加固：改全局状态（`state::*`、命令记录器）的
+  三条全链测试以串行锁互斥——全局 broadcast 串扰曾致偶发「speaking 应推为 true」
+  假失败（连续 6 跑全绿后归档）。
+- **验证（本机实测）**：`session_engine` 过滤 **7**/0（串行锁后 6 连跑稳定）；
+  `wasm-plugins,esp_home` **1127**/0；`esp_home` 单独 **991**/0；`wasm-plugins` **868**/0；
+  `wasm-plugins,tuya-plugin` **1236**/0；default **762**/0；改动文件 rustfmt clean；
+  `git diff --check` 干净。
+- **剩余**：桥外更多消息类型（switch 状态回推、报警器等）未收录；生产接管真机验收
+  以 P8c 真机 + HA 客户端回归为删除门槛；Tuya LAN native worker 删除同以真机回归为
+  门槛；EchoMuse 协议栈按设计保留 native、仅入口策略面经插件。

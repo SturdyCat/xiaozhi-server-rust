@@ -10,19 +10,19 @@ use super::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// 消息类型号（取自 crate `parser::proto_message_mappings!`）。
-const HELLO_REQUEST: u8 = 1;
-const HELLO_RESPONSE: u8 = 2;
-const DEVICE_INFO_REQUEST: u8 = 9;
-const DEVICE_INFO_RESPONSE: u8 = 10;
-const LIST_ENTITIES_REQUEST: u8 = 11;
-const LIST_ENTITIES_BINARY_SENSOR: u8 = 12;
-const LIST_ENTITIES_DONE: u8 = 19;
-const SUBSCRIBE_STATES_REQUEST: u8 = 20;
-const BINARY_SENSOR_STATE: u8 = 21;
-const LIST_ENTITIES_NUMBER: u8 = 49;
-const NUMBER_STATE: u8 = 50;
+pub(super) const HELLO_REQUEST: u8 = 1;
+pub(super) const HELLO_RESPONSE: u8 = 2;
+pub(super) const DEVICE_INFO_REQUEST: u8 = 9;
+pub(super) const DEVICE_INFO_RESPONSE: u8 = 10;
+pub(super) const LIST_ENTITIES_REQUEST: u8 = 11;
+pub(super) const LIST_ENTITIES_BINARY_SENSOR: u8 = 12;
+pub(super) const LIST_ENTITIES_DONE: u8 = 19;
+pub(super) const SUBSCRIBE_STATES_REQUEST: u8 = 20;
+pub(super) const BINARY_SENSOR_STATE: u8 = 21;
+pub(super) const LIST_ENTITIES_NUMBER: u8 = 49;
+pub(super) const NUMBER_STATE: u8 = 50;
 /// 客户端 → 服务端的「设定数值」命令（HA 拖滑块）。
-const NUMBER_COMMAND: u8 = 51;
+pub(super) const NUMBER_COMMAND: u8 = 51;
 
 fn encode_varint(mut v: u64, out: &mut Vec<u8>) {
     loop {
@@ -37,7 +37,7 @@ fn encode_varint(mut v: u64, out: &mut Vec<u8>) {
 }
 
 /// 明文帧：`0x00` + 载荷长度（不含类型字节）+ 类型 + 载荷。
-fn frame(msg_type: u8, payload: &[u8]) -> Vec<u8> {
+pub(super) fn frame(msg_type: u8, payload: &[u8]) -> Vec<u8> {
     let mut out = vec![0u8];
     encode_varint(payload.len() as u64, &mut out);
     out.push(msg_type);
@@ -46,7 +46,7 @@ fn frame(msg_type: u8, payload: &[u8]) -> Vec<u8> {
 }
 
 /// 读一帧，返回（类型，载荷）。
-async fn read_frame(stream: &mut TcpStream) -> (u8, Vec<u8>) {
+pub(super) async fn read_frame(stream: &mut TcpStream) -> (u8, Vec<u8>) {
     let mut marker = [0u8; 1];
     stream.read_exact(&mut marker).await.unwrap();
     assert_eq!(marker[0], 0, "本端应回明文帧（未配 encryption_key）");
@@ -69,7 +69,7 @@ async fn read_frame(stream: &mut TcpStream) -> (u8, Vec<u8>) {
     (buf[0], buf[1..].to_vec())
 }
 
-fn contains(hay: &[u8], needle: &[u8]) -> bool {
+pub(super) fn contains(hay: &[u8], needle: &[u8]) -> bool {
     hay.windows(needle.len()).any(|w| w == needle)
 }
 
@@ -92,7 +92,7 @@ fn read_varint(buf: &[u8]) -> (u64, usize) {
 ///
 /// 同时支持 varint（`state` 等 bool/uint32）与 fixed32（`key`：ESPHome 的
 /// `BinarySensorStateResponse.key` 在当前 proto 版本是 `fixed32`，线上 4 字节小端）。
-fn field_u32(payload: &[u8], want_tag: u8) -> u64 {
+pub(super) fn field_u32(payload: &[u8], want_tag: u8) -> u64 {
     let mut i = 0;
     while i < payload.len() {
         let (key, n) = read_varint(&payload[i..]);
@@ -130,7 +130,7 @@ fn field_u32(payload: &[u8], want_tag: u8) -> u64 {
 
 /// 取某个 `float` 字段（wire type 5，小端 4 字节）；**缺省返回 0.0**——同样因为
 /// protobuf 省略默认值，`min_value=0` / `state=0.0` 在线上不出现。
-fn field_f32(payload: &[u8], want_tag: u8) -> f32 {
+pub(super) fn field_f32(payload: &[u8], want_tag: u8) -> f32 {
     let mut i = 0;
     while i < payload.len() {
         let (key, n) = read_varint(&payload[i..]);

@@ -13,6 +13,12 @@ use crate::config::{canonical_engine, EngineSpec};
 /// `wasm-policy` = 桥启动期经 `connector.esp-home` 扩展点向 WASM 插件征询实体目录
 /// 放行/显示名决策；协议握手、加密、状态采集与命令执行仍由 native 承载（阶段三
 /// ESPHome 第一切片，数据面不出原生）。
+///
+/// `wasm-session`（S3v 生产接管）= 目录决策之外，**协议面（握手/加密/消息派发/实体
+/// 应答）也整体迁入 esphome.official 插件**：宿主桥只做 TCP accept、原始字节搬运、
+/// 状态观测注入与命令执行。psk 不再来自 `[esp_home].encryption_key`，而是插件配置
+/// 命名空间的 `noise_psk`（secret 字段）。缺 wasm-plugins feature / 缺宿主 /
+/// 缺插件、或与 `ble_proxy=true` 组合，桥**不启动**（fail-closed，不静默降级）。
 pub const ESPHOME_ENGINES: &[EngineSpec] = &[
     EngineSpec {
         id: "native",
@@ -22,13 +28,18 @@ pub const ESPHOME_ENGINES: &[EngineSpec] = &[
         id: "wasm-policy",
         aliases: &["wasm"],
     },
+    EngineSpec {
+        id: "wasm-session",
+        aliases: &[],
+    },
 ];
 const DEFAULT_ESPHOME_ENGINE: &str = "native";
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct EspHomeConfig {
-    /// 桥实现：`native`（宿主全原生）或 `wasm-policy`（启动期实体目录经 WASM 策略
-    /// 插件决策）。旧值 `wasm` 仍可读；均为 RestartOnly（桥是启动期拉起的后台任务）。
+    /// 桥实现：`native`（宿主全原生）、`wasm-policy`（启动期实体目录经 WASM 策略
+    /// 插件决策）或 `wasm-session`（S3v：协议面也进插件，psk 经插件配置）。
+    /// 旧值 `wasm` 仍可读；均为 RestartOnly（桥是启动期拉起的后台任务）。
     #[serde(default = "default_engine")]
     pub engine: String,
     /// 是否启用桥。**默认关闭**（可选模块，不影响现有语音/设备路径）。
