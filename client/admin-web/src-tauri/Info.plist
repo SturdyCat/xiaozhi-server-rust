@@ -1,9 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  预留模板：本阶段文件未被 tauri.conf.json 引用，也未写入 bundle 配置。
-  后续接入麦克风采集 / 局域网发现硬件命令时，按 Tauri 2 的 macOS bundle
-  配置方式显式引用，并把占位文案替换成正式说明后再上线。
+  正式引用（W14b-1，M6）：tauri.conf.json 的 bundle.macOS.infoPlist 指向本文件，
+  打包时与 Tauri 默认 Info.plist 合并（tauri-utils MacConfig::info_plist）。
+  NSAllowsLocalNetworking：macOS 15 ATS 对 WKWebView 的 WS 升级拦截放宽
+  （架构文档 §1.1①；localhost/127.0.0.1 的 per-domain 例外不覆盖 WebSocket 升级）。
+  ⚠️ 实际是否生效（含 app-sandbox / 签名组合）仍需真机复核（架构文档 §3-L3 第 1/2 项）。
 -->
 <plist version="1.0">
 <dict>
@@ -15,5 +17,7 @@
   <array>
     <string>_xiaozhi._tcp</string>
   </array>
+  <key>NSAllowsLocalNetworking</key>
+  <true/>
 </dict>
 </plist>

@@ -20,3 +20,16 @@ serde_json = "1"
 url = "2"
 # 本轮唯一插件：局域网 http:// 非安全上下文下 navigator.clipboard 不可用时的原生复制兜底。
 tauri-plugin-clipboard-manager = "2"
+
+# —— W14b 本地音频桥（路径 X：Tauri 本地 loopback WS 桥，见
+#    docs/plans/admin-web-migration/w14-testbench-architecture.md §1.1/§4-M1~M5）——
+# 本地桥服务：与 server 同栈的 tokio + axum（server 用 axum 0.8 / tokio 1.x，口径一致）。
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync"] }
+axum = { version = "0.8", features = ["ws"] }
+# axum WebSocket 的 Sink/Stream split 所需。
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+# 音频采集/播放：macOS 走 CoreAudio 后端（研究 §2：cpal macOS 成熟、免双实现）。
+cpal = "0.18"
+# Opus 编码上行（16k / 60ms / 40kbps）：与 server 同款 crate（server/Cargo.toml audiopus 0.2），
+# audiopus_sys 在 macOS 经 pkg-config 链接系统 libopus（本机 brew opus 1.6.1 已具备）。
+audiopus = "0.2"

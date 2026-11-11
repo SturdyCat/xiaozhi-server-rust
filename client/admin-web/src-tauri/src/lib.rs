@@ -1,8 +1,12 @@
 //! 小智管理台 Tauri 2 桌面壳。
 //!
-//! 这里只负责：按运行模式创建窗口、注册窄命令、挂载最小插件。
-//! 业务逻辑一律留在前端 React SPA 中，不往 Rust 侧搬。
+//! 这里只负责：按运行模式创建窗口、注册窄命令、挂载最小插件、启动本地音频桥。
+//! 业务逻辑（协议编排）一律留在前端 React SPA 中，不往 Rust 侧搬；
+//! 本地桥只承载「Tauri Rust 音频硬件 ↔ 前端」的 PCM/Opus 数据与控制命令
+//! （架构路径 X，见 docs/plans/admin-web-migration/w14-testbench-architecture.md §1.1）。
 
+mod audio;
+mod bridge;
 mod commands;
 
 use tauri::{WebviewUrl, WebviewWindowBuilder};
@@ -102,10 +106,27 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![commands::app_capabilities])
         .setup(|app| {
             let url = resolve_window_url()?;
+
+            // —— W14b 本地音频桥（路径 X）：随 app 启动即监听（端口早定便于注入），
+            // app 退出随进程回收。桥只绑 127.0.0.1:0；Origin 白名单按窗口地址推导。
+            // 启动失败诚实降级：不注入端口，前端按「本地桥不可用」呈现，不伪装成功。
+            let origins = bridge::allowed_origins_for_window(&url);
+            let init_script = match bridge::start_bridge(origins.clone()) {
+                Ok(secret) => {
+                    bridge::set_bridge_origins(origins.clone());
+                    bridge::bridge_init_script(secret.port, &secret.token, &origins)
+                }
+                Err(error) => {
+                    eprintln!("[bridge] 本地音频桥启动失败（ASR/试听将不可用）: {error}");
+                    String::new()
+                }
+            };
+
             WebviewWindowBuilder::new(app, MAIN_WINDOW_LABEL, url)
                 .title("小智管理台")
                 .inner_size(1280.0, 800.0)
                 .min_inner_size(960.0, 640.0)
+                .initialization_script(&init_script)
                 .build()?;
             Ok(())
         })

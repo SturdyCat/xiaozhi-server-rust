@@ -1,8 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  预留模板：本阶段文件未被 tauri.conf.json 引用。启用前需按实际签名／沙箱
-  策略复核，尤其是 com.apple.security.app-sandbox 与硬件权限的组合。
+  正式引用（W14b-1，M6）：tauri.conf.json 的 bundle.macOS.entitlements 指向本文件。
+  com.apple.security.network.client：连接局域网 server（页面基址）；
+  com.apple.security.device.audio-input：麦克风采集（本地桥 cpal input）。
+  ⚠️ 与 com.apple.security.app-sandbox / 签名策略的组合仍需按实际签名方式复核
+  （未签名 ad-hoc 开发构建默认无沙箱，此文件在打包签名时才实际生效）。
 -->
 <plist version="1.0">
 <dict>
