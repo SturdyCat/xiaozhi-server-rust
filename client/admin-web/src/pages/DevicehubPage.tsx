@@ -34,6 +34,16 @@
 import { useCallback, useState, type ReactElement } from "react";
 import { Link } from "react-router-dom";
 import { Plus, RefreshCw, Settings2, Wrench } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -228,6 +238,7 @@ export function DevicehubPage(): ReactElement {
   const [detailEmId, setDetailEmId] = useState<string | null>(null);
   const [extensionEmId, setExtensionEmId] = useState<string | null>(null);
   const [detailTuyaId, setDetailTuyaId] = useState<string | null>(null);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   const refreshAll = useCallback((): void => {
     void echoQ.refetch();
@@ -292,20 +303,14 @@ export function DevicehubPage(): ReactElement {
   };
 
   const handleDeleteEm = (device: EchomuseDevice): void => {
-    void runAction(`delete:${device.deviceId}`, async () => {
-      try {
-        await deleteEchomuseDevice(device.deviceId);
-        toast.show(`已删除记录 ${device.label || device.deviceId}`, "success");
-        void echoQ.refetch();
-      } catch (error) {
-        if (error instanceof EchomuseApiError && error.status === 404) {
-          toast.show("设备不存在（可能已被删除，刷新列表即可）", "error");
-        } else {
-          toast.show(error instanceof Error ? error.message : String(error), "error");
-        }
-      }
-    });
+    // §13 实施清单：删除走 destructive 二次确认 + 点遮罩不关闭；确认后执行。
+    setDeleteConfirmId(device.deviceId);
   };
+
+  const deleteTarget =
+    deleteConfirmId !== null
+      ? (echoData?.devices.find((device) => device.deviceId === deleteConfirmId) ?? null)
+      : null;
 
   const detailEm =
     detailEmId !== null
@@ -613,6 +618,57 @@ export function DevicehubPage(): ReactElement {
           </section>
         ) : null}
       </div>
+
+      {/* 删除记录二次确认（§13 实施清单：destructive + 点遮罩不关闭） */}
+      <AlertDialog
+        open={deleteConfirmId !== null}
+        onOpenChange={() => {
+          // 忽略 ESC / 遮罩关闭请求：只能走「删除 / 取消」两个按钮。
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除设备记录？</AlertDialogTitle>
+            <AlertDialogDescription>
+              将删除 {deleteTarget?.label || deleteTarget?.deviceId || ""}（
+              {deleteTarget?.deviceId ?? ""}）的登记记录；设备下次连接会重新出现。此操作不可撤销。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              onClick={() => {
+                setDeleteConfirmId(null);
+              }}
+            >
+              取消
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                const target = deleteConfirmId;
+                setDeleteConfirmId(null);
+                if (target !== null) {
+                  void runAction(`delete:${target}`, async () => {
+                    try {
+                      await deleteEchomuseDevice(target);
+                      toast.show(`已删除记录 ${target}`, "success");
+                      void echoQ.refetch();
+                    } catch (error) {
+                      if (error instanceof EchomuseApiError && error.status === 404) {
+                        toast.show("设备不存在（可能已被删除，刷新列表即可）", "error");
+                      } else {
+                        toast.show(error instanceof Error ? error.message : String(error), "error");
+                      }
+                    }
+                  });
+                }
+              }}
+            >
+              删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* 齿轮：设备接入配置（一次性配置；凭证唯一录入路径） */}
       <DeviceAccessConfigDialog
