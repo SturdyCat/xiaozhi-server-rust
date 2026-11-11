@@ -38,8 +38,9 @@ export const NAV_DESCRIPTORS: readonly NavDescriptor[] = [
   },
   {
     key: "settings",
-    label: "系统设置",
-    description: "管理员账号、通知与服务运行参数。",
+    label: "全局配置",
+    description:
+      "部署级参数：能力总览、预设、AIUI 全链路、服务、Tuya 接入与 OTA；无流程节点，与语音流程共用一份表单。",
     tauriOnly: false,
   },
   {
