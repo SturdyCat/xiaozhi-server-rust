@@ -6,9 +6,11 @@ import { isTauri } from "@/lib/platform";
 import { ConfigPage } from "@/pages/ConfigPage";
 import { ConsolePage } from "@/pages/ConsolePage";
 import { DevicesPage } from "@/pages/DevicesPage";
+import { DevicehubPage } from "@/pages/DevicehubPage";
 import { EchomusePage } from "@/pages/EchomusePage";
 import { FilesPage } from "@/pages/FilesPage";
 import { OverviewPage } from "@/pages/OverviewPage";
+import { PluginRuntimeRoute, PluginsPage } from "@/pages/PluginsPage";
 import { SettingsPage } from "@/pages/SettingsPage";
 import { TestbenchPage } from "@/pages/TestbenchPage";
 
@@ -16,11 +18,13 @@ import { TestbenchPage } from "@/pages/TestbenchPage";
 export const PAGE_COMPONENTS: Record<string, ComponentType> = {
   overview: OverviewPage,
   devices: DevicesPage,
+  devicehub: DevicehubPage,
   config: ConfigPage,
   settings: SettingsPage,
   echomuse: EchomusePage,
   console: ConsolePage,
   files: FilesPage,
+  plugins: PluginsPage,
   testbench: TestbenchPage,
 };
 
@@ -42,6 +46,11 @@ export function AppRouter(): ReactElement {
             />
           );
         })}
+        {/* 插件动态运行页：必须在 `path="*"` 兜底之前声明。 */}
+        <Route
+          path="plugin/:pluginId/:entryId"
+          element={<PluginRuntimeRoute />}
+        />
         <Route path="*" element={<Navigate to="/overview" replace />} />
       </Route>
     </Routes>

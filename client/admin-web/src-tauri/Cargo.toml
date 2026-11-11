@@ -18,3 +18,5 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # 与 tauri-utils 使用的 url 2.5.x 同系列，用于解析并校验 WebviewUrl::External 的 scheme。
 url = "2"
+# 本轮唯一插件：局域网 http:// 非安全上下文下 navigator.clipboard 不可用时的原生复制兜底。
+tauri-plugin-clipboard-manager = "2"

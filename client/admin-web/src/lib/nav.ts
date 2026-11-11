@@ -25,6 +25,12 @@ export const NAV_DESCRIPTORS: readonly NavDescriptor[] = [
     tauriOnly: false,
   },
   {
+    key: "devicehub",
+    label: "设备中心",
+    description: "EchoMuse 与涂鸦设备的接入、运行面板与扩展工具。",
+    tauriOnly: false,
+  },
+  {
     key: "config",
     label: "配置管理",
     description: "服务端参数与配置热生效档位。",
@@ -52,6 +58,12 @@ export const NAV_DESCRIPTORS: readonly NavDescriptor[] = [
     key: "files",
     label: "文件管理",
     description: "固件、音频与静态资源的上传和管理。",
+    tauriOnly: false,
+  },
+  {
+    key: "plugins",
+    label: "插件",
+    description: "WASM 插件上传、生命周期管理与动态运行页。",
     tauriOnly: false,
   },
   {

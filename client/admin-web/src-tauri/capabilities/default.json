@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "主窗口最小权限：不授予 core:default。Tauri 2 默认允许 invoke_handler 注册的应用自定义命令（app_capabilities）被所有窗口调用，故 permissions 为空。远程 URL 授权的 remote.urls 模板见 client/admin-web/AGENTS.md，本阶段默认不开启。",
+  "description": "主窗口最小权限：不授予 core:default，只放行剪贴板写入文本。通过 invoke_handler 注册的应用自定义命令（app_capabilities）仅对 Local origin（内嵌 tauri://localhost）默认可用；生产默认加载的是远程服务器页面（如 http://127.0.0.1:8000），origin 为 Remote，IPC 默认被 ACL 拒绝，故 app_capabilities 与剪贴板插件 IPC 都不会成功。未配置 remote.urls（依据与模板见 client/admin-web/AGENTS.md）；如需远程 IPC 须显式授权并复评信任边界。",
   "windows": ["main"],
-  "permissions": []
+  "permissions": ["clipboard-manager:allow-write-text"]
 }

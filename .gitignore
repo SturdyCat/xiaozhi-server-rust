@@ -65,3 +65,7 @@ client/admin-web/src-tauri/gen/
 #   find . -maxdepth 1 -type f -size 4c -name '????????' -delete
 /[a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_]
 /_tmp_*
+# 同一现象也会落在运行 Python 脚本的子目录（如 client/admin-web/scripts/gen-icons.py），
+# 故对子目录再补一条；`_tmp_*` 前缀足够独特，放开层级不会误伤项目文件。
+client/admin-web/[a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_][a-z0-9_]
+**/_tmp_*

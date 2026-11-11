@@ -1,5 +1,6 @@
 import type { ReactElement } from "react";
 import { HashRouter } from "react-router-dom";
+import { ToastProvider } from "./components/feedback/ToastHost";
 import { AppRouter } from "./router";
 
 /**
@@ -9,7 +10,9 @@ import { AppRouter } from "./router";
 export default function App(): ReactElement {
   return (
     <HashRouter>
-      <AppRouter />
+      <ToastProvider>
+        <AppRouter />
+      </ToastProvider>
     </HashRouter>
   );
 }

@@ -35,7 +35,9 @@ export default defineConfig({
     // proxy 中间件先于 SPA history fallback 生效，因此 /em/（含尾斜杠）
     // 会原样转发到 Rust server，不会被 index.html 吞掉。
     proxy: {
-      "/api": { target: proxyTarget, changeOrigin: true },
+      // /api 前缀同时覆盖 /api/logs（控制台日志 WS）与 /api/admin/ws（管理台实时 WS），
+      // 必须开启 ws: true 才能完成 WebSocket 升级；普通 HTTP 请求不受影响。
+      "/api": { target: proxyTarget, changeOrigin: true, ws: true },
       "/ws": { target: proxyTarget, changeOrigin: true, ws: true },
       "/em": { target: proxyTarget, changeOrigin: true },
     },

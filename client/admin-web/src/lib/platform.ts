@@ -32,8 +32,12 @@ export function isTauri(): boolean {
 }
 
 /**
- * 读取桌面壳能力信息。浏览器环境直接返回 Web 兜底值，绝不调用 invoke；
- * Tauri 环境若命令未注册或调用失败也降级，保证页面不会因骨架命令崩溃。
+ * 读取桌面壳能力信息。
+ * - 浏览器环境（isTauri 为假）：直接返回 Web 兜底值，绝不调用 invoke。
+ * - Tauri Local origin（内嵌 SPA，tauri://localhost）：返回真实值。
+ * - Tauri Remote origin（生产服务器页面 / tauri dev 的 Vite URL）：
+ *   invoke 会被 ACL 拒绝。此处**抛错**让调用方（TestbenchPage）显式提示，
+ *   而不是用 platform:"web" 制造「通道正常」的误导。调用方必须自行 try/catch。
  */
 export async function getCapabilities(): Promise<AppCapabilities> {
   if (!isTauri()) {
@@ -41,7 +45,11 @@ export async function getCapabilities(): Promise<AppCapabilities> {
   }
   try {
     return await invoke<AppCapabilities>("app_capabilities");
-  } catch {
-    return { ...WEB_CAPABILITIES, tauri: true };
+  } catch (cause: unknown) {
+    // 远程页面 origin（生产服务器页面 / tauri dev）未被 capability 授权 remote.urls，
+    // invoke 会被 ACL 拒绝。抛错让调用方（TestbenchPage）显式提示，
+    // 而不是用 platform:"web" 制造「通道正常」的误导。调用方必须自行 try/catch。
+    const reason = cause instanceof Error ? cause.message : String(cause);
+    throw new Error(`IPC 通道不可用（远程 origin 未授权 remote.urls）：${reason}`);
   }
 }
