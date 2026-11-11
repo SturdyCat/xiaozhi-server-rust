@@ -1,5 +1,6 @@
 /**
- * 测试台 WS 客户端：连接 `/api/ws`（设备协议通道），承载 LLM / NLU 纯文本测试。
+ * 测试台 WS 客户端：连接 `/api/ws`（设备协议通道），承载 LLM / NLU 纯文本测试与
+ * ASR / TTS 音频测试（W14b：上行二进制中转 + 下行二进制中转到本地桥解码播放）。
  *
  * ## 端点与鉴权
  * - `/api/ws` 是设备 WebSocket 协议端点（`gateway/ws/mod.rs`），**不是**管理台实时
@@ -58,8 +59,51 @@ export interface SttWire {
   readonly text: string;
 }
 
+/**
+ * server hello 回包的下行音频参数（`gateway/ws/mod.rs:435-446`：下行采样率/帧长由
+ * 服务端配置 `[audio].downlink_sample_rate` 决定——默认 24k，设备/测试台据此解码）。
+ * 下行二进制帧 = server hello 版本（hello.version:1 → V1 裸 Opus，无封装头）。
+ */
+export interface ServerHelloAudio {
+  readonly sampleRate: number;
+  readonly channels: number;
+  readonly frameDuration: number;
+}
+
+/** 下行 server hello 帧（ServerMessage::Hello 的前端消费子集）。 */
+export interface HelloWire {
+  readonly sessionId: string | null;
+  readonly audio: ServerHelloAudio | null;
+}
+
+/** `tts` 状态帧（ServerMessage::Tts：{session_id, state:"start"|"stop", text?}）——
+ * start/stop 界定下行音频流的边界（sender.rs ensure_tts_started / bench.rs:393-396）。 */
+export interface TtsStateWire {
+  readonly state: "start" | "stop";
+}
+
+/** `tts_test` 结果帧（protocol.rs:224-233：ok 时 text=服务端合成耗时 ms，error 时为可读错误）。 */
+export interface TtsTestWire {
+  readonly state: "ok" | "error";
+  readonly engine: string | null;
+  readonly text: string | null;
+}
+
 /** asr_test 上行：{type:"asr_test", action:"start"|"stop"}（ClientMessage::AsrTest，bench.rs:29-80 坐实字段名 action）。 */
 export type AsrTestAction = "start" | "stop";
+
+/** tts_test 上行参数（ClientMessage::TtsTest，protocol.rs:141-158 坐实字段名）。 */
+export interface TtsTestParams {
+  readonly text: string;
+  /** 语音角色（Kokoro sid）；省略 = 用服务器配置默认值。 */
+  readonly speaker?: number;
+  /** 语言（"zh"/"en"）；省略 = 用服务器配置默认值。 */
+  readonly lang?: string;
+  /** 语速；省略 = 用服务器配置默认值。 */
+  readonly speed?: number;
+  /** 远程音色覆盖（讯飞 vcn）；省略/空 = 用服务端已保存配置。 */
+  readonly vcn?: string;
+}
 
 // ============================================================================
 // 本地音频桥（Tauri Rust loopback WS；控制协议见 src-tauri/src/audio.rs BridgeCommand/BridgeEvent）
@@ -71,6 +115,7 @@ export type BridgeFrame =
   | { type: "recorded"; seconds: number; buckets: number[] }
   | { type: "wave"; seconds: number; buckets: number[] }
   | { type: "play_state"; playing: boolean; position: number; duration: number }
+  | { type: "tts_done"; seconds: number; buckets: number[] }
   | { type: "error"; code: string; message: string };
 
 /** 读取 init script 注入的桥凭据；未注入（Web 环境 / 桥启动失败）返回 null。 */
@@ -96,7 +141,7 @@ export function buildBridgeWsUrl(): string | null {
 }
 
 export interface BridgeSocketHandlers {
-  /** 桥连接建立（可发 start_capture）。 */
+  /** 桥连接建立（可发 start_capture / tts_begin）。 */
   readonly onOpen: () => void;
   /** 桥连接断开（含首次连接失败；detail 为 close code）。 */
   readonly onClose: (code: number) => void;
@@ -108,7 +153,8 @@ export interface BridgeSocketHandlers {
 
 /**
  * 本地音频桥 WS 客户端（一条连接；断开不自动重连，下次录音动作重建）。
- * 发送侧只有控制文本帧——Opus 由 Rust → 前端单向流出。
+ * 发送侧：控制文本帧（录音/播放/TTS 会话）+ 下行 Opus 二进制帧（server → 前端 → 桥）；
+ * 接收侧：上行 Opus 二进制帧（桥 → 前端 → server）。
  */
 export class BridgeSocket {
   private ws: WebSocket | null = null;
@@ -175,6 +221,14 @@ export class BridgeSocket {
               });
             }
             break;
+          case "tts_done":
+            if (typeof record["seconds"] === "number" && Array.isArray(record["buckets"])) {
+              const buckets = record["buckets"].filter(
+                (b): b is number => typeof b === "number" && Number.isFinite(b),
+              );
+              this.handlers.onFrame({ type: "tts_done", seconds: record["seconds"], buckets });
+            }
+            break;
           case "error":
             if (typeof record["code"] === "string" && typeof record["message"] === "string") {
               this.handlers.onFrame({
@@ -223,6 +277,38 @@ export class BridgeSocket {
 
   public stopPlayback(): void {
     this.sendCommand("stop_playback");
+  }
+
+  /**
+   * 开始 TTS 下行会话（W14b-2）：`sampleRate` 为下行采样率（server hello audio_params，
+   * 服务端配置决定）；Rust 建解码器与输出流等待解码数据。
+   */
+  public ttsBegin(sampleRate: number): void {
+    if (this.isOpen) {
+      this.ws?.send(JSON.stringify({ type: "tts_begin", sample_rate: sampleRate }));
+    }
+  }
+
+  /** 结束 TTS 下行会话：缓冲排空后 Rust 回 `tts_done`（整段波形 + 时长）。 */
+  public ttsEnd(): void {
+    this.sendCommand("tts_end");
+  }
+
+  /** 回放最近一次完成的 TTS 缓冲（对齐旧端 playTts）。 */
+  public playTts(): void {
+    this.sendCommand("play_tts");
+  }
+
+  /**
+   * 中转 server `/api/ws` 下行 Opus 二进制帧到本地桥（解码播放）。
+   * 与上行共用同一条桥连接；协议帧（JSON 文本）不走这里。
+   */
+  public sendBinary(data: ArrayBuffer): boolean {
+    if (!this.isOpen) {
+      return false;
+    }
+    this.ws?.send(data);
+    return true;
   }
 
   /** 手动断开（不触发 onClose 回调）。 */
@@ -375,10 +461,18 @@ export interface TestbenchSocketHandlers {
   readonly onHandshakeFailure: () => void;
   /** 连接建立后意外断开（code 为 WebSocket close code）。 */
   readonly onUnexpectedClose: (code: number) => void;
+  /** server hello 回包（下行音频参数——下行解码率以此为准）。 */
+  readonly onHello: (hello: HelloWire) => void;
   readonly onLlmTestResult: (result: LlmTestWire) => void;
   readonly onNluTestResult: (result: NluTestWire) => void;
   /** `stt` 结果帧（asr_test stop 的识别回包；W14b-1 起）。 */
   readonly onSttResult: (result: SttWire) => void;
+  /** `tts` 状态帧（start/stop 界定下行音频流边界；W14b-2 起）。 */
+  readonly onTtsState: (state: TtsStateWire) => void;
+  /** `tts_test` 结果帧（ok=text=耗时 ms；error=text=可读错误；W14b-2 起）。 */
+  readonly onTtsTestResult: (result: TtsTestWire) => void;
+  /** 下行 Opus 二进制帧（tts_test 合成结果，中转到本地桥解码播放；W14b-2 起）。 */
+  readonly onBinary: (data: ArrayBuffer) => void;
 }
 
 /**
@@ -398,13 +492,20 @@ export class TestbenchSocket {
   /** 发起连接；open 后自动发送 hello 帧，再回调 onOpen。 */
   public open(): void {
     const ws = new WebSocket(this.url);
+    // 下行 Opus 二进制帧按 ArrayBuffer 收（默认 Blob 无法直接中转）。
+    ws.binaryType = "arraybuffer";
     this.ws = ws;
     ws.onopen = () => {
       this.opened = true;
       ws.send(JSON.stringify(HELLO_FRAME));
       this.handlers.onOpen();
     };
-    ws.onmessage = (event: MessageEvent<string>) => {
+    ws.onmessage = (event: MessageEvent<string | ArrayBuffer>) => {
+      if (event.data instanceof ArrayBuffer) {
+        // server → 前端的下行 Opus（tts_test 合成结果；v1 裸帧，前端中转到本地桥）。
+        this.handlers.onBinary(event.data);
+        return;
+      }
       this.routeMessage(event.data);
     };
     // 浏览器不提供握手失败详情，统一由 onclose 判定后回调（dev 原文走探针）。
@@ -450,6 +551,18 @@ export class TestbenchSocket {
   }
 
   /**
+   * 发 `tts_test`（字段名由 protocol.rs:141-158 ClientMessage::TtsTest 坐实：
+   * text / speaker / lang / speed / vcn，全部可选字段可省——省略走服务器配置默认值）。
+   */
+  public sendTtsTest(params: TtsTestParams): boolean {
+    if (!this.isOpen) {
+      return false;
+    }
+    this.ws?.send(JSON.stringify({ type: "tts_test", ...params }));
+    return true;
+  }
+
+  /**
    * 中转 Opus 二进制帧到 server `/api/ws`（hello version:1 → unwrap_uplink V1 裸帧）。
    * **绝对禁止开第二条 `/api/ws`**：test_buf 是会话级缓冲，双 WS = 缓冲分裂。
    */
@@ -477,7 +590,7 @@ export class TestbenchSocket {
     return true;
   }
 
-  /** 下行文本帧路由：只认 llm_test / nlu_test 结果帧；其余（hello/stt/tts/…）忽略。 */
+  /** 下行文本帧路由：只认 hello / stt / tts / tts_test / llm_test / nlu_test；其余忽略。 */
   private routeMessage(raw: string): void {
     let parsed: unknown;
     try {
@@ -489,11 +602,41 @@ export class TestbenchSocket {
       return;
     }
     const type = parsed["type"];
+    // server hello（下行音频参数：下行采样率/帧长由服务端配置决定，解码以此为准）。
+    if (type === "hello") {
+      const audioParams = parsed["audio_params"];
+      let audio: ServerHelloAudio | null = null;
+      if (isRecord(audioParams)) {
+        const sampleRate = optionalNumber(audioParams["sample_rate"]);
+        const channels = optionalNumber(audioParams["channels"]);
+        const frameDuration = optionalNumber(audioParams["frame_duration"]);
+        if (sampleRate !== null && sampleRate > 0) {
+          audio = {
+            sampleRate,
+            channels: channels ?? 1,
+            frameDuration: frameDuration ?? 60,
+          };
+        }
+      }
+      this.handlers.onHello({
+        sessionId: optionalString(parsed["session_id"]),
+        audio,
+      });
+      return;
+    }
     // stt 帧无 state 字段（{session_id, text}），先于 state 守卫路由。
     if (type === "stt") {
       const text = optionalString(parsed["text"]);
       if (text !== null) {
         this.handlers.onSttResult({ text });
+      }
+      return;
+    }
+    // tts 状态帧的 state 是 start/stop（非 ok/error），先于 testState 守卫路由。
+    if (type === "tts") {
+      const state = parsed["state"];
+      if (state === "start" || state === "stop") {
+        this.handlers.onTtsState({ state });
       }
       return;
     }
@@ -514,6 +657,12 @@ export class TestbenchSocket {
         confidence: optionalNumber(parsed["confidence"]),
         tokenizeMs: optionalNumber(parsed["tokenize_ms"]),
         inferMs: optionalNumber(parsed["infer_ms"]),
+        text: optionalString(parsed["text"]),
+      });
+    } else if (type === "tts_test") {
+      this.handlers.onTtsTestResult({
+        state,
+        engine: optionalString(parsed["engine"]),
         text: optionalString(parsed["text"]),
       });
     }
