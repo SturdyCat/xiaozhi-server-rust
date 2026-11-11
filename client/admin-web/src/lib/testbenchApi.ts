@@ -41,6 +41,208 @@
 
 import { getApiBaseUrl, getAuthToken } from "@/lib/api";
 
+// ============================================================================
+// W14b-1 扩展：server WS 增加 asr_test / Stt / 二进制中转；新增本地桥客户端。
+// ============================================================================
+
+/** 本地音频桥 init script 注入的常量（src-tauri/src/bridge.rs bridge_init_script）。 */
+declare global {
+  interface Window {
+    __XIAOZHI_BRIDGE_PORT__?: number;
+    __XIAOZHI_BRIDGE_TOKEN__?: string;
+  }
+}
+
+/** `stt` 结果帧（protocol.rs ServerMessage::Stt：{session_id, text}）。 */
+export interface SttWire {
+  readonly text: string;
+}
+
+/** asr_test 上行：{type:"asr_test", action:"start"|"stop"}（ClientMessage::AsrTest，bench.rs:29-80 坐实字段名 action）。 */
+export type AsrTestAction = "start" | "stop";
+
+// ============================================================================
+// 本地音频桥（Tauri Rust loopback WS；控制协议见 src-tauri/src/audio.rs BridgeCommand/BridgeEvent）
+// ============================================================================
+
+/** 本地桥事件帧（audio.rs BridgeEvent → JSON；Opus 帧走二进制不走这里）。 */
+export type BridgeFrame =
+  | { type: "started" }
+  | { type: "recorded"; seconds: number; buckets: number[] }
+  | { type: "wave"; seconds: number; buckets: number[] }
+  | { type: "play_state"; playing: boolean; position: number; duration: number }
+  | { type: "error"; code: string; message: string };
+
+/** 读取 init script 注入的桥凭据；未注入（Web 环境 / 桥启动失败）返回 null。 */
+export function bridgeInfo(): { port: number; token: string } | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  const port = window.__XIAOZHI_BRIDGE_PORT__;
+  const token = window.__XIAOZHI_BRIDGE_TOKEN__;
+  if (typeof port !== "number" || port <= 0 || typeof token !== "string" || token === "") {
+    return null;
+  }
+  return { port, token };
+}
+
+/** 本地桥 WS 地址（loopback；bridge_token 精确匹配）。 */
+export function buildBridgeWsUrl(): string | null {
+  const info = bridgeInfo();
+  if (info === null) {
+    return null;
+  }
+  return `ws://127.0.0.1:${info.port}/bridge?bridge_token=${encodeURIComponent(info.token)}`;
+}
+
+export interface BridgeSocketHandlers {
+  /** 桥连接建立（可发 start_capture）。 */
+  readonly onOpen: () => void;
+  /** 桥连接断开（含首次连接失败；detail 为 close code）。 */
+  readonly onClose: (code: number) => void;
+  /** 文本事件帧（形状不符的帧已在本层丢弃）。 */
+  readonly onFrame: (frame: BridgeFrame) => void;
+  /** Opus 二进制帧（60ms 裸帧，前端原样中转到 server /api/ws）。 */
+  readonly onBinary: (data: ArrayBuffer) => void;
+}
+
+/**
+ * 本地音频桥 WS 客户端（一条连接；断开不自动重连，下次录音动作重建）。
+ * 发送侧只有控制文本帧——Opus 由 Rust → 前端单向流出。
+ */
+export class BridgeSocket {
+  private ws: WebSocket | null = null;
+  private manualClose = false;
+
+  public constructor(private readonly handlers: BridgeSocketHandlers) {}
+
+  /** 发起连接；URL 由 buildBridgeWsUrl() 推导（null = 桥未注入，调用方自行提示）。 */
+  public open(): boolean {
+    const url = buildBridgeWsUrl();
+    if (url === null) {
+      return false;
+    }
+    const ws = new WebSocket(url);
+    ws.binaryType = "arraybuffer";
+    this.ws = ws;
+    ws.onopen = () => {
+      this.handlers.onOpen();
+    };
+    ws.onmessage = (event: MessageEvent<string | ArrayBuffer>) => {
+      if (typeof event.data === "string") {
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(event.data);
+        } catch {
+          return; // 非 JSON 文本帧丢弃
+        }
+        if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+          return;
+        }
+        const type = (parsed as Record<string, unknown>)["type"];
+        if (typeof type !== "string") {
+          return;
+        }
+        const record = parsed as Record<string, unknown>;
+        switch (type) {
+          case "started":
+            this.handlers.onFrame({ type: "started" });
+            break;
+          case "recorded":
+          case "wave":
+            if (typeof record["seconds"] === "number" && Array.isArray(record["buckets"])) {
+              const buckets = record["buckets"].filter(
+                (b): b is number => typeof b === "number" && Number.isFinite(b),
+              );
+              if (type === "wave") {
+                this.handlers.onFrame({ type: "wave", seconds: record["seconds"], buckets });
+              } else {
+                this.handlers.onFrame({ type: "recorded", seconds: record["seconds"], buckets });
+              }
+            }
+            break;
+          case "play_state":
+            if (
+              typeof record["playing"] === "boolean" &&
+              typeof record["position"] === "number" &&
+              typeof record["duration"] === "number"
+            ) {
+              this.handlers.onFrame({
+                type: "play_state",
+                playing: record["playing"],
+                position: record["position"],
+                duration: record["duration"],
+              });
+            }
+            break;
+          case "error":
+            if (typeof record["code"] === "string" && typeof record["message"] === "string") {
+              this.handlers.onFrame({
+                type: "error",
+                code: record["code"],
+                message: record["message"],
+              });
+            }
+            break;
+          default:
+            break; // 未知类型丢弃
+        }
+      } else if (event.data instanceof ArrayBuffer) {
+        this.handlers.onBinary(event.data);
+      }
+    };
+    ws.onclose = (event: CloseEvent) => {
+      this.ws = null;
+      if (!this.manualClose) {
+        this.handlers.onClose(event.code);
+      }
+    };
+    ws.onerror = () => undefined; // 详情由 onclose 报告
+    return true;
+  }
+
+  public get isOpen(): boolean {
+    return this.ws !== null && this.ws.readyState === WebSocket.OPEN;
+  }
+
+  public startCapture(): void {
+    this.sendCommand("start_capture");
+  }
+
+  public stopCapture(): void {
+    this.sendCommand("stop_capture");
+  }
+
+  public discardCapture(): void {
+    this.sendCommand("discard_capture");
+  }
+
+  public playRecorded(): void {
+    this.sendCommand("play_recorded");
+  }
+
+  public stopPlayback(): void {
+    this.sendCommand("stop_playback");
+  }
+
+  /** 手动断开（不触发 onClose 回调）。 */
+  public close(): void {
+    this.manualClose = true;
+    const ws = this.ws;
+    this.ws = null;
+    ws?.close();
+  }
+
+  private sendCommand(type: string): void {
+    if (this.isOpen) {
+      this.ws?.send(JSON.stringify({ type }));
+    }
+  }
+}
+
+/** 本地桥可用性说明（诚实呈现用）。 */
+export const BRIDGE_UNAVAILABLE_HINT = "本地音频桥未就绪（需在 Tauri 桌面壳内运行；请重启应用）";
+
 /** hello 帧（XiaoZhiModule.m:104-117 逐字段；本模块常量，连接建立后立即发送）。 */
 const HELLO_FRAME: Record<string, unknown> = {
   type: "hello",
@@ -175,6 +377,8 @@ export interface TestbenchSocketHandlers {
   readonly onUnexpectedClose: (code: number) => void;
   readonly onLlmTestResult: (result: LlmTestWire) => void;
   readonly onNluTestResult: (result: NluTestWire) => void;
+  /** `stt` 结果帧（asr_test stop 的识别回包；W14b-1 起）。 */
+  readonly onSttResult: (result: SttWire) => void;
 }
 
 /**
@@ -233,6 +437,30 @@ export class TestbenchSocket {
     return this.sendTest("nlu_test", text);
   }
 
+  /**
+   * 发 `asr_test`（action: start 开始缓冲 / stop 停止并整段识别；
+   * 字段名 `action` 由 bench.rs:29-80 `handle_asr_test` 坐实）。
+   */
+  public sendAsrTest(action: AsrTestAction): boolean {
+    if (!this.isOpen) {
+      return false;
+    }
+    this.ws?.send(JSON.stringify({ type: "asr_test", action }));
+    return true;
+  }
+
+  /**
+   * 中转 Opus 二进制帧到 server `/api/ws`（hello version:1 → unwrap_uplink V1 裸帧）。
+   * **绝对禁止开第二条 `/api/ws`**：test_buf 是会话级缓冲，双 WS = 缓冲分裂。
+   */
+  public sendBinary(data: ArrayBuffer): boolean {
+    if (!this.isOpen) {
+      return false;
+    }
+    this.ws?.send(data);
+    return true;
+  }
+
   /** 手动断开（对齐旧端 disconnect：「已断开」由页面回写状态）。 */
   public close(): void {
     this.manualClose = true;
@@ -260,11 +488,19 @@ export class TestbenchSocket {
     if (!isRecord(parsed)) {
       return;
     }
+    const type = parsed["type"];
+    // stt 帧无 state 字段（{session_id, text}），先于 state 守卫路由。
+    if (type === "stt") {
+      const text = optionalString(parsed["text"]);
+      if (text !== null) {
+        this.handlers.onSttResult({ text });
+      }
+      return;
+    }
     const state = testState(parsed["state"]);
     if (state === null) {
       return; // 形状不符整帧丢弃（fail-closed；busy 由页面超时兜底恢复）
     }
-    const type = parsed["type"];
     if (type === "llm_test") {
       this.handlers.onLlmTestResult({
         state,
