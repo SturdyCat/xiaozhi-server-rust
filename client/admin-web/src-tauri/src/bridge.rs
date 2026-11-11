@@ -25,8 +25,10 @@
 //!
 //! ## 控制协议
 //! 前端 → Rust 文本帧：[`audio::BridgeCommand`]（start_capture / stop_capture /
-//! discard_capture / play_recorded / stop_playback）；
-//! Rust → 前端：文本帧 [`audio::BridgeEvent`] + 二进制裸 Opus 帧（v1 无封装头，
+//! discard_capture / play_recorded / stop_playback / tts_begin / tts_end / play_tts）；
+//! 前端 → Rust **二进制帧**（W14b-2）：server `/api/ws` 下行 Opus（tts_test 合成结果，
+//! 前端中转）→ `AudioManager::feed_tts_frame` 解码播放；
+//! Rust → 前端：文本帧 [`audio::BridgeEvent`] + 二进制裸 Opus 帧（上行，v1 无封装头，
 //! 前端原样中转到 server `/api/ws`）。连接断开即停采集/播放（清理）。
 
 use std::sync::{Arc, Mutex};
@@ -264,8 +266,16 @@ async fn handle_socket(socket: WebSocket, state: Arc<BridgeState>) {
                 };
                 state.audio.lock().expect("audio lock").handle_command(command);
             }
-            // 前端不向桥发二进制（Opus 只从 Rust 流出）；收到即忽略。
-            Message::Binary(_) | Message::Ping(_) | Message::Pong(_) => {}
+            // W14b-2 下行中转：server /api/ws 的 Opus 二进制帧（tts_test 合成结果）→
+            // 解码播放。协议帧（JSON 文本）不走这条通道——本地桥只承载音频数据。
+            Message::Binary(data) => {
+                state
+                    .audio
+                    .lock()
+                    .expect("audio lock")
+                    .feed_tts_frame(&data);
+            }
+            Message::Ping(_) | Message::Pong(_) => {}
             Message::Close(_) => break,
         }
     }

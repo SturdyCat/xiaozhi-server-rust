@@ -1,4 +1,5 @@
-//! 音频链路（W14b-1 上行方向）：采集 → 重采样 → 帧切分 → Opus 编码，以及试听播放。
+//! 音频链路（W14b-1 上行方向 + W14b-2 下行方向）：采集 → 重采样 → 帧切分 → Opus 编码，
+//! 以及下行 Opus 解码 → 播放（TTS 合成结果流式试听）。
 //!
 //! 分层（对齐架构文档 §1.1④ 子路径 B：Rust 只做音频 I/O，协议编排在前端）：
 //! - [`LinearResampler`]：设备采样率 → 16k 上行（线性插值；48k→16k 恰为整数 3:1，
@@ -14,6 +15,19 @@
 //! - [`wave_buckets`]：整段 PCM 均分 64 桶 RMS 归一（对齐旧端 getAudioState 波形语义）。
 //! - [`AudioManager`]：cpal 采集/播放生命周期；命令-事件协议见 [`BridgeCommand`] /
 //!   [`BridgeEvent`]（本地桥 WS 文本帧，前端编排）。
+//! - **下行（W14b-2）**：server `/api/ws` 的 Opus 二进制帧（tts_test 合成结果，前端中转）
+//!   → [`DownlinkDecoder`] 流式解码（下行率来自 server hello `audio_params.sample_rate`，
+//!   服务端配置 `[audio].downlink_sample_rate`，默认 24k）→ 线性重采样到输出设备实测率 →
+//!   cpal output stream 流式播放；`tts_end` 后缓冲排空回 `TtsDone`（整段波形 + 时长），
+//!   样本快照保留供 `play_tts` 回放。
+//!
+//! ## 下行 pre-skip / 解码器状态（对齐 `+Opus.m:128-161` 的坑）
+//! 旧端 AudioConverter 的坑本质：默认 pre-skip 修剪让首包「凑不满请求量 → 二次索要
+//! 输入 → EOF 粘滞」。libopus/audiopus **无此问题**：`decode(packet)` 每包确定性地
+//! 产出整帧样本数（单测 `downlink_stream_decode_length_exact` 固化），不存在 EOF 粘滞
+//! 等价物。等价纪律照抄旧端：**整段流共用同一 Decoder 实例**（帧间 MDCT overlap 状态
+//! 跨包保留 = 无缝衔接，不做每帧重建），仅在新一次合成开始（`tts_begin`）时整体重建
+//! （等价旧端「仅在新一次合成开始时重置一次」）。
 //!
 //! ⚠️ 命令可用 / 编译通过不等于真机硬件通过（`src-tauri/src/commands/mod.rs:11`）：
 //! cpal CoreAudio 全双工稳定性与麦克风 TCC 授权只能真机验证（架构文档 §3-L3）。
@@ -169,14 +183,46 @@ impl UplinkEncoder {
     }
 }
 
-/// Opus 解码（仅单测往返用：16k Mono）。
-#[cfg(test)]
-fn decode_frame(decoder: &mut audiopus::coder::Decoder, data: &[u8]) -> Result<Vec<f32>, String> {
-    let mut pcm = vec![0i16; 5760];
-    let n = decoder
-        .decode(Some(data), &mut pcm, false)
-        .map_err(|e| format!("Opus 解码失败: {e:?}"))?;
-    Ok(pcm[..n].iter().map(|s| f32::from(*s) / 32_768.0).collect())
+/// 整数采样率 → `audiopus::SampleRate`（下行解码构造用；非法率 fail-closed 返回 Err）。
+fn to_audiopus_rate(sr: u32) -> Result<audiopus::SampleRate, String> {
+    use audiopus::SampleRate;
+    Ok(match sr {
+        8_000 => SampleRate::Hz8000,
+        12_000 => SampleRate::Hz12000,
+        16_000 => SampleRate::Hz16000,
+        24_000 => SampleRate::Hz24000,
+        48_000 => SampleRate::Hz48000,
+        _ => return Err(format!("不支持的下行 Opus 采样率 {sr}（只支持 8k/12k/16k/24k/48k）")),
+    })
+}
+
+/// 下行 Opus 解码器（W14b-2；**流式单实例**——帧间 overlap 状态跨包保留，
+/// 见模块尾注「下行 pre-skip / 解码器状态」）。
+pub struct DownlinkDecoder {
+    dec: audiopus::coder::Decoder,
+    /// 复用的 i16 缓冲：60ms@24k = 1440 帧，5760 容量足够所有合法帧长。
+    pcm: Vec<i16>,
+}
+
+impl DownlinkDecoder {
+    /// `sample_rate` 为下行采样率（server hello audio_params；仅 8k/12k/16k/24k/48k）。
+    pub fn new(sample_rate: u32) -> Result<Self, String> {
+        let dec = audiopus::coder::Decoder::new(to_audiopus_rate(sample_rate)?, audiopus::Channels::Mono)
+            .map_err(|e| format!("创建下行 Opus 解码器失败: {e:?}"))?;
+        Ok(Self {
+            dec,
+            pcm: vec![0i16; 5760],
+        })
+    }
+
+    /// 解码一包 Opus → f32 PCM（-1..1）；输出长度由包内容决定（合法 60ms 帧恒整帧）。
+    pub fn decode(&mut self, packet: &[u8]) -> Result<Vec<f32>, String> {
+        let n = self
+            .dec
+            .decode(Some(packet), &mut self.pcm, false)
+            .map_err(|e| format!("下行 Opus 解码失败: {e:?}"))?;
+        Ok(self.pcm[..n].iter().map(|s| f32::from(*s) / 32_768.0).collect())
+    }
 }
 
 /// 整段 PCM 均分 `buckets` 桶 RMS 归一波形（0..1）；空段返回全 0。
@@ -217,6 +263,15 @@ pub enum BridgeCommand {
     PlayRecorded,
     /// 停止试听。
     StopPlayback,
+    /// 开始 TTS 下行会话（W14b-2）：`sample_rate` 为下行采样率（server hello
+    /// audio_params.sample_rate；非法率解析即拒绝）。建输出流等待解码数据。
+    TtsBegin {
+        sample_rate: u32,
+    },
+    /// 结束 TTS 下行会话：缓冲排空后回 `TtsDone`，样本快照保留供 `PlayTts` 回放。
+    TtsEnd,
+    /// 回放最近一次 TTS 缓冲（对齐旧端 playTts）。
+    PlayTts,
 }
 
 impl BridgeCommand {
@@ -229,6 +284,17 @@ impl BridgeCommand {
             "discard_capture" => Some(Self::DiscardCapture),
             "play_recorded" => Some(Self::PlayRecorded),
             "stop_playback" => Some(Self::StopPlayback),
+            "tts_begin" => {
+                // 下行率合法值 fail-closed：非法/缺失一律拒绝（服务端只可能发 8/12/16/24/48k）。
+                let sr = obj
+                    .get("sample_rate")
+                    .and_then(serde_json::Value::as_u64)
+                    .filter(|sr| matches!(sr, 8_000 | 12_000 | 16_000 | 24_000 | 48_000))
+                    .map(|sr| sr as u32)?;
+                Some(Self::TtsBegin { sample_rate: sr })
+            }
+            "tts_end" => Some(Self::TtsEnd),
+            "play_tts" => Some(Self::PlayTts),
             _ => None,
         }
     }
@@ -254,6 +320,12 @@ pub enum BridgeEvent {
         playing: bool,
         position: f64,
         duration: f64,
+    },
+    /// TTS 下行会话完成（W14b-2）：缓冲排空，seconds 为整段时长，buckets 为整段波形
+    /// （64 桶 RMS）；样本快照已保留，可 `play_tts` 回放。
+    TtsDone {
+        seconds: f64,
+        buckets: Vec<f32>,
     },
     /// 采集/播放失败（code: mic_permission_denied | device_unavailable | device_start_failed）。
     Error {
@@ -288,6 +360,11 @@ impl BridgeEvent {
                 obj.insert("playing".into(), serde_json::json!(playing));
                 obj.insert("position".into(), serde_json::json!(position));
                 obj.insert("duration".into(), serde_json::json!(duration));
+            }
+            Self::TtsDone { seconds, buckets } => {
+                obj.insert("type".into(), "tts_done".into());
+                obj.insert("seconds".into(), serde_json::json!(seconds));
+                obj.insert("buckets".into(), serde_json::json!(buckets));
             }
             Self::Error { code, message } => {
                 obj.insert("type".into(), "error".into());
@@ -344,6 +421,12 @@ pub struct AudioManager {
     capturing: Arc<AtomicBool>,
     /// 试听缓冲（采集原始采样率的 f32 PCM）与播放游标。
     playback: Arc<Mutex<PlaybackState>>,
+    /// 进行中的 TTS 下行会话（W14b-2；None = 无会话）。
+    tts: Option<TtsSession>,
+    /// 下行解码器（WS 线程 feed_tts_frame 使用；与会话同生命周期）。
+    tts_decoder: Option<DownlinkDecoder>,
+    /// 最近一次完成的 TTS 缓冲快照（供 play_tts 回放；tts_end 时快照）。
+    tts_replay: Option<TtsReplay>,
     /// 事件出口（当前连接的 mpsc 发送端）。
     events: Option<tokio::sync::mpsc::UnboundedSender<BridgeOut>>,
 }
@@ -353,6 +436,32 @@ struct PlaybackState {
     /// 采集原始采样率。
     source_sr: u32,
     playing: bool,
+}
+
+/// TTS 下行会话的共享缓冲（WS 线程写解码样本 / cpal 回调线程消费）。
+struct TtsBuffer {
+    /// 已解码 PCM（下行采样率域；实时下发节奏下增长速度≈播放速度）。
+    samples: Vec<f32>,
+    /// `tts_end` 已收到：缓冲排空后回调收尾并产出 `TtsDone`。
+    ended: bool,
+}
+
+/// 进行中的 TTS 下行会话（`tts_begin` 创建，`stop_playback`/`reset`/新会话销毁）。
+struct TtsSession {
+    /// 播放流必须保活（drop 即停）；本字段从不读取，纯保活（静音期输出零成本）。
+    #[allow(dead_code)]
+    stream: cpal::Stream,
+    buffer: Arc<Mutex<TtsBuffer>>,
+    /// 下行采样率（server hello audio_params）。
+    dec_sr: u32,
+}
+
+/// 完成的 TTS 缓冲快照（tts_end 时从会话缓冲复制；供 `play_tts` 回放）。
+#[derive(Debug, Clone)]
+struct TtsReplay {
+    buffer: Arc<Mutex<Vec<f32>>>,
+    /// 下行采样率（回放重采样源率）。
+    sr: u32,
 }
 
 impl Default for AudioManager {
@@ -373,6 +482,9 @@ impl AudioManager {
                 source_sr: UPLINK_SAMPLE_RATE,
                 playing: false,
             })),
+            tts: None,
+            tts_decoder: None,
+            tts_replay: None,
             events: None,
         }
     }
@@ -398,13 +510,19 @@ impl AudioManager {
             }
             BridgeCommand::PlayRecorded => self.start_playback(),
             BridgeCommand::StopPlayback => self.stop_playback(),
+            BridgeCommand::TtsBegin { sample_rate } => self.tts_begin(sample_rate),
+            BridgeCommand::TtsEnd => self.tts_end(),
+            BridgeCommand::PlayTts => self.play_tts(),
         }
     }
 
-    /// 连接断开时清理（架构文档 M1：断开清理采集流）。
+    /// 连接断开时清理（架构文档 M1：断开清理采集/播放/TTS 会话）。
     pub fn reset(&mut self) {
         self.capture_stream = None; // drop cpal stream = 停止采集
         self.playback_stream = None;
+        self.tts = None;
+        self.tts_decoder = None;
+        self.tts_replay = None;
         self.chain = None;
         self.capturing.store(false, Ordering::SeqCst);
         self.playback.lock().expect("playback lock").playing = false;
@@ -695,6 +813,10 @@ impl AudioManager {
 
     fn stop_playback(&mut self) {
         self.playback_stream = None; // drop = 停止播放
+        // TTS 下行会话一并停（旧端单播放器语义：stop 停掉任何在播的流；
+        // 回放快照已在 tts_end 复制，不受会话销毁影响）。
+        self.tts = None;
+        self.tts_decoder = None;
         let mut pb = self.playback.lock().expect("playback lock");
         pb.playing = false;
         let duration = pb.buffer.len() as f64 / f64::from(pb.source_sr);
@@ -704,6 +826,354 @@ impl AudioManager {
             position: 0.0,
             duration,
         });
+    }
+
+    // ====================================================================
+    // TTS 下行（W14b-2）：解码播放 + 波形 + 回放
+    // ====================================================================
+
+    /// 开始 TTS 下行会话：清理旧会话（新合成 = 新解码器，状态边界对齐旧端
+    /// 「仅在新一次合成开始时重置一次」）、建输出流等待解码数据。
+    fn tts_begin(&mut self, sample_rate: u32) {
+        self.tts = None;
+        self.tts_decoder = None;
+        self.tts_replay = None;
+        self.playback_stream = None;
+        self.playback.lock().expect("playback lock").playing = false;
+        let Some(tx) = self.events.clone() else {
+            return;
+        };
+        if let Err(message) = self.try_tts_begin(sample_rate, tx) {
+            self.tts = None;
+            self.tts_decoder = None;
+            self.emit(BridgeEvent::Error {
+                code: "device_start_failed".into(),
+                message,
+            });
+        }
+    }
+
+    /// 实际启动 TTS 下行会话；Err 为可读失败原因。
+    fn try_tts_begin(
+        &mut self,
+        sample_rate: u32,
+        tx: tokio::sync::mpsc::UnboundedSender<BridgeOut>,
+    ) -> Result<(), String> {
+        use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+
+        // 解码器创建即校验下行率（非法率 fail-closed 拒绝）。
+        let decoder = DownlinkDecoder::new(sample_rate)?;
+        let host = cpal::default_host();
+        let Some(device) = host.default_output_device() else {
+            return Err(error_message_for_code("device_unavailable").to_string());
+        };
+        let out_cfg = device
+            .default_output_config()
+            .map_err(|e| format!("{}（{e}）", error_message_for_code("device_unavailable")))?;
+        let out_sr = out_cfg.sample_rate(); // cpal 0.18: SampleRate 即 u32 别名
+        let channels = out_cfg.channels() as usize;
+
+        let buffer = Arc::new(Mutex::new(TtsBuffer {
+            samples: Vec::new(),
+            ended: false,
+        }));
+        let cursor = Arc::new(Mutex::new(PlaybackCursor {
+            resampler: LinearResampler::new(sample_rate, out_sr),
+            pending: Vec::new(),
+            position: 0usize, // 已消费的缓冲（下行率域）样本位置
+            frames_since_state: 0usize,
+        }));
+        let playing = Arc::new(AtomicBool::new(true));
+        let cb_buffer = Arc::clone(&buffer);
+        let cb_cursor = Arc::clone(&cursor);
+        let cb_playing = Arc::clone(&playing);
+        let cb_tx = tx.clone(); // 数据回调与错误回调各持一个发送端
+        let err_tx = tx;
+
+        let stream = device
+            .build_output_stream(
+                out_cfg.into(), // cpal 0.18: StreamConfig 传值（非引用）
+                move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                    if !cb_playing.load(Ordering::SeqCst) {
+                        data.fill(0.0);
+                        return;
+                    }
+                    let Ok(mut cur) = cb_cursor.lock() else {
+                        data.fill(0.0);
+                        return;
+                    };
+                    let frames_needed = data.len() / channels.max(1);
+                    let mut produced: Vec<f32> = Vec::with_capacity(frames_needed);
+                    // 会话收尾标志（缓冲排空且 tts_end 已收到时置位）。
+                    let mut finish: Option<(f64, Vec<f32>)> = None;
+                    {
+                        let Ok(buf) = cb_buffer.lock() else {
+                            data.fill(0.0);
+                            return;
+                        };
+                        while produced.len() < frames_needed {
+                            if cur.pending.is_empty() {
+                                // 从缓冲取下一块（约 10ms）重采样；缓冲是流式增长的。
+                                let take = (sample_rate as f64 * 0.01) as usize;
+                                let start = cur.position.min(buf.samples.len());
+                                let end = (cur.position + take).min(buf.samples.len());
+                                let chunk: Vec<f32> = buf.samples[start..end].to_vec();
+                                cur.position = end;
+                                if chunk.is_empty() {
+                                    if buf.ended {
+                                        // 播完：冲刷尾帧后收尾（TtsDone 由回调发出）。
+                                        let tail = cur.resampler.flush();
+                                        produced.extend(tail);
+                                        let seconds =
+                                            buf.samples.len() as f64 / f64::from(sample_rate);
+                                        let buckets =
+                                            wave_buckets(&buf.samples, WAVE_BUCKETS);
+                                        finish = Some((seconds, buckets));
+                                    }
+                                    break;
+                                }
+                                cur.pending = cur.resampler.process(&chunk);
+                            }
+                            let need = frames_needed - produced.len();
+                            let take = need.min(cur.pending.len());
+                            produced.extend(cur.pending.drain(..take));
+                        }
+                        // 100ms 播放状态推送（对齐旧端 getAudioState 语义；
+                        // 下行会话 duration 未知（流式），完成时由 TtsDone 带整段时长）。
+                        cur.frames_since_state += frames_needed;
+                        let state_interval = (out_sr as f64 * 0.1) as usize;
+                        if cur.frames_since_state >= state_interval && finish.is_none() {
+                            cur.frames_since_state = 0;
+                            let _ = cb_tx.send(BridgeOut::Event(BridgeEvent::PlayState {
+                                playing: true,
+                                position: cur.position as f64 / f64::from(sample_rate),
+                                duration: 0.0,
+                            }));
+                        }
+                    }
+                    if let Some((seconds, buckets)) = finish {
+                        cb_playing.store(false, Ordering::SeqCst);
+                        let _ = cb_tx.send(BridgeOut::Event(BridgeEvent::PlayState {
+                            playing: false,
+                            position: seconds,
+                            duration: seconds,
+                        }));
+                        let _ = cb_tx.send(BridgeOut::Event(BridgeEvent::TtsDone {
+                            seconds,
+                            buckets,
+                        }));
+                    }
+                    // 单声道铺到输出各声道
+                    for (i, slot) in data.iter_mut().enumerate() {
+                        *slot = produced.get(i / channels.max(1)).copied().unwrap_or(0.0);
+                    }
+                },
+                move |error| {
+                    let _ = err_tx.send(BridgeOut::Event(BridgeEvent::Error {
+                        code: "device_start_failed".into(),
+                        message: format!(
+                            "{}（{error}）",
+                            error_message_for_code("device_start_failed")
+                        ),
+                    }));
+                },
+                None,
+            )
+            .map_err(|e| format!("{}（{e}）", error_message_for_code("device_start_failed")))?;
+        stream
+            .play()
+            .map_err(|e| format!("{}（{e}）", error_message_for_code("device_start_failed")))?;
+        self.tts_decoder = Some(decoder);
+        self.tts = Some(TtsSession {
+            stream,
+            buffer,
+            dec_sr: sample_rate,
+        });
+        Ok(())
+    }
+
+    /// 结束 TTS 下行会话：置 ended 标志并快照已解码样本（供回放）；
+    /// 缓冲排空后回调发出 `TtsDone`（会话流保留到下一次清理，静音输出无成本）。
+    fn tts_end(&mut self) {
+        let Some(session) = &self.tts else {
+            return; // 无会话：幂等忽略
+        };
+        let snapshot = {
+            let mut buf = session.buffer.lock().expect("tts buffer lock");
+            buf.ended = true;
+            buf.samples.clone()
+        };
+        self.tts_replay = Some(TtsReplay {
+            buffer: Arc::new(Mutex::new(snapshot)),
+            sr: session.dec_sr,
+        });
+    }
+
+    /// 回放最近一次完成的 TTS 缓冲（对齐旧端 playTts；进度经 PlayState 推送）。
+    fn play_tts(&mut self) {
+        use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+
+        let Some(replay) = self.tts_replay.clone() else {
+            return; // 尚无完成的 TTS 缓冲：幂等忽略
+        };
+        let Some(tx) = self.events.clone() else {
+            return;
+        };
+        // 单播放器语义：起始回放前停掉在播的试听/旧回放。
+        self.playback_stream = None;
+        self.playback.lock().expect("playback lock").playing = false;
+        self.tts = None;
+        self.tts_decoder = None;
+
+        let source_sr = replay.sr;
+        let host = cpal::default_host();
+        let Some(device) = host.default_output_device() else {
+            self.emit(BridgeEvent::Error {
+                code: "device_unavailable".into(),
+                message: error_message_for_code("device_unavailable").into(),
+            });
+            return;
+        };
+        let out_cfg = match device.default_output_config() {
+            Ok(c) => c,
+            Err(e) => {
+                self.emit(BridgeEvent::Error {
+                    code: "device_unavailable".into(),
+                    message: format!("{}（{e}）", error_message_for_code("device_unavailable")),
+                });
+                return;
+            }
+        };
+        let out_sr = out_cfg.sample_rate();
+        let channels = out_cfg.channels() as usize;
+        let duration = {
+            let buf = replay.buffer.lock().expect("tts replay lock");
+            buf.len() as f64 / f64::from(source_sr)
+        };
+        let cursor = Arc::new(Mutex::new(PlaybackCursor {
+            resampler: LinearResampler::new(source_sr, out_sr),
+            pending: Vec::new(),
+            position: 0usize,
+            frames_since_state: 0usize,
+        }));
+        let playing_flag = Arc::new(AtomicBool::new(true));
+        let cb_playing = Arc::clone(&playing_flag);
+        let cb_cursor = Arc::clone(&cursor);
+        let cb_buffer = Arc::clone(&replay.buffer);
+        let cb_tx = tx.clone(); // 数据回调与错误回调各持一个发送端
+        let err_tx = tx;
+
+        let stream = device
+            .build_output_stream(
+                out_cfg.into(),
+                move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                    if !cb_playing.load(Ordering::SeqCst) {
+                        data.fill(0.0);
+                        return;
+                    }
+                    let Ok(mut cur) = cb_cursor.lock() else {
+                        data.fill(0.0);
+                        return;
+                    };
+                    let frames_needed = data.len() / channels.max(1);
+                    let mut produced: Vec<f32> = Vec::with_capacity(frames_needed);
+                    {
+                        let Ok(buf) = cb_buffer.lock() else {
+                            data.fill(0.0);
+                            return;
+                        };
+                        while produced.len() < frames_needed {
+                            if cur.pending.is_empty() {
+                                let take = (source_sr as f64 * 0.01) as usize;
+                                let start = cur.position.min(buf.len());
+                                let end = (cur.position + take).min(buf.len());
+                                let chunk: Vec<f32> = buf[start..end].to_vec();
+                                cur.position = end;
+                                if chunk.is_empty() {
+                                    let tail = cur.resampler.flush();
+                                    produced.extend(tail);
+                                    cb_playing.store(false, Ordering::SeqCst);
+                                    break;
+                                }
+                                cur.pending = cur.resampler.process(&chunk);
+                            }
+                            let need = frames_needed - produced.len();
+                            let take = need.min(cur.pending.len());
+                            produced.extend(cur.pending.drain(..take));
+                        }
+                        cur.frames_since_state += frames_needed;
+                        let state_interval = (out_sr as f64 * 0.1) as usize;
+                        if cur.frames_since_state >= state_interval {
+                            cur.frames_since_state = 0;
+                            let _ = cb_tx.send(BridgeOut::Event(BridgeEvent::PlayState {
+                                playing: cb_playing.load(Ordering::SeqCst),
+                                position: cur.position as f64 / f64::from(source_sr),
+                                duration,
+                            }));
+                        }
+                    }
+                    for (i, slot) in data.iter_mut().enumerate() {
+                        *slot = produced.get(i / channels.max(1)).copied().unwrap_or(0.0);
+                    }
+                },
+                move |error| {
+                    let _ = err_tx.send(BridgeOut::Event(BridgeEvent::Error {
+                        code: "device_start_failed".into(),
+                        message: format!(
+                            "{}（{error}）",
+                            error_message_for_code("device_start_failed")
+                        ),
+                    }));
+                },
+                None,
+            )
+            .map_err(|e| format!("{}（{e}）", error_message_for_code("device_start_failed")));
+        let stream = match stream {
+            Ok(s) => s,
+            Err(message) => {
+                self.emit(BridgeEvent::Error {
+                    code: "device_start_failed".into(),
+                    message,
+                });
+                return;
+            }
+        };
+        if let Err(e) = stream.play() {
+            self.emit(BridgeEvent::Error {
+                code: "device_start_failed".into(),
+                message: format!("{}（{e}）", error_message_for_code("device_start_failed")),
+            });
+            return;
+        }
+        self.playback_stream = Some(stream);
+    }
+
+    /// 喂一包下行 Opus 帧（bridge.rs 从前端二进制帧转入）；
+    /// 无会话 / 已结束 / 非法包按 fail-closed 忽略或回错误事件。
+    pub fn feed_tts_frame(&mut self, packet: &[u8]) {
+        let decoded = {
+            let Some(decoder) = &mut self.tts_decoder else {
+                return; // 无会话：忽略（前端编排保证 tts_begin 先行）
+            };
+            match decoder.decode(packet) {
+                Ok(samples) => samples,
+                Err(message) => {
+                    self.emit(BridgeEvent::Error {
+                        code: "device_start_failed".into(),
+                        message,
+                    });
+                    return;
+                }
+            }
+        };
+        let Some(session) = &self.tts else {
+            return;
+        };
+        let mut buf = session.buffer.lock().expect("tts buffer lock");
+        if buf.ended {
+            return; // tts_end 后的迟到帧：丢弃
+        }
+        buf.samples.extend_from_slice(&decoded);
     }
 }
 
@@ -843,10 +1313,10 @@ mod tests {
         // 40kbps / 60ms 理论上限 ~300B，Opus 包含开销，放宽到 600B。
         assert!(bytes.len() < 600, "帧过大: {} bytes", bytes.len());
 
-        let mut decoder =
-            audiopus::coder::Decoder::new(audiopus::SampleRate::Hz16000, audiopus::Channels::Mono)
-                .expect("解码器构造");
-        let pcm = decode_frame(&mut decoder, &bytes).expect("解码");
+        let pcm = DownlinkDecoder::new(16_000)
+            .expect("解码器构造")
+            .decode(&bytes)
+            .expect("解码");
         assert_eq!(pcm.len(), FRAME_SAMPLES, "60ms 帧解码应还原 960 样本");
         let peak = pcm.iter().fold(0.0f32, |m, s| m.max(s.abs()));
         assert!(peak > 0.2, "解码后峰值过低（音色丢失？）: {peak}");
@@ -854,6 +1324,10 @@ mod tests {
 
     /// 上行帧封装对齐：v1 = 裸 Opus 帧（unwrap_uplink V1 原样返回，protocol.rs:342-344），
     /// 编码输出即为服务端解出的 payload，无任何封装头。
+    ///
+    /// ⚠️ 本测试**仅固化当前 V1 identity 语义**（protocol.rs:342-344），不追踪 server 侧
+    /// 语义漂移——server 的 unwrap 行为由 server 自身测试保护（`bin_v2_big_endian_layout`
+    /// 等）；改名不必要，恒等复刻本身无害（M1 复审结论）。
     #[test]
     fn uplink_frames_are_bare_opus_for_v1() {
         let mut encoder = UplinkEncoder::new().expect("编码器构造");
@@ -934,5 +1408,151 @@ mod tests {
             error_message_for_code("device_unavailable"),
             "录音设备启动失败（检查输入设备）"
         );
+    }
+
+    /// 命令解析（W14b-2 下行）：tts_begin 合法率 / 非法率 fail-closed / tts_end / play_tts。
+    #[test]
+    fn bridge_command_tts_parse() {
+        let begin: serde_json::Value =
+            serde_json::from_str(r#"{"type":"tts_begin","sample_rate":24000}"#).expect("parse");
+        assert_eq!(
+            BridgeCommand::parse(&begin),
+            Some(BridgeCommand::TtsBegin { sample_rate: 24_000 })
+        );
+        let begin16k: serde_json::Value =
+            serde_json::from_str(r#"{"type":"tts_begin","sample_rate":16000}"#).expect("parse");
+        assert_eq!(
+            BridgeCommand::parse(&begin16k),
+            Some(BridgeCommand::TtsBegin { sample_rate: 16_000 })
+        );
+        // 非法率（server 只可能发 8/12/16/24/48k）与缺失字段：fail-closed 拒绝。
+        for raw in [
+            r#"{"type":"tts_begin","sample_rate":12345}"#,
+            r#"{"type":"tts_begin"}"#,
+            r#"{"type":"tts_begin","sample_rate":"24000"}"#,
+        ] {
+            let value: serde_json::Value = serde_json::from_str(raw).expect("parse");
+            assert_eq!(BridgeCommand::parse(&value), None, "raw={raw}");
+        }
+        let end: serde_json::Value = serde_json::from_str(r#"{"type":"tts_end"}"#).expect("parse");
+        assert_eq!(BridgeCommand::parse(&end), Some(BridgeCommand::TtsEnd));
+        let play: serde_json::Value =
+            serde_json::from_str(r#"{"type":"play_tts"}"#).expect("parse");
+        assert_eq!(BridgeCommand::parse(&play), Some(BridgeCommand::PlayTts));
+    }
+
+    /// 事件序列化（W14b-2 下行）：tts_done 字段名与前端消费严格一致。
+    #[test]
+    fn tts_done_event_json_fields() {
+        let done = BridgeEvent::TtsDone {
+            seconds: 2.4,
+            buckets: vec![0.25, 0.5],
+        }
+        .to_json();
+        assert!(done.contains(r#""type":"tts_done""#));
+        assert!(done.contains(r#""seconds":2.4"#));
+        assert!(done.contains(r#""buckets":[0.25,0.5]"#));
+    }
+
+    /// 测试用 24k 编码器（下行往返：server 下行编码同款参数 16k→24k 等价验证用）。
+    fn encode_frame_24k(encoder: &mut audiopus::coder::Encoder, frame: &[f32]) -> Vec<u8> {
+        let pcm: Vec<i16> = frame
+            .iter()
+            .map(|s| (s.clamp(-1.0, 1.0) * 32_767.0) as i16)
+            .collect();
+        let mut out = vec![0u8; 4000];
+        let n = encoder.encode(&pcm, &mut out).expect("编码");
+        out[..n].to_vec()
+    }
+
+    /// 下行解码往返（24k）：编码 60ms 正弦帧 → DownlinkDecoder 解码还原长度与音调。
+    #[test]
+    fn downlink_decode_roundtrip_24k() {
+        use audiopus::{Application, Channels, SampleRate};
+        let mut encoder =
+            audiopus::coder::Encoder::new(SampleRate::Hz24000, Channels::Mono, Application::Voip)
+                .expect("编码器构造");
+        let frame_samples = 24_000 * 60 / 1000; // 1440
+        let frame: Vec<f32> = (0..frame_samples)
+            .map(|i| 0.5 * ((2.0 * std::f32::consts::PI * 440.0 * i as f32) / 24_000.0).sin())
+            .collect();
+        let packet = encode_frame_24k(&mut encoder, &frame);
+
+        let mut decoder = DownlinkDecoder::new(24_000).expect("解码器构造");
+        let pcm = decoder.decode(&packet).expect("解码");
+        assert_eq!(pcm.len(), frame_samples, "60ms@24k 解码应还原 1440 样本");
+        let peak = pcm.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        assert!(peak > 0.2, "解码后峰值过低（音色丢失？）: {peak}");
+    }
+
+    /// 流式解码长度确定性（pre-skip 坑的 audiopus 等价验证）：同一 Decoder 连续解码
+    /// N 帧输出长度恰为 N×帧长——每包确定性产出整帧，不存在 AudioConverter 式
+    /// 「凑不满请求量 → EOF 粘滞」（见模块尾注 + `+Opus.m:128-161`）。
+    #[test]
+    fn downlink_stream_decode_length_exact() {
+        use audiopus::{Application, Channels, SampleRate};
+        let mut encoder =
+            audiopus::coder::Encoder::new(SampleRate::Hz24000, Channels::Mono, Application::Voip)
+                .expect("编码器构造");
+        let frame_samples = 24_000 * 60 / 1000;
+        let frame: Vec<f32> = (0..frame_samples)
+            .map(|i| 0.25 * ((2.0 * std::f32::consts::PI * 220.0 * i as f32) / 24_000.0).sin())
+            .collect();
+        let packets: Vec<Vec<u8>> = (0..5)
+            .map(|_| encode_frame_24k(&mut encoder, &frame))
+            .collect();
+
+        let mut decoder = DownlinkDecoder::new(24_000).expect("解码器构造");
+        let mut total = 0usize;
+        for packet in &packets {
+            total += decoder.decode(packet).expect("解码").len();
+        }
+        assert_eq!(
+            total, 5 * frame_samples,
+            "流式解码总长度应恰为 5×1440（无粘滞/无丢失）"
+        );
+    }
+
+    /// 解码器状态边界：每句新建解码器（tts_begin 重建）隔离上句 overlap 状态——
+    /// 全新解码器对同一包的输出与首句首包一致（状态边界等价旧端 reset 语义）。
+    #[test]
+    fn downlink_fresh_decoder_isolates_state() {
+        use audiopus::{Application, Channels, SampleRate};
+        let mut encoder =
+            audiopus::coder::Encoder::new(SampleRate::Hz24000, Channels::Mono, Application::Voip)
+                .expect("编码器构造");
+        let frame_samples = 24_000 * 60 / 1000;
+        let frame: Vec<f32> = (0..frame_samples)
+            .map(|i| 0.4 * ((2.0 * std::f32::consts::PI * 330.0 * i as f32) / 24_000.0).sin())
+            .collect();
+        let packet = encode_frame_24k(&mut encoder, &frame);
+
+        // 上一句：解码过若干帧的「旧」解码器。
+        let mut old = DownlinkDecoder::new(24_000).expect("解码器构造");
+        let _ = old.decode(&packet).expect("旧句解码");
+        // 新一句：tts_begin 重建的全新解码器，对同一包的输出必须与首句一致。
+        let mut fresh = DownlinkDecoder::new(24_000).expect("解码器构造");
+        let fresh_out = fresh.decode(&packet).expect("新句首包解码");
+
+        let mut first = DownlinkDecoder::new(24_000).expect("解码器构造");
+        let first_out = first.decode(&packet).expect("首句首包解码");
+        assert_eq!(
+            fresh_out.len(),
+            first_out.len(),
+            "新句首包长度应与首句首包一致"
+        );
+        for (x, y) in fresh_out.iter().zip(first_out.iter()) {
+            assert!((x - y).abs() < 1e-6, "新句首包样本应与首句首包一致");
+        }
+    }
+
+    /// 非法下行率 fail-closed：DownlinkDecoder::new 拒绝非 Opus 合法率。
+    #[test]
+    fn downlink_decoder_rejects_invalid_rate() {
+        assert!(DownlinkDecoder::new(24_000).is_ok());
+        assert!(DownlinkDecoder::new(16_000).is_ok());
+        assert!(DownlinkDecoder::new(22_050).is_err());
+        assert!(DownlinkDecoder::new(44_100).is_err());
+        assert!(DownlinkDecoder::new(0).is_err());
     }
 }
