@@ -70,7 +70,8 @@ export const NAV_DESCRIPTORS: readonly NavDescriptor[] = [
   {
     key: "testbench",
     label: "硬件测试台",
-    description: "桌面壳能力检测与后续硬件命令的入口。",
+    description:
+      "连接服务端测试 LLM 对话与 NLU 意图；录音识别与 TTS 合成待硬件桥接（仅 Tauri 桌面环境）。",
     tauriOnly: true,
   },
 ];
