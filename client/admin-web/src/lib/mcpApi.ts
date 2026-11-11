@@ -167,9 +167,7 @@ export async function getMcpTools(): Promise<McpTools> {
   }
   const body = requireOk(raw, "读取设备工具清单");
   if (!Array.isArray(body["devices"])) {
-    throw new McpUnavailableError(
-      "读取设备工具清单：响应缺少 devices 数组（服务端返回异常）。",
-    );
+    throw new McpUnavailableError("读取设备工具清单：响应缺少 devices 数组（服务端返回异常）。");
   }
   const devices: McpDevice[] = [];
   for (const item of body["devices"]) {

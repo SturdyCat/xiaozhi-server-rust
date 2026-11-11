@@ -224,9 +224,7 @@ export interface SoulPreview {
  * 预览最终提示词。`soul` 传当前草稿的 `[soul]` 对象（未保存也能预览）；传 null
  * 时省略该键，服务端回落盘上配置。请求体是裸 Value（多余字段被忽略）。
  */
-export async function previewSoul(
-  soul: JsonObject | null,
-): Promise<SoulPreview> {
+export async function previewSoul(soul: JsonObject | null): Promise<SoulPreview> {
   const payload: Record<string, JsonValue> = {};
   if (soul !== null) {
     payload["soul"] = soul;
@@ -346,8 +344,7 @@ export async function getMemoryStatus(): Promise<MemoryStatus> {
     extractor: (body["extractor"] ?? null) as JsonValue,
     config: (body["config"] ?? null) as JsonValue,
     capabilityPhase: capability === null ? null : str(capability, "phase"),
-    capabilityLastError:
-      capability === null ? null : str(capability, "last_error"),
+    capabilityLastError: capability === null ? null : str(capability, "last_error"),
     aiuiNote: str(body, "aiui_note"),
     rag:
       ragRaw === null

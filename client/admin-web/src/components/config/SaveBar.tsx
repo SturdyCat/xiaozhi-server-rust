@@ -63,18 +63,11 @@ export function SaveBar({
                 ? "没有未保存的修改"
                 : `有 ${dirtyCount} 处未保存的修改`}
           </p>
-          {message ? (
-            <p className="truncate text-xs text-muted-foreground">{message}</p>
-          ) : null}
+          {message ? <p className="truncate text-xs text-muted-foreground">{message}</p> : null}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {hot && ready ? <Badge variant="outline">{HOT_LABEL[hot]}</Badge> : null}
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={onDiscard}
-            disabled={disabled}
-          >
+          <Button variant="ghost" size="sm" onClick={onDiscard} disabled={disabled}>
             放弃修改
           </Button>
           <Button size="sm" onClick={onSave} disabled={disabled}>

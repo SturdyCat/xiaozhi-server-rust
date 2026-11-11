@@ -93,9 +93,7 @@ export function JsonTextField({
         placeholder={placeholder}
         onChange={(event) => onChange(event.target.value)}
       />
-      {error !== null ? (
-        <p className="mt-1 text-sm font-medium text-destructive">{error}</p>
-      ) : null}
+      {error !== null ? <p className="mt-1 text-sm font-medium text-destructive">{error}</p> : null}
     </FieldRow>
   );
 }

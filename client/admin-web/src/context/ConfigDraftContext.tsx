@@ -225,8 +225,7 @@ export function ConfigDraftProvider({ children }: { children: ReactNode }): Reac
   }, []);
 
   const getField = useCallback(
-    (dottedPath: string): JsonValue | undefined =>
-      readPath(draft, splitPath(dottedPath)),
+    (dottedPath: string): JsonValue | undefined => readPath(draft, splitPath(dottedPath)),
     [draft],
   );
 
@@ -291,14 +290,14 @@ export function ConfigDraftProvider({ children }: { children: ReactNode }): Reac
           : typeof result.revision === "string"
             ? result.revision
             : revision;
-      const authoritative: ConfigRoot =
-        fresh ?? { ...cloneObject(submittedDraft), revision: nextRevision };
+      const authoritative: ConfigRoot = fresh ?? {
+        ...cloneObject(submittedDraft),
+        revision: nextRevision,
+      };
       setBaseline(authoritative);
       setRevision(nextRevision);
       // 只在 draft 未被并发修改时才重置；否则保留用户新输入，dirtyCount 会继续显示新增改动。
-      setDraft((current) =>
-        current === submittedDraft ? toDraft(authoritative) : current,
-      );
+      setDraft((current) => (current === submittedDraft ? toDraft(authoritative) : current));
       setConflict(false);
       setLastResult(result);
       // 只清掉本次已提交的密钥：保存期间用户新输入的明文不能被旧快照一并抹掉。
@@ -346,9 +345,7 @@ export function ConfigDraftProvider({ children }: { children: ReactNode }): Reac
   }, [reload]);
 
   const dirtyCount = useMemo(
-    () =>
-      (baseline === null ? 0 : countDirty(draft, baseline)) +
-      Object.keys(secretValues).length,
+    () => (baseline === null ? 0 : countDirty(draft, baseline)) + Object.keys(secretValues).length,
     [baseline, draft, secretValues],
   );
 
@@ -404,9 +401,7 @@ export function ConfigDraftProvider({ children }: { children: ReactNode }): Reac
     ],
   );
 
-  return (
-    <ConfigDraftContext.Provider value={value}>{children}</ConfigDraftContext.Provider>
-  );
+  return <ConfigDraftContext.Provider value={value}>{children}</ConfigDraftContext.Provider>;
 }
 
 /** 读取配置草稿状态；必须在 `ConfigDraftProvider` 内使用。 */

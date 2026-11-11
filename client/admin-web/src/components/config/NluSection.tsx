@@ -92,10 +92,8 @@ function parseCandidate(artifact: JsonObject | null): NluCandidate | null {
   const buildId = typeof artifact["build_id"] === "string" ? artifact["build_id"] : "";
   const sourceRevision =
     typeof artifact["source_revision"] === "string" ? artifact["source_revision"] : "";
-  const sha256 =
-    typeof artifact["model_sha256"] === "string" ? artifact["model_sha256"] : "";
-  const baseModel =
-    typeof artifact["base_model"] === "string" ? artifact["base_model"] : "";
+  const sha256 = typeof artifact["model_sha256"] === "string" ? artifact["model_sha256"] : "";
+  const baseModel = typeof artifact["base_model"] === "string" ? artifact["base_model"] : "";
   const expectedConfig = isJsonObject(artifact["expected_config"])
     ? artifact["expected_config"]
     : null;
@@ -118,11 +116,7 @@ function parseCandidate(artifact: JsonObject | null): NluCandidate | null {
 }
 
 /** 测试结果与输入的绑定键：输入在响应回来前变化则结果不参与 verified（旧端 :222-223）。 */
-function testKey(
-  candidate: NluCandidate,
-  text: string,
-  expected: string,
-): string {
+function testKey(candidate: NluCandidate, text: string, expected: string): string {
   return JSON.stringify([
     candidate.buildId,
     candidate.sourceRevision,
@@ -142,7 +136,10 @@ function integrityBadge(integrity: string): { label: string; className: string }
     case "incomplete":
       return { label: "incomplete", className: "border-amber-600/40 bg-amber-50 text-amber-800" };
     case "corrupt":
-      return { label: "corrupt", className: "border-destructive/40 bg-destructive/5 text-destructive" };
+      return {
+        label: "corrupt",
+        className: "border-destructive/40 bg-destructive/5 text-destructive",
+      };
     default:
       return { label: integrity === "" ? "未知" : integrity, className: "" };
   }
@@ -305,16 +302,23 @@ export function NluSection(): ReactElement {
         result.sourceRevision === candidate.sourceRevision &&
         result.expectedIntent === testExpected.trim();
       const unchanged = key === testKey(candidate, testText.trim(), testExpected.trim());
-      const label = result.intent !== "" ? result.intent : result.rawLabel !== "" ? result.rawLabel : "未知";
+      const label =
+        result.intent !== "" ? result.intent : result.rawLabel !== "" ? result.rawLabel : "未知";
       const verdict = valid
         ? `预测：${label}；置信度 ${result.confidence}；阈值 ${result.threshold}；` +
           (result.accepted ? "达到接受条件" : "拒识或未达阈值") +
           "；" +
-          (result.expectedMatch === true ? "与预期一致" : result.expectedMatch === false ? "与预期不一致" : "无预期比对") +
+          (result.expectedMatch === true
+            ? "与预期一致"
+            : result.expectedMatch === false
+              ? "与预期不一致"
+              : "无预期比对") +
           `。分词 ${result.tokenizeMs} ms，推理 ${result.inferMs} ms。未执行技能。`
         : "候选版本或推理证据不一致，不能采用。";
       setTestMessage(verdict);
-      setTestVerifiedKey(valid && unchanged && result.accepted && result.expectedMatch === true ? key : null);
+      setTestVerifiedKey(
+        valid && unchanged && result.accepted && result.expectedMatch === true ? key : null,
+      );
     } catch (error: unknown) {
       setTestMessage(`候选测试失败：${nluErrorMessage(error)}`);
       setTestVerifiedKey(null);
@@ -348,18 +352,9 @@ export function NluSection(): ReactElement {
     }
     const cfg = candidate.expectedConfig;
     setField("nlu.bert_enabled", cfg["bert_enabled"] === true);
-    setField(
-      "nlu.bert_model",
-      typeof cfg["bert_model"] === "string" ? cfg["bert_model"] : "",
-    );
-    setField(
-      "nlu.bert_vocab",
-      typeof cfg["bert_vocab"] === "string" ? cfg["bert_vocab"] : "",
-    );
-    setField(
-      "nlu.bert_labels",
-      typeof cfg["bert_labels"] === "string" ? cfg["bert_labels"] : "",
-    );
+    setField("nlu.bert_model", typeof cfg["bert_model"] === "string" ? cfg["bert_model"] : "");
+    setField("nlu.bert_vocab", typeof cfg["bert_vocab"] === "string" ? cfg["bert_vocab"] : "");
+    setField("nlu.bert_labels", typeof cfg["bert_labels"] === "string" ? cfg["bert_labels"] : "");
     setAdoptMessage(
       "已将候选写入当前草稿（bert_enabled / bert_model / bert_vocab / bert_labels 四字段），请检查后点保存生效；构建永不自动启用。采用候选并保存启用后，首启自举可能改配置版本，保存报 409 请重新加载。",
     );
@@ -597,13 +592,14 @@ export function NluSection(): ReactElement {
           ) : null}
           <div className="flex flex-wrap items-center gap-2">
             {statusLoading ? (
-              <LoaderCircle aria-hidden="true" className="size-4 animate-spin text-muted-foreground" />
+              <LoaderCircle
+                aria-hidden="true"
+                className="size-4 animate-spin text-muted-foreground"
+              />
             ) : null}
             <p className="text-sm font-medium">{statusLine}</p>
           </div>
-          {pollMessage !== null ? (
-            <FormNotice tone="warning">{pollMessage}</FormNotice>
-          ) : null}
+          {pollMessage !== null ? <FormNotice tone="warning">{pollMessage}</FormNotice> : null}
           {status !== null && status.logTail !== "" ? (
             <div className="space-y-1">
               <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-md bg-zinc-950 px-3 py-2 font-mono text-xs text-zinc-100">
@@ -672,7 +668,10 @@ export function NluSection(): ReactElement {
                     运行候选测试
                   </Button>
                   {verified ? (
-                    <Badge className="border-emerald-600/40 bg-emerald-50 text-emerald-800" variant="outline">
+                    <Badge
+                      className="border-emerald-600/40 bg-emerald-50 text-emerald-800"
+                      variant="outline"
+                    >
                       已验证（可用「采用候选」）
                     </Badge>
                   ) : null}
@@ -769,12 +768,8 @@ export function NluSection(): ReactElement {
                     return (
                       <tr key={row.buildId} className="border-b border-border/60 align-top">
                         <td className="py-1.5 pr-3 font-mono">{row.buildId}</td>
-                        <td className="py-1.5 pr-3">
-                          {row.createdAt ?? "未记录（历史构建）"}
-                        </td>
-                        <td className="py-1.5 pr-3">
-                          {row.baseModel ?? "未记录（历史构建）"}
-                        </td>
+                        <td className="py-1.5 pr-3">{row.createdAt ?? "未记录（历史构建）"}</td>
+                        <td className="py-1.5 pr-3">{row.baseModel ?? "未记录（历史构建）"}</td>
                         <td className="py-1.5 pr-3">共 {row.labels.length} 个标签</td>
                         <td className="py-1.5 pr-3">
                           <Badge variant="outline" className={badge.className}>
@@ -818,7 +813,10 @@ export function NluSection(): ReactElement {
           {catalogUnavailable ? (
             <UnavailableNotice
               title="技能目录能力未启用"
-              description={catalogError ?? "服务端未挂载 /api/skills/catalog（通常是构建未启用对应能力）；该状态下不能查看保存态目录，配置编辑仍可用。"}
+              description={
+                catalogError ??
+                "服务端未挂载 /api/skills/catalog（通常是构建未启用对应能力）；该状态下不能查看保存态目录，配置编辑仍可用。"
+              }
             />
           ) : catalogError !== null ? (
             <FormNotice tone="danger">读取技能目录失败：{catalogError}</FormNotice>
@@ -827,8 +825,10 @@ export function NluSection(): ReactElement {
             <div className="space-y-3">
               <p className="text-xs text-muted-foreground">
                 识别口径 {catalog.recognition === "" ? "未知" : catalog.recognition}；目录版本{" "}
-                <span className="font-mono">{catalog.revision === "" ? "未知" : catalog.revision}</span>；共{" "}
-                {catalog.intents.length} 个技能。
+                <span className="font-mono">
+                  {catalog.revision === "" ? "未知" : catalog.revision}
+                </span>
+                ；共 {catalog.intents.length} 个技能。
               </p>
               {(["server", "device", "iot"] as const).map((domain) => {
                 const intents = catalog.intents.filter((item) => item.domain === domain);
@@ -853,7 +853,9 @@ export function NluSection(): ReactElement {
                             className="flex flex-wrap items-center gap-2 text-xs"
                           >
                             <span className="font-mono font-medium">{item.name}</span>
-                            <Badge variant="outline">{item.source === "" ? "未知来源" : item.source}</Badge>
+                            <Badge variant="outline">
+                              {item.source === "" ? "未知来源" : item.source}
+                            </Badge>
                             <span className="text-muted-foreground">
                               例句 {item.templates.length} 条
                             </span>
@@ -869,7 +871,9 @@ export function NluSection(): ReactElement {
                   </div>
                 );
               })}
-              {catalog.intents.some((item) => !(NLU_DOMAINS as readonly string[]).includes(item.domain)) ? (
+              {catalog.intents.some(
+                (item) => !(NLU_DOMAINS as readonly string[]).includes(item.domain),
+              ) ? (
                 <p className="text-xs font-medium text-amber-900">
                   目录中存在未知控制域的技能条目，已不在上述分组中显示；以服务端为准，不要在界面改写。
                 </p>

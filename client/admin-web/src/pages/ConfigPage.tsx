@@ -99,15 +99,14 @@ function ConfigPageContent(): ReactElement {
 
   const meta = metaQuery.data;
   const metaTitle =
-    [meta?.backend, meta?.loaded_from].filter((item) => item !== null && item !== undefined).join(" · ") ||
-    undefined;
+    [meta?.backend, meta?.loaded_from]
+      .filter((item) => item !== null && item !== undefined)
+      .join(" · ") || undefined;
   // 两条非致命提示合并展示：草稿层的「已保存但回读失败」优先（信息更新），
   // 其次是「配置文件来源信息读取失败」（不影响配置本身的加载与保存）。
   const warning =
     draftWarning ??
-    (metaQuery.error === null
-      ? null
-      : `配置文件来源信息读取失败：${metaQuery.error}`);
+    (metaQuery.error === null ? null : `配置文件来源信息读取失败：${metaQuery.error}`);
 
   const doReload = (): void => {
     setReloadConfirmOpen(false);
@@ -161,9 +160,7 @@ function ConfigPageContent(): ReactElement {
         </div>
         <div className="flex flex-wrap items-start gap-4">
           <div className="flex items-center gap-2">
-            <span className="text-xs text-muted-foreground">
-              {advancedMode ? "高级" : "简单"}
-            </span>
+            <span className="text-xs text-muted-foreground">{advancedMode ? "高级" : "简单"}</span>
             <Switch
               aria-label="切换高级模式"
               checked={advancedMode}
@@ -201,9 +198,7 @@ function ConfigPageContent(): ReactElement {
               }
               return (
                 <div key={group.id} className="space-y-1">
-                  <p className="px-3 text-xs font-medium text-muted-foreground">
-                    {group.label}
-                  </p>
+                  <p className="px-3 text-xs font-medium text-muted-foreground">{group.label}</p>
                   {items.map((section) => (
                     <button
                       key={section.id}
@@ -263,18 +258,12 @@ function ConfigPageContent(): ReactElement {
               className="flex flex-wrap items-start justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive"
             >
               <div className="space-y-1">
-                <p>
-                  配置已被其他窗口/端修改，本次保存已取消（避免覆盖别人的改动）。
-                </p>
+                <p>配置已被其他窗口/端修改，本次保存已取消（避免覆盖别人的改动）。</p>
                 <p className="text-xs text-destructive/80">
                   你当前的修改仍保留在页面上，可先复制再重新加载。
                 </p>
               </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => void resolveConflict()}
-              >
+              <Button variant="outline" size="sm" onClick={() => void resolveConflict()}>
                 重新加载并放弃本地改动
               </Button>
             </div>

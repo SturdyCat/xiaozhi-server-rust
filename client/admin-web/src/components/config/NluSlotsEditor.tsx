@@ -93,8 +93,7 @@ function SlotBlock({
   onChange: (next: SlotEdit) => void;
   onRemove: () => void;
 }): ReactElement {
-  const update = (patch: Partial<SlotEdit>): void =>
-    onChange({ ...edit, ...patch });
+  const update = (patch: Partial<SlotEdit>): void => onChange({ ...edit, ...patch });
 
   return (
     <div className="rounded-md border border-border bg-muted/30">
@@ -134,7 +133,8 @@ function SlotBlock({
               onChange={(event) => update({ name: event.target.value })}
             />
             <p className="text-xs text-muted-foreground">
-              必须与模板里的 {"{占位名}"} 完全一致（区分大小写）。改名后不会自动同步模板，需自行修改训练例句。
+              必须与模板里的 {"{占位名}"}{" "}
+              完全一致（区分大小写）。改名后不会自动同步模板，需自行修改训练例句。
             </p>
           </div>
           <div className="grid gap-1.5 py-2">
@@ -215,22 +215,19 @@ export function NluSlotsEditor(): ReactElement {
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
-        <p className="min-w-0 flex-1 text-sm font-medium">
-          槽位定义（{items.length} 条）
-        </p>
+        <p className="min-w-0 flex-1 text-sm font-medium">槽位定义（{items.length} 条）</p>
         <Button type="button" variant="outline" size="sm" onClick={addSlot}>
           <Plus aria-hidden="true" className="size-4" />
           添加槽位
         </Button>
       </div>
       <p className="text-xs text-muted-foreground">
-        训练例句中的 {"{槽位}"} 在这里声明。只有模型已经接受同一技能后，才提取、校验这些参数；缺少必填参数时明确请求补充，不从分数、其他技能或大模型猜造参数。模板里用到的
+        训练例句中的 {"{槽位}"}{" "}
+        在这里声明。只有模型已经接受同一技能后，才提取、校验这些参数；缺少必填参数时明确请求补充，不从分数、其他技能或大模型猜造参数。模板里用到的
         {"{槽位}"} 在这里命名并给封闭值表；不给值表 = 开放槽位。
       </p>
       {items.length === 0 ? (
-        <p className="text-xs text-muted-foreground">
-          暂无槽位定义；无槽位技能无需添加槽位。
-        </p>
+        <p className="text-xs text-muted-foreground">暂无槽位定义；无槽位技能无需添加槽位。</p>
       ) : (
         <div className="space-y-2">
           {items.map((edit, index) => (
@@ -238,9 +235,7 @@ export function NluSlotsEditor(): ReactElement {
               key={`${edit.name}:${index}`}
               edit={edit}
               expanded={expandedIndex === index}
-              onToggle={() =>
-                setExpandedIndex((current) => (current === index ? null : index))
-              }
+              onToggle={() => setExpandedIndex((current) => (current === index ? null : index))}
               onChange={(next) => updateAt(index, next)}
               onRemove={() => removeAt(index)}
             />

@@ -42,11 +42,7 @@ import { TextAreaField } from "@/components/form/TextAreaField";
 import { TextField } from "@/components/form/TextField";
 import { toText } from "@/components/form/types";
 import { useConfigDraft } from "@/context/ConfigDraftContext";
-import {
-  catalogueErrorMessage,
-  fetchLlmModels,
-  type LlmModelsRequest,
-} from "@/lib/catalogueApi";
+import { catalogueErrorMessage, fetchLlmModels, type LlmModelsRequest } from "@/lib/catalogueApi";
 
 export function LlmSection(): ReactElement {
   const { getField, getSecret, setField } = useConfigDraft();
@@ -92,15 +88,16 @@ export function LlmSection(): ReactElement {
       });
   };
 
-  const selectedModel =
-    models !== null && models.includes(currentModel) ? currentModel : "";
+  const selectedModel = models !== null && models.includes(currentModel) ? currentModel : "";
 
   return (
     <div className="space-y-4">
       <SectionHotHint sectionId="llm" />
 
       <FormNotice tone="info">
-        本段只编辑下列 8 个字段：实现 id、残句定时出句等待与备用端点链沿用旧管理台口径，不在本页暴露。关闭「启用对话生成」会进入回声模式（技能未命中时把 ASR 文本原样 TTS 下发），不影响技能级联命中（plugins/llm/mod.rs:37-43）。
+        本段只编辑下列 8 个字段：实现
+        id、残句定时出句等待与备用端点链沿用旧管理台口径，不在本页暴露。关闭「启用对话生成」会进入回声模式（技能未命中时把
+        ASR 文本原样 TTS 下发），不影响技能级联命中（plugins/llm/mod.rs:37-43）。
       </FormNotice>
 
       <SectionCard
@@ -153,10 +150,7 @@ export function LlmSection(): ReactElement {
                 获取模型列表
               </Button>
               {models !== null && models.length > 0 ? (
-                <Select
-                  value={selectedModel}
-                  onValueChange={(next) => setField("llm.model", next)}
-                >
+                <Select value={selectedModel} onValueChange={(next) => setField("llm.model", next)}>
                   <SelectTrigger className="w-[260px]">
                     <SelectValue placeholder="从在线列表选择" />
                   </SelectTrigger>

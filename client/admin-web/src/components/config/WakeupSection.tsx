@@ -46,7 +46,8 @@ export function WakeupSection(): ReactElement {
 
       {emptyPool ? (
         <FormNotice tone="warning">
-          已启用唤醒问候语，但问候语池为空（全为空行）。这属于可选能力的 Degraded，不是硬错误：唤醒后不会问候，其余语音服务照常（plugins/wakeup/mod.rs:106-115）。请填至少一句（如「我在」），或关闭总开关。
+          已启用唤醒问候语，但问候语池为空（全为空行）。这属于可选能力的
+          Degraded，不是硬错误：唤醒后不会问候，其余语音服务照常（plugins/wakeup/mod.rs:106-115）。请填至少一句（如「我在」），或关闭总开关。
         </FormNotice>
       ) : null}
 
@@ -77,7 +78,8 @@ export function WakeupSection(): ReactElement {
           {persist ? (
             <div className="py-2">
               <FormNotice tone="info">
-                持久化复用依赖 [tts].cache_entries &gt; 0：缓存被关掉时音频无法落盘，每次唤醒都会重新合成（plugins/wakeup/mod.rs:65-68、plugins/registry/validate.rs:172-180）。这里只做提示，不做跨段硬校验。
+                持久化复用依赖 [tts].cache_entries &gt;
+                0：缓存被关掉时音频无法落盘，每次唤醒都会重新合成（plugins/wakeup/mod.rs:65-68、plugins/registry/validate.rs:172-180）。这里只做提示，不做跨段硬校验。
               </FormNotice>
             </div>
           ) : null}

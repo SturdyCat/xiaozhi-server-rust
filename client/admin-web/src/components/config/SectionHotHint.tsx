@@ -27,10 +27,7 @@ export function SectionHotHint({ sectionId }: SectionHotHintProps): ReactElement
 
   return (
     <div className="flex flex-wrap items-center gap-2 rounded-md border border-amber-600/40 bg-amber-50 px-3 py-2">
-      <Badge
-        variant="outline"
-        className="border-amber-600/40 bg-white text-amber-900"
-      >
+      <Badge variant="outline" className="border-amber-600/40 bg-white text-amber-900">
         {HOT_LABEL[entry.hot] ?? entry.hot}
       </Badge>
       <p className="text-sm font-medium text-amber-900">{entry.hot_hint}</p>

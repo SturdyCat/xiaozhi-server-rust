@@ -1,13 +1,7 @@
 import { type ReactElement, type ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { cn, formatDateTime, formatRelative, formatUptime } from "@/lib/utils";
 import { useApiQuery } from "@/lib/useApiQuery";
@@ -39,24 +33,14 @@ function phaseBadgeClass(phase: string, enabled: boolean): string {
 }
 
 /** 单值统计卡。 */
-function StatCard({
-  label,
-  value,
-  hint,
-}: {
-  label: string;
-  value: ReactNode;
-  hint?: string;
-}) {
+function StatCard({ label, value, hint }: { label: string; value: ReactNode; hint?: string }) {
   return (
     <Card>
       <CardHeader className="pb-2">
         <CardDescription>{label}</CardDescription>
         <CardTitle className="text-2xl font-semibold">{value}</CardTitle>
       </CardHeader>
-      {hint ? (
-        <CardContent className="text-xs text-muted-foreground">{hint}</CardContent>
-      ) : null}
+      {hint ? <CardContent className="text-xs text-muted-foreground">{hint}</CardContent> : null}
     </Card>
   );
 }
@@ -68,10 +52,7 @@ function CapabilityRow({ cap }: { cap: EngineCapability }) {
       <div className="min-w-0">
         <div className="truncate font-medium">{cap.display}</div>
         {cap.last_error ? (
-          <div
-            className="truncate text-xs text-destructive"
-            title={cap.last_error}
-          >
+          <div className="truncate text-xs text-destructive" title={cap.last_error}>
             {cap.last_error}
           </div>
         ) : null}
@@ -94,8 +75,7 @@ export function OverviewPage(): ReactElement {
   const queries = [health, stats, engines, devices, geo, plugins];
   const anyLoading = queries.some((q) => q.loading);
   const firstError = queries.find((q) => q.error !== null)?.error ?? null;
-  const lastUpdated =
-    Math.max(0, ...queries.map((q) => q.updatedAt ?? 0)) || null;
+  const lastUpdated = Math.max(0, ...queries.map((q) => q.updatedAt ?? 0)) || null;
 
   const handleRefresh = (): void => {
     health.refetch();
@@ -114,20 +94,13 @@ export function OverviewPage(): ReactElement {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="space-y-1">
           <h2 className="text-2xl font-semibold tracking-tight">总览</h2>
-          <p className="text-sm text-muted-foreground">
-            设备在线状态、会话统计与服务运行概况。
-          </p>
+          <p className="text-sm text-muted-foreground">设备在线状态、会话统计与服务运行概况。</p>
         </div>
         <div className="flex items-center gap-3">
           <span className="text-xs text-muted-foreground">
             最后更新：{formatDateTime(lastUpdated)}
           </span>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleRefresh}
-            disabled={anyLoading}
-          >
+          <Button variant="outline" size="sm" onClick={handleRefresh} disabled={anyLoading}>
             {anyLoading ? "刷新中…" : "刷新"}
           </Button>
         </div>
@@ -163,26 +136,14 @@ export function OverviewPage(): ReactElement {
               }
             />
             <StatCard label="版本" value={health.data?.version ?? "—"} />
-            <StatCard
-              label="运行时间"
-              value={formatUptime(stats.data?.uptime_ms ?? 0)}
-            />
+            <StatCard label="运行时间" value={formatUptime(stats.data?.uptime_ms ?? 0)} />
             <StatCard
               label="在线设备"
               value={`${devices.data?.online_count ?? 0} / ${devices.data?.count ?? 0}`}
             />
-            <StatCard
-              label="活跃会话"
-              value={stats.data?.sessions.live ?? 0}
-            />
-            <StatCard
-              label="对话数"
-              value={stats.data?.conversations.retained ?? 0}
-            />
-            <StatCard
-              label="消息轮次"
-              value={stats.data?.turns.retained ?? 0}
-            />
+            <StatCard label="活跃会话" value={stats.data?.sessions.live ?? 0} />
+            <StatCard label="对话数" value={stats.data?.conversations.retained ?? 0} />
+            <StatCard label="消息轮次" value={stats.data?.turns.retained ?? 0} />
           </div>
 
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -217,9 +178,7 @@ export function OverviewPage(): ReactElement {
                       className="flex items-start justify-between gap-3 rounded-md border px-3 py-2"
                     >
                       <div className="min-w-0">
-                        <div className="truncate font-mono text-xs">
-                          {d.device_id}
-                        </div>
+                        <div className="truncate font-mono text-xs">{d.device_id}</div>
                         <div className="text-xs text-muted-foreground">
                           {d.board} · {d.firmware_version}
                         </div>

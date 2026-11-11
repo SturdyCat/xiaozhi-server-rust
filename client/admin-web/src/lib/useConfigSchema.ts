@@ -29,10 +29,7 @@ export interface ConfigSchemaState {
 export function useConfigSchema(): ConfigSchemaState {
   const { data, loading, error } = useApiQuery(getConfigSchema);
 
-  const advancedFields = useMemo(
-    () => new Set(data?.advanced_fields ?? []),
-    [data],
-  );
+  const advancedFields = useMemo(() => new Set(data?.advanced_fields ?? []), [data]);
 
   const isAdvancedField = useCallback(
     (path: string): boolean => advancedFields.has(path),
@@ -41,8 +38,8 @@ export function useConfigSchema(): ConfigSchemaState {
 
   const implementationsOf = useCallback(
     (section: string): ConfigImplementationInfo[] =>
-      data?.capabilities.find((capability) => capability.id === section)
-        ?.implementations ?? EMPTY_IMPLEMENTATIONS,
+      data?.capabilities.find((capability) => capability.id === section)?.implementations ??
+      EMPTY_IMPLEMENTATIONS,
     [data],
   );
 

@@ -118,23 +118,22 @@ function StatusCard({ status }: { status: MemoryStatus | null }): ReactElement {
       {status.scopes.length > 0 ? (
         <p>
           作用域：
-          {status.scopes
-            .map((item) => `${item.scope}（${item.memories} 条）`)
-            .join("、")}
+          {status.scopes.map((item) => `${item.scope}（${item.memories} 条）`).join("、")}
         </p>
       ) : null}
       {status.capabilityPhase !== null ? <p>能力阶段：{status.capabilityPhase}</p> : null}
       {status.lexicalOnly === true ? (
         <FormNotice tone="info">
-          当前为本地词法召回（lexical_only：未配置 embedding）。这不是故障：召回仍会工作，但只按关键词匹配、语义泛化能力有限。
+          当前为本地词法召回（lexical_only：未配置
+          embedding）。这不是故障：召回仍会工作，但只按关键词匹配、语义泛化能力有限。
         </FormNotice>
       ) : null}
       {status.capabilityLastError !== null ? (
-        <FormNotice tone="danger">能力降级原因（服务端 last_error）：{status.capabilityLastError}</FormNotice>
+        <FormNotice tone="danger">
+          能力降级原因（服务端 last_error）：{status.capabilityLastError}
+        </FormNotice>
       ) : null}
-      {status.aiuiNote !== null ? (
-        <FormNotice tone="warning">{status.aiuiNote}</FormNotice>
-      ) : null}
+      {status.aiuiNote !== null ? <FormNotice tone="warning">{status.aiuiNote}</FormNotice> : null}
       {status.rag !== null ? (
         <div className="space-y-2">
           <p>
@@ -315,9 +314,7 @@ export function MemorySection(): ReactElement {
     setClearError(null);
     void (async () => {
       try {
-        const result = await clearMemory(
-          clearAll ? { all: true } : { scope: clearScope.trim() },
-        );
+        const result = await clearMemory(clearAll ? { all: true } : { scope: clearScope.trim() });
         if (!mountedRef.current) {
           return;
         }
@@ -363,8 +360,7 @@ export function MemorySection(): ReactElement {
     })();
   };
 
-  const engineLabel =
-    ENGINE_OPTIONS.find((option) => option.value === engine)?.label ?? engine;
+  const engineLabel = ENGINE_OPTIONS.find((option) => option.value === engine)?.label ?? engine;
 
   return (
     <div className="space-y-4">
@@ -452,7 +448,8 @@ export function MemorySection(): ReactElement {
                     }
                   />
                   <FormNotice tone="warning">
-                    记忆端点未启用或被管理页 HTML 回退接走：状态与维护 / 召回 / 清空动作均不可用，但 [memory] 配置字段仍可正常保存。
+                    记忆端点未启用或被管理页 HTML 回退接走：状态与维护 / 召回 / 清空动作均不可用，但
+                    [memory] 配置字段仍可正常保存。
                   </FormNotice>
                 </div>
               ) : null}
@@ -592,7 +589,11 @@ export function MemorySection(): ReactElement {
                     </div>
                     {clearArmed ? (
                       <FormNotice tone="danger">
-                        已进入确认状态：再点一次「{clearAll ? "清空全部设备" : `清空 ${clearScope.trim() || "（未填作用域）"}`}」就会执行，删除的数据不可恢复。修改上方作用域或开关会作废本次确认。
+                        已进入确认状态：再点一次「
+                        {clearAll
+                          ? "清空全部设备"
+                          : `清空 ${clearScope.trim() || "（未填作用域）"}`}
+                        」就会执行，删除的数据不可恢复。修改上方作用域或开关会作废本次确认。
                       </FormNotice>
                     ) : null}
                     {clearResult !== null ? (

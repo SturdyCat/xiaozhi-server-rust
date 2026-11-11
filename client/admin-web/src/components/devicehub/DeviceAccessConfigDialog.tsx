@@ -23,12 +23,7 @@ import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/feedback/ToastHost";
 import { TuyaCredentialsCard } from "@/components/devicehub/TuyaCredentialsCard";
 import { getEmStatus, type EmStatus } from "@/lib/echomuseApi";
-import {
-  syncTuyaNow,
-  tuyaAgeText,
-  tuyaResultLabel,
-  type TuyaStatus,
-} from "@/lib/tuyaApi";
+import { syncTuyaNow, tuyaAgeText, tuyaResultLabel, type TuyaStatus } from "@/lib/tuyaApi";
 
 export interface DeviceAccessConfigDialogProps {
   open: boolean;
@@ -175,11 +170,7 @@ export function DeviceAccessConfigDialog({
               </p>
             ) : null}
             {tuyaEnabled ? (
-              <TuyaCredentialsCard
-                status={tuyaStatus}
-                disabled={false}
-                onChanged={onTuyaChanged}
-              />
+              <TuyaCredentialsCard status={tuyaStatus} disabled={false} onChanged={onTuyaChanged} />
             ) : null}
             <div className="flex flex-wrap items-center gap-2">
               <Button

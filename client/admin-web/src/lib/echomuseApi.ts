@@ -94,9 +94,7 @@ function strArray(raw: Record<string, unknown>, key: string): string[] {
 }
 
 /** 解析错误体（E1 纯 `{"error"}` / E2 `{"error","code"}`；401 是纯文本不走这里）。 */
-function readErrorBody(
-  body: string,
-): { error: string; code: string | null } | null {
+function readErrorBody(body: string): { error: string; code: string | null } | null {
   const text = body.trim();
   if (text === "") {
     return null;
@@ -143,10 +141,20 @@ function gateError(error: unknown, action: string): never {
           "disabled",
         );
       }
-      throw new EchomuseApiError(`${action}失败：${parsed.error}`, error.status, parsed.error, parsed.code);
+      throw new EchomuseApiError(
+        `${action}失败：${parsed.error}`,
+        error.status,
+        parsed.error,
+        parsed.code,
+      );
     }
     if (error.body.trim() !== "") {
-      throw new EchomuseApiError(`${action}失败：${error.body.trim()}`, error.status, error.body.trim(), null);
+      throw new EchomuseApiError(
+        `${action}失败：${error.body.trim()}`,
+        error.status,
+        error.body.trim(),
+        null,
+      );
     }
     if (error.status === 404) {
       throw new EchomuseUnavailableError(
@@ -292,7 +300,10 @@ export async function getEmStatus(): Promise<EmStatus> {
   const devices: { deviceId: string; connectedSecs: number }[] = [];
   for (const item of raw["devices"]) {
     if (isRecord(item)) {
-      devices.push({ deviceId: str(item, "device_id"), connectedSecs: num(item, "connected_secs") });
+      devices.push({
+        deviceId: str(item, "device_id"),
+        connectedSecs: num(item, "connected_secs"),
+      });
     }
   }
   return { enabled: raw["enabled"], devices };
@@ -342,11 +353,11 @@ export async function deleteEchomuseDevice(deviceId: string): Promise<void> {
  * 批准（认领）一台设备；`label` 可选（缺省发 `{}`），同一端点可用于改名。
  * 成功回 `record_payload`。
  */
-export async function approveEchomuseDevice(deviceId: string, label?: string): Promise<EchomuseDevice> {
-  const body =
-    typeof label === "string" && label.trim() !== ""
-      ? { label: label.trim() }
-      : {};
+export async function approveEchomuseDevice(
+  deviceId: string,
+  label?: string,
+): Promise<EchomuseDevice> {
+  const body = typeof label === "string" && label.trim() !== "" ? { label: label.trim() } : {};
   let raw: unknown;
   try {
     raw = await requestApi<unknown>(`echomuse/devices/${encodeURIComponent(deviceId)}/approve`, {
@@ -507,7 +518,11 @@ function parseShellOutput(raw: unknown, action: string): EchomuseShellOutput {
   if (!isRecord(raw) || typeof raw["output"] !== "string") {
     throw new Error(`${action}：响应形状不符（缺少 output）。`);
   }
-  return { deviceId: str(raw, "device_id"), output: raw["output"], exitCode: num(raw, "exit_code") };
+  return {
+    deviceId: str(raw, "device_id"),
+    output: raw["output"],
+    exitCode: num(raw, "exit_code"),
+  };
 }
 
 /** 读取原始系统信息（B.10，G2 `system_gate` 五重；固定 INFO 命令）。 */

@@ -94,9 +94,7 @@ function DeviceBlock({ device }: { device: McpDevice }): ReactElement {
         {!device.online ? (
           <Badge variant="secondary">已断开（上次探测 {ageText(device.ageMs)}）</Badge>
         ) : null}
-        {device.commandGate === "will_degrade" ? (
-          <Badge variant="destructive">{gate}</Badge>
-        ) : null}
+        {device.commandGate === "will_degrade" ? <Badge variant="destructive">{gate}</Badge> : null}
       </div>
       {device.commandGate === "compatible" ? (
         <p className="text-xs text-muted-foreground">{gate}（说「退下」会保持连接）</p>
@@ -240,9 +238,8 @@ export function McpSection(): ReactElement {
           </p>
         ) : null}
 
-        {data !== null && data.devices.map((device) => (
-          <DeviceBlock key={device.deviceId} device={device} />
-        ))}
+        {data !== null &&
+          data.devices.map((device) => <DeviceBlock key={device.deviceId} device={device} />)}
       </div>
     </SectionCard>
   );

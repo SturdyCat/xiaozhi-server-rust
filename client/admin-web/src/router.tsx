@@ -38,19 +38,10 @@ export function AppRouter(): ReactElement {
         <Route index element={<Navigate to="/overview" replace />} />
         {visibleNavDescriptors(tauriEnv).map((item) => {
           const PageComponent: ComponentType = PAGE_COMPONENTS[item.key];
-          return (
-            <Route
-              key={item.key}
-              path={item.key}
-              element={<PageComponent />}
-            />
-          );
+          return <Route key={item.key} path={item.key} element={<PageComponent />} />;
         })}
         {/* 插件动态运行页：必须在 `path="*"` 兜底之前声明。 */}
-        <Route
-          path="plugin/:pluginId/:entryId"
-          element={<PluginRuntimeRoute />}
-        />
+        <Route path="plugin/:pluginId/:entryId" element={<PluginRuntimeRoute />} />
         <Route path="*" element={<Navigate to="/overview" replace />} />
       </Route>
     </Routes>

@@ -43,9 +43,7 @@ export function PlaceholderPage({
       <Card>
         <CardHeader>
           <CardTitle>页面占位</CardTitle>
-          <CardDescription>
-            本阶段只搭建开发环境，业务页面将在后续迁移中实现。
-          </CardDescription>
+          <CardDescription>本阶段只搭建开发环境，业务页面将在后续迁移中实现。</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4 text-sm">
           <dl className="grid grid-cols-[120px_1fr] gap-x-4 gap-y-3">

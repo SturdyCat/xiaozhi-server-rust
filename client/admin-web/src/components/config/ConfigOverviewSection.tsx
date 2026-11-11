@@ -56,8 +56,7 @@ function sectionForCapability(capability: EngineCapability): ConfigSection | und
   if (typeof fromServer === "string" && fromServer !== "") {
     return findSection(fromServer);
   }
-  const fallback =
-    CAPABILITY_SECTION_OVERRIDES[capability.capability] ?? capability.capability;
+  const fallback = CAPABILITY_SECTION_OVERRIDES[capability.capability] ?? capability.capability;
   return findSection(fallback);
 }
 
@@ -89,9 +88,7 @@ function hotBadgeClass(hot: ConfigHotLevel): string {
   return "border-border bg-muted text-muted-foreground";
 }
 
-export function ConfigOverviewSection({
-  onJump,
-}: ConfigOverviewSectionProps): ReactElement {
+export function ConfigOverviewSection({ onJump }: ConfigOverviewSectionProps): ReactElement {
   const enginesQuery = useApiQuery(getEngines);
   const schemaQuery = useApiQuery(getConfigSchema);
 
@@ -153,21 +150,14 @@ export function ConfigOverviewSection({
                         <Badge
                           variant="outline"
                           className={phaseBadgeClass(capability.phase)}
-                          title={
-                            capability.last_error ??
-                            `phase: ${capability.phase}`
-                          }
+                          title={capability.last_error ?? `phase: ${capability.phase}`}
                         >
                           {PHASE_LABEL[capability.phase] ?? capability.phase}
                         </Badge>
                       </td>
                       <td className="py-2 text-right">
                         {section ? (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => onJump(section.id)}
-                          >
+                          <Button variant="outline" size="sm" onClick={() => onJump(section.id)}>
                             去配置
                           </Button>
                         ) : (

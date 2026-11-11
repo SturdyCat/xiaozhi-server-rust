@@ -66,7 +66,8 @@ export function TuyaSection(): ReactElement {
             />
 
             <p className="py-2 text-xs text-muted-foreground">
-              云凭证（区域 / access_id / access_secret）在「设备管理」页右上角齿轮里录入，这里不重复编辑。
+              云凭证（区域 / access_id /
+              access_secret）在「设备管理」页右上角齿轮里录入，这里不重复编辑。
             </p>
 
             {!enabled ? (

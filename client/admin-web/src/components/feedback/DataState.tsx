@@ -53,9 +53,7 @@ export function DataState({
   }
 
   if (empty) {
-    return (
-      <div className="py-6 text-center text-sm text-muted-foreground">{emptyText}</div>
-    );
+    return <div className="py-6 text-center text-sm text-muted-foreground">{emptyText}</div>;
   }
 
   return <>{children}</>;

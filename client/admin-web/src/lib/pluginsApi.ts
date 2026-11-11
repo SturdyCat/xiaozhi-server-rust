@@ -546,11 +546,19 @@ export function uploadPluginRaw(
         try {
           parsed = JSON.parse(xhr.responseText);
         } catch {
-          reject(new ApiError("上传失败：服务端返回了无法解析的响应", xhr.status, xhr.responseText));
+          reject(
+            new ApiError("上传失败：服务端返回了无法解析的响应", xhr.status, xhr.responseText),
+          );
           return;
         }
         if (!isRecord(parsed) || parsed["ok"] !== true || parsed["staged"] !== true) {
-          reject(new ApiError("上传失败：服务端未确认登记 Staged（响应缺少 ok/staged:true）。", xhr.status, xhr.responseText));
+          reject(
+            new ApiError(
+              "上传失败：服务端未确认登记 Staged（响应缺少 ok/staged:true）。",
+              xhr.status,
+              xhr.responseText,
+            ),
+          );
           return;
         }
         const previousVersion = parsed["previous_version"];
@@ -598,10 +606,9 @@ async function lifecycleRequest(
 ): Promise<PluginLifecycleResult> {
   let raw: unknown;
   try {
-    raw = await requestApi<unknown>(
-      `plugins/${encodeURIComponent(pluginId)}/${op}`,
-      { method: "POST" },
-    );
+    raw = await requestApi<unknown>(`plugins/${encodeURIComponent(pluginId)}/${op}`, {
+      method: "POST",
+    });
   } catch (error) {
     normalizeWriteError(error, action);
   }

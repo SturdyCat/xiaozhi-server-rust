@@ -212,9 +212,7 @@ export async function putConfig(
   expectedRevision?: string,
 ): Promise<ConfigSaveResult> {
   const payload: JsonObject =
-    expectedRevision === undefined
-      ? patch
-      : { ...patch, expected_revision: expectedRevision };
+    expectedRevision === undefined ? patch : { ...patch, expected_revision: expectedRevision };
   try {
     return await requestApi<ConfigSaveResult>("config", {
       method: "PUT",

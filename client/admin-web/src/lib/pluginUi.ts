@@ -81,7 +81,12 @@ export type PluginUiNode =
   | { readonly type: "form"; readonly fields: PluginConfigField[] }
   | { readonly type: "actions"; readonly actions: PluginAction[] }
   | { readonly type: "panel"; readonly actions: PluginAction[] }
-  | { readonly type: "input"; readonly id: string; readonly label: string; readonly placeholder: string }
+  | {
+      readonly type: "input";
+      readonly id: string;
+      readonly label: string;
+      readonly placeholder: string;
+    }
   | { readonly type: "result" };
 
 /** 文档的一页；`kind` 是插件自述（如 `config` / `test`），渲染器只做展示标注。 */
@@ -358,7 +363,11 @@ export function parsePluginUiDocs(snapshot: WasmSnapshot): Record<string, Plugin
     if (registration === null || registration.ui === null) {
       continue;
     }
-    const doc = parsePluginUiDocument(registration.ui, registration.configFields, registration.actions);
+    const doc = parsePluginUiDocument(
+      registration.ui,
+      registration.configFields,
+      registration.actions,
+    );
     if (doc !== null) {
       out[plugin.id] = doc;
     }

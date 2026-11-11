@@ -1,19 +1,7 @@
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type ReactElement,
-} from "react";
+import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/components/feedback/ToastHost";
 import { getApiBaseUrl } from "@/lib/api";
@@ -180,9 +168,7 @@ export function ConsolePage(): ReactElement {
       bufferRef.current = [];
       setLines((prev) => {
         const merged = prev.concat(incoming);
-        return merged.length > MAX_LINES
-          ? merged.slice(merged.length - MAX_LINES)
-          : merged;
+        return merged.length > MAX_LINES ? merged.slice(merged.length - MAX_LINES) : merged;
       });
     }, FLUSH_INTERVAL_MS);
     return () => window.clearInterval(id);
@@ -208,9 +194,7 @@ export function ConsolePage(): ReactElement {
     void copyText(lines.join("\n"))
       .then((ok) => {
         show(
-          ok
-            ? "已复制全部日志"
-            : "复制失败：浏览器阻止了剪贴板访问，请手动选中日志复制",
+          ok ? "已复制全部日志" : "复制失败：浏览器阻止了剪贴板访问，请手动选中日志复制",
           ok ? "success" : "error",
         );
       })
@@ -220,8 +204,7 @@ export function ConsolePage(): ReactElement {
       });
   }, [lines, show]);
 
-  const visibleLines =
-    level === "ALL" ? lines : lines.filter((line) => lineLevel(line) === level);
+  const visibleLines = level === "ALL" ? lines : lines.filter((line) => lineLevel(line) === level);
 
   const meta = statusMeta(status);
 
@@ -230,17 +213,11 @@ export function ConsolePage(): ReactElement {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="space-y-1">
           <h2 className="text-2xl font-semibold tracking-tight">控制台</h2>
-          <p className="text-sm text-muted-foreground">
-            服务端实时日志（tracing 镜像流）。
-          </p>
+          <p className="text-sm text-muted-foreground">服务端实时日志（tracing 镜像流）。</p>
         </div>
         <div className="flex items-center gap-2">
           <Badge className={cn("shrink-0", meta.className)}>{meta.label}</Badge>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setGeneration((g) => g + 1)}
-          >
+          <Button variant="outline" size="sm" onClick={() => setGeneration((g) => g + 1)}>
             重连
           </Button>
         </div>
@@ -253,8 +230,7 @@ export function ConsolePage(): ReactElement {
             <div className="space-y-1">
               <CardTitle>实时日志</CardTitle>
               <CardDescription>
-                共 {lines.length} 行
-                {level === "ALL" ? "" : `（筛选后 ${visibleLines.length} 行）`}
+                共 {lines.length} 行{level === "ALL" ? "" : `（筛选后 ${visibleLines.length} 行）`}
               </CardDescription>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -270,11 +246,7 @@ export function ConsolePage(): ReactElement {
                   </Button>
                 ))}
               </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setAutoScroll((v) => !v)}
-              >
+              <Button variant="outline" size="sm" onClick={() => setAutoScroll((v) => !v)}>
                 {autoScroll ? "暂停滚动" : "继续滚动"}
               </Button>
               <Button

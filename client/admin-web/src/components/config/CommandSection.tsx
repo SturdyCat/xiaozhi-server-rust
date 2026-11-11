@@ -37,12 +37,15 @@ export function CommandSection(): ReactElement {
       <SectionHotHint sectionId="command" />
 
       <FormNotice tone="info">
-        关键词是设备域技能 end_session（断开对话）的训练样本，直接进入统一训练目录，不是运行期精确匹配词表（plugins/command/mod.rs:22-25）。修改后须重新训练验证。
+        关键词是设备域技能
+        end_session（断开对话）的训练样本，直接进入统一训练目录，不是运行期精确匹配词表（plugins/command/mod.rs:22-25）。修改后须重新训练验证。
       </FormNotice>
 
       {emptyKeywords ? (
         <FormNotice tone="warning">
-          已启用结束聆听技能，但训练样例为空。保存不会失败，但服务端会把该技能标记为 Degraded（/api/plugins 可见降级原因），运行时不执行结束聆听：请至少填一行完整训练句，或关闭总开关。
+          已启用结束聆听技能，但训练样例为空。保存不会失败，但服务端会把该技能标记为
+          Degraded（/api/plugins
+          可见降级原因），运行时不执行结束聆听：请至少填一行完整训练句，或关闭总开关。
         </FormNotice>
       ) : null}
 

@@ -96,11 +96,7 @@ export function AppShell(): ReactElement {
     <div className="flex min-h-screen bg-background text-foreground">
       <aside className="flex w-64 shrink-0 flex-col border-r border-border bg-sidebar text-sidebar-foreground">
         <div className="flex h-16 shrink-0 items-center gap-3 px-6">
-          <img
-            src="/logo.png"
-            alt="小智"
-            className="size-9 shrink-0 rounded-lg object-cover"
-          />
+          <img src="/logo.png" alt="小智" className="size-9 shrink-0 rounded-lg object-cover" />
           <div className="min-w-0">
             <p className="truncate text-sm font-semibold">小智管理台</p>
             <p className="truncate text-xs text-muted-foreground">Admin Web 骨架</p>
@@ -160,9 +156,7 @@ export function AppShell(): ReactElement {
         <Separator />
         <div className="flex shrink-0 items-center justify-between gap-2 p-4">
           <span className="text-xs text-muted-foreground">运行环境</span>
-          <Badge variant="secondary">
-            {tauriEnv ? "Tauri 桌面端" : "Web 浏览器"}
-          </Badge>
+          <Badge variant="secondary">{tauriEnv ? "Tauri 桌面端" : "Web 浏览器"}</Badge>
         </div>
       </aside>
 
@@ -178,11 +172,7 @@ export function AppShell(): ReactElement {
             <Badge variant="outline" className="hidden sm:inline-flex">
               API {apiBaseUrl}
             </Badge>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => window.location.reload()}
-            >
+            <Button variant="outline" size="sm" onClick={() => window.location.reload()}>
               刷新
             </Button>
           </div>

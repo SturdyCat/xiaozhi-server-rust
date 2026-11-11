@@ -11,12 +11,7 @@ import { Switch } from "@/components/ui/switch";
 import { useConfigDraft } from "@/context/ConfigDraftContext";
 import type { FieldBaseProps } from "@/components/form/types";
 
-export function SwitchField({
-  path,
-  label,
-  hint,
-  advanced,
-}: FieldBaseProps): ReactElement {
+export function SwitchField({ path, label, hint, advanced }: FieldBaseProps): ReactElement {
   const { getField, setField } = useConfigDraft();
   const checked = getField(path) === true;
 

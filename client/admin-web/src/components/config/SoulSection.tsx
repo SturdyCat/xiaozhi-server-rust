@@ -307,7 +307,9 @@ export function SoulSection(): ReactElement {
                     }
                   />
                   <FormNotice tone="warning">
-                    预设清单端点未启用或被管理页 HTML 回退接走：下拉仍保留内置两项，高级模式下的动作与预览不可用，但 [soul] 配置字段仍可正常保存。
+                    预设清单端点未启用或被管理页 HTML
+                    回退接走：下拉仍保留内置两项，高级模式下的动作与预览不可用，但 [soul]
+                    配置字段仍可正常保存。
                   </FormNotice>
                 </div>
               ) : null}
@@ -361,7 +363,13 @@ export function SoulSection(): ReactElement {
                 placeholder="每行一条：标签：遇到 X 会怎么做"
                 hint="性格：每条写「标签：遇到 X 会怎么做」。只写形容词会失效。"
               />
-              <StringListField path="soul.values" label="价值观" advanced rows={3} hint="坚持的价值。" />
+              <StringListField
+                path="soul.values"
+                label="价值观"
+                advanced
+                rows={3}
+                hint="坚持的价值。"
+              />
               <StringListField
                 path="soul.boundaries"
                 label="红线 / 拒绝清单"
@@ -500,21 +508,15 @@ export function SoulSection(): ReactElement {
             {!busy && actionMessage !== null ? (
               <FormNotice tone="info">{actionMessage}</FormNotice>
             ) : null}
-            {actionError !== null ? (
-              <FormNotice tone="danger">{actionError}</FormNotice>
-            ) : null}
+            {actionError !== null ? <FormNotice tone="danger">{actionError}</FormNotice> : null}
 
             {preview !== null ? (
               <div className="space-y-2">
-                <p className="text-sm font-medium">
-                  最终提示词（预览，只读；不会保存）
-                </p>
+                <p className="text-sm font-medium">最终提示词（预览，只读；不会保存）</p>
                 <div className="space-y-1 text-sm text-muted-foreground">
                   <p>
                     来源：
-                    {preview.source === "soul"
-                      ? "人格档案"
-                      : "[llm].system_prompt（人格未启用）"}
+                    {preview.source === "soul" ? "人格档案" : "[llm].system_prompt（人格未启用）"}
                     {preview.presetName !== null ? ` · 预设：${preview.presetName}` : ""}
                   </p>
                   <p>
@@ -537,7 +539,8 @@ export function SoulSection(): ReactElement {
                   </pre>
                 ) : (
                   <FormNotice tone="warning">
-                    服务端返回的提示词正文为空：通常是人格未启用或档案全空，请核对上方「来源」与 enabled 开关。
+                    服务端返回的提示词正文为空：通常是人格未启用或档案全空，请核对上方「来源」与
+                    enabled 开关。
                   </FormNotice>
                 )}
               </div>

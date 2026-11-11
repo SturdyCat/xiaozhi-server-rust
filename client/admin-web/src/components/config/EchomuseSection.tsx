@@ -110,7 +110,8 @@ export function EchomuseSection(): ReactElement {
 
       {available ? (
         <FormNotice tone="info">
-          「music_dir」（音乐文件根目录，默认 /data/music）本轮未暴露：需要目录选择控件（schema FieldKind::Dir），已列入后续补全清单；当前可在配置文件中直接编辑该键。
+          「music_dir」（音乐文件根目录，默认 /data/music）本轮未暴露：需要目录选择控件（schema
+          FieldKind::Dir），已列入后续补全清单；当前可在配置文件中直接编辑该键。
         </FormNotice>
       ) : null}
     </div>

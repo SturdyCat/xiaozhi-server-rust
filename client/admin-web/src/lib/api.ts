@@ -128,11 +128,7 @@ export async function requestApi<T>(path: string, init?: RequestInit): Promise<T
 
   const text = await response.text();
   if (!response.ok) {
-    throw new ApiError(
-      `请求 ${apiUrl(path)} 失败：HTTP ${response.status}`,
-      response.status,
-      text,
-    );
+    throw new ApiError(`请求 ${apiUrl(path)} 失败：HTTP ${response.status}`, response.status, text);
   }
 
   if (text.trim() === "") {

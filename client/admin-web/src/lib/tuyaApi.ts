@@ -100,7 +100,9 @@ function num(raw: Record<string, unknown>, key: string): number {
 }
 
 /** 解析错误体（E1 纯 `{"error"}`；控制失败扩展 `kind`/`advice`）。 */
-function readErrorBody(body: string): { error: string; kind: string | null; advice: string | null } | null {
+function readErrorBody(
+  body: string,
+): { error: string; kind: string | null; advice: string | null } | null {
   const text = body.trim();
   if (text === "") {
     return null;
@@ -148,10 +150,22 @@ function gateError(error: unknown, action: string): never {
           "disabled",
         );
       }
-      throw new TuyaApiError(`${action}失败：${parsed.error}`, error.status, parsed.error, parsed.kind, parsed.advice);
+      throw new TuyaApiError(
+        `${action}失败：${parsed.error}`,
+        error.status,
+        parsed.error,
+        parsed.kind,
+        parsed.advice,
+      );
     }
     if (error.body.trim() !== "") {
-      throw new TuyaApiError(`${action}失败：${error.body.trim()}`, error.status, error.body.trim(), null, null);
+      throw new TuyaApiError(
+        `${action}失败：${error.body.trim()}`,
+        error.status,
+        error.body.trim(),
+        null,
+        null,
+      );
     }
     if (error.status === 404) {
       throw new TuyaUnavailableError(

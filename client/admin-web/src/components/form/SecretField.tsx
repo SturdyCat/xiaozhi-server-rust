@@ -32,8 +32,7 @@ export function SecretField({
   const { getField, getSecret, setSecret } = useConfigDraft();
   const configured = getField(hasPath) === true;
   const value = getSecret(path) ?? "";
-  const effectivePlaceholder =
-    placeholder ?? (configured ? "已配置（留空保留）" : "未配置");
+  const effectivePlaceholder = placeholder ?? (configured ? "已配置（留空保留）" : "未配置");
 
   return (
     <FieldRow label={label} hint={hint} advanced={advanced}>

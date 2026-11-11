@@ -18,11 +18,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/components/feedback/ToastHost";
-import {
-  clearTuyaCredentials,
-  saveTuyaCredentials,
-  type TuyaStatus,
-} from "@/lib/tuyaApi";
+import { clearTuyaCredentials, saveTuyaCredentials, type TuyaStatus } from "@/lib/tuyaApi";
 
 /** 区域四选项（TuyaPage.kt:63-72 逐字；REGIONS cn/us/eu/in）。 */
 const REGIONS: { value: string; label: string }[] = [
@@ -146,9 +142,7 @@ export function TuyaCredentialsCard({
           type="password"
           value={accessSecret}
           placeholder={
-            configured
-              ? "留空保存 = 保留旧值"
-              : "涂鸦 IoT 平台云开发项目的 access_secret"
+            configured ? "留空保存 = 保留旧值" : "涂鸦 IoT 平台云开发项目的 access_secret"
           }
           disabled={disabled || saving}
           onChange={(event) => setAccessSecret(event.target.value)}

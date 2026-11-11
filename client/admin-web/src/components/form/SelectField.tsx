@@ -19,11 +19,7 @@ import { FieldRow } from "@/components/config/FieldRow";
 import { FormNotice } from "@/components/form/FormNotice";
 import { useConfigDraft } from "@/context/ConfigDraftContext";
 import type { JsonValue } from "@/lib/configApi";
-import {
-  toText,
-  type FieldBaseProps,
-  type SelectOption,
-} from "@/components/form/types";
+import { toText, type FieldBaseProps, type SelectOption } from "@/components/form/types";
 
 export interface SelectFieldProps extends FieldBaseProps {
   options: SelectOption[];
@@ -53,9 +49,7 @@ export function SelectField({
         onValueChange={(next) => setField(path, coerce ? coerce(next) : next)}
       >
         <SelectTrigger className="w-[240px]">
-          <SelectValue
-            placeholder={current === "" ? "请选择" : `未识别取值：${current}`}
-          />
+          <SelectValue placeholder={current === "" ? "请选择" : `未识别取值：${current}`} />
         </SelectTrigger>
         <SelectContent>
           {options.map((option) => (

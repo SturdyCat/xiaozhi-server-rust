@@ -58,9 +58,7 @@ export function AdvancedModeProvider({ children }: { children: ReactNode }): Rea
     [advancedMode, toggle],
   );
 
-  return (
-    <AdvancedModeContext.Provider value={value}>{children}</AdvancedModeContext.Provider>
-  );
+  return <AdvancedModeContext.Provider value={value}>{children}</AdvancedModeContext.Provider>;
 }
 
 /** 读取高级模式；必须在 `AdvancedModeProvider` 内使用。 */

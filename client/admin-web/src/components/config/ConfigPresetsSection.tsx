@@ -47,10 +47,7 @@ export function ConfigPresetsSection(): ReactElement {
     setSaving(true);
     try {
       const result = await savePreset(trimmedName);
-      show(
-        result.message?.trim() ? result.message : `已保存预设「${trimmedName}」`,
-        "success",
-      );
+      show(result.message?.trim() ? result.message : `已保存预设「${trimmedName}」`, "success");
       setName("");
       await refetch();
     } catch (err: unknown) {
@@ -75,10 +72,7 @@ export function ConfigPresetsSection(): ReactElement {
         );
         return;
       }
-      show(
-        result.message?.trim() ? result.message : `已应用预设「${presetName}」`,
-        "success",
-      );
+      show(result.message?.trim() ? result.message : `已应用预设「${presetName}」`, "success");
     } catch (err: unknown) {
       show(configErrorMessage(err), "error");
     } finally {
@@ -91,10 +85,7 @@ export function ConfigPresetsSection(): ReactElement {
     setBusy(presetName);
     try {
       const result = await deletePreset(presetName);
-      show(
-        result.message?.trim() ? result.message : `已删除预设「${presetName}」`,
-        "success",
-      );
+      show(result.message?.trim() ? result.message : `已删除预设「${presetName}」`, "success");
       await refetch();
     } catch (err: unknown) {
       show(configErrorMessage(err), "error");
@@ -105,10 +96,7 @@ export function ConfigPresetsSection(): ReactElement {
 
   return (
     <div className="space-y-4">
-      <SectionCard
-        title="已保存预设"
-        description="预设是全局配置快照，不含 per-device overlay。"
-      >
+      <SectionCard title="已保存预设" description="预设是全局配置快照，不含 per-device overlay。">
         <DataState
           loading={loading}
           error={error}
@@ -197,9 +185,7 @@ export function ConfigPresetsSection(): ReactElement {
         open={pendingDelete !== null}
         title="删除预设"
         description={
-          pendingDelete === null
-            ? undefined
-            : `删除预设「${pendingDelete}」后不可恢复。`
+          pendingDelete === null ? undefined : `删除预设「${pendingDelete}」后不可恢复。`
         }
         confirmText="删除"
         destructive

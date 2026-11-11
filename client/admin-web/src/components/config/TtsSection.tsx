@@ -103,9 +103,7 @@ function groupVoices(voices: Voice[]): VoiceGroup[] {
       buckets.set(key, [voice]);
     }
   }
-  const rest = [...buckets.keys()]
-    .filter((key) => !preferred.includes(key))
-    .sort();
+  const rest = [...buckets.keys()].filter((key) => !preferred.includes(key)).sort();
   const keys = [...preferred.filter((key) => buckets.has(key)), ...rest];
   return keys.map((key) => {
     const parts = key.split("|");
@@ -343,12 +341,18 @@ function XfyunSection(): ReactElement {
             if (final.source === "empty" && final.fetchedAt === 0) {
               // 尚未探测：交给下方「尚未探测」的可行动指引呈现，不报「服务端坏了」，
               // 也不写成探测成功。
-              setRefreshMessage("探测流程已结束，但目录仍是「尚未探测」状态；请按下方指引先保存三要素后重试，本次不视为探测成功。");
+              setRefreshMessage(
+                "探测流程已结束，但目录仍是「尚未探测」状态；请按下方指引先保存三要素后重试，本次不视为探测成功。",
+              );
             } else if (final.voices.length === 0) {
               // 探测完成但 0 条可用：由下方 warning 呈现，不假装拿到目录。
-              setRefreshMessage("探测完成但 0 条可用音色；请按下方提示核对账号授权，本次不视为探测成功。");
+              setRefreshMessage(
+                "探测完成但 0 条可用音色；请按下方提示核对账号授权，本次不视为探测成功。",
+              );
             } else {
-              setRefreshMessage(`探测完成：共 ${final.voices.length} 个实测可用音色，已按性别 × 类型分组。`);
+              setRefreshMessage(
+                `探测完成：共 ${final.voices.length} 个实测可用音色，已按性别 × 类型分组。`,
+              );
             }
           });
         })
@@ -381,9 +385,7 @@ function XfyunSection(): ReactElement {
         if (!mountedRef.current || seq !== pollSeqRef.current) {
           return;
         }
-        setRefreshMessage(
-          `探测已启动（候选 ${started.candidates} 个），后台逐个真实合成验证中…`,
-        );
+        setRefreshMessage(`探测已启动（候选 ${started.candidates} 个），后台逐个真实合成验证中…`);
         pollOnce(seq, 0);
       })
       .catch((error: unknown) => {
@@ -402,17 +404,16 @@ function XfyunSection(): ReactElement {
   };
 
   const groups = voices === null ? [] : groupVoices(voices.voices);
-  const knownVoice =
-    voices !== null && voices.voices.some((voice) => voice.vcn === currentVoice);
-  const selectValue =
-    voiceMode === "custom" ? CUSTOM_VOICE : knownVoice ? currentVoice : "";
-  const neverProbed =
-    voices !== null && voices.source === "empty" && voices.fetchedAt === 0;
+  const knownVoice = voices !== null && voices.voices.some((voice) => voice.vcn === currentVoice);
+  const selectValue = voiceMode === "custom" ? CUSTOM_VOICE : knownVoice ? currentVoice : "";
+  const neverProbed = voices !== null && voices.source === "empty" && voices.fetchedAt === 0;
 
   return (
     <div className="space-y-4">
       <FormNotice tone="warning">
-        讯飞三要素中只有 app_id 是明文回传的普通字段：留空保存会把它清空，不是「留空保留」。api_key / api_secret 属于服务端 SECRET_PATHS（server/src/gateway/ws/config.rs:74-86），走密钥控件，留空 = 保留原值。
+        讯飞三要素中只有 app_id 是明文回传的普通字段：留空保存会把它清空，不是「留空保留」。api_key
+        / api_secret 属于服务端
+        SECRET_PATHS（server/src/gateway/ws/config.rs:74-86），走密钥控件，留空 = 保留原值。
       </FormNotice>
 
       <SectionCard
@@ -426,11 +427,7 @@ function XfyunSection(): ReactElement {
             placeholder="讯飞开放平台 APPID"
             hint="明文非密钥，留空会被清空，不是留空保留；在讯飞「在线语音合成」控制台创建应用后取得。"
           />
-          <SecretField
-            path="tts.xfyun.api_key"
-            hasPath="tts.xfyun.has_api_key"
-            label="API Key"
-          />
+          <SecretField path="tts.xfyun.api_key" hasPath="tts.xfyun.has_api_key" label="API Key" />
           <SecretField
             path="tts.xfyun.api_secret"
             hasPath="tts.xfyun.has_api_secret"
@@ -512,10 +509,16 @@ function XfyunSection(): ReactElement {
               <>
                 <UnavailableNotice
                   title="音色目录能力未启用"
-                  description={unavailableMessage ?? "服务端未挂载 /api/tts/voices*（通常是构建未启用 native-plugins）；该状态下不能探测或选择音色，配置字段仍可正常保存。"}
+                  description={
+                    unavailableMessage ??
+                    "服务端未挂载 /api/tts/voices*（通常是构建未启用 native-plugins）；该状态下不能探测或选择音色，配置字段仍可正常保存。"
+                  }
                 />
                 <FormNotice tone="warning">
-                  音色目录端点未启用或被管理页 HTML 回退接走：现在不能探测、也不能从下拉选择音色，但上方 [tts] 配置字段仍可正常保存。请改用启用 native-plugins 的服务端构建，或直接在「发音人 vcn」手填。
+                  音色目录端点未启用或被管理页 HTML
+                  回退接走：现在不能探测、也不能从下拉选择音色，但上方 [tts]
+                  配置字段仍可正常保存。请改用启用 native-plugins 的服务端构建，或直接在「发音人
+                  vcn」手填。
                 </FormNotice>
               </>
             ) : null}
@@ -523,19 +526,19 @@ function XfyunSection(): ReactElement {
             {loadError !== null ? (
               <FormNotice tone="danger">读取音色目录失败：{loadError}</FormNotice>
             ) : null}
-            {refreshError !== null ? (
-              <FormNotice tone="danger">{refreshError}</FormNotice>
-            ) : null}
+            {refreshError !== null ? <FormNotice tone="danger">{refreshError}</FormNotice> : null}
 
             {neverProbed ? (
               <FormNotice tone="warning">
-                音色目录尚未探测（source=empty、fetched_at=0）：请先保存讯飞三要素，再点「探测音色目录」，服务端会对候选音色逐个真实合成验证（约需 1 分钟）。这不是服务端故障，也不代表探测已完成。
+                音色目录尚未探测（source=empty、fetched_at=0）：请先保存讯飞三要素，再点「探测音色目录」，服务端会对候选音色逐个真实合成验证（约需
+                1 分钟）。这不是服务端故障，也不代表探测已完成。
               </FormNotice>
             ) : null}
 
             {voices !== null && !neverProbed && voices.voices.length === 0 ? (
               <FormNotice tone="warning">
-                探测已完成，但当前账号没有可用音色（0 条）：请确认讯飞控制台已开通在线语音合成并授权发音人，必要时重新探测。这不视为探测出可用目录。
+                探测已完成，但当前账号没有可用音色（0
+                条）：请确认讯飞控制台已开通在线语音合成并授权发音人，必要时重新探测。这不视为探测出可用目录。
               </FormNotice>
             ) : null}
 
@@ -561,9 +564,7 @@ function XfyunSection(): ReactElement {
                   <SelectContent>
                     <SelectGroup>
                       <SelectLabel>自定义</SelectLabel>
-                      <SelectItem value={CUSTOM_VOICE}>
-                        自定义（手填 vcn）
-                      </SelectItem>
+                      <SelectItem value={CUSTOM_VOICE}>自定义（手填 vcn）</SelectItem>
                     </SelectGroup>
                     {groups.map((group) => (
                       <SelectGroup key={group.key}>
@@ -580,7 +581,8 @@ function XfyunSection(): ReactElement {
                 </Select>
                 {voiceMode === "custom" ? (
                   <FormNotice tone="info">
-                    自定义模式：请在上方「发音人 vcn」输入框直接手填讯飞控制台上的标识（如 x4_yezi）。服务端不会校验是否存在，填错会在合成时失败。
+                    自定义模式：请在上方「发音人 vcn」输入框直接手填讯飞控制台上的标识（如
+                    x4_yezi）。服务端不会校验是否存在，填错会在合成时失败。
                   </FormNotice>
                 ) : null}
               </div>
@@ -589,7 +591,11 @@ function XfyunSection(): ReactElement {
         </SectionCard>
       ) : (
         <FormNotice tone="warning">
-          请先保存讯飞三要素（app_id / api_key / api_secret），保存成功后本页回读到 has_api_key / has_api_secret 均为已配置，才会出现「探测音色目录」按钮与音色下拉。当前三要素未齐备（app_id 非空、has_api_key、has_api_secret 三项须同时满足），界面暂不提供音色区，避免选出必然失败的发音人；这不是报错，也不代表目录可用。
+          请先保存讯飞三要素（app_id / api_key / api_secret），保存成功后本页回读到 has_api_key /
+          has_api_secret
+          均为已配置，才会出现「探测音色目录」按钮与音色下拉。当前三要素未齐备（app_id
+          非空、has_api_key、has_api_secret
+          三项须同时满足），界面暂不提供音色区，避免选出必然失败的发音人；这不是报错，也不代表目录可用。
         </FormNotice>
       )}
     </div>
@@ -665,7 +671,8 @@ export function TtsSection(): ReactElement {
 
       {!knownEngine && engine !== "" ? (
         <FormNotice tone="warning">
-          未识别的实现 id「{engine}」：界面不展示任何私有段（避免把 [tts.kokoro] / [tts.xfyun] 的残留字段当生效值），也不会自动改写；如不主动选择，保存时会原样提交。
+          未识别的实现 id「{engine}」：界面不展示任何私有段（避免把 [tts.kokoro] / [tts.xfyun]
+          的残留字段当生效值），也不会自动改写；如不主动选择，保存时会原样提交。
         </FormNotice>
       ) : null}
     </div>

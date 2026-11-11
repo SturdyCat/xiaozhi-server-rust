@@ -31,18 +31,8 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { DataState } from "@/components/feedback/DataState";
 import { UnavailableNotice } from "@/components/feedback/UnavailableNotice";
 import { useToast } from "@/components/feedback/ToastHost";
@@ -113,10 +103,7 @@ function lifecycleLineOf(plugin: PluginRecord): string {
   }
 }
 
-function buildPluginDetail(
-  plugin: PluginRecord,
-  uiPages: readonly string[],
-): PluginDetailModel {
+function buildPluginDetail(plugin: PluginRecord, uiPages: readonly string[]): PluginDetailModel {
   const sections: PluginDetailSection[] = [];
   const intro: string[] = [
     `${plugin.id} · v${plugin.version}` +
@@ -422,14 +409,9 @@ export function PluginsPage(): ReactElement {
     ? (snapshot?.plugins.find((p) => p.id === confirmLifecycle.pluginId) ?? null)
     : null;
   const isRemove = confirmLifecycle?.op === "remove";
-  const detailPlugin = detailId
-    ? (snapshot?.plugins.find((p) => p.id === detailId) ?? null)
-    : null;
+  const detailPlugin = detailId ? (snapshot?.plugins.find((p) => p.id === detailId) ?? null) : null;
   const detailModel = detailPlugin
-    ? buildPluginDetail(
-        detailPlugin,
-        docs[detailPlugin.id]?.pages.map((page) => page.title) ?? [],
-      )
+    ? buildPluginDetail(detailPlugin, docs[detailPlugin.id]?.pages.map((page) => page.title) ?? [])
     : null;
 
   return (
@@ -576,11 +558,14 @@ export function PluginsPage(): ReactElement {
       </AlertDialog>
 
       {/* 详情弹窗：快照静态渲染，零请求；打开时的清单快照是什么就展示什么。 */}
-      <Dialog open={detailPlugin !== null} onOpenChange={(open) => {
-        if (!open) {
-          setDetailId(null);
-        }
-      }}>
+      <Dialog
+        open={detailPlugin !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setDetailId(null);
+          }
+        }}
+      >
         <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{detailModel?.title ?? ""}</DialogTitle>
@@ -626,9 +611,10 @@ export function PluginRuntimeRoute(): ReactElement {
   const snapshot: WasmSnapshot | null = data?.wasm ?? null;
   const [busy, setBusy] = useState<string | null>(null);
 
-  const plugin = pluginId !== "" && snapshot !== null
-    ? (snapshot.plugins.find((item) => item.id === pluginId) ?? null)
-    : null;
+  const plugin =
+    pluginId !== "" && snapshot !== null
+      ? (snapshot.plugins.find((item) => item.id === pluginId) ?? null)
+      : null;
 
   const docs = useMemo<Record<string, PluginUiDocument>>(
     () => (snapshot !== null ? parsePluginUiDocs(snapshot) : {}),
@@ -704,14 +690,10 @@ export function PluginRuntimeRoute(): ReactElement {
             {plugin.id} · v{plugin.version} · {plugin.phase.state}
           </p>
           {plugin.implements.length > 0 ? (
-            <p className="text-xs text-muted-foreground">
-              扩展点：{plugin.implements.join("、")}
-            </p>
+            <p className="text-xs text-muted-foreground">扩展点：{plugin.implements.join("、")}</p>
           ) : null}
           {plugin.permissions.length > 0 ? (
-            <p className="text-xs text-muted-foreground">
-              权限：{plugin.permissions.join("、")}
-            </p>
+            <p className="text-xs text-muted-foreground">权限：{plugin.permissions.join("、")}</p>
           ) : null}
         </CardContent>
       </Card>

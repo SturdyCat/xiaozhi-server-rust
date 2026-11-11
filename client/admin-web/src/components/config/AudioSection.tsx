@@ -44,7 +44,8 @@ export function AudioSection(): ReactElement {
         description="服务器下行（TTS）协商与缓冲参数；字段来自 [audio]（server/src/config.rs:224-296）。"
       >
         <FormNotice tone="warning">
-          设备解码队列约 1.2s（20 包 × 60ms 帧）是硬上限，超出队容量的下行帧会被固件静默丢弃；服务器侧水库用服务器内存换下行连续性，起跑闸的代价是首帧延迟。
+          设备解码队列约 1.2s（20 包 × 60ms
+          帧）是硬上限，超出队容量的下行帧会被固件静默丢弃；服务器侧水库用服务器内存换下行连续性，起跑闸的代价是首帧延迟。
         </FormNotice>
 
         <div className="divide-y divide-border">

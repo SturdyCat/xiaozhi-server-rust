@@ -88,9 +88,10 @@ function normalizeIntent(source: JsonObject): IntentEdit {
   // 旧端 `ConfigNluState.kt:32-35`：未知/缺失 domain 缺省服务端域（写回非法值会 400）。
   const domain = (NLU_DOMAINS as readonly string[]).includes(domainRaw) ? domainRaw : "server";
   const sourceAction = isJsonObject(source["action"]) ? source["action"] : {};
-  const kindRaw = typeof sourceAction["kind"] === "string" && sourceAction["kind"] !== ""
-    ? sourceAction["kind"]
-    : "reply";
+  const kindRaw =
+    typeof sourceAction["kind"] === "string" && sourceAction["kind"] !== ""
+      ? sourceAction["kind"]
+      : "reply";
   const isMcp = kindRaw === "mcp" || kindRaw.startsWith("mcp:");
   const planValue = sourceAction["plan"];
   const plan = isJsonObject(planValue) ? planValue : null;
@@ -131,8 +132,7 @@ function normalizeIntents(value: JsonValue | undefined): IntentEdit[] {
  */
 function intentToWire(edit: IntentEdit): JsonObject {
   const action: JsonObject = { ...edit.sourceAction };
-  const kind =
-    edit.actionKind === "mcp" ? `mcp:${edit.mcpTool.trim()}` : edit.actionKind;
+  const kind = edit.actionKind === "mcp" ? `mcp:${edit.mcpTool.trim()}` : edit.actionKind;
   action["kind"] = kind;
   action["reply"] = edit.reply;
   if (edit.actionKind !== "plan") {
@@ -187,8 +187,7 @@ function IntentBlock({
     });
   }
 
-  const update = (patch: Partial<IntentEdit>): void =>
-    onChange({ ...edit, ...patch });
+  const update = (patch: Partial<IntentEdit>): void => onChange({ ...edit, ...patch });
 
   const updatePlanText = (raw: string): void => {
     const error = nluPlanError(raw);
@@ -220,12 +219,7 @@ function IntentBlock({
           {edit.name.trim() === "" ? "(未命名技能)" : edit.name.trim()}
         </span>
         <Badge variant="outline">{edit.domain}</Badge>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={onRemove}
-        >
+        <Button type="button" variant="outline" size="sm" onClick={onRemove}>
           <Trash2 aria-hidden="true" className="size-4" />
           删除
         </Button>
@@ -241,7 +235,9 @@ function IntentBlock({
               onChange={(event) => update({ name: event.target.value })}
             />
             <p className="text-xs text-muted-foreground">
-              技能唯一标识 = 模型训练标签（可用英文下划线）；同名技能会被服务端拒绝，不能使用保留标签 other/end_session。
+              技能唯一标识 =
+              模型训练标签（可用英文下划线）；同名技能会被服务端拒绝，不能使用保留标签
+              other/end_session。
             </p>
             {renamed ? (
               <div className="pt-1">
@@ -268,8 +264,9 @@ function IntentBlock({
             </select>
             <p className="text-xs text-muted-foreground">
               按执行者分域：设备域由固件工具执行（含断开对话），服务器域由服务端执行（提醒/天气类能力组合），IoT
-              域由服务端执行（tuya 第三方设备）。改域只影响目录分组展示，不影响训练标签；非法值保存会被服务端
-              400 拒绝，界面已按服务端缺省规则归为 server。
+              域由服务端执行（tuya
+              第三方设备）。改域只影响目录分组展示，不影响训练标签；非法值保存会被服务端 400
+              拒绝，界面已按服务端缺省规则归为 server。
             </p>
           </div>
           <div className="grid gap-1.5 py-2">
@@ -283,7 +280,8 @@ function IntentBlock({
             />
             <p className="text-sm font-medium">共 {edit.templates.length} 条</p>
             <p className="text-xs text-muted-foreground">
-              每行一个不同句式，可直接写无槽位句子；{"{槽位名}"} 是可变部分，需在下方槽位定义里声明。模型训练每类至少需要两条不同的展开句子；少于两条会明确失败，不会复制样本伪造评测。
+              每行一个不同句式，可直接写无槽位句子；{"{槽位名}"}{" "}
+              是可变部分，需在下方槽位定义里声明。模型训练每类至少需要两条不同的展开句子；少于两条会明确失败，不会复制样本伪造评测。
             </p>
           </div>
           <div className="grid gap-1.5 py-2">
@@ -300,7 +298,9 @@ function IntentBlock({
               ))}
             </select>
             <p className="text-xs text-muted-foreground">
-              能力组合 = 声明条件与系统能力步骤；已有应答、结束聆听与设备工具动作继续兼容。动作名称与工具名由配置确定，模型不能创建任意 API 或脚本。
+              能力组合 =
+              声明条件与系统能力步骤；已有应答、结束聆听与设备工具动作继续兼容。动作名称与工具名由配置确定，模型不能创建任意
+              API 或脚本。
             </p>
           </div>
           {edit.actionKind === "plan" ? (
@@ -332,8 +332,9 @@ function IntentBlock({
                 onChange={(event) => update({ mcpTool: event.target.value })}
               />
               <p className="text-xs text-muted-foreground">
-                设备固件在 MCP 清单里声明的工具名（静态字面量），需精确匹配（清单见「MCP 工具」页）。写回时以
-                mcp:&lt;工具名&gt; 编码进 kind；设备没有声明同名工具则走固定降级话术拒识、不报错崩会话。
+                设备固件在 MCP 清单里声明的工具名（静态字面量），需精确匹配（清单见「MCP
+                工具」页）。写回时以 mcp:&lt;工具名&gt; 编码进
+                kind；设备没有声明同名工具则走固定降级话术拒识、不报错崩会话。
               </p>
             </div>
           ) : null}
@@ -415,9 +416,7 @@ export function NluIntentsEditor(): ReactElement {
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
-        <p className="min-w-0 flex-1 text-sm font-medium">
-          自定义技能（{items.length} 条）
-        </p>
+        <p className="min-w-0 flex-1 text-sm font-medium">自定义技能（{items.length} 条）</p>
         <Button type="button" variant="outline" size="sm" onClick={addIntent}>
           <Plus aria-hidden="true" className="size-4" />
           添加技能
@@ -437,9 +436,7 @@ export function NluIntentsEditor(): ReactElement {
               key={`${edit.sourceName}:${index}`}
               edit={edit}
               expanded={expandedIndex === index}
-              onToggle={() =>
-                setExpandedIndex((current) => (current === index ? null : index))
-              }
+              onToggle={() => setExpandedIndex((current) => (current === index ? null : index))}
               onChange={(next) => updateAt(index, next)}
               onRemove={() => removeAt(index)}
             />

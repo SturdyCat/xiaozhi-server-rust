@@ -13,12 +13,7 @@
  */
 
 import { type ReactElement } from "react";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import {
   buildEmEmbedUrlWithAdminToken,
@@ -32,16 +27,11 @@ export interface EchoMuseDetailDialogProps {
   onClose: () => void;
 }
 
-export function EchoMuseDetailDialog({
-  device,
-  onClose,
-}: EchoMuseDetailDialogProps): ReactElement {
+export function EchoMuseDetailDialog({ device, onClose }: EchoMuseDetailDialogProps): ReactElement {
   const open = device !== null;
   // device 变化时 key 随之变化：销毁旧浏览上下文再挂新 iframe（旧端 key(url) 口径）。
   const embedUrl =
-    device !== null
-      ? buildEmEmbedUrlWithAdminToken({ device: device.deviceId })
-      : "";
+    device !== null ? buildEmEmbedUrlWithAdminToken({ device: device.deviceId }) : "";
 
   return (
     <Dialog

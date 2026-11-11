@@ -209,9 +209,7 @@ export interface UploadResult {
 
 /** 列出目录（path 为空表示存储根）。 */
 export const getFileList = (path: string) =>
-  requestApi<FilesListing>(
-    path ? `files?path=${encodeURIComponent(path)}` : "files",
-  );
+  requestApi<FilesListing>(path ? `files?path=${encodeURIComponent(path)}` : "files");
 
 /** 新建目录（父目录一并创建，已存在幂等）。 */
 export const makeDir = (path: string) =>
@@ -250,9 +248,7 @@ export function uploadFile(
   return new Promise<UploadResult>((resolve, reject) => {
     const overwrite = options?.overwrite === true ? "&overwrite=1" : "";
     const onProgress = options?.onProgress;
-    const url = apiUrl(
-      `files/upload?path=${encodeURIComponent(targetPath)}${overwrite}`,
-    );
+    const url = apiUrl(`files/upload?path=${encodeURIComponent(targetPath)}${overwrite}`);
     const xhr = new XMLHttpRequest();
     xhr.open("POST", url);
     xhr.setRequestHeader("Content-Type", "application/octet-stream");
@@ -275,13 +271,7 @@ export function uploadFile(
           resolve({ ok: false, message: "服务端返回了无法解析的响应" });
         }
       } else {
-        reject(
-          new ApiError(
-            `上传失败：HTTP ${xhr.status}`,
-            xhr.status,
-            xhr.responseText,
-          ),
-        );
+        reject(new ApiError(`上传失败：HTTP ${xhr.status}`, xhr.status, xhr.responseText));
       }
     };
     xhr.send(file);
@@ -301,7 +291,6 @@ export function uploadFile(
 export const downloadUrl = (path: string): string => {
   const token = getAuthToken();
   // URL 已带 `?path=`，追加参数一律用 `&`；token 过滤空串已由 getAuthToken 保证。
-  const tokenQuery =
-    token === null ? "" : `&token=${encodeURIComponent(token)}`;
+  const tokenQuery = token === null ? "" : `&token=${encodeURIComponent(token)}`;
   return apiUrl(`files/download?path=${encodeURIComponent(path)}${tokenQuery}`);
 };

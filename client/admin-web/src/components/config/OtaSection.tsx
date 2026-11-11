@@ -308,10 +308,12 @@ export function OtaSection(): ReactElement {
       <SectionCard title="固件与 OTA">
         <div className="space-y-2 text-xs leading-relaxed text-muted-foreground">
           <p>
-            固件包托管走独立接口（GET /api/ota/firmware），不随 POST /api/config 回传：保存配置不会动固件，上传/删除固件也不会动配置。
+            固件包托管走独立接口（GET /api/ota/firmware），不随 POST /api/config
+            回传：保存配置不会动固件，上传/删除固件也不会动配置。
           </p>
           <p>
-            上传与删除就在本页下方（唯一一套链路）：设备 OTA 时按「功能 + 型号」匹配，发错型号的包会直接变砖，所以删除必须二次确认。
+            上传与删除就在本页下方（唯一一套链路）：设备 OTA 时按「功能 +
+            型号」匹配，发错型号的包会直接变砖，所以删除必须二次确认。
           </p>
         </div>
       </SectionCard>
@@ -323,7 +325,9 @@ export function OtaSection(): ReactElement {
       >
         <div className="space-y-3">
           <p className="text-xs leading-relaxed text-muted-foreground">
-            服务端按「功能 + 型号」二维托管固件：设备 OTA 时上报 application.name（功能）、chip_model_name（型号）、board.type（板型）；三者命中且版本更新才会下发下载地址。不同型号 / 不同功能的包绝不互发。
+            服务端按「功能 + 型号」二维托管固件：设备 OTA 时上报
+            application.name（功能）、chip_model_name（型号）、board.type（板型）；三者命中且版本更新才会下发下载地址。不同型号
+            / 不同功能的包绝不互发。
           </p>
           <div className="flex flex-wrap items-center gap-2">
             <p className="text-sm font-medium">{summary ?? (loading ? "加载中…" : "—")}</p>
@@ -339,9 +343,7 @@ export function OtaSection(): ReactElement {
             </Button>
           </div>
           {loadError !== null ? (
-            <FormNotice tone="danger">
-              {loadError}（确认服务端地址可达后点「刷新清单」）
-            </FormNotice>
+            <FormNotice tone="danger">{loadError}（确认服务端地址可达后点「刷新清单」）</FormNotice>
           ) : null}
           {list !== null && list.dir !== "" ? (
             <p className="text-xs text-muted-foreground">存储目录：{list.dir}</p>
@@ -353,7 +355,8 @@ export function OtaSection(): ReactElement {
       <SectionCard title="上传固件包">
         <div className="space-y-3">
           <p className="text-xs leading-relaxed text-muted-foreground">
-            选择 idf.py build 产出的 app .bin：功能 / 型号 / 版本由包内元数据自动识别（ESP-IDF 镜像头的 chip_id + esp_app_desc_t），无需手填。同 功能+型号 再次上传即覆盖旧包。
+            选择 idf.py build 产出的 app .bin：功能 / 型号 / 版本由包内元数据自动识别（ESP-IDF
+            镜像头的 chip_id + esp_app_desc_t），无需手填。同 功能+型号 再次上传即覆盖旧包。
           </p>
 
           <input
@@ -380,7 +383,9 @@ export function OtaSection(): ReactElement {
               disabled={picked === null || uploading}
               onClick={handleUpload}
             >
-              {uploading ? <LoaderCircle aria-hidden="true" className="size-4 animate-spin" /> : null}
+              {uploading ? (
+                <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+              ) : null}
               上传固件
             </Button>
             {picked !== null ? (
@@ -400,7 +405,8 @@ export function OtaSection(): ReactElement {
                 />
               </div>
               <p className="text-xs text-muted-foreground">
-                上传中：{picked?.name ?? "固件包"}（{picked !== null ? formatBytes(picked.size) : ""}）· {uploadPct}%
+                上传中：{picked?.name ?? "固件包"}（
+                {picked !== null ? formatBytes(picked.size) : ""}）· {uploadPct}%
               </p>
             </div>
           ) : null}
@@ -480,7 +486,10 @@ export function OtaSection(): ReactElement {
                 </thead>
                 <tbody>
                   {list.entries.map((entry) => (
-                    <tr key={`${entry.project}|${entry.model}|${entry.board}`} className="border-b border-border/60 align-top">
+                    <tr
+                      key={`${entry.project}|${entry.model}|${entry.board}`}
+                      className="border-b border-border/60 align-top"
+                    >
                       <td className="max-w-md py-2 pr-3">
                         <p className="font-medium">{entryTitle(entry)}</p>
                         <p
@@ -522,7 +531,8 @@ export function OtaSection(): ReactElement {
           ) : null}
           {list !== null && list.entries.length > 0 ? (
             <p className="text-xs text-muted-foreground">
-              大小 / 编译时间右对齐便于纵向比对；「删除」需二次确认，删除后该 功能+型号 的设备不再收到这条升级（已升级到该版本的设备不受影响）。
+              大小 / 编译时间右对齐便于纵向比对；「删除」需二次确认，删除后该 功能+型号
+              的设备不再收到这条升级（已升级到该版本的设备不受影响）。
             </p>
           ) : null}
         </div>
@@ -561,7 +571,9 @@ export function OtaSection(): ReactElement {
                 }
               }}
             >
-              {deleting ? <LoaderCircle aria-hidden="true" className="size-4 animate-spin" /> : null}
+              {deleting ? (
+                <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+              ) : null}
               删除
             </AlertDialogAction>
           </AlertDialogFooter>

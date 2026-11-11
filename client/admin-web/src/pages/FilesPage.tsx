@@ -1,19 +1,7 @@
-import {
-  type ChangeEvent,
-  type FormEvent,
-  type ReactElement,
-  useRef,
-  useState,
-} from "react";
+import { type ChangeEvent, type FormEvent, type ReactElement, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { ApiError } from "@/lib/api";
 import { formatDateTime } from "@/lib/utils";
@@ -53,9 +41,7 @@ function formatBytes(bytes: number): string {
     value /= 1024;
     unit += 1;
   }
-  return unit === 0
-    ? `${value} ${units[unit]}`
-    : `${value.toFixed(1)} ${units[unit]}`;
+  return unit === 0 ? `${value} ${units[unit]}` : `${value.toFixed(1)} ${units[unit]}`;
 }
 
 /** 服务端 400 的响应体是 `{"error":"<可读原因>"}`，优先透出原因为用户提示。 */
@@ -169,9 +155,7 @@ function FileRow({
           className="text-destructive hover:text-destructive"
           onClick={onDelete}
           disabled={disabled || entry.protected}
-          title={
-            entry.protected ? "受保护路径不允许删除" : "删除（目录将递归删除）"
-          }
+          title={entry.protected ? "受保护路径不允许删除" : "删除（目录将递归删除）"}
         >
           删除
         </Button>
@@ -227,9 +211,7 @@ export function FilesPage(): ReactElement {
 
   const handleDelete = (entry: FileEntry): void => {
     const target = joinPath(cwd, entry.name);
-    const label = entry.dir
-      ? `目录「${entry.name}」及其全部内容`
-      : `文件「${entry.name}」`;
+    const label = entry.dir ? `目录「${entry.name}」及其全部内容` : `文件「${entry.name}」`;
     if (!window.confirm(`确认删除${label}？此操作不可撤销。`)) {
       return;
     }
@@ -242,9 +224,7 @@ export function FilesPage(): ReactElement {
 
   const handleUpload = (file: File): void => {
     if (file.size > MAX_UPLOAD_BYTES) {
-      setError(
-        `「${file.name}」${formatBytes(file.size)} 超过 64MB 上限，未发起上传`,
-      );
+      setError(`「${file.name}」${formatBytes(file.size)} 超过 64MB 上限，未发起上传`);
       return;
     }
     const target = joinPath(cwd, file.name);
@@ -421,11 +401,7 @@ export function FilesPage(): ReactElement {
               placeholder="新建目录名称（支持 a/b 多级）"
               className="min-w-[240px] flex-1 rounded-md border px-2 py-1 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
             />
-            <Button
-              type="submit"
-              size="sm"
-              disabled={busy || dirName.trim() === ""}
-            >
+            <Button type="submit" size="sm" disabled={busy || dirName.trim() === ""}>
               新建目录
             </Button>
           </form>
@@ -452,13 +428,9 @@ export function FilesPage(): ReactElement {
                 </Button>
               </div>
             ) : listing.loading ? (
-              <div className="px-4 py-6 text-sm text-muted-foreground">
-                加载中…
-              </div>
+              <div className="px-4 py-6 text-sm text-muted-foreground">加载中…</div>
             ) : entries.length === 0 ? (
-              <div className="px-4 py-6 text-sm text-muted-foreground">
-                该目录为空
-              </div>
+              <div className="px-4 py-6 text-sm text-muted-foreground">该目录为空</div>
             ) : (
               entries.map((entry) => (
                 <FileRow

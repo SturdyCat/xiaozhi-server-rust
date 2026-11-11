@@ -37,8 +37,7 @@ function deepEqual(a: JsonValue | undefined, b: JsonValue | undefined): boolean 
       return false;
     }
     return aKeys.every(
-      (key) =>
-        Object.prototype.hasOwnProperty.call(b, key) && deepEqual(a[key], b[key]),
+      (key) => Object.prototype.hasOwnProperty.call(b, key) && deepEqual(a[key], b[key]),
     );
   }
   return false;

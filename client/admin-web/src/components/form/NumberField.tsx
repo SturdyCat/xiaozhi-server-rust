@@ -111,7 +111,8 @@ export function NumberField({
       />
       {invalid ? (
         <p className="mt-1 text-sm font-medium text-destructive">
-          请输入合法{integer ? "整数" : "数值"}（范围 {rangeText}）；当前输入未写入草稿，不会提交给服务端。
+          请输入合法{integer ? "整数" : "数值"}（范围 {rangeText}
+          ）；当前输入未写入草稿，不会提交给服务端。
         </p>
       ) : null}
     </FieldRow>

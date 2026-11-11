@@ -22,10 +22,7 @@ const TONE_CLASS: Record<FormNoticeTone, string> = {
   info: "border-sky-600/40 bg-sky-50 text-sky-900",
 };
 
-export function FormNotice({
-  tone = "warning",
-  children,
-}: FormNoticeProps): ReactElement {
+export function FormNotice({ tone = "warning", children }: FormNoticeProps): ReactElement {
   return (
     <div
       role={tone === "danger" ? "alert" : undefined}

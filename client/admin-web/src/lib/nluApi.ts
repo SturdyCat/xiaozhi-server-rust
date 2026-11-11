@@ -16,7 +16,7 @@
  *   返回 `{state:"ok",revision,recognition,intents,effective,capabilities,...}`；
  *   该路由随 `skill_api::routes()` 挂载，pure-base 构建下请求会被 SPA fallback
  *   接走返回 **HTML 200**（`requestApi` 抛 `SyntaxError`）——`getSkillCatalog()`
-   * 走 fail-closed：形状不符抛 [`NluUnavailableError`]，绝不伪装成空目录。
+ * 走 fail-closed：形状不符抛 [`NluUnavailableError`]，绝不伪装成空目录。
  *
  * 路径写法沿用 `configApi.ts` / `catalogueApi.ts` 惯例：只传相对 `requestApi`
  * 的路径，不拼 `/api` 前缀。所有端点都不以 HTTP 200 作为成功判据。
@@ -156,9 +156,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /** 尽力从错误响应体取服务端文案与 error_code（JSON 或纯文本兜底）。 */
-function readErrorBody(
-  body: string,
-): { code: string | null; message: string | null } {
+function readErrorBody(body: string): { code: string | null; message: string | null } {
   const text = body.trim();
   if (text === "") {
     return { code: null, message: null };
@@ -173,8 +171,7 @@ function readErrorBody(
       const message =
         typeof parsed["error"] === "string" && parsed["error"].trim() !== ""
           ? parsed["error"].trim()
-          : typeof parsed["message"] === "string" &&
-              parsed["message"].trim() !== ""
+          : typeof parsed["message"] === "string" && parsed["message"].trim() !== ""
             ? parsed["message"].trim()
             : null;
       return { code, message };
@@ -235,9 +232,7 @@ function normalizeError(error: unknown, action: string): never {
     }
     if (error.status === 409) {
       if (code === "build_running") {
-        throw new Error(
-          `${action}冲突：已有一个模型构建在运行（唯一槽位）。请等待其结束后再试。`,
-        );
+        throw new Error(`${action}冲突：已有一个模型构建在运行（唯一槽位）。请等待其结束后再试。`);
       }
       if (code === "revision_conflict") {
         throw new Error(
@@ -252,9 +247,7 @@ function normalizeError(error: unknown, action: string): never {
     throw new NluUnavailableError(`${action}：${FALLBACK_HINT}`);
   }
   if (error instanceof DOMException && error.name === "AbortError") {
-    throw new Error(
-      `${action}本地超时（60 秒）。超时不代表失败：服务端可能仍在推理，请稍后重试。`,
-    );
+    throw new Error(`${action}本地超时（60 秒）。超时不代表失败：服务端可能仍在推理，请稍后重试。`);
   }
   if (error instanceof Error) {
     throw error;
@@ -263,10 +256,7 @@ function normalizeError(error: unknown, action: string): never {
 }
 
 /** 判定构建响应的业务错误形状 `{state:"error",error_code,error}` 并抛出。 */
-function throwNluBusinessError(
-  raw: Record<string, unknown>,
-  action: string,
-): never {
+function throwNluBusinessError(raw: Record<string, unknown>, action: string): never {
   const detail =
     typeof raw["error"] === "string" && raw["error"].trim() !== ""
       ? raw["error"].trim()
@@ -303,12 +293,10 @@ export async function getNluBuildStatus(): Promise<NluBuildStatus> {
       `读取模型构建状态：响应不是含 type=state 的 JSON 对象，不能判定为成功。${FALLBACK_HINT}`,
     );
   }
-  const artifact =
-    isRecord(raw["artifact"]) ? (raw["artifact"] as JsonObject) : null;
-  const expectedConfig =
-    isRecord(raw["expected_config"])
-      ? (raw["expected_config"] as JsonObject)
-      : null;
+  const artifact = isRecord(raw["artifact"]) ? (raw["artifact"] as JsonObject) : null;
+  const expectedConfig = isRecord(raw["expected_config"])
+    ? (raw["expected_config"] as JsonObject)
+    : null;
   return {
     phase: raw["state"],
     running: raw["running"],
@@ -316,18 +304,14 @@ export async function getNluBuildStatus(): Promise<NluBuildStatus> {
     logTail: typeof raw["log_tail"] === "string" ? raw["log_tail"] : "",
     buildId:
       (artifact !== null ? artifactString(artifact, "build_id") : null) ??
-      (typeof raw["build_id"] === "string" && raw["build_id"] !== ""
-        ? raw["build_id"]
-        : null),
+      (typeof raw["build_id"] === "string" && raw["build_id"] !== "" ? raw["build_id"] : null),
     sourceRevision:
       (artifact !== null ? artifactString(artifact, "source_revision") : null) ??
       (typeof raw["source_revision"] === "string" && raw["source_revision"] !== ""
         ? raw["source_revision"]
         : null),
     outputDir:
-      typeof raw["output_dir"] === "string" && raw["output_dir"] !== ""
-        ? raw["output_dir"]
-        : null,
+      typeof raw["output_dir"] === "string" && raw["output_dir"] !== "" ? raw["output_dir"] : null,
     origin: typeof raw["origin"] === "string" ? raw["origin"] : null,
     artifact,
     expectedConfig,
@@ -343,9 +327,7 @@ export async function getNluBuildStatus(): Promise<NluBuildStatus> {
  * `started === true && state === "running"` 且 `build_id` / `source_revision` 在场，
  * `source_revision` 还要回显校验与请求一致。
  */
-export async function startNluBuild(
-  expectedRevision: string,
-): Promise<NluBuildStartResult> {
+export async function startNluBuild(expectedRevision: string): Promise<NluBuildStartResult> {
   let raw: unknown;
   try {
     raw = await requestApi<unknown>("nlu/model/build", {
@@ -366,9 +348,7 @@ export async function startNluBuild(
     throwNluBusinessError(raw, "启动模型构建");
   }
   const buildId =
-    typeof raw["build_id"] === "string" && raw["build_id"] !== ""
-      ? raw["build_id"]
-      : null;
+    typeof raw["build_id"] === "string" && raw["build_id"] !== "" ? raw["build_id"] : null;
   const sourceRevision =
     typeof raw["source_revision"] === "string" && raw["source_revision"] !== ""
       ? raw["source_revision"]
@@ -442,10 +422,7 @@ export async function getNluBuildHistory(): Promise<NluBuildHistory> {
       integrity: typeof item["integrity"] === "string" ? item["integrity"] : "",
       missing: stringArrayOf(item["missing"]),
       active: item["active"] === true,
-      error:
-        typeof item["error"] === "string" && item["error"] !== ""
-          ? item["error"]
-          : null,
+      error: typeof item["error"] === "string" && item["error"] !== "" ? item["error"] : null,
     });
   }
   const total =
@@ -506,17 +483,16 @@ export async function testNluModel(body: NluTestRequest): Promise<NluTestResult>
   return {
     buildId: typeof raw["build_id"] === "string" ? raw["build_id"] : "",
     modelSha256: typeof raw["model_sha256"] === "string" ? raw["model_sha256"] : "",
-    sourceRevision:
-      typeof raw["source_revision"] === "string" ? raw["source_revision"] : "",
+    sourceRevision: typeof raw["source_revision"] === "string" ? raw["source_revision"] : "",
     rawLabel: typeof raw["raw_label"] === "string" ? raw["raw_label"] : "",
     intent: typeof raw["intent"] === "string" ? raw["intent"] : "",
     confidence: number("confidence"),
     threshold: number("threshold"),
     accepted: raw["accepted"] === true,
     rejectReason: typeof raw["reject_reason"] === "string" ? raw["reject_reason"] : "",
-    expectedIntent:
-      typeof raw["expected_intent"] === "string" ? raw["expected_intent"] : null,
-    expectedMatch: raw["expected_match"] === true ? true : raw["expected_match"] === false ? false : null,
+    expectedIntent: typeof raw["expected_intent"] === "string" ? raw["expected_intent"] : null,
+    expectedMatch:
+      raw["expected_match"] === true ? true : raw["expected_match"] === false ? false : null,
     tokenizeMs: number("tokenize_ms"),
     inferMs: number("infer_ms"),
   };
@@ -565,21 +541,15 @@ export async function getSkillCatalog(): Promise<SkillCatalog> {
   } catch (error) {
     normalizeError(error, "读取技能目录");
   }
-  if (
-    !isRecord(raw) ||
-    raw["state"] !== "ok" ||
-    !Array.isArray(raw["intents"])
-  ) {
+  if (!isRecord(raw) || raw["state"] !== "ok" || !Array.isArray(raw["intents"])) {
     throw new NluUnavailableError(
       `读取技能目录：响应不是含 state="ok" 与 intents 数组的 JSON 对象，按能力未启用处理（不伪装成空目录）。${FALLBACK_HINT}`,
     );
   }
   const intents = raw["intents"].map(toCatalogIntent);
   return {
-    revision:
-      typeof raw["revision"] === "string" ? raw["revision"] : "",
-    recognition:
-      typeof raw["recognition"] === "string" ? raw["recognition"] : "",
+    revision: typeof raw["revision"] === "string" ? raw["revision"] : "",
+    recognition: typeof raw["recognition"] === "string" ? raw["recognition"] : "",
     intents,
   };
 }

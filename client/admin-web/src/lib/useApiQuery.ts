@@ -10,10 +10,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
  * @param queryFn 返回 Promise<T> 的查询函数（如 adminApi 的导出函数）。
  * @param deps    控制 refetch 身份的依赖项；为 [] 时 queryFn 仅在挂载时执行一次。
  */
-export function useApiQuery<T>(
-  queryFn: () => Promise<T>,
-  deps: unknown[] = [],
-) {
+export function useApiQuery<T>(queryFn: () => Promise<T>, deps: unknown[] = []) {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);

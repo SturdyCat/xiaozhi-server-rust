@@ -1,16 +1,7 @@
-import {
-  type FormEvent,
-  type ReactElement,
-  useState,
-} from "react";
+import { type FormEvent, type ReactElement, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-} from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { formatDateTime, formatRelative } from "@/lib/utils";
 import { useApiQuery } from "@/lib/useApiQuery";
@@ -108,19 +99,14 @@ function DeviceDetailBody({ detail }: { detail: DeviceDetailInfo | null }) {
               <li key={s.session_id} className="rounded-md border px-3 py-2">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="font-mono text-xs">{s.session_id}</span>
-                  <span className="text-xs text-muted-foreground">
-                    {s.phase_display}
-                  </span>
+                  <span className="text-xs text-muted-foreground">{s.phase_display}</span>
                 </div>
                 <div className="text-xs text-muted-foreground">
                   轮次 {s.turn_count}
                   {s.last_user_text ? ` · 最近：${s.last_user_text}` : ""}
                 </div>
                 {s.last_error ? (
-                  <div
-                    className="truncate text-xs text-destructive"
-                    title={s.last_error}
-                  >
+                  <div className="truncate text-xs text-destructive" title={s.last_error}>
                     {s.last_error}
                   </div>
                 ) : null}
@@ -133,9 +119,7 @@ function DeviceDetailBody({ detail }: { detail: DeviceDetailInfo | null }) {
       </div>
 
       <div>
-        <div className="mb-2 font-medium">
-          对话（{detail.conversations.length}）
-        </div>
+        <div className="mb-2 font-medium">对话（{detail.conversations.length}）</div>
         {detail.conversations.length > 0 ? (
           <ul className="space-y-2">
             {detail.conversations.map((c) => (
@@ -147,8 +131,7 @@ function DeviceDetailBody({ detail }: { detail: DeviceDetailInfo | null }) {
                 </div>
                 {c.turns.length > 0 ? (
                   <div className="truncate text-xs">
-                    {c.turns[c.turns.length - 1].role}：
-                    {c.turns[c.turns.length - 1].text}
+                    {c.turns[c.turns.length - 1].role}：{c.turns[c.turns.length - 1].text}
                   </div>
                 ) : null}
               </li>
@@ -163,13 +146,7 @@ function DeviceDetailBody({ detail }: { detail: DeviceDetailInfo | null }) {
 }
 
 /** 消息注入表单：行内成功/失败提示，不抛到顶层；成功后回调刷新详情。 */
-function InjectForm({
-  deviceId,
-  onInjected,
-}: {
-  deviceId: string;
-  onInjected: () => void;
-}) {
+function InjectForm({ deviceId, onInjected }: { deviceId: string; onInjected: () => void }) {
   const [text, setText] = useState("");
   const [success, setSuccess] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -216,9 +193,7 @@ function InjectForm({
           {submitting ? "注入中…" : "注入"}
         </Button>
       </div>
-      {success !== null ? (
-        <p className="text-xs text-emerald-700">{success}</p>
-      ) : null}
+      {success !== null ? <p className="text-xs text-emerald-700">{success}</p> : null}
       {error !== null ? <p className="text-xs text-destructive">{error}</p> : null}
     </form>
   );
@@ -246,20 +221,13 @@ export function DevicesPage(): ReactElement {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="space-y-1">
           <h2 className="text-2xl font-semibold tracking-tight">设备管理</h2>
-          <p className="text-sm text-muted-foreground">
-            设备列表、在线状态、会话与消息注入。
-          </p>
+          <p className="text-sm text-muted-foreground">设备列表、在线状态、会话与消息注入。</p>
         </div>
         <div className="flex items-center gap-3">
           <span className="text-xs text-muted-foreground">
             最后更新：{formatDateTime(lastUpdated)}
           </span>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleRefresh}
-            disabled={anyLoading}
-          >
+          <Button variant="outline" size="sm" onClick={handleRefresh} disabled={anyLoading}>
             {anyLoading ? "刷新中…" : "刷新"}
           </Button>
         </div>

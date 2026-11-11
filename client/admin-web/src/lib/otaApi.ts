@@ -229,7 +229,9 @@ export function uploadFirmware(
         try {
           parsed = JSON.parse(xhr.responseText);
         } catch {
-          reject(new ApiError("上传失败：服务端返回了无法解析的响应", xhr.status, xhr.responseText));
+          reject(
+            new ApiError("上传失败：服务端返回了无法解析的响应", xhr.status, xhr.responseText),
+          );
           return;
         }
         if (!isRecord(parsed)) {
@@ -269,11 +271,7 @@ export function uploadFirmware(
  * 删除一个托管条目（坐标走 query，与 DELETE 方法同一处理器 `http.rs:209-236`）。
  * 成功判 `{ok:true}`；400 缺参 / 404 未找到是纯文本中文，原样透出。
  */
-export async function deleteFirmware(
-  project: string,
-  model: string,
-  board: string,
-): Promise<void> {
+export async function deleteFirmware(project: string, model: string, board: string): Promise<void> {
   const query = `project=${encodeURIComponent(project)}&model=${encodeURIComponent(model)}&board=${encodeURIComponent(board)}`;
   let raw: unknown;
   try {
@@ -282,9 +280,7 @@ export async function deleteFirmware(
     });
   } catch (error) {
     if (error instanceof ApiError) {
-      throw new Error(
-        `删除失败：${error.body.trim() || `HTTP ${error.status}`}`,
-      );
+      throw new Error(`删除失败：${error.body.trim() || `HTTP ${error.status}`}`);
     }
     throw error instanceof Error ? error : new Error(String(error));
   }

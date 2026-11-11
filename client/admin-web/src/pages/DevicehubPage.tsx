@@ -74,12 +74,14 @@ import {
 // 分区提示（DeviceManagementCenter.kt 逐字）
 // ============================================================
 
-function SectionHint(props: { line: string; action?: ReactElement; danger?: boolean }): ReactElement {
+function SectionHint(props: {
+  line: string;
+  action?: ReactElement;
+  danger?: boolean;
+}): ReactElement {
   return (
     <div className="space-y-2 rounded-lg border border-dashed p-4">
-      <p className={props.danger === true ? "text-sm text-destructive" : "text-sm"}>
-        {props.line}
-      </p>
+      <p className={props.danger === true ? "text-sm text-destructive" : "text-sm"}>{props.line}</p>
       {props.action ?? null}
     </div>
   );
@@ -185,7 +187,9 @@ function TuyaCard(props: {
       <CardHeader className="flex-row items-start justify-between gap-3 space-y-0">
         <div className="min-w-0 space-y-1">
           <div className="flex flex-wrap items-center gap-2">
-            <CardTitle className="text-base">{device.name !== "" ? device.name : device.deviceId}</CardTitle>
+            <CardTitle className="text-base">
+              {device.name !== "" ? device.name : device.deviceId}
+            </CardTitle>
             <Badge variant="secondary">涂鸦</Badge>
             <Badge variant="outline">{device.online ? "在线" : "离线"}</Badge>
           </div>
@@ -195,7 +199,9 @@ function TuyaCard(props: {
         <p className="text-xs text-muted-foreground">
           {device.deviceId} · {device.model !== "" ? device.model : "型号未知"}
         </p>
-        <p className="text-xs text-muted-foreground">IP：{device.ip !== "" ? device.ip : "IP 未上报"}</p>
+        <p className="text-xs text-muted-foreground">
+          IP：{device.ip !== "" ? device.ip : "IP 未上报"}
+        </p>
         <Button
           type="button"
           variant="outline"
@@ -263,7 +269,9 @@ export function DevicehubPage(): ReactElement {
   // 摘要（deviceHubSummary 口径：涂鸦未配置/未启用时如实说，不冒充 0 台）。
   const summary = ((): string => {
     const echoLoadingNow = echoLoading;
-    const tuyaLoadingNow = (tuyaStatusQ.loading && tuyaStatus === null) || (tuyaEnabled && tuyaDevicesQ.loading && tuyaDevicesQ.data === null);
+    const tuyaLoadingNow =
+      (tuyaStatusQ.loading && tuyaStatus === null) ||
+      (tuyaEnabled && tuyaDevicesQ.loading && tuyaDevicesQ.data === null);
     if (echoLoadingNow && tuyaLoadingNow) {
       return "加载中…";
     }
@@ -403,10 +411,7 @@ export function DevicehubPage(): ReactElement {
                     />
                   );
                 }
-                if (
-                  echoError.includes("非 JSON 内容") ||
-                  echoError.includes("服务端无此端点")
-                ) {
+                if (echoError.includes("非 JSON 内容") || echoError.includes("服务端无此端点")) {
                   return (
                     <UnavailableNotice
                       title="EchoMuse 设备面未编入当前构建"
@@ -424,7 +429,12 @@ export function DevicehubPage(): ReactElement {
                 >
                   <p className="text-sm font-medium text-destructive">EchoMuse 设备列表加载失败</p>
                   <p className="break-words text-xs text-destructive">{echoError}</p>
-                  <Button type="button" variant="outline" size="sm" onClick={() => void echoQ.refetch()}>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void echoQ.refetch()}
+                  >
                     重试
                   </Button>
                 </div>
@@ -536,7 +546,12 @@ export function DevicehubPage(): ReactElement {
               <SectionHint
                 line="凭证未配置：点右上角齿轮录入涂鸦云凭证，或到「Tuya 接入」配置。"
                 action={
-                  <Button type="button" variant="outline" size="sm" onClick={() => setGearOpen(true)}>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setGearOpen(true)}
+                  >
                     打开设备接入配置
                   </Button>
                 }
@@ -592,14 +607,17 @@ export function DevicehubPage(): ReactElement {
             {/* LAN 未登记设备如实展示（不纳管、不落库） */}
             {tuyaStatus !== null && tuyaStatus.enabled && tuyaStatus.lanUnregistered.length > 0 ? (
               <div className="rounded-lg border p-3">
-                <p className="text-sm font-medium">局域网未登记设备（{tuyaStatus.lanUnregistered.length}）</p>
+                <p className="text-sm font-medium">
+                  局域网未登记设备（{tuyaStatus.lanUnregistered.length}）
+                </p>
                 <p className="mt-1 text-xs text-muted-foreground">
                   LAN 扫描发现但未纳管的设备快照：等云同步写入后才进目录。
                 </p>
                 <div className="mt-2 space-y-1">
                   {tuyaStatus.lanUnregistered.map((item) => (
                     <p key={item.deviceId} className="font-mono text-xs text-muted-foreground">
-                      {item.deviceId} · {item.ip !== "" ? item.ip : "IP 未上报"} · {tuyaAgeText(item.ageMs)}
+                      {item.deviceId} · {item.ip !== "" ? item.ip : "IP 未上报"} ·{" "}
+                      {tuyaAgeText(item.ageMs)}
                     </p>
                   ))}
                 </div>
@@ -684,11 +702,7 @@ export function DevicehubPage(): ReactElement {
 
       {/* 扩展工具工作区（R11：models / diagnostics / compat 三项） */}
       {extensionEm !== null ? (
-        <ExtensionWorkspace
-          device={extensionEm}
-          open
-          onClose={() => setExtensionEmId(null)}
-        />
+        <ExtensionWorkspace device={extensionEm} open onClose={() => setExtensionEmId(null)} />
       ) : null}
 
       {/* 涂鸦详情：设备信息 / 本地别名 / DP 控制 */}

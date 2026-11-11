@@ -1,10 +1,4 @@
-import {
-  Fragment,
-  useCallback,
-  useEffect,
-  useState,
-  type ReactElement,
-} from "react";
+import { Fragment, useCallback, useEffect, useState, type ReactElement } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -16,11 +10,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
-import {
-  getCapabilities,
-  isTauri,
-  type AppCapabilities,
-} from "@/lib/platform";
+import { getCapabilities, isTauri, type AppCapabilities } from "@/lib/platform";
 
 /**
  * 硬件测试台：仅 isTauri() 为真时由 router.tsx 注册。
@@ -88,22 +78,13 @@ export function TestbenchPage(): ReactElement {
               </Fragment>
             ))}
           </dl>
-          {error !== "" ? (
-            <p className="text-destructive">调用失败：{error}</p>
-          ) : null}
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => void refresh()}
-            disabled={loading}
-          >
+          {error !== "" ? <p className="text-destructive">调用失败：{error}</p> : null}
+          <Button variant="outline" size="sm" onClick={() => void refresh()} disabled={loading}>
             {loading ? "读取中…" : "重新读取"}
           </Button>
         </CardContent>
         <CardFooter className="flex flex-wrap items-center gap-2">
-          <Badge variant="outline">
-            麦克风 / Opus / 播放 / mDNS：本阶段未实现
-          </Badge>
+          <Badge variant="outline">麦克风 / Opus / 播放 / mDNS：本阶段未实现</Badge>
           <Badge variant="outline">接口可用 ≠ 真机通过</Badge>
         </CardFooter>
       </Card>

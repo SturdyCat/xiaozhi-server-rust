@@ -15,7 +15,14 @@
  * - 弹窗点遮罩不关闭；busy 门禁：全局 busy 非空禁用所有按钮。
  */
 
-import { useCallback, useEffect, useRef, useState, type ChangeEvent, type ReactElement } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type ReactElement,
+} from "react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -27,12 +34,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/components/feedback/ToastHost";
 import { copyText } from "@/lib/clipboard";
@@ -165,7 +167,13 @@ function ModelsTab({ deviceId, busy }: { deviceId: string; busy: boolean }): Rea
         >
           {uploading ? "上传中…" : "上传模型文件"}
         </Button>
-        <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={() => void refreshList()}>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          disabled={busy}
+          onClick={() => void refreshList()}
+        >
           刷新列表
         </Button>
       </div>
@@ -178,7 +186,10 @@ function ModelsTab({ deviceId, busy }: { deviceId: string; busy: boolean }): Rea
       ) : entries !== null ? (
         <div className="space-y-1">
           {entries.map((entry) => (
-            <div key={entry.name} className="flex items-center justify-between gap-2 rounded-md border px-3 py-1.5">
+            <div
+              key={entry.name}
+              className="flex items-center justify-between gap-2 rounded-md border px-3 py-1.5"
+            >
               <span className="truncate text-sm">{entry.name}</span>
               <span className="shrink-0 text-xs text-muted-foreground">
                 {formatBytes(entry.size)}
@@ -270,19 +281,27 @@ function DiagnosticsTab({ deviceId, busy }: { deviceId: string; busy: boolean })
       <div className="space-y-2 rounded-lg border p-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="text-sm font-medium">当前会话最近报告</p>
-          <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => void readRuntime()}>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={busy}
+            onClick={() => void readRuntime()}
+          >
             读取设备报告
           </Button>
         </div>
         {runtimeError !== null ? (
           <p className="text-sm text-destructive">{runtimeError}</p>
         ) : runtime === null ? (
-          <p className="text-xs text-muted-foreground">尚未读取；设备离线时回包为全 null 快照（不是错误）。</p>
+          <p className="text-xs text-muted-foreground">
+            尚未读取；设备离线时回包为全 null 快照（不是错误）。
+          </p>
         ) : (
           <div className="space-y-1">
             <p className="text-xs text-muted-foreground">
-              online：{runtime.online ? "是" : "否"} · session：{runtime.sessionId ?? "—"} · updated：{" "}
-              {runtime.updatedAt ?? "—"}
+              online：{runtime.online ? "是" : "否"} · session：{runtime.sessionId ?? "—"} ·
+              updated： {runtime.updatedAt ?? "—"}
               {runtime.link !== null
                 ? ` · link：authenticated=${runtime.link.authenticated ? "是" : "否"}/token_required=${runtime.link.tokenRequired ? "是" : "否"}`
                 : ""}
@@ -298,16 +317,26 @@ function DiagnosticsTab({ deviceId, busy }: { deviceId: string; busy: boolean })
       <div className="space-y-2 rounded-lg border p-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="text-sm font-medium">原始系统信息</p>
-          <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => void readInfo()}>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={busy}
+            onClick={() => void readInfo()}
+          >
             读取原始系统信息
           </Button>
         </div>
         {infoError !== null ? (
           <p className="text-sm text-destructive">{infoError}</p>
         ) : info === null ? (
-          <p className="text-xs text-muted-foreground">尚未读取（固定 INFO 命令，客户端不插值 shell）。</p>
+          <p className="text-xs text-muted-foreground">
+            尚未读取（固定 INFO 命令，客户端不插值 shell）。
+          </p>
         ) : (
-          <pre className="max-h-48 overflow-auto rounded-md bg-muted/50 p-2 text-xs">{info.output}</pre>
+          <pre className="max-h-48 overflow-auto rounded-md bg-muted/50 p-2 text-xs">
+            {info.output}
+          </pre>
         )}
       </div>
 
@@ -357,10 +386,7 @@ function DiagnosticsTab({ deviceId, busy }: { deviceId: string; busy: boolean })
             >
               取消
             </AlertDialogCancel>
-            <AlertDialogAction
-              variant="destructive"
-              onClick={() => void handleReboot()}
-            >
+            <AlertDialogAction variant="destructive" onClick={() => void handleReboot()}>
               发送重启请求
             </AlertDialogAction>
           </AlertDialogFooter>
@@ -400,10 +426,16 @@ function CompatTab({ deviceId, busy }: { deviceId: string; busy: boolean }): Rea
   return (
     <div className="space-y-3">
       <p className="text-xs text-muted-foreground">
-        设备兼容视角：设备上报 settings 的只读快照。编辑请用 /em/ 官方页「配置」页签
-        （本管理台不做 40 键编辑器；配置保存走官方页的增量下发口径）。
+        设备兼容视角：设备上报 settings 的只读快照。编辑请用 /em/ 官方页「配置」页签 （本管理台不做
+        40 键编辑器；配置保存走官方页的增量下发口径）。
       </p>
-      <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={() => void refresh()}>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        disabled={busy}
+        onClick={() => void refresh()}
+      >
         重新读取
       </Button>
       {loading && settings === null ? (
@@ -415,7 +447,10 @@ function CompatTab({ deviceId, busy }: { deviceId: string; busy: boolean }): Rea
       ) : (
         <div className="space-y-1">
           {Object.entries(settings).map(([key, value]) => (
-            <div key={key} className="flex items-start justify-between gap-3 rounded-md border px-3 py-1.5">
+            <div
+              key={key}
+              className="flex items-start justify-between gap-3 rounded-md border px-3 py-1.5"
+            >
               <span className="shrink-0 font-mono text-xs">{key}</span>
               <span className="min-w-0 break-all text-right font-mono text-xs text-muted-foreground">
                 {typeof value === "string" ? value : JSON.stringify(value)}
@@ -438,7 +473,11 @@ function CompatTab({ deviceId, busy }: { deviceId: string; busy: boolean }): Rea
 // 工作区弹窗
 // ============================================================
 
-export function ExtensionWorkspace({ device, open, onClose }: ExtensionWorkspaceProps): ReactElement {
+export function ExtensionWorkspace({
+  device,
+  open,
+  onClose,
+}: ExtensionWorkspaceProps): ReactElement {
   const [tab, setTab] = useState<ExtensionTab>("models");
   const [busy, setBusy] = useState(false);
 

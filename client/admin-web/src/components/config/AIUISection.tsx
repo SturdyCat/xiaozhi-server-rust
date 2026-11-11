@@ -32,7 +32,8 @@ export function AIUISection(): ReactElement {
 
       {enabled ? (
         <FormNotice tone="warning">
-          当前使用云端托管流程：本地 ASR / NLU / LLM / TTS 增强不代表在云端链路执行。启用后本地 ASR / LLM / TTS 引擎闲置。
+          当前使用云端托管流程：本地 ASR / NLU / LLM / TTS 增强不代表在云端链路执行。启用后本地 ASR
+          / LLM / TTS 引擎闲置。
         </FormNotice>
       ) : null}
 
@@ -54,17 +55,9 @@ export function AIUISection(): ReactElement {
             hint="平台上 appid 下创建应用后填入。"
           />
 
-          <SecretField
-            path="aiui.api_key"
-            hasPath="aiui.has_api_key"
-            label="API Key"
-          />
+          <SecretField path="aiui.api_key" hasPath="aiui.has_api_key" label="API Key" />
 
-          <SecretField
-            path="aiui.api_secret"
-            hasPath="aiui.has_api_secret"
-            label="API Secret"
-          />
+          <SecretField path="aiui.api_secret" hasPath="aiui.has_api_secret" label="API Secret" />
 
           <TextField
             path="aiui.scene"

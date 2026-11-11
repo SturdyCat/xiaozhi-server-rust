@@ -69,9 +69,7 @@ export interface RefreshResult {
 }
 
 /** `POST /api/tts/voices/test-credentials` 的两种业务结果（只测不存）。 */
-export type CredentialsTestResult =
-  | { ok: true; elapsedMs: number }
-  | { ok: false; error: string };
+export type CredentialsTestResult = { ok: true; elapsedMs: number } | { ok: false; error: string };
 
 /** 音色目录能力未启用 / 响应被 SPA fallback 接走的可识别错误。 */
 export class CatalogueUnavailableError extends Error {
@@ -174,9 +172,7 @@ function normalizeError(error: unknown, action: string): never {
  * 全空时发 `{}`（服务端回落盘上已存 `[llm]` 凭据）。HTTP 200 也可能
  * `state:"error"`，必须判 `state === "ok"` 才取 `models`。
  */
-export async function fetchLlmModels(
-  body: LlmModelsRequest,
-): Promise<LlmModelsResult> {
+export async function fetchLlmModels(body: LlmModelsRequest): Promise<LlmModelsResult> {
   const payload: Record<string, string> = {};
   if (body.api_base !== undefined && body.api_base.trim() !== "") {
     payload.api_base = body.api_base.trim();
@@ -216,9 +212,7 @@ export async function fetchLlmModels(
     }
   }
   const elapsedMs =
-    typeof raw.elapsed_ms === "number" && Number.isFinite(raw.elapsed_ms)
-      ? raw.elapsed_ms
-      : null;
+    typeof raw.elapsed_ms === "number" && Number.isFinite(raw.elapsed_ms) ? raw.elapsed_ms : null;
   return { models, elapsedMs };
 }
 
@@ -256,11 +250,7 @@ export async function getTtsVoices(): Promise<VoicesResult> {
     normalizeError(error, "读取音色目录");
   }
 
-  if (
-    !isRecord(raw) ||
-    !Array.isArray(raw.voices) ||
-    typeof raw.probing !== "boolean"
-  ) {
+  if (!isRecord(raw) || !Array.isArray(raw.voices) || typeof raw.probing !== "boolean") {
     throw new CatalogueUnavailableError(
       `读取音色目录：响应不是含 voices 数组与 probing 字段的 JSON 对象，按能力未启用处理（不伪装成空目录）。${FALLBACK_HINT}`,
     );
@@ -274,9 +264,7 @@ export async function getTtsVoices(): Promise<VoicesResult> {
     }
   }
   const fetchedAt =
-    typeof raw.fetched_at === "number" && Number.isFinite(raw.fetched_at)
-      ? raw.fetched_at
-      : 0;
+    typeof raw.fetched_at === "number" && Number.isFinite(raw.fetched_at) ? raw.fetched_at : 0;
   return {
     voices,
     source: typeof raw.source === "string" ? raw.source : "",
@@ -310,9 +298,7 @@ export async function refreshTtsVoices(): Promise<RefreshResult> {
     );
   }
   const candidates =
-    typeof raw.candidates === "number" && Number.isFinite(raw.candidates)
-      ? raw.candidates
-      : 0;
+    typeof raw.candidates === "number" && Number.isFinite(raw.candidates) ? raw.candidates : 0;
   return { ok: true, probing: raw.probing, candidates };
 }
 
@@ -345,7 +331,9 @@ export async function testTtsCredentials(
   }
 
   if (!isRecord(raw) || typeof raw.ok !== "boolean") {
-    throw new Error(`测试讯飞凭据：服务端响应缺少布尔字段 ok，不能判定为测试成功。${FALLBACK_HINT}`);
+    throw new Error(
+      `测试讯飞凭据：服务端响应缺少布尔字段 ok，不能判定为测试成功。${FALLBACK_HINT}`,
+    );
   }
   if (raw.ok === false) {
     const detail =
@@ -355,8 +343,6 @@ export async function testTtsCredentials(
     return { ok: false, error: detail };
   }
   const elapsedMs =
-    typeof raw.elapsed_ms === "number" && Number.isFinite(raw.elapsed_ms)
-      ? raw.elapsed_ms
-      : 0;
+    typeof raw.elapsed_ms === "number" && Number.isFinite(raw.elapsed_ms) ? raw.elapsed_ms : 0;
   return { ok: true, elapsedMs };
 }

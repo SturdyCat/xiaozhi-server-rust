@@ -11,12 +11,7 @@
  */
 
 import { useCallback, useEffect, useState, type ReactElement } from "react";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -135,7 +130,10 @@ export function TuyaDeviceDialog({
   const renderDpRow = (dp: TuyaDp): ReactElement => {
     const busy = dpBusy === dp.dp;
     return (
-      <div key={dp.dp} className="flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2">
+      <div
+        key={dp.dp}
+        className="flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2"
+      >
         <div className="min-w-0">
           <p className="text-sm font-medium">DP {dp.dp}</p>
           <p className="text-xs text-muted-foreground">
