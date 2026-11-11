@@ -35,7 +35,9 @@
  * ## sync 语义（诚实化锚点 5）
  *
  * `POST /api/tuya/sync` 回 `{result,message}`：`ok/partial/cloud_auth_failed/
- * network_error/skipped/busy`。**`skipped`（60s 闸门或并发拦下）不算失败、也不得报
+ * network_error/skipped`（服务端实际下发集合；**不存在 "busy"**——并发场景 sync.rs:45
+ * 返回 `result="skipped"` + message「已有一次同步在进行中」）。
+ * **`skipped`（60s 闸门或并发拦下）不算失败、也不得报
  * 成功**——`resultLabel("skipped")`=「已跳过」，由 UI 以中性语气透出服务端 message。
  */
 
@@ -324,7 +326,7 @@ export async function deleteTuyaCredentialsAlias(): Promise<string> {
 // C.5 POST /api/tuya/sync（G3；skipped 不算失败也不报成功）
 // ============================================================
 
-/** 手动同步结果（`result` ∈ ok/partial/cloud_auth_failed/network_error/skipped/busy）。 */
+/** 手动同步结果（`result` ∈ ok/partial/cloud_auth_failed/network_error/skipped；并发场景 = skipped + message，无 "busy"）。 */
 export interface TuyaSyncResult {
   result: string;
   message: string;

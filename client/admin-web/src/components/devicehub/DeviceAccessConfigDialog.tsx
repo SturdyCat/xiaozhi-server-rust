@@ -78,8 +78,9 @@ export function DeviceAccessConfigDialog({
     setSyncing(true);
     try {
       const result = await syncTuyaNow();
-      // TuyaState.kt:250-270：skipped = 60s 闸门拦下，不算失败也不报成功。
-      if (result.result === "skipped" || result.result === "busy") {
+      // TuyaState.kt:250-270：skipped = 60s 闸门/并发拦下，不算失败也不报成功
+      // （并发场景服务端同样回 skipped + message「已有一次同步在进行中」，无 "busy" 值）。
+      if (result.result === "skipped") {
         toast.show(`已跳过：${result.message || tuyaResultLabel(result.result)}`, "info");
       } else if (result.result === "cloud_auth_failed" || result.result === "network_error") {
         toast.show(`${tuyaResultLabel(result.result)}：${result.message}`, "error");
