@@ -20,6 +20,7 @@ import { CONFIG_SECTIONS } from "@/components/config/configSections";
 export function ConfigPage(): ReactElement {
   return (
     <ConfigWorkspace
+      viewId="config"
       title="配置"
       description="服务端参数与热生效档位；保存按字段增量提交。"
       sectionIds={CONFIG_SECTIONS.map((section) => section.id)}

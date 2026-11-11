@@ -34,6 +34,7 @@ const GLOBAL_SECTION_IDS: readonly string[] = [
 export function SettingsPage(): ReactElement {
   return (
     <ConfigWorkspace
+      viewId="settings"
       title="全局配置"
       description="部署级参数（能力总览、预设、AIUI 全链路、服务、Tuya 接入、OTA）——没有流程节点，与语音流程共用一份草稿、一次 POST /api/config。"
       sectionIds={GLOBAL_SECTION_IDS}

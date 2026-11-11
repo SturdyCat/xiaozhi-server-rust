@@ -61,6 +61,11 @@ import { useConfigSchema } from "@/lib/useConfigSchema";
 import { cn, formatDateTime } from "@/lib/utils";
 
 export interface ConfigWorkspaceProps {
+  /**
+   * 视图标识（config / settings）：同时用于「最后选中段」的会话级记忆——
+   * 同一视图内往返恢复各自最后选中段，互不串扰。
+   */
+  readonly viewId: string;
   /** 页头 H2 标题（旧端：流程节点视图=「节点管理」，全局段视图=「全局配置」）。 */
   readonly title: string;
   /** 页头描述文案。 */
@@ -126,7 +131,17 @@ const SECTION_COMPONENTS: Record<string, ComponentType<{ onJump: (sectionId: str
   ota: OtaSection,
 };
 
+/**
+ * 各视图「最后选中段」的会话级记忆（对齐旧端 ConfigFormState.kt:327-328 的
+ * lastWorkflowSelection / lastGlobalSection）：key 是视图标识（config / settings），
+ * 同一视图内往返（如 /settings → /config → /settings）恢复各自最后选中段。
+ * 模块级 Map 只在 SPA 会话内存活——页面刷新即重置（与旧端会话级 state 一致，
+ * 不写 sessionStorage，也不与 ConfigProvidersLayout 的卸载/重挂耦合）。
+ */
+const LAST_SECTION_BY_VIEW = new Map<string, string>();
+
 export function ConfigWorkspace({
+  viewId,
   title,
   description,
   sectionIds,
@@ -154,7 +169,14 @@ export function ConfigWorkspace({
   const metaQuery = useApiQuery(getConfigMeta);
   const navigate = useNavigate();
 
-  const [active, setActive] = useState<string>(sectionIds[0] ?? "overview");
+  const [active, setActive] = useState<string>(() => {
+    // 恢复本视图最后选中段（会话级记忆）；记忆段已不在白名单（防御）或首访时落首段。
+    const remembered = LAST_SECTION_BY_VIEW.get(viewId);
+    if (remembered !== undefined && sectionIds.includes(remembered)) {
+      return remembered;
+    }
+    return sectionIds[0] ?? "overview";
+  });
   const [reloadConfirmOpen, setReloadConfirmOpen] = useState(false);
   const [saveConfirmOpen, setSaveConfirmOpen] = useState(false);
   const [lastLoadedAt, setLastLoadedAt] = useState<number | null>(null);
@@ -176,6 +198,12 @@ export function ConfigWorkspace({
   const warning =
     draftWarning ??
     (metaQuery.error === null ? null : `配置文件来源信息读取失败：${metaQuery.error}`);
+
+  // 切换分区统一入口：写入本视图的会话级记忆（见 LAST_SECTION_BY_VIEW）。
+  const selectSection = (sectionId: string): void => {
+    LAST_SECTION_BY_VIEW.set(viewId, sectionId);
+    setActive(sectionId);
+  };
 
   const doReload = (): void => {
     setReloadConfirmOpen(false);
@@ -223,7 +251,7 @@ export function ConfigWorkspace({
   // 流程段）无深链参数机制，按 `jumpFallbackRoute` 诚实回退，绝不渲染空白分区。
   const jumpTo = (sectionId: string): void => {
     if (sectionIds.includes(sectionId)) {
-      setActive(sectionId);
+      selectSection(sectionId);
       return;
     }
     if (jumpFallbackRoute !== undefined) {
@@ -287,7 +315,7 @@ export function ConfigWorkspace({
                     <button
                       key={section.id}
                       type="button"
-                      onClick={() => setActive(section.id)}
+                      onClick={() => selectSection(section.id)}
                       className={cn(
                         "w-full rounded-md px-3 py-2 text-left text-sm transition-colors",
                         active === section.id
