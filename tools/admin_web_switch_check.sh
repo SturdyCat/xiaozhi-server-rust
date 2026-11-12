@@ -53,7 +53,7 @@ ROOT_HTML="$TMP_DIR/root.html"
 if ! curl --noproxy '*' -fsS --max-time 10 -D "$TMP_DIR/root.headers" -o "$ROOT_HTML" "$BASE/" \
      2>"$TMP_DIR/root.curl.err"; then
   printf 'FAIL: %s/ 不可达——需先构建 dist 并启动真 server（./dev-server.sh）。curl: %s\n' \
-    "$BASE" "$(tr '\n' ' ' <"$TMP_DIR/root.curl.err")" >&2
+    "$BASE" "$(LC_ALL=C tr '\n' ' ' <"$TMP_DIR/root.curl.err")" >&2
   printf 'RESULT: FAIL\n'
   exit 1
 fi
@@ -82,7 +82,7 @@ fi
 # ---- 2) `/em/`（尾斜杠必须）必须返回官方 EchoMuse 页，而不是 SPA fallback ----
 EM_HTML="$TMP_DIR/em.html"
 if ! curl --noproxy '*' -fsS --max-time 10 -o "$EM_HTML" "$BASE/em/" 2>"$TMP_DIR/em.curl.err"; then
-  fail "/em/ 非 2xx：$(tr '\n' ' ' <"$TMP_DIR/em.curl.err")"
+  fail "/em/ 非 2xx：$(LC_ALL=C tr '\n' ' ' <"$TMP_DIR/em.curl.err")"
 else
   if grep -qF '<title>EchoMuse 设备管理</title>' "$EM_HTML" \
      && grep -qF 'static/adapter.js' "$EM_HTML" \
@@ -107,14 +107,16 @@ for js_file in adapter.js dashboard.js host.js; do
   JS_OUT="$TMP_DIR/$js_file"
   if ! curl --noproxy '*' -fsS --max-time 10 -o "$JS_OUT" "$BASE/em/static/$js_file" \
        2>"$TMP_DIR/$js_file.curl.err"; then
-    fail "/em/static/$js_file 不可达：$(tr '\n' ' ' <"$TMP_DIR/$js_file.curl.err")"
+    fail "/em/static/$js_file 不可达：$(LC_ALL=C tr '\n' ' ' <"$TMP_DIR/$js_file.curl.err")"
     continue
   fi
   if [[ ! -s "$JS_OUT" ]]; then
     fail "/em/static/$js_file 是空文件"
     continue
   fi
-  FIRST_BYTE="$(head -c 120 "$JS_OUT" | tr -d '\r\n' | sed 's/^[[:space:]]*//' | head -c 1)"
+  # tr 固定 LC_ALL=C：UTF-8 locale 下 BSD/GNU tr 处理含中文的 JS/JSON 会报
+  # "Illegal byte sequence" 并 exit 1，污染 FIRST_BYTE（见 QA D2）。
+  FIRST_BYTE="$(head -c 120 "$JS_OUT" | LC_ALL=C tr -d '\r\n' | sed 's/^[[:space:]]*//' | head -c 1)"
   if [[ "$FIRST_BYTE" == '<' ]]; then
     fail "/em/static/$js_file 返回了 HTML（首字节 '<'）"
   else
@@ -126,15 +128,17 @@ done
 API_OUT="$TMP_DIR/api-config"
 if ! curl --noproxy '*' -fsS --max-time 10 -D "$TMP_DIR/api-config.headers" -o "$API_OUT" \
      "$BASE/api/config" 2>"$TMP_DIR/api-config.curl.err"; then
-  fail "/api/config 不可达：$(tr '\n' ' ' <"$TMP_DIR/api-config.curl.err")"
+  fail "/api/config 不可达：$(LC_ALL=C tr '\n' ' ' <"$TMP_DIR/api-config.curl.err")"
 else
   API_CONTENT_TYPE="$(awk 'tolower($1) == "content-type:" { print tolower($2); exit }' \
-    "$TMP_DIR/api-config.headers" | tr -d '\r')"
-  API_FIRST_BYTE="$(head -c 120 "$API_OUT" | tr -d '\r\n' | sed 's/^[[:space:]]*//' | head -c 1)"
+    "$TMP_DIR/api-config.headers" | LC_ALL=C tr -d '\r')"
+  API_FIRST_BYTE="$(head -c 120 "$API_OUT" | LC_ALL=C tr -d '\r\n' | sed 's/^[[:space:]]*//' | head -c 1)"
   if [[ "$API_FIRST_BYTE" == '<' || "$API_CONTENT_TYPE" == *html* ]]; then
-    fail "/api/config 返回了 HTML（Content-Type=$API_CONTENT_TYPE，首字节='$API_FIRST_BYTE'）"
+    # 变量必须用 ${} 包裹：bash 3.2 + UTF-8 locale 下紧跟中文标点会被并入变量名
+    # → `API_CONTENT_TYPE?: unbound variable`（set -u 下脚本中途崩溃）。见 QA D1。
+    fail "/api/config 返回了 HTML（Content-Type=${API_CONTENT_TYPE}，首字节='${API_FIRST_BYTE}'）"
   else
-    pass "/api/config 非 HTML（Content-Type=$API_CONTENT_TYPE）"
+    pass "/api/config 非 HTML（Content-Type=${API_CONTENT_TYPE}）"
   fi
 fi
 
