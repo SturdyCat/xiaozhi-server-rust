@@ -34,7 +34,8 @@
 #   与 web 的 Gradle+Kotlin daemon（约 3.5GB）同时驻留，4–8GB 档构建机直接爆。
 #   因此两处硬约束（①参数化为默认 2，GHA 大内存档传 4；②任何档位都勿删）：
 #     ① build 阶段 `CARGO_BUILD_JOBS`（ARG，默认 2）——不限制就按 CPU 核数开满 rustc；
-#     ② build 阶段以 `COPY --from=web` 建立依赖 → 两个阶段严格串行，峰值永不同时出现
+#     ② build 阶段以 `COPY --from=<静态页 stage>` 建立依赖（W15-1 起为 admin-web，原先为 web）
+#       → 两个阶段严格串行，峰值永不同时出现
 #       （GHA 16GB 下两段并跑虽勉强放得下，但叠加峰值贴近上限且省时有限，同样不放开）。
 #
 # 🚨 2026-10-27 第三次复现的**真正根因**（与前两条内存结论无关，别再按 OOM 调参）：
@@ -118,8 +119,9 @@
 #   首次构建冷建无缓存，第二次起生效。GHA 仓库级缓存配额 10GB（LRU 逐出；超限只是退化
 #   成冷建，不会失败）。cache-mount 需要 BuildKit（顶部 # syntax 已声明）；ACR 自动构建
 #   若重新启用，须先确认其构建机支持 BuildKit，否则在 RUN --mount 处解析报错。
-# 三个阶段：
-#   web    —— Gradle 构建 Kuikly H5 管理页（client 工程：shared 业务包 + h5App 壳）
+# 阶段（W15-1 软下线第一波：生产 DAG = admin-web → build → runtime）：
+#   web    —— [保留定义，不再进入生产 DAG] Gradle 构建 Kuikly H5 管理页（旧端回滚链）
+#   admin-web —— node/pnpm 构建 React SPA（client/admin-web/dist，含 /em/ 白名单 4 文件）
 #   build  —— 编译 Rust server（--no-default-features --features sherpa,nlu,wasm-plugins，模型/音频运行时 + NLU 训练/推理 + WASM 宿主）
 #   运行时 —— debian-slim：同源托管 管理页(/) + /api + /api/ws，模型缺失由入口脚本按需下载
 #   运行镜像包含底座、WASM 宿主与官方系统级 WASM 插件；用户插件仍经数据卷/管理端上传。
@@ -127,6 +129,15 @@
 #
 # 运行镜像内浏览器访问 `http://<host>:8000/` 即管理页，`/api/config` 读写 SQLite 配置库（data.db），
 # `/api/ws` 供设备（xiaozhi-esp32）WebSocket 接入；静态页与 API 同源，无 CORS 问题。
+#
+# 🆕 W15-1（软下线第一波）：生产管理页静态产物改由 admin-web stage 自建的 dist/ 提供。
+#   web（Gradle）阶段的**定义与全部旧端源码原位保留**，但文件里不再有任何
+#   `COPY --from=web` 引用，BuildKit 会跳过该阶段 ⇒ 生产镜像不再依赖旧端产物/
+#   Gradle 构建；回滚时仍可在本地重建旧端链（见 w15-production-build-research.md）。
+#   配套：.dockerignore 放开 admin-web/scripts + public/logo.png 的排除例外；
+#   .github/workflows/docker-amd64.yml 的 GRADLE_* / NODE_MAX_OLD_SPACE build-args
+#   按派发要求不动（web stage 不构建时它们变为 inert，详见交付报告）。
+#   ⚠️ ACR 控制台「源码自动构建」是仓库外并行链路，本波不碰（仅登记）。
 # ============================================================
 
 # ---- web 阶段：构建 Kuikly H5 管理页静态产物（client Gradle 工程）----
@@ -231,13 +242,45 @@ RUN --mount=type=cache,target=/home/gradle/.gradle \
 RUN --mount=type=cache,target=/home/gradle/.gradle \
     NODE_OPTIONS="--max-old-space-size=${NODE_MAX_OLD_SPACE}" \
     gradle :apps:h5App:publishWeb --no-daemon --max-workers=${GRADLE_MAX_WORKERS} -PwebSourceMap=false \
-      -Dorg.gradle.jvmargs="-Xmx${GRADLE_XMX} -Dfile.encoding=UTF-8" \
- && test -f apps/h5App/web/index.html \
- && test -f apps/h5App/web/nativevue2.js \
- && test -f apps/h5App/web/h5App.js \
- && test -f apps/h5App/web/em/index.html \
- && test -f apps/h5App/web/em/static/dashboard.js \
- && test -f apps/h5App/web/em/static/adapter.js
+      -Dorg.gradle.jvmargs="-Xmx${GRADLE_XMX} -Dfile.encoding=UTF-8"
+# W15-1：旧端 publishWeb 的产物断言（web/index.html / nativevue2.js / h5App.js /
+#   web/em/*）已随「生产镜像不再依赖旧端产物」移除。等价校验迁到下面的 admin-web stage：
+#   `pnpm build` 后断言 dist/index.html + dist/em/index.html +
+#   dist/em/static/{adapter.js,dashboard.js,host.js}（+ dist/logo.png）。
+#   web stage 定义完整保留，仅供本地回滚重建旧端时使用。
+
+# ---- admin-web 阶段：构建 React 管理台 SPA + /em/ 白名单资产（W15-1）----
+# dist/ 不入库（client/admin-web/.gitignore），镜像必须自建；Node 22 + pnpm 12.15.0
+# 与本机 / tauri.conf.json 的 beforeBuildCommand "pnpm build" 同款工具链。
+# `pnpm build` 先跑 scripts/sync-em.mjs 把 em 源目录的白名单 4 文件同步到 public/em/，
+# 再由 Vite 默认 publicDir 在**同一次 build 内**（清空 outDir 之后）拷进 dist/em/——
+# 这是唯一与 build.emptyOutDir:true 天然兼容的方案，不需要改 vite.config.ts。
+FROM node:22-alpine AS admin-web
+WORKDIR /src/client/admin-web
+# em 源目录（client/apps/h5App/em/）是 /em/ 官方页唯一来源，软下线时原位保留；
+# 这里只带 sync-em.mjs 需要的白名单 4 文件，不带 dashboard.jsx / tests / README / LICENSE。
+COPY client/apps/h5App/em/index.html /src/client/apps/h5App/em/index.html
+COPY client/apps/h5App/em/static/adapter.js /src/client/apps/h5App/em/static/adapter.js
+COPY client/apps/h5App/em/static/dashboard.js /src/client/apps/h5App/em/static/dashboard.js
+COPY client/apps/h5App/em/static/host.js /src/client/apps/h5App/em/static/host.js
+# 先只拷依赖清单，源码改动不触发依赖重装。
+COPY client/admin-web/package.json client/admin-web/pnpm-lock.yaml client/admin-web/pnpm-workspace.yaml ./
+RUN npm install -g pnpm@12.15.0 \
+ && pnpm install --frozen-lockfile
+COPY client/admin-web/tsconfig.json client/admin-web/tsconfig.app.json client/admin-web/tsconfig.node.json \
+     client/admin-web/vite.config.ts client/admin-web/index.html ./
+COPY client/admin-web/src ./src
+COPY client/admin-web/scripts ./scripts
+# .dockerignore 的 `logo.png` 会连带排除 public/logo.png，已在 .dockerignore 里开例外；
+# 这里再显式指定单文件，确保 dist/index.html:7 引用的 /logo.png 一定随镜像分发。
+COPY client/admin-web/public/logo.png ./public/logo.png
+RUN pnpm build \
+ && test -f dist/index.html \
+ && test -f dist/logo.png \
+ && test -f dist/em/index.html \
+ && test -f dist/em/static/adapter.js \
+ && test -f dist/em/static/dashboard.js \
+ && test -f dist/em/static/host.js
 
 # ---- Rust 构建阶段 ----
 # rust:1.95-bookworm = 满足 WASM 宿主（wasmtime 48）所需的 rustc 版本。
@@ -253,11 +296,14 @@ RUN apt-get update \
 WORKDIR /app
 
 # 🚨 阶段串行屏障（见文件头 2026-10-27 记录，勿删）：BuildKit 默认并行执行没有依赖关系的
-#   stage，cargo 的 rustc 进程群会与 web 阶段的 Gradle / Kotlin daemon / webpack 同时驻留，
-#   4–8GB 档构建机必被 OOM kill（日志以 `rpc error ... EOF` 收尾，无任何编译错误）。
-#   这里读一个 web 阶段产物建立 DAG 依赖：web 先跑完，cargo 才开始；文件落 /tmp，不进运行镜像。
-#   代价：总时长 ≈ web + build（原先并行取 max），换峰值内存永不同时出现。
-COPY --from=web /src/client/apps/h5App/web/index.html /tmp/.web-stage-done
+#   stage。W15-1 起 admin-web（node/pnpm + Vite 构建）与 build（cargo 的 rustc 进程群，
+#   本依赖树含 ort/tokenizers/sherpa-onnx，单进程 1.5–2.5GB）并行驻留仍会抬高构建机
+#   峰值内存，4–8GB 档有 OOM 风险。这里读一个 admin-web 阶段产物建立 DAG 依赖：
+#   admin-web 先跑完，cargo 才开始；文件落 /tmp，不进运行镜像。
+#   代价：总时长 ≈ admin-web + build（原先并行取 max），换峰值内存永不同时出现。
+#   ⚠️ web（Gradle）阶段仍在文件中保留定义（软下线），但已无 `COPY --from=web` 引用，
+#      BuildKit 不会构建它——生产镜像不再依赖旧端产物。
+COPY --from=admin-web /src/client/admin-web/dist/index.html /tmp/.web-stage-done
 
 # 🚨 rustc 并行度上限（ACR 档默认 2，勿删）：cargo 默认 `-j=CPU 核数`，本依赖树含
 #   wasmtime/cranelift / sherpa-onnx-sys（自带 C++/protobuf codegen），单 rustc 峰值 1.5–2.5GB，
@@ -395,8 +441,10 @@ RUN apt-get update \
 WORKDIR /app
 # Rust server 二进制
 COPY --from=build /app/target/release/xiaozhi-server-rust /app/server
-# 同源托管的管理页静态产物（server [server].admin_dir 由下方 ENV 指到 /app/web）
-COPY --from=web /src/client/apps/h5App/web /app/web
+# 同源托管的管理页静态产物（server [server].admin_dir 由下方 ENV 指到 /app/web）。
+# W15-1：只来自 admin-web stage 自建的 React SPA dist/（含 /em/ 白名单 4 文件），
+# 不再 COPY 旧端 Gradle publishWeb 的 web/ 产物；目录名 /app/web 与 ENV 保持不变。
+COPY --from=admin-web /src/client/admin-web/dist /app/web
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
 # 内置配置示例：字段说明参照（配置真源为 SQLite data.db；示例不再作为首启配置生成）
 COPY server/config.example.toml /app/config.example.toml

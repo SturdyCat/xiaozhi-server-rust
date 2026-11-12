@@ -90,3 +90,15 @@ config.toml
 server/config.toml
 server-data
 .env
+
+# ---- W15-1：admin-web stage 对上述排除项的例外（必须排在所有排除规则之后）----
+# `scripts`（:29）与 `logo.png`（:36）都是「不含 / 的任意层级同名匹配」：
+#   `scripts` 会连带排除 client/admin-web/scripts/（sync-em.mjs 需要）；
+#   `logo.png` 会连带排除 client/admin-web/public/logo.png（dist/index.html:7 引用 /logo.png）。
+# 例外只放开 admin-web 侧这两个精确路径，不影响其它同名目录/文件的排除。
+!client/admin-web/scripts/
+!client/admin-web/scripts/**
+!client/admin-web/public/logo.png
+# 本地构建产物不进上下文：dist 由 admin-web stage 自建，public/em 由 sync-em.mjs 自建。
+client/admin-web/dist/
+client/admin-web/public/em/
