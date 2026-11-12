@@ -214,8 +214,8 @@ pub struct ServerConfig {
     /// tokio 异步运行时的 worker 线程数；默认 2，避免占满低功耗主机（如 N5105 4 核）。
     #[serde(default = "default_worker_threads")]
     pub worker_threads: u32,
-    /// 管理页面（h5App 构建产物）静态目录；server 在 `/` 直接托管该目录。
-    /// 为空或目录不存在时，`/` 返回友好提示而非崩溃。默认 "../client/apps/h5App/web"。
+    /// 管理页面（admin-web Vite 构建产物）静态目录；server 在 `/` 直接托管该目录。
+    /// 为空或目录不存在时，`/` 返回友好提示而非崩溃。默认 "../client/admin-web/dist"。
     #[serde(default = "default_admin_dir")]
     pub admin_dir: String,
 }
@@ -579,11 +579,13 @@ fn default_worker_threads() -> u32 {
     2
 }
 
-/// 管理页面静态目录默认指向上级 client/apps/h5App 的 web 产物目录
-/// （:apps:h5App:publishWeb 汇聚 index.html + nativevue2.js + h5App.js）。
+/// 管理页面静态目录默认指向上级 client/admin-web 的 Vite 构建产物 dist/
+/// （pnpm --dir client/admin-web build 生成 index.html + assets/ + em/ 白名单 4 文件）。
 /// 容器部署由镜像内置的 XIAOZHI_ADMIN_DIR=/app/web 覆盖（见 main.rs load_config）。
+/// 注意：admin_dir 是 SQLite 配置库可写字段，本默认值只对空库首次启动落库生效；
+/// 存量实例保留库内已持久化值，XIAOZHI_ADMIN_DIR env 最后覆盖且优先、不写回。
 fn default_admin_dir() -> String {
-    "../client/apps/h5App/web".into()
+    "../client/admin-web/dist".into()
 }
 
 #[cfg(test)]

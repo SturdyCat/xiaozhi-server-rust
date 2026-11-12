@@ -15,10 +15,14 @@ port = 8000
 expected_token = ""
 # tokio 异步运行时 worker 线程数（默认 2）：避免占满 4 核小主机，给其他服务留余量
 worker_threads = 2
-# 管理页面（h5App 的 Kuikly Web 构建产物）目录；server 在 / 静态托管。
-# 默认相对 server/ 指向上级 client/apps/h5App/web（:apps:h5App:publishWeb 产物）；
+# 管理页面（admin-web Vite 构建产物）目录；server 在 / 静态托管。
+# 默认相对 server/ 指向上级 client/admin-web/dist（pnpm --dir client/admin-web build 产物）；
 # Docker 部署无需修改——镜像内置 XIAOZHI_ADMIN_DIR=/app/web 环境变量覆盖。
-admin_dir = "../client/apps/h5App/web"
+# ⚠️ admin_dir 是 SQLite 配置库可写字段（plugins/registry/projection.rs）：改这里或改代码
+#    默认值都只对「空库首次启动落库」生效，**不影响存量实例已持久化的库内值**。
+#    XIAOZHI_ADMIN_DIR 环境变量最后覆盖且优先、不写回（GET /api/config 仍展示库内原值）；
+#    切换存量实例请用管理页 PUT /api/config 改 server.admin_dir 并重启，或显式设置该环境变量。
+admin_dir = "../client/admin-web/dist"
 
 [audio]
 # 服务器下行（TTS）采样率，写入服务器 hello，设备据此解码播放。

@@ -80,13 +80,15 @@ impl Options {
             .to_string_lossy()
             .into_owned();
         // Isolated HTTP admin serving; no real-model path or cloud credential is fabricated.
+        // W15-1: --dev 兜底同生产默认，指向 admin-web 的 Vite 构建产物 dist/。
+        // 仍保留「仅当 XIAOZHI_ADMIN_DIR 未设或为空才生效」的逻辑，env 最终覆盖见 main.rs。
         if std::env::var("XIAOZHI_ADMIN_DIR")
             .ok()
             .filter(|s| !s.is_empty())
             .is_none()
         {
             config.server.admin_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../client/apps/h5App/web")
+                .join("../client/admin-web/dist")
                 .to_string_lossy()
                 .into_owned();
         }
