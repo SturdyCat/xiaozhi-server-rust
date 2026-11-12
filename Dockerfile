@@ -409,6 +409,15 @@ RUN apt-get update \
  && cargo install wasm-tools --version 1.263.0 --locked
 COPY server/crates /server/crates
 COPY server/wit /server/wit
+# 🚨 tuya 官方插件经 #[path] 单源引用 server/src/device/tuya/{protocol,dps}.rs
+#   （见 plugins-src/tuya/src/lib.rs:19/34）。该 #[path] 相对插件 crate 的 src 目录
+#   上溯 3 级到容器根 /，再进 server/src/device/tuya/ → 解析到容器内 /server/src/...。
+#   build 阶段把 server 源码落在 /app/src（COPY server/src ./src），插件读不到；这里
+#   必须显式把该单源目录拷到 /server/src/device/tuya/，否则 tuya-official 编译报
+#   `couldn't read src/../../../server/src/device/tuya/protocol.rs`（Docker 冷建实测）。
+#   ⛔ 与第六次复现同型：新增 #[path] 单源时，COPY 落点必须与该相对路径层级一致。
+#   protocol.rs/dps.rs 均自包含（无内部 mod/include），整目录拷贝即覆盖两处引用与未来 sibling。
+COPY server/src/device/tuya /server/src/device/tuya
 COPY plugins-src /plugins-src
 COPY tools/wasm-fixtures /tools/wasm-fixtures
 COPY tools/build-system-plugins.sh /tools/build-system-plugins.sh
