@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
+import { useInterval } from "ahooks";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -159,8 +160,9 @@ export function ConsolePage(): ReactElement {
   }, [generation]);
 
   // 每 200ms 把缓冲日志合并进 lines，保留最后 MAX_LINES 行。
-  useEffect(() => {
-    const id = window.setInterval(() => {
+  // immediate:false 对齐 setInterval 首次延后执行；卸载清理由 useInterval 自动承担。
+  useInterval(
+    () => {
       if (bufferRef.current.length === 0) {
         return;
       }
@@ -170,9 +172,10 @@ export function ConsolePage(): ReactElement {
         const merged = prev.concat(incoming);
         return merged.length > MAX_LINES ? merged.slice(merged.length - MAX_LINES) : merged;
       });
-    }, FLUSH_INTERVAL_MS);
-    return () => window.clearInterval(id);
-  }, []);
+    },
+    FLUSH_INTERVAL_MS,
+    { immediate: false },
+  );
 
   // 自动滚到底部（暂停时不动）。
   useEffect(() => {

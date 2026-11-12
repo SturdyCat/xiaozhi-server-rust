@@ -16,9 +16,10 @@ React + shadcn/ui + Tauri 2 管理台。**运行环境已就绪，业务页面�
 
 ## 依赖与格式约定（W13 起）
 
-- **成熟库采用口径**：新代码优先用 `ahooks`（useRequest / useDebounceFn / useUpdateEffect 等 hooks）、`es-toolkit`（debounce / groupBy / chunk 等数据与函数工具）、`ky`（HTTP 客户端，用于新增的独立请求场景）简化逻辑，不重复造轮子。
-- **既有已过 QA 的封装一律不重写**：`lib/api.ts` 的 `requestApi`、各波 `*Api.ts`（adminApi / configApi / pluginsApi / otaApi / soulMemoryApi / mcpApi / echomuseApi / tuyaApi）、`lib/clipboard.ts` 的三级降级链——它们沉淀了 W8/W10 D1 教训的 fail-closed 检查单语义（SyntaxError 归一 + 形状不符双路径、401 纯文本分支等，见「api 封装检查单」），重写有回归风险。渐进式采用；requestApi → ky 的整体迁移由后续统一评估，不逐波顺手改。
+- **成熟库采用口径（已全量落地）**：`ahooks` / `es-toolkit` / `ky` 已全量替代手写实现——`lib/useApiQuery.ts` 基于 `useRequest`（竞态保护依赖其内置 count 守卫）、`lib/api.ts` 的 `requestApi` 基于 `ky`（`retry: 0` + `timeout: false` 保持原 fetch「一次请求、无超时」语义，非 2xx 经 `hooks.beforeError` 转 `ApiError`）、NluSection / TtsSection 的轮询用 `useRequest` `pollingInterval`、ConsolePage 日志 flush 用 `useInterval`、数据工具函数用 `es-toolkit`（sortBy / sumBy；注意其 sortBy 只接受**数组形式的 criteria**）。新代码优先用库，不重复造轮子。
+- **仅库无法覆盖的场景保留手写**：全部 `new XMLHttpRequest` 上传（进度依赖 `xhr.upload.onprogress`，ky/fetch 无此能力）、ConsolePage 的 WS 指数退避重连（`scheduleRetry`，ahooks/ky 均无 WebSocket 能力）、`lib/clipboard.ts` 三级降级链（ahooks `useCopyToClipboard` 无 Tauri IPC + execCommand 兜底）、TestbenchPage 的 4 处 busy 超时兜底 setTimeout（命令式单次超时，非轮询）。库化迁移不改变 `*Api.ts` 既有 fail-closed 检查单语义（SyntaxError 归一 + 形状不符双路径、401 纯文本分支等，见「api 封装检查单」）。
 - **Tauri API 口径（登记）**：涉及平台能力（剪贴板 / 文件 / 窗口）且 Tauri 2 有跨平台 plugin API 时优先 Tauri；但**任何 Tauri API 使用必须保留浏览器降级链，不得裸调**——生产默认服务器页面模式下插件 IPC 默认被 ACL 拒绝（依据见「插件」小节 `remote.urls` 二选一结论）。
+- **API 调用口径**：新增 API 优先用 `lib/api.ts` 的方法级封装 `apiGet` / `apiPost` / `apiPut` / `apiPatch` / `apiDelete`（内部统一走 `requestApi`，鉴权与错误语义不重复实现）；`requestApi` 仅作特殊场景逃生舱（非 JSON 请求、需自定义 `RequestInit` 如 `signal`）。错误处理由封装层自动归一：调用点传 `action` 声明动作标签（默认归一），必要时用 `onError` 覆盖默认处理（接入领域归一器），调用点不再手写 try/catch + 归一器样板。
 - **prettier 统一格式**（prettier 3.9.10）：`.prettierrc` 参数按既有代码风格抽查定参（printWidth 100 / tabWidth 2 / 双引号 / 分号 / 尾逗号 all / LF），避免全量格式化产生巨型 diff；`.prettierignore` 排除 `dist/`、`src-tauri/target/`、`pnpm-lock.yaml`、`pnpm-workspace.yaml`。命令：`pnpm format`（写）/ `pnpm format:check`（只读自查）。项目无 eslint 配置（0 命中），故不装 `eslint-config-prettier`；后续若引入 eslint 需同步补装防规则冲突。提交前保证 `format:check` 通过。
 
 ## 目录结构

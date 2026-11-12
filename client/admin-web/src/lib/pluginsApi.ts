@@ -46,7 +46,7 @@
  * 413 纯文本「产物超上限（N 字节 > M）」透出。
  */
 
-import { ApiError, apiUrl, getAuthToken, requestApi } from "@/lib/api";
+import { ApiError, apiGet, apiPost, apiUrl, getAuthToken } from "@/lib/api";
 import type { JsonValue } from "@/lib/configApi";
 
 /** 插件平台结构性不可用（HTML 200 归一 / 形状不符），UI 层按能力未启用呈现。 */
@@ -455,7 +455,7 @@ function parseWasmSnapshot(wasm: Record<string, unknown>): WasmSnapshot | null {
  * `wasm` 键缺失/损坏 → wasm=null（静态基线），不是错误。
  */
 export async function getPluginsFull(): Promise<PluginsFullSnapshot> {
-  const raw = await requestApi<unknown>("plugins");
+  const raw = await apiGet<unknown>("plugins");
   if (!isRecord(raw) || raw["ok"] !== true) {
     throw new Error("插件清单加载失败：响应缺少 ok:true，不视为有效清单。");
   }
@@ -604,14 +604,10 @@ async function lifecycleRequest(
   op: "register" | "activate" | "deactivate" | "remove",
   action: string,
 ): Promise<PluginLifecycleResult> {
-  let raw: unknown;
-  try {
-    raw = await requestApi<unknown>(`plugins/${encodeURIComponent(pluginId)}/${op}`, {
-      method: "POST",
-    });
-  } catch (error) {
-    normalizeWriteError(error, action);
-  }
+  const raw = await apiPost<unknown>(`plugins/${encodeURIComponent(pluginId)}/${op}`, undefined, {
+    action,
+    onError: normalizeWriteError,
+  });
   if (!isRecord(raw) || raw["ok"] !== true) {
     const detail = isRecord(raw) ? readServerError(JSON.stringify(raw)) : null;
     throw new Error(`${action}失败：${detail ?? "服务端未确认操作成功（响应缺少 ok:true）。"}`);
@@ -661,19 +657,11 @@ export async function runPluginAction(
   actionId: string,
   payload: Record<string, string>,
 ): Promise<PluginActionRunResult> {
-  let raw: unknown;
-  try {
-    raw = await requestApi<unknown>(
-      `plugins/${encodeURIComponent(pluginId)}/actions/${encodeURIComponent(actionId)}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      },
-    );
-  } catch (error) {
-    normalizeWriteError(error, "动作执行");
-  }
+  const raw = await apiPost<unknown>(
+    `plugins/${encodeURIComponent(pluginId)}/actions/${encodeURIComponent(actionId)}`,
+    payload,
+    { action: "动作执行", onError: normalizeWriteError },
+  );
   if (!isRecord(raw) || raw["ok"] !== true) {
     const detail = isRecord(raw) ? readServerError(JSON.stringify(raw)) : null;
     throw new Error(`动作执行失败：${detail ?? "服务端未确认动作成功（响应缺少 ok:true）。"}`);

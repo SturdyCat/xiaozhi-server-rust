@@ -21,6 +21,8 @@
  * 该令牌只注入 `requestApi`；WebSocket / XHR 上传 / 下载链接的透传是后续收尾项。
  */
 
+import ky, { isHTTPError } from "ky";
+
 const DEFAULT_API_BASE_URL = "/api";
 
 /** 去掉结尾斜杠，保证拼接结果唯一。 */
@@ -121,20 +123,191 @@ export async function requestApi<T>(path: string, init?: RequestInit): Promise<T
     headers.set("Authorization", `Bearer ${token}`);
   }
 
-  const response = await fetch(apiUrl(path), {
+  const url = apiUrl(path);
+  const response = await ky(url, {
     ...init,
     headers,
+    // 对齐原 fetch 语义：一次请求绝不重试（ky 默认重试 2 次）、无超时（ky 默认每次 10s）。
+    retry: 0,
+    timeout: false,
+    hooks: {
+      beforeError: [
+        async ({ error }) => {
+          if (isHTTPError(error)) {
+            // ky 2 在抛 HTTPError 前已把 body 全量读进 error.data（response body 被消费，
+            // error.response.text() 会抛 Body is unusable）。data 的类型：JSON
+            // content-type 时为已 parse 的值、其他 content-type 为原文 string、
+            // 空 body/读取/解析失败为 undefined。ApiError.body 无消费方，用 stringify
+            // 尽量贴近旧版「原始响应文本」语义。
+            const body =
+              typeof error.data === "string"
+                ? error.data
+                : error.data === undefined
+                  ? ""
+                  : JSON.stringify(error.data);
+            // 注意：request.url 会被解析成绝对地址，这里保持与旧版一致用相对拼接结果。
+            return new ApiError(
+              `请求 ${url} 失败：HTTP ${error.response.status}`,
+              error.response.status,
+              body,
+            );
+          }
+          return error;
+        },
+      ],
+    },
   });
 
   const text = await response.text();
-  if (!response.ok) {
-    throw new ApiError(`请求 ${apiUrl(path)} 失败：HTTP ${response.status}`, response.status, text);
-  }
-
   if (text.trim() === "") {
     return undefined as T;
   }
   return JSON.parse(text) as T;
+}
+
+/** 方法级封装的错误处理选项：封装层自动捕获并归一异常，业务可覆盖。 */
+export interface ApiCallOptions {
+  /** 业务动作标签（如「读取设备列表」），拼入错误文案。 */
+  action?: string;
+  /** 业务覆盖默认归一；必须抛出（never），签名与各领域归一器一致。 */
+  onError?: (error: unknown, action: string) => never;
+}
+
+/**
+ * 方法级封装的默认错误归一（供未来没有领域归一器的新代码使用）。
+ *
+ * - `ApiError`：尽力从响应体提取服务端可读文案（`message` / `error` 字段，轻量 JSON
+ *   提取、非 JSON 回落原文），拼成「<action>失败：<detail>」；无 body 时回落 HTTP 状态。
+ * - `SyntaxError`（HTML 200 被 SPA fallback 接走）：明确「非 JSON 内容」。
+ * - 其余异常原样重抛（不吞、不伪装成功）。
+ */
+function defaultNormalizeError(error: unknown, action: string): never {
+  if (error instanceof ApiError) {
+    let detail: string | null = null;
+    const text = error.body.trim();
+    if (text !== "") {
+      try {
+        const parsed: unknown = JSON.parse(text);
+        if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+          const record = parsed as Record<string, unknown>;
+          const message = record["message"];
+          const serverError = record["error"];
+          if (typeof message === "string" && message.trim() !== "") {
+            detail = message.trim();
+          } else if (typeof serverError === "string" && serverError.trim() !== "") {
+            detail = serverError.trim();
+          }
+        }
+      } catch {
+        // 非 JSON 错误体：回落原文。
+      }
+      detail ??= text;
+    }
+    throw new Error(`${action}失败：${detail ?? `HTTP ${error.status}`}`);
+  }
+  if (error instanceof SyntaxError) {
+    throw new Error(`${action}失败：服务端返回了非 JSON 内容（通常被管理页 HTML 回退接走）。`);
+  }
+  throw error instanceof Error ? error : new Error(String(error));
+}
+
+/**
+ * 方法级 JSON 请求的公共实现：全部走 [`requestApi`]（鉴权注入、ApiError、
+ * retry/timeout 语义都在那里），这里只收敛 method + body 的样板。
+ *
+ * `body === undefined` 时不发送请求体、不带 `Content-Type`（对齐既有
+ * `{ method: "POST" }` 形态）；body 存在时统一 `JSON.stringify` 并带
+ * `Content-Type: application/json`。
+ *
+ * 错误处理三层默认语义（`ApiCallOptions`）：不传 options（或 action 与 onError 均缺省）
+ * 时不包 try/catch，行为与现状完全一致（异常原样上抛）；传 `onError` 时由业务归一器
+ * 覆盖默认处理；只传 `action` 时由 [`defaultNormalizeError`] 归一。
+ */
+async function jsonRequest<T>(
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
+  path: string,
+  body?: unknown,
+  options?: ApiCallOptions,
+): Promise<T> {
+  const promise = requestApi<T>(
+    path,
+    body === undefined
+      ? { method }
+      : {
+          method,
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+  );
+  if (options === undefined || (options.action === undefined && options.onError === undefined)) {
+    return promise;
+  }
+  try {
+    return await promise;
+  } catch (error) {
+    if (options.onError !== undefined) {
+      // 业务覆盖：归一器签名是 never，正常实现必抛；后面 throw 兜底防实现不规范的归一器。
+      options.onError(error, options.action ?? "");
+      throw error;
+    }
+    defaultNormalizeError(error, options.action ?? "");
+    throw error;
+  }
+}
+
+/**
+ * GET 请求（JSON 解析与鉴权同 `requestApi`）。
+ *
+ * 错误处理三层默认语义：传 `action` 时异常由封装层捕获并按
+ * [`defaultNormalizeError`] 归一；传 `onError` 时由业务归一器覆盖默认处理；
+ * 两者都缺省时行为与不带 options 完全一致（异常原样上抛）。
+ */
+export function apiGet<T>(path: string, options?: ApiCallOptions): Promise<T> {
+  return jsonRequest<T>("GET", path, undefined, options);
+}
+
+/**
+ * POST 请求；body 省略时不发送请求体，存在时统一 JSON 序列化并带 `Content-Type: application/json`。
+ *
+ * 错误处理三层默认语义：传 `action` 时异常由封装层捕获并按
+ * [`defaultNormalizeError`] 归一；传 `onError` 时由业务归一器覆盖默认处理；
+ * 两者都缺省时行为与不带 options 完全一致（异常原样上抛）。
+ */
+export function apiPost<T>(path: string, body?: unknown, options?: ApiCallOptions): Promise<T> {
+  return jsonRequest<T>("POST", path, body, options);
+}
+
+/**
+ * PUT 请求；body 省略时不发送请求体，存在时统一 JSON 序列化并带 `Content-Type: application/json`。
+ *
+ * 错误处理三层默认语义：传 `action` 时异常由封装层捕获并按
+ * [`defaultNormalizeError`] 归一；传 `onError` 时由业务归一器覆盖默认处理；
+ * 两者都缺省时行为与不带 options 完全一致（异常原样上抛）。
+ */
+export function apiPut<T>(path: string, body?: unknown, options?: ApiCallOptions): Promise<T> {
+  return jsonRequest<T>("PUT", path, body, options);
+}
+
+/**
+ * PATCH 请求；body 省略时不发送请求体，存在时统一 JSON 序列化并带 `Content-Type: application/json`。
+ *
+ * 错误处理三层默认语义：传 `action` 时异常由封装层捕获并按
+ * [`defaultNormalizeError`] 归一；传 `onError` 时由业务归一器覆盖默认处理；
+ * 两者都缺省时行为与不带 options 完全一致（异常原样上抛）。
+ */
+export function apiPatch<T>(path: string, body?: unknown, options?: ApiCallOptions): Promise<T> {
+  return jsonRequest<T>("PATCH", path, body, options);
+}
+
+/**
+ * DELETE 请求；body 省略时不发送请求体，存在时统一 JSON 序列化并带 `Content-Type: application/json`。
+ *
+ * 错误处理三层默认语义：传 `action` 时异常由封装层捕获并按
+ * [`defaultNormalizeError`] 归一；传 `onError` 时由业务归一器覆盖默认处理；
+ * 两者都缺省时行为与不带 options 完全一致（异常原样上抛）。
+ */
+export function apiDelete<T>(path: string, body?: unknown, options?: ApiCallOptions): Promise<T> {
+  return jsonRequest<T>("DELETE", path, body, options);
 }
 
 /**

@@ -22,7 +22,7 @@
  * 的路径，不拼 `/api` 前缀。所有端点都不以 HTTP 200 作为成功判据。
  */
 
-import { ApiError, requestApi } from "@/lib/api";
+import { ApiError, apiGet, apiPost, requestApi } from "@/lib/api";
 import type { JsonObject, JsonValue } from "@/lib/configApi";
 
 /** 技能控制域白名单，与服务端 `Domain` 枚举一一对应（`plugins/nlu/mod.rs:136-146`）。 */
@@ -277,12 +277,10 @@ function artifactString(artifact: JsonObject, key: string): string | null {
  * 服务端硬编码 false，这里仍做强校验，防止「构建成功自动启用」的假象。
  */
 export async function getNluBuildStatus(): Promise<NluBuildStatus> {
-  let raw: unknown;
-  try {
-    raw = await requestApi<unknown>("nlu/model/build");
-  } catch (error) {
-    normalizeError(error, "读取模型构建状态");
-  }
+  const raw = await apiGet<unknown>("nlu/model/build", {
+    action: "读取模型构建状态",
+    onError: normalizeError,
+  });
   if (
     !isRecord(raw) ||
     raw["type"] !== "state" ||
@@ -328,16 +326,11 @@ export async function getNluBuildStatus(): Promise<NluBuildStatus> {
  * `source_revision` 还要回显校验与请求一致。
  */
 export async function startNluBuild(expectedRevision: string): Promise<NluBuildStartResult> {
-  let raw: unknown;
-  try {
-    raw = await requestApi<unknown>("nlu/model/build", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ expected_revision: expectedRevision }),
-    });
-  } catch (error) {
-    normalizeError(error, "启动模型构建");
-  }
+  const raw = await apiPost<unknown>(
+    "nlu/model/build",
+    { expected_revision: expectedRevision },
+    { action: "启动模型构建", onError: normalizeError },
+  );
   if (!isRecord(raw)) {
     throw new Error(`启动模型构建：响应不是 JSON 对象，不能判定为已启动。${FALLBACK_HINT}`);
   }
@@ -392,12 +385,10 @@ function stringArrayOf(value: unknown): string[] {
  * 不以 HTTP 200 判成功。
  */
 export async function getNluBuildHistory(): Promise<NluBuildHistory> {
-  let raw: unknown;
-  try {
-    raw = await requestApi<unknown>("nlu/model/builds");
-  } catch (error) {
-    normalizeError(error, "读取构建历史");
-  }
+  const raw = await apiGet<unknown>("nlu/model/builds", {
+    action: "读取构建历史",
+    onError: normalizeError,
+  });
   if (!isRecord(raw) || !Array.isArray(raw["builds"])) {
     throw new Error(
       `读取构建历史：响应不是含 builds 数组的 JSON 对象，不能判定为成功。${FALLBACK_HINT}`,
@@ -535,12 +526,10 @@ function toCatalogIntent(value: unknown): SkillCatalogIntent {
  * 绝不伪装成空目录、绝不伪装成加载成功。
  */
 export async function getSkillCatalog(): Promise<SkillCatalog> {
-  let raw: unknown;
-  try {
-    raw = await requestApi<unknown>("skills/catalog");
-  } catch (error) {
-    normalizeError(error, "读取技能目录");
-  }
+  const raw = await apiGet<unknown>("skills/catalog", {
+    action: "读取技能目录",
+    onError: normalizeError,
+  });
   if (!isRecord(raw) || raw["state"] !== "ok" || !Array.isArray(raw["intents"])) {
     throw new NluUnavailableError(
       `读取技能目录：响应不是含 state="ok" 与 intents 数组的 JSON 对象，按能力未启用处理（不伪装成空目录）。${FALLBACK_HINT}`,

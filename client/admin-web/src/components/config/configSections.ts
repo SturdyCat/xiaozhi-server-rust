@@ -6,6 +6,8 @@
  * 里另起一套 id 清单。
  */
 
+import { sortBy } from "es-toolkit";
+
 export type ConfigSectionGroup = "pinned" | "voice" | "agent" | "service";
 
 export interface ConfigSection {
@@ -51,9 +53,10 @@ export function findSection(id: string): ConfigSection | undefined {
   return CONFIG_SECTIONS.find((section) => section.id === id);
 }
 
-/** 取某组的分区，按 `order` 升序。 */
+/** 取某组的分区，按 `order` 升序（sortBy 返回新数组，稳定排序，与原 sort 等价）。 */
 export function sectionsOf(group: ConfigSectionGroup): ConfigSection[] {
-  return CONFIG_SECTIONS.filter((section) => section.group === group).sort(
-    (a, b) => a.order - b.order,
+  return sortBy(
+    CONFIG_SECTIONS.filter((section) => section.group === group),
+    [(section) => section.order],
   );
 }

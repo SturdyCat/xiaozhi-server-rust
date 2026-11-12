@@ -36,7 +36,8 @@
  *   `auth_ok`（`[server].expected_token`/Bearer）。iframe `?token=` 传的是管理台令牌。
  */
 
-import { ApiError, requestApi } from "@/lib/api";
+import ky, { isHTTPError } from "ky";
+import { ApiError, apiGet, apiPost } from "@/lib/api";
 import type { JsonValue } from "@/lib/configApi";
 
 /**
@@ -237,12 +238,10 @@ export interface EchomuseDevices {
  * **不判 `ok===true`（响应无 ok 键）也不判 HTTP 200**。
  */
 export async function getEchomuseDevices(): Promise<EchomuseDevices> {
-  let raw: unknown;
-  try {
-    raw = await requestApi<unknown>("echomuse/devices");
-  } catch (error) {
-    gateError(error, "读取 EchoMuse 设备列表");
-  }
+  const raw = await apiGet<unknown>("echomuse/devices", {
+    action: "读取 EchoMuse 设备列表",
+    onError: gateError,
+  });
   if (!isRecord(raw) || typeof raw["enabled"] !== "boolean" || !Array.isArray(raw["devices"])) {
     throw new Error("读取 EchoMuse 设备列表：响应形状不符（缺少 enabled/devices 数组）。");
   }
@@ -279,12 +278,23 @@ export interface EmStatus {
 export async function getEmStatus(): Promise<EmStatus> {
   let raw: unknown;
   try {
-    const response = await fetch("/em/status", { headers: { Accept: "application/json" } });
-    const text = await response.text();
-    if (!response.ok) {
-      throw new Error(`读取 /em/status 失败（HTTP ${response.status}）`);
-    }
-    raw = JSON.parse(text) as unknown;
+    const response = await ky("/em/status", {
+      headers: { Accept: "application/json" },
+      // 对齐原 fetch 语义：不重试、无超时；非 2xx 抛出与旧版同文案的 Error。
+      retry: 0,
+      timeout: false,
+      hooks: {
+        beforeError: [
+          async ({ error }) => {
+            if (isHTTPError(error)) {
+              return new Error(`读取 /em/status 失败（HTTP ${error.response.status}）`);
+            }
+            return error;
+          },
+        ],
+      },
+    });
+    raw = JSON.parse(await response.text()) as unknown;
   } catch (error) {
     if (error instanceof SyntaxError) {
       throw new EchomuseUnavailableError(
@@ -315,12 +325,10 @@ export async function getEmStatus(): Promise<EmStatus> {
 
 /** 读取单台设备（`record_payload`；404 `device not found` → EchomuseApiError）。 */
 export async function getEchomuseDevice(deviceId: string): Promise<EchomuseDevice> {
-  let raw: unknown;
-  try {
-    raw = await requestApi<unknown>(`echomuse/devices/${encodeURIComponent(deviceId)}`);
-  } catch (error) {
-    gateError(error, "读取 EchoMuse 设备详情");
-  }
+  const raw = await apiGet<unknown>(`echomuse/devices/${encodeURIComponent(deviceId)}`, {
+    action: "读取 EchoMuse 设备详情",
+    onError: gateError,
+  });
   if (!isRecord(raw) || typeof raw["device_id"] !== "string") {
     throw new Error("读取 EchoMuse 设备详情：响应形状不符（缺少 device_id）。");
   }
@@ -332,14 +340,11 @@ export async function getEchomuseDevice(deviceId: string): Promise<EchomuseDevic
  * 行为一致）。判 `{removed:true}`。
  */
 export async function deleteEchomuseDevice(deviceId: string): Promise<void> {
-  let raw: unknown;
-  try {
-    raw = await requestApi<unknown>(`echomuse/devices/${encodeURIComponent(deviceId)}/delete`, {
-      method: "POST",
-    });
-  } catch (error) {
-    gateError(error, "删除 EchoMuse 设备记录");
-  }
+  const raw = await apiPost<unknown>(
+    `echomuse/devices/${encodeURIComponent(deviceId)}/delete`,
+    undefined,
+    { action: "删除 EchoMuse 设备记录", onError: gateError },
+  );
   if (!isRecord(raw) || raw["removed"] !== true) {
     throw new Error("删除 EchoMuse 设备记录：服务端未确认删除（响应缺少 removed:true）。");
   }
@@ -358,16 +363,11 @@ export async function approveEchomuseDevice(
   label?: string,
 ): Promise<EchomuseDevice> {
   const body = typeof label === "string" && label.trim() !== "" ? { label: label.trim() } : {};
-  let raw: unknown;
-  try {
-    raw = await requestApi<unknown>(`echomuse/devices/${encodeURIComponent(deviceId)}/approve`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-  } catch (error) {
-    gateError(error, "批准 EchoMuse 设备");
-  }
+  const raw = await apiPost<unknown>(
+    `echomuse/devices/${encodeURIComponent(deviceId)}/approve`,
+    body,
+    { action: "批准 EchoMuse 设备", onError: gateError },
+  );
   if (!isRecord(raw) || typeof raw["device_id"] !== "string") {
     throw new Error("批准 EchoMuse 设备：响应形状不符（缺少 device_id）。");
   }
@@ -392,16 +392,11 @@ export async function sendEchomuseCommand(
   deviceId: string,
   body: { action: "wifi" | "wifi_scan" | "wifi_commit"; ssid?: string; psk?: string },
 ): Promise<EchomuseCommandResult> {
-  let raw: unknown;
-  try {
-    raw = await requestApi<unknown>(`echomuse/devices/${encodeURIComponent(deviceId)}/command`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-  } catch (error) {
-    gateError(error, "下发 EchoMuse 指令");
-  }
+  const raw = await apiPost<unknown>(
+    `echomuse/devices/${encodeURIComponent(deviceId)}/command`,
+    body,
+    { action: "下发 EchoMuse 指令", onError: gateError },
+  );
   if (!isRecord(raw) || raw["queued"] !== true) {
     throw new Error("下发 EchoMuse 指令：服务端未确认排队（响应缺少 queued:true）。");
   }
@@ -421,16 +416,11 @@ export async function saveEchomuseSettings(
   deviceId: string,
   body: Record<string, JsonValue>,
 ): Promise<{ persisted: boolean; delivered: boolean }> {
-  let raw: unknown;
-  try {
-    raw = await requestApi<unknown>(`echomuse/devices/${encodeURIComponent(deviceId)}/settings`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-  } catch (error) {
-    gateError(error, "保存 EchoMuse 设备设置");
-  }
+  const raw = await apiPost<unknown>(
+    `echomuse/devices/${encodeURIComponent(deviceId)}/settings`,
+    body,
+    { action: "保存 EchoMuse 设备设置", onError: gateError },
+  );
   if (!isRecord(raw) || raw["persisted"] !== true || typeof raw["delivered"] !== "boolean") {
     throw new Error("保存 EchoMuse 设备设置：响应形状不符（缺少 persisted/delivered）。");
   }
@@ -457,12 +447,10 @@ export interface EchomuseRuntime {
  * 离线回 `offline_payload`（全 null，显式不缺键）→ online=false。
  */
 export async function getEchomuseRuntime(deviceId: string): Promise<EchomuseRuntime> {
-  let raw: unknown;
-  try {
-    raw = await requestApi<unknown>(`echomuse/devices/${encodeURIComponent(deviceId)}/runtime`);
-  } catch (error) {
-    gateError(error, "读取 EchoMuse 设备报告");
-  }
+  const raw = await apiGet<unknown>(`echomuse/devices/${encodeURIComponent(deviceId)}/runtime`, {
+    action: "读取 EchoMuse 设备报告",
+    onError: gateError,
+  });
   if (!isRecord(raw)) {
     throw new Error("读取 EchoMuse 设备报告：响应形状不符（不是 JSON 对象）。");
   }
@@ -491,16 +479,11 @@ export async function setEchomuseVolume(
   deviceId: string,
   level: number,
 ): Promise<{ queued: boolean; applied: boolean; level: number }> {
-  let raw: unknown;
-  try {
-    raw = await requestApi<unknown>(`echomuse/devices/${encodeURIComponent(deviceId)}/volume`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ level }),
-    });
-  } catch (error) {
-    gateError(error, "设置 EchoMuse 设备音量");
-  }
+  const raw = await apiPost<unknown>(
+    `echomuse/devices/${encodeURIComponent(deviceId)}/volume`,
+    { level },
+    { action: "设置 EchoMuse 设备音量", onError: gateError },
+  );
   if (!isRecord(raw) || raw["queued"] !== true) {
     throw new Error("设置 EchoMuse 设备音量：服务端未确认排队（响应缺少 queued:true）。");
   }
@@ -527,12 +510,10 @@ function parseShellOutput(raw: unknown, action: string): EchomuseShellOutput {
 
 /** 读取原始系统信息（B.10，G2 `system_gate` 五重；固定 INFO 命令）。 */
 export async function getEchomuseSystemInfo(deviceId: string): Promise<EchomuseShellOutput> {
-  let raw: unknown;
-  try {
-    raw = await requestApi<unknown>(`echomuse/devices/${encodeURIComponent(deviceId)}/system/info`);
-  } catch (error) {
-    gateError(error, "读取 EchoMuse 原始系统信息");
-  }
+  const raw = await apiGet<unknown>(
+    `echomuse/devices/${encodeURIComponent(deviceId)}/system/info`,
+    { action: "读取 EchoMuse 原始系统信息", onError: gateError },
+  );
   return parseShellOutput(raw, "读取 EchoMuse 原始系统信息");
 }
 
@@ -556,14 +537,10 @@ export async function getEchomuseSystemLogs(
   deviceId: string,
   source: EchomuseLogSource = "messages",
 ): Promise<EchomuseShellOutput & { source: string }> {
-  let raw: unknown;
-  try {
-    raw = await requestApi<unknown>(
-      `echomuse/devices/${encodeURIComponent(deviceId)}/system/logs?source=${encodeURIComponent(source)}`,
-    );
-  } catch (error) {
-    gateError(error, "读取 EchoMuse 设备日志");
-  }
+  const raw = await apiGet<unknown>(
+    `echomuse/devices/${encodeURIComponent(deviceId)}/system/logs?source=${encodeURIComponent(source)}`,
+    { action: "读取 EchoMuse 设备日志", onError: gateError },
+  );
   const parsed = parseShellOutput(raw, "读取 EchoMuse 设备日志");
   return { ...parsed, source: isRecord(raw) ? str(raw, "source") || source : source };
 }
@@ -575,19 +552,11 @@ export async function getEchomuseSystemLogs(
 export async function rebootEchomuseDevice(
   deviceId: string,
 ): Promise<{ dispatched: boolean; rebooted: boolean }> {
-  let raw: unknown;
-  try {
-    raw = await requestApi<unknown>(
-      `echomuse/devices/${encodeURIComponent(deviceId)}/system/reboot`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ confirm: true }),
-      },
-    );
-  } catch (error) {
-    gateError(error, "重启 EchoMuse 设备");
-  }
+  const raw = await apiPost<unknown>(
+    `echomuse/devices/${encodeURIComponent(deviceId)}/system/reboot`,
+    { confirm: true },
+    { action: "重启 EchoMuse 设备", onError: gateError },
+  );
   if (!isRecord(raw) || raw["dispatched"] !== true) {
     throw new Error("重启 EchoMuse 设备：服务端未确认调度（响应缺少 dispatched:true）。");
   }
@@ -633,12 +602,10 @@ function parseAsset(raw: unknown): OwwAssetState {
 
 /** 读取 OWW 资产状态（B.14，G2）。读不到设备不是错误（200 + unknown）。 */
 export async function getOwwState(deviceId: string): Promise<OwwState> {
-  let raw: unknown;
-  try {
-    raw = await requestApi<unknown>(`echomuse/devices/${encodeURIComponent(deviceId)}/oww/state`);
-  } catch (error) {
-    gateError(error, "读取 OWW 资产状态");
-  }
+  const raw = await apiGet<unknown>(`echomuse/devices/${encodeURIComponent(deviceId)}/oww/state`, {
+    action: "读取 OWW 资产状态",
+    onError: gateError,
+  });
   if (!isRecord(raw) || !isRecord(raw["vad"]) || !isRecord(raw["ort"])) {
     throw new Error("读取 OWW 资产状态：响应形状不符（缺少 vad/ort）。");
   }
@@ -660,15 +627,11 @@ export async function getOwwState(deviceId: string): Promise<OwwState> {
  * 「官方已有的资产安装不再重复设置入口」），方法按 wire 补齐。
  */
 export async function installOwwVad(deviceId: string): Promise<void> {
-  let raw: unknown;
-  try {
-    raw = await requestApi<unknown>(
-      `echomuse/devices/${encodeURIComponent(deviceId)}/oww/install-vad`,
-      { method: "POST" },
-    );
-  } catch (error) {
-    gateError(error, "安装 OWW VAD 资产");
-  }
+  const raw = await apiPost<unknown>(
+    `echomuse/devices/${encodeURIComponent(deviceId)}/oww/install-vad`,
+    undefined,
+    { action: "安装 OWW VAD 资产", onError: gateError },
+  );
   if (!isRecord(raw) || raw["installed"] !== true) {
     throw new Error("安装 OWW VAD 资产：服务端未确认安装（响应缺少 installed:true）。");
   }

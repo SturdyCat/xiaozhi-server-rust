@@ -1,4 +1,4 @@
-import { ApiError, apiUrl, getAuthToken, requestApi } from "@/lib/api";
+import { ApiError, apiGet, apiPost, apiUrl, getAuthToken } from "@/lib/api";
 
 /** 服务健康信息（`GET /api/health`）。 */
 export interface HealthInfo {
@@ -99,22 +99,22 @@ export interface PluginsInfo {
 }
 
 /** 拉取服务健康信息。 */
-export const getHealth = () => requestApi<HealthInfo>("health");
+export const getHealth = () => apiGet<HealthInfo>("health");
 
 /** 拉取全局运行统计。 */
-export const getStats = () => requestApi<StatsInfo>("stats");
+export const getStats = () => apiGet<StatsInfo>("stats");
 
 /** 拉取引擎能力总览。 */
-export const getEngines = () => requestApi<EnginesInfo>("health/engines");
+export const getEngines = () => apiGet<EnginesInfo>("health/engines");
 
 /** 拉取设备列表。 */
-export const getDevices = () => requestApi<DevicesInfo>("devices");
+export const getDevices = () => apiGet<DevicesInfo>("devices");
 
 /** 拉取服务器出口地理信息。 */
-export const getGeo = () => requestApi<GeoInfo>("server/geo");
+export const getGeo = () => apiGet<GeoInfo>("server/geo");
 
 /** 拉取插件能力列表。 */
-export const getPlugins = () => requestApi<PluginsInfo>("plugins");
+export const getPlugins = () => apiGet<PluginsInfo>("plugins");
 
 /** 设备会话摘要（`GET /api/devices/{id}` 内 sessions 项）。 */
 export interface DeviceSession {
@@ -164,15 +164,11 @@ export interface InjectResult {
 
 /** 拉取单个设备详情（含会话与对话）。 */
 export const getDevice = (id: string) =>
-  requestApi<DeviceDetailInfo>("devices/" + encodeURIComponent(id));
+  apiGet<DeviceDetailInfo>("devices/" + encodeURIComponent(id));
 
 /** 向设备注入一条消息（≤2000 字符，由服务端校验）。 */
 export const injectDevice = (id: string, text: string) =>
-  requestApi<InjectResult>("devices/" + encodeURIComponent(id) + "/inject", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text }),
-  });
+  apiPost<InjectResult>("devices/" + encodeURIComponent(id) + "/inject", { text });
 
 /** 存储目录中的单个条目（`GET /api/files`）。 */
 export interface FileEntry {
@@ -209,23 +205,13 @@ export interface UploadResult {
 
 /** 列出目录（path 为空表示存储根）。 */
 export const getFileList = (path: string) =>
-  requestApi<FilesListing>(path ? `files?path=${encodeURIComponent(path)}` : "files");
+  apiGet<FilesListing>(path ? `files?path=${encodeURIComponent(path)}` : "files");
 
 /** 新建目录（父目录一并创建，已存在幂等）。 */
-export const makeDir = (path: string) =>
-  requestApi<FileOkResult>("files/mkdir", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ path }),
-  });
+export const makeDir = (path: string) => apiPost<FileOkResult>("files/mkdir", { path });
 
 /** 删除文件或目录（目录递归）。 */
-export const deletePath = (path: string) =>
-  requestApi<FileOkResult>("files/delete", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ path }),
-  });
+export const deletePath = (path: string) => apiPost<FileOkResult>("files/delete", { path });
 
 /**
  * 上传裸字节到目标文件路径（含文件名，相对存储根），用 XHR 取得上传进度。

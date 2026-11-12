@@ -15,7 +15,7 @@
  * 出错是普通 JSON `{ok:false,...}`，读 message 透出。**不判 HTTP 200 为成功**。
  */
 
-import { ApiError, requestApi } from "@/lib/api";
+import { ApiError, apiGet } from "@/lib/api";
 import type { JsonValue } from "@/lib/configApi";
 
 /** MCP 工具清单读取失败（形状不符等结构性异常，UI 层用错误行呈现）。 */
@@ -159,12 +159,10 @@ function num(raw: Record<string, unknown>, key: string): number {
  * 形状不符抛 [`McpUnavailableError`]。**空 devices 是正常**，按成功返回。
  */
 export async function getMcpTools(): Promise<McpTools> {
-  let raw: unknown;
-  try {
-    raw = await requestApi<unknown>("mcp/tools");
-  } catch (error) {
-    normalizeError(error, "读取设备工具清单");
-  }
+  const raw = await apiGet<unknown>("mcp/tools", {
+    action: "读取设备工具清单",
+    onError: normalizeError,
+  });
   const body = requireOk(raw, "读取设备工具清单");
   if (!Array.isArray(body["devices"])) {
     throw new McpUnavailableError("读取设备工具清单：响应缺少 devices 数组（服务端返回异常）。");

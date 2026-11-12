@@ -21,7 +21,7 @@
  * 路径写法沿用 `configApi.ts` 惯例：只传相对 `requestApi` 的路径，不拼 `/api` 前缀。
  */
 
-import { ApiError, requestApi } from "@/lib/api";
+import { ApiError, apiGet, apiPost } from "@/lib/api";
 
 /** `POST /api/test/llm/models` 请求体：只允许这两个键，且只带非空值（可只发 `{}`）。 */
 export interface LlmModelsRequest {
@@ -181,16 +181,10 @@ export async function fetchLlmModels(body: LlmModelsRequest): Promise<LlmModelsR
     payload.api_key = body.api_key.trim();
   }
 
-  let raw: unknown;
-  try {
-    raw = await requestApi<unknown>("test/llm/models", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-  } catch (error) {
-    normalizeError(error, "获取模型列表");
-  }
+  const raw = await apiPost<unknown>("test/llm/models", payload, {
+    action: "获取模型列表",
+    onError: normalizeError,
+  });
 
   if (!isRecord(raw) || typeof raw.state !== "string") {
     throw new Error(`获取模型列表：服务端响应缺少 state 字段，不能判定为成功。${FALLBACK_HINT}`);
@@ -243,12 +237,10 @@ function toVoice(value: unknown): Voice {
  * probing 布尔」，否则同样按能力未启用处理。
  */
 export async function getTtsVoices(): Promise<VoicesResult> {
-  let raw: unknown;
-  try {
-    raw = await requestApi<unknown>("tts/voices");
-  } catch (error) {
-    normalizeError(error, "读取音色目录");
-  }
+  const raw = await apiGet<unknown>("tts/voices", {
+    action: "读取音色目录",
+    onError: normalizeError,
+  });
 
   if (!isRecord(raw) || !Array.isArray(raw.voices) || typeof raw.probing !== "boolean") {
     throw new CatalogueUnavailableError(
@@ -281,16 +273,14 @@ export async function getTtsVoices(): Promise<VoicesResult> {
  * 必须判 `ok === true`，不能只看 HTTP 200。
  */
 export async function refreshTtsVoices(): Promise<RefreshResult> {
-  let raw: unknown;
-  try {
-    raw = await requestApi<unknown>("tts/voices/refresh", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: "{}",
-    });
-  } catch (error) {
-    normalizeError(error, "启动音色探测");
-  }
+  const raw = await apiPost<unknown>(
+    "tts/voices/refresh",
+    {},
+    {
+      action: "启动音色探测",
+      onError: normalizeError,
+    },
+  );
 
   if (!isRecord(raw) || raw.ok !== true || typeof raw.probing !== "boolean") {
     throw new Error(
@@ -319,16 +309,10 @@ export async function testTtsCredentials(
     }
   }
 
-  let raw: unknown;
-  try {
-    raw = await requestApi<unknown>("tts/voices/test-credentials", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-  } catch (error) {
-    normalizeError(error, "测试讯飞凭据");
-  }
+  const raw = await apiPost<unknown>("tts/voices/test-credentials", payload, {
+    action: "测试讯飞凭据",
+    onError: normalizeError,
+  });
 
   if (!isRecord(raw) || typeof raw.ok !== "boolean") {
     throw new Error(

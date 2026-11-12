@@ -23,7 +23,7 @@
  * 路径写法沿用 `configApi.ts` 惯例：只传相对 `requestApi` 的路径，不拼 `/api` 前缀。
  */
 
-import { ApiError, requestApi } from "@/lib/api";
+import { ApiError, apiGet, apiPost } from "@/lib/api";
 import type { JsonObject, JsonValue } from "@/lib/configApi";
 
 /** 人格 / 记忆能力未启用（native-plugins 未编入，SPA fallback 接走）的可识别错误。 */
@@ -165,12 +165,10 @@ export interface SoulPresets {
  * pure-base 下被 SPA fallback 接走 → [`SoulMemoryUnavailableError`]。
  */
 export async function getSoulPresets(): Promise<SoulPresets> {
-  let raw: unknown;
-  try {
-    raw = await requestApi<unknown>("soul/presets");
-  } catch (error) {
-    normalizeError(error, "读取人格预设清单");
-  }
+  const raw = await apiGet<unknown>("soul/presets", {
+    action: "读取人格预设清单",
+    onError: normalizeError,
+  });
   const body = requireOk(raw, "读取人格预设清单");
   if (!Array.isArray(body["presets"])) {
     throw new SoulMemoryUnavailableError(
@@ -229,16 +227,10 @@ export async function previewSoul(soul: JsonObject | null): Promise<SoulPreview>
   if (soul !== null) {
     payload["soul"] = soul;
   }
-  let raw: unknown;
-  try {
-    raw = await requestApi<unknown>("soul/preview", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-  } catch (error) {
-    normalizeError(error, "预览最终提示词");
-  }
+  const raw = await apiPost<unknown>("soul/preview", payload, {
+    action: "预览最终提示词",
+    onError: normalizeError,
+  });
   const body = requireOk(raw, "预览最终提示词");
   const instructions = typeof body["instructions"] === "string" ? body["instructions"] : "";
   return {
@@ -309,12 +301,10 @@ export interface MemoryStatus {
  * `rag` 键**按存在性判断**（`types.rs:180-183`：graph/store 的 JSON 没有 rag 段）。
  */
 export async function getMemoryStatus(): Promise<MemoryStatus> {
-  let raw: unknown;
-  try {
-    raw = await requestApi<unknown>("memory/status");
-  } catch (error) {
-    normalizeError(error, "读取记忆状态");
-  }
+  const raw = await apiGet<unknown>("memory/status", {
+    action: "读取记忆状态",
+    onError: normalizeError,
+  });
   const body = requireOk(raw, "读取记忆状态");
   const capability = isRecord(body["capability"]) ? body["capability"] : null;
   const ragRaw = isRecord(body["rag"]) ? body["rag"] : null;
@@ -397,16 +387,10 @@ export async function recallMemory(body: {
   if (body.scope !== undefined && body.scope.trim() !== "") {
     payload["scope"] = body.scope.trim();
   }
-  let raw: unknown;
-  try {
-    raw = await requestApi<unknown>("memory/recall", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-  } catch (error) {
-    normalizeError(error, "测试召回");
-  }
+  const raw = await apiPost<unknown>("memory/recall", payload, {
+    action: "测试召回",
+    onError: normalizeError,
+  });
   const res = requireOk(raw, "测试召回");
   return {
     // 服务端 wire：hits / matched_terms 都是 usize 数字（types.rs:23-33），不存在
@@ -440,17 +424,13 @@ export interface MemoryMaintainResult {
  * 不依赖服务端默认值；`dry_run=true` 是演练（未删除），文案不得说成已清理。
  */
 export async function maintainMemory(dryRun: boolean): Promise<MemoryMaintainResult> {
-  let raw: unknown;
-  try {
-    raw = await requestApi<unknown>("memory/maintain", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ force: true, dry_run: dryRun }),
-    });
-  } catch (error) {
-    normalizeError(error, dryRun ? "演练保留策略" : "立即维护");
-  }
-  const res = requireOk(raw, dryRun ? "演练保留策略" : "立即维护");
+  const action = dryRun ? "演练保留策略" : "立即维护";
+  const raw = await apiPost<unknown>(
+    "memory/maintain",
+    { force: true, dry_run: dryRun },
+    { action, onError: normalizeError },
+  );
+  const res = requireOk(raw, action);
   return {
     ran: typeof res["ran"] === "boolean" ? res["ran"] : null,
     released: num(res, "released"),
@@ -486,16 +466,10 @@ export async function clearMemory(body: {
   } else if (body.scope !== undefined && body.scope.trim() !== "") {
     payload["scope"] = body.scope.trim();
   }
-  let raw: unknown;
-  try {
-    raw = await requestApi<unknown>("memory/clear", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-  } catch (error) {
-    normalizeError(error, "清空记忆");
-  }
+  const raw = await apiPost<unknown>("memory/clear", payload, {
+    action: "清空记忆",
+    onError: normalizeError,
+  });
   const res = requireOk(raw, "清空记忆");
   return {
     deleted: num(res, "deleted"),
@@ -525,16 +499,14 @@ export interface MemoryReindexResult {
  * `/api/memory/status` 的 rag 段（前端不做自动轮询，提示手动刷新）。
  */
 export async function reindexRag(): Promise<MemoryReindexResult> {
-  let raw: unknown;
-  try {
-    raw = await requestApi<unknown>("memory/rag/reindex", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
-    });
-  } catch (error) {
-    normalizeError(error, "重建文档索引");
-  }
+  const raw = await apiPost<unknown>(
+    "memory/rag/reindex",
+    {},
+    {
+      action: "重建文档索引",
+      onError: normalizeError,
+    },
+  );
   const res = requireOk(raw, "重建文档索引");
   if (typeof res["building"] !== "boolean") {
     throw new Error(

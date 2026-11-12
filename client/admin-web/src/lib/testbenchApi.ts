@@ -40,6 +40,7 @@
  * （无 JSON），按 null 处理回退通用文案。错误原文如实透出，不伪装成网络错误。
  */
 
+import ky from "ky";
 import { getApiBaseUrl, getAuthToken } from "@/lib/api";
 
 // ============================================================================
@@ -426,7 +427,13 @@ export async function probeTestbenchHandshakeDetail(token: string | null): Promi
     return null;
   }
   try {
-    const response = await fetch(probeUrl, { headers: { Accept: "application/json" } });
+    // 原版语义：不区分 2xx/4xx，只要能读到 JSON 原文就透出；throwHttpErrors:false 保留该口径。
+    const response = await ky(probeUrl, {
+      headers: { Accept: "application/json" },
+      retry: 0,
+      timeout: false,
+      throwHttpErrors: false,
+    });
     const text = await response.text();
     if (text.trim() === "") {
       return null;

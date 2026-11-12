@@ -17,7 +17,7 @@
  *   [`saveImpactOf`] 把两种形状归一。
  */
 
-import { ApiError, requestApi } from "@/lib/api";
+import { ApiError, apiGet, apiPost, apiPut } from "@/lib/api";
 
 /** JSON 标量。 */
 export type JsonPrimitive = string | number | boolean | null;
@@ -199,7 +199,7 @@ export function saveImpactOf(result: ConfigSaveResult): ConfigSaveImpact | null 
 }
 
 /** 拉取整份配置（含 revision）。 */
-export const getConfig = () => requestApi<ConfigRoot>("config");
+export const getConfig = () => apiGet<ConfigRoot>("config");
 
 /**
  * 增量保存配置。
@@ -213,18 +213,15 @@ export async function putConfig(
 ): Promise<ConfigSaveResult> {
   const payload: JsonObject =
     expectedRevision === undefined ? patch : { ...patch, expected_revision: expectedRevision };
-  try {
-    return await requestApi<ConfigSaveResult>("config", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-  } catch (error) {
-    if (error instanceof ApiError && error.status === 409) {
-      throw new ConfigConflictError(error.status, error.body, readRevision(error.body));
-    }
-    throw error;
-  }
+  return apiPut<ConfigSaveResult>("config", payload, {
+    // 业务覆盖范本：409 → ConfigConflictError（带 currentRevision），其余异常原样上抛。
+    onError: (error) => {
+      if (error instanceof ApiError && error.status === 409) {
+        throw new ConfigConflictError(error.status, error.body, readRevision(error.body));
+      }
+      throw error;
+    },
+  });
 }
 
 /** 从 409 响应体里读取当前 revision。 */
@@ -244,36 +241,28 @@ function readRevision(body: string): string | null {
 }
 
 /** 拉取字段元数据（默认值 / 热生效档位 / 密钥标记 / 高级字段清单）。 */
-export const getConfigSchema = () => requestApi<ConfigSchemaInfo>("config/schema");
+export const getConfigSchema = () => apiGet<ConfigSchemaInfo>("config/schema");
 
 /** 拉取配置文件来源元信息（路径 / 后端 / 是否持久化）。 */
-export const getConfigMeta = () => requestApi<ConfigMetaInfo>("config/meta");
+export const getConfigMeta = () => apiGet<ConfigMetaInfo>("config/meta");
 
 /** 列出全部预设名。 */
 export async function listPresets(): Promise<PresetInfo[]> {
-  const result = await requestApi<{ presets?: string[] }>("config/presets");
+  const result = await apiGet<{ presets?: string[] }>("config/presets");
   return (result.presets ?? []).map((name) => ({ name }));
 }
 
 /** 把当前生效配置保存为预设。 */
 export function savePreset(name: string): Promise<ConfigSaveResult> {
-  return requestApi<ConfigSaveResult>("config/presets", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name }),
-  });
+  return apiPost<ConfigSaveResult>("config/presets", { name });
 }
 
 /** 应用预设到全局配置（复用服务端部分更新管线）。 */
 export function applyPreset(name: string): Promise<ConfigSaveResult> {
-  return requestApi<ConfigSaveResult>(`config/presets/${encodeURIComponent(name)}/apply`, {
-    method: "POST",
-  });
+  return apiPost<ConfigSaveResult>(`config/presets/${encodeURIComponent(name)}/apply`);
 }
 
 /** 删除预设。管理台统一走 POST 别名（服务端同时保留 DELETE 路由）。 */
 export function deletePreset(name: string): Promise<ConfigSaveResult> {
-  return requestApi<ConfigSaveResult>(`config/presets/${encodeURIComponent(name)}/delete`, {
-    method: "POST",
-  });
+  return apiPost<ConfigSaveResult>(`config/presets/${encodeURIComponent(name)}/delete`);
 }

@@ -24,6 +24,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
+import { sumBy } from "es-toolkit";
 import { LoaderCircle } from "lucide-react";
 import { SectionCard } from "@/components/config/SectionCard";
 import { Badge } from "@/components/ui/badge";
@@ -183,7 +184,7 @@ export function McpSection(): ReactElement {
 
   // 计数摘要（只含非零项，口径对齐 McpToolsState.kt:72-75）。
   const onlineCount = data === null ? 0 : data.devices.filter((d) => d.online).length;
-  const toolTotal = data === null ? 0 : data.devices.reduce((sum, d) => sum + d.toolCount, 0);
+  const toolTotal = data === null ? 0 : sumBy(data.devices, (d) => d.toolCount);
   const summaryParts: string[] = [];
   if (data !== null) {
     summaryParts.push(`共 ${data.devices.length} 台设备上报过工具`);

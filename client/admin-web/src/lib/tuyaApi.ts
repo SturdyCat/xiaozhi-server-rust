@@ -41,7 +41,7 @@
  * 成功**——`resultLabel("skipped")`=「已跳过」，由 UI 以中性语气透出服务端 message。
  */
 
-import { ApiError, requestApi } from "@/lib/api";
+import { ApiError, apiDelete, apiGet, apiPost } from "@/lib/api";
 import type { JsonValue } from "@/lib/configApi";
 
 /**
@@ -226,12 +226,10 @@ function parseLastSync(raw: unknown): TuyaLastSync | null {
  * （UI 呈「未启用」）。
  */
 export async function getTuyaStatus(): Promise<TuyaStatus> {
-  let raw: unknown;
-  try {
-    raw = await requestApi<unknown>("tuya/status");
-  } catch (error) {
-    gateError(error, "读取涂鸦状态");
-  }
+  const raw = await apiGet<unknown>("tuya/status", {
+    action: "读取涂鸦状态",
+    onError: gateError,
+  });
   if (
     !isRecord(raw) ||
     typeof raw["enabled"] !== "boolean" ||
@@ -281,20 +279,15 @@ export interface TuyaCredentialsInput {
  * 成功判 `ok===true`，返回服务端文案「凭证已保存（secret 不再回显）」。
  */
 export async function saveTuyaCredentials(input: TuyaCredentialsInput): Promise<string> {
-  let raw: unknown;
-  try {
-    raw = await requestApi<unknown>("tuya/credentials", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        region: input.region,
-        access_id: input.accessId,
-        access_secret: input.accessSecret,
-      }),
-    });
-  } catch (error) {
-    gateError(error, "保存涂鸦凭证");
-  }
+  const raw = await apiPost<unknown>(
+    "tuya/credentials",
+    {
+      region: input.region,
+      access_id: input.accessId,
+      access_secret: input.accessSecret,
+    },
+    { action: "保存涂鸦凭证", onError: gateError },
+  );
   if (!isRecord(raw) || raw["ok"] !== true) {
     throw new Error("保存涂鸦凭证：服务端未确认保存（响应缺少 ok:true）。");
   }
@@ -306,12 +299,10 @@ export async function saveTuyaCredentials(input: TuyaCredentialsInput): Promise<
  * 成功判 `ok===true`，返回服务端文案「凭证已清除」。
  */
 export async function clearTuyaCredentials(): Promise<string> {
-  let raw: unknown;
-  try {
-    raw = await requestApi<unknown>("tuya/credentials", { method: "DELETE" });
-  } catch (error) {
-    gateError(error, "清除涂鸦凭证");
-  }
+  const raw = await apiDelete<unknown>("tuya/credentials", undefined, {
+    action: "清除涂鸦凭证",
+    onError: gateError,
+  });
   if (!isRecord(raw) || raw["ok"] !== true) {
     throw new Error("清除涂鸦凭证：服务端未确认清除（响应缺少 ok:true）。");
   }
@@ -324,12 +315,10 @@ export async function clearTuyaCredentials(): Promise<string> {
  * （`clearTuyaCredentials`），**UI 不调用本方法**，按 wire 表补齐。
  */
 export async function deleteTuyaCredentialsAlias(): Promise<string> {
-  let raw: unknown;
-  try {
-    raw = await requestApi<unknown>("tuya/credentials/delete", { method: "POST" });
-  } catch (error) {
-    gateError(error, "清除涂鸦凭证");
-  }
+  const raw = await apiPost<unknown>("tuya/credentials/delete", undefined, {
+    action: "清除涂鸦凭证",
+    onError: gateError,
+  });
   if (!isRecord(raw) || raw["ok"] !== true) {
     throw new Error("清除涂鸦凭证：服务端未确认清除（响应缺少 ok:true）。");
   }
@@ -348,12 +337,10 @@ export interface TuyaSyncResult {
 
 /** 触发一次云同步（60s 闸门在服务端）。**skipped = 被闸门拦下，不算失败也不报成功**。 */
 export async function syncTuyaNow(): Promise<TuyaSyncResult> {
-  let raw: unknown;
-  try {
-    raw = await requestApi<unknown>("tuya/sync", { method: "POST" });
-  } catch (error) {
-    gateError(error, "触发涂鸦同步");
-  }
+  const raw = await apiPost<unknown>("tuya/sync", undefined, {
+    action: "触发涂鸦同步",
+    onError: gateError,
+  });
   if (!isRecord(raw) || typeof raw["result"] !== "string") {
     throw new Error("触发涂鸦同步：响应形状不符（缺少 result）。");
   }
@@ -425,12 +412,10 @@ export interface TuyaDevices {
  */
 export async function getTuyaDevices(online?: boolean): Promise<TuyaDevices> {
   const query = online === undefined ? "" : `?online=${online ? "true" : "false"}`;
-  let raw: unknown;
-  try {
-    raw = await requestApi<unknown>(`tuya/devices${query}`);
-  } catch (error) {
-    gateError(error, "读取涂鸦设备目录");
-  }
+  const raw = await apiGet<unknown>(`tuya/devices${query}`, {
+    action: "读取涂鸦设备目录",
+    onError: gateError,
+  });
   if (!isRecord(raw) || !Array.isArray(raw["devices"]) || typeof raw["total"] !== "number") {
     throw new Error("读取涂鸦设备目录：响应形状不符（缺少 devices/total）。");
   }
@@ -474,12 +459,10 @@ export interface TuyaDeviceDetail {
 
 /** 读取单台设备详情（C.7；dps 按 dp 字典序——服务端已排）。 */
 export async function getTuyaDevice(deviceId: string): Promise<TuyaDeviceDetail> {
-  let raw: unknown;
-  try {
-    raw = await requestApi<unknown>(`tuya/devices/${encodeURIComponent(deviceId)}`);
-  } catch (error) {
-    gateError(error, "读取涂鸦设备详情");
-  }
+  const raw = await apiGet<unknown>(`tuya/devices/${encodeURIComponent(deviceId)}`, {
+    action: "读取涂鸦设备详情",
+    onError: gateError,
+  });
   if (!isRecord(raw) || !Array.isArray(raw["dps"])) {
     throw new Error("读取涂鸦设备详情：响应形状不符（缺少 dps 数组）。");
   }
@@ -520,16 +503,11 @@ export async function setTuyaDp(
   dp: string,
   value: JsonValue,
 ): Promise<{ message: string }> {
-  let raw: unknown;
-  try {
-    raw = await requestApi<unknown>(`tuya/devices/${encodeURIComponent(deviceId)}/dp`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ dp, value }),
-    });
-  } catch (error) {
-    gateError(error, "下发涂鸦数据点");
-  }
+  const raw = await apiPost<unknown>(
+    `tuya/devices/${encodeURIComponent(deviceId)}/dp`,
+    { dp, value },
+    { action: "下发涂鸦数据点", onError: gateError },
+  );
   if (!isRecord(raw) || typeof raw["message"] !== "string") {
     throw new Error("下发涂鸦数据点：响应形状不符（缺少 message）。");
   }
@@ -541,16 +519,11 @@ export async function setTuyaDp(
  * 成功判 `ok===true`。
  */
 export async function saveTuyaAlias(deviceId: string, alias: string): Promise<void> {
-  let raw: unknown;
-  try {
-    raw = await requestApi<unknown>(`tuya/devices/${encodeURIComponent(deviceId)}/alias`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ alias }),
-    });
-  } catch (error) {
-    gateError(error, "保存涂鸦本地别名");
-  }
+  const raw = await apiPost<unknown>(
+    `tuya/devices/${encodeURIComponent(deviceId)}/alias`,
+    { alias },
+    { action: "保存涂鸦本地别名", onError: gateError },
+  );
   if (!isRecord(raw) || raw["ok"] !== true) {
     throw new Error("保存涂鸦本地别名：服务端未确认保存（响应缺少 ok:true）。");
   }
@@ -578,21 +551,16 @@ export interface TuyaCloudProxyRequest {
 export async function proxyTuyaCloud(
   request: TuyaCloudProxyRequest,
 ): Promise<{ status: number; body: JsonValue }> {
-  let raw: unknown;
-  try {
-    raw = await requestApi<unknown>("tuya/cloud/proxy", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        method: request.method ?? "GET",
-        path: request.path,
-        query: request.query ?? {},
-        body: request.body ?? null,
-      }),
-    });
-  } catch (error) {
-    gateError(error, "涂鸦云代理请求");
-  }
+  const raw = await apiPost<unknown>(
+    "tuya/cloud/proxy",
+    {
+      method: request.method ?? "GET",
+      path: request.path,
+      query: request.query ?? {},
+      body: request.body ?? null,
+    },
+    { action: "涂鸦云代理请求", onError: gateError },
+  );
   if (!isRecord(raw) || typeof raw["status"] !== "number") {
     throw new Error("涂鸦云代理请求：响应形状不符（缺少 status）。");
   }

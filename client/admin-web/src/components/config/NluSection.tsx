@@ -27,6 +27,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
+import { useRequest } from "ahooks";
 import { LoaderCircle, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -159,76 +160,61 @@ export function NluSection(): ReactElement {
   const dirty = dirtyCount > 0;
 
   // ============================================================
-  // 构建状态 + 轮询（5s × 360，递归 setTimeout；卸载/过期响应必弃）
+  // 构建状态 + 轮询（5s × 360；useRequest pollingInterval，卸载/过期响应必弃）
   // ============================================================
   const [status, setStatus] = useState<NluBuildStatus | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
-  const [statusLoading, setStatusLoading] = useState(false);
   const [polling, setPolling] = useState(false);
   const [pollMessage, setPollMessage] = useState<string | null>(null);
+  /** 继续轮询的步进计数；每次「running 且未超次」的响应 +1（对齐旧 attemptsRef 口径）。 */
   const attemptsRef = useRef(0);
-  const timerRef = useRef<number | null>(null);
-  const mountedRef = useRef(true);
-  const seqRef = useRef(0);
 
-  const fetchStatus = useCallback(async (seq: number): Promise<void> => {
-    try {
-      const next = await getNluBuildStatus();
-      if (!mountedRef.current || seq !== seqRef.current) {
-        return;
-      }
+  const statusRequest = useRequest(getNluBuildStatus, {
+    manual: true,
+    pollingInterval: POLL_INTERVAL_MS,
+    // 旧版 setTimeout 轮询不感知页面可见性，这里保持后台继续轮询。
+    pollingWhenHidden: true,
+    // 一次失败即停（对齐旧版 catch 不续轮询）。
+    pollingErrorRetryCount: 0,
+    onSuccess: (next: NluBuildStatus) => {
       setStatus(next);
       setStatusError(null);
       if (next.phase === "running" && attemptsRef.current < POLL_MAX_ATTEMPTS) {
         attemptsRef.current += 1;
         setPolling(true);
-        timerRef.current = window.setTimeout(() => {
-          void fetchStatus(seq);
-        }, POLL_INTERVAL_MS);
       } else {
+        // cancel() 会递增 Fetch.count：本响应的 polling onFinally 不再调度下一次刷新。
+        cancelStatusFetch();
         setPolling(false);
         if (next.phase === "running") {
           setPollMessage("已停止等待，服务器训练可能仍在继续。请稍后手动刷新状态。");
         }
       }
-    } catch (error: unknown) {
-      if (!mountedRef.current || seq !== seqRef.current) {
-        return;
-      }
+    },
+    onError: (error: unknown) => {
       setStatusError(nluErrorMessage(error));
+      cancelStatusFetch();
       setPolling(false);
-    }
-  }, []);
+    },
+  });
+  const { run: runStatusFetch, cancel: cancelStatusFetch, loading: statusLoading } = statusRequest;
 
-  /** 手动刷新 / 构建启动后重挂轮询：清旧定时器、attempts 归零。 */
+  /** 手动刷新 / 构建启动后重挂轮询：attempts 归零（run 内部会先停掉待触发的轮询）。 */
   const refreshStatus = useCallback((): void => {
-    if (timerRef.current !== null) {
-      window.clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
     attemptsRef.current = 0;
     setPollMessage(null);
-    setStatusLoading(true);
-    const seq = ++seqRef.current;
-    void fetchStatus(seq).finally(() => {
-      if (mountedRef.current) {
-        setStatusLoading(false);
-      }
-    });
-  }, [fetchStatus]);
+    runStatusFetch();
+  }, [runStatusFetch]);
 
   useEffect(() => {
-    mountedRef.current = true;
     // 首次挂载读一次状态（可在页面刷新后重新挂上进行中的构建，对齐旧端 refresh）。
     refreshStatus();
+    // ahooks 内置 useUnmount(() => cancel())；此处显式 cleanup 是对齐旧版「卸载即清
+    // 轮询 timer」时序的冗余保险（cancel 同时清 polling 插件的待触发 timer）。
     return () => {
-      mountedRef.current = false;
-      if (timerRef.current !== null) {
-        window.clearTimeout(timerRef.current);
-        timerRef.current = null;
-      }
+      cancelStatusFetch();
     };
-  }, [refreshStatus]);
+  }, [refreshStatus, cancelStatusFetch]);
 
   const candidate = status === null ? null : parseCandidate(status.artifact);
 

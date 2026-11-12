@@ -27,7 +27,7 @@
  * JSON `{ok:false}`——错误归一直接透出响应体文本。
  */
 
-import { ApiError, apiUrl, getAuthToken, requestApi } from "@/lib/api";
+import { ApiError, apiGet, apiPost, apiUrl, getAuthToken } from "@/lib/api";
 
 /** OTA 固件清单读取失败（形状不符等结构性异常；feature 未编入时 SPA fallback HTML 200）。 */
 export class OtaUnavailableError extends Error {
@@ -101,31 +101,42 @@ function num(raw: Record<string, unknown>, key: string): number {
 }
 
 /**
+ * 固件清单错误归一（原 `getFirmwareList` 内联 catch 链提取，分支与文案逐字保留）。
+ * 清单文案是固定文案（不拼 action），入参签名对齐 `ApiCallOptions["onError"]`。
+ */
+function firmwareListError(error: unknown): never {
+  if (error instanceof OtaUnavailableError) {
+    throw error;
+  }
+  if (error instanceof ApiError) {
+    throw new Error(`固件清单加载失败：${error.body.trim() || `HTTP ${error.status}`}`);
+  }
+  // HTML 200（pure-base 下 SPA fallback 接走）经 requestApi 的 JSON.parse 抛裸
+  // SyntaxError：必须归一成 OtaUnavailableError，否则 pure-base 下 fail-closed
+  // 解释失效、误导排障指引（与 soulMemoryApi.ts:90-92 同构；W10 缺陷单 major）。
+  if (error instanceof SyntaxError) {
+    throw new OtaUnavailableError(
+      "固件清单加载失败：服务端返回了非 JSON 内容（通常是构建未启用 native-plugins，请求被管理页 HTML 回退接走）。按能力未启用处理，不伪装成空清单。",
+    );
+  }
+  throw error instanceof Error ? error : new Error(String(error));
+}
+
+/** 固件删除错误归一（原 `deleteFirmware` 内联 catch 链提取，分支与文案逐字保留）。 */
+function firmwareDeleteError(error: unknown): never {
+  if (error instanceof ApiError) {
+    throw new Error(`删除失败：${error.body.trim() || `HTTP ${error.status}`}`);
+  }
+  throw error instanceof Error ? error : new Error(String(error));
+}
+
+/**
  * 读取托管固件清单。**不以 HTTP 200 判可用**（pure-base 下 HTML 200 也是 200）：
  * 形状不符（非对象 / entries 非数组 / 条目非对象）抛 [`OtaUnavailableError`]。
  * 空清单是正常态（尚未托管任何固件）。
  */
 export async function getFirmwareList(): Promise<OtaFirmwareList> {
-  let raw: unknown;
-  try {
-    raw = await requestApi<unknown>("ota/firmware");
-  } catch (error) {
-    if (error instanceof OtaUnavailableError) {
-      throw error;
-    }
-    if (error instanceof ApiError) {
-      throw new Error(`固件清单加载失败：${error.body.trim() || `HTTP ${error.status}`}`);
-    }
-    // HTML 200（pure-base 下 SPA fallback 接走）经 requestApi 的 JSON.parse 抛裸
-    // SyntaxError：必须归一成 OtaUnavailableError，否则 pure-base 下 fail-closed
-    // 解释失效、误导排障指引（与 soulMemoryApi.ts:90-92 同构；W10 缺陷单 major）。
-    if (error instanceof SyntaxError) {
-      throw new OtaUnavailableError(
-        "固件清单加载失败：服务端返回了非 JSON 内容（通常是构建未启用 native-plugins，请求被管理页 HTML 回退接走）。按能力未启用处理，不伪装成空清单。",
-      );
-    }
-    throw error instanceof Error ? error : new Error(String(error));
-  }
+  const raw = await apiGet<unknown>("ota/firmware", { onError: firmwareListError });
   if (!isRecord(raw) || !Array.isArray(raw["entries"])) {
     throw new OtaUnavailableError(
       "固件清单加载失败：响应缺少 entries 数组（通常是构建未启用 native-plugins，请求被管理页 HTML 回退接走）。按能力未启用处理，不伪装成空清单。",
@@ -273,17 +284,9 @@ export function uploadFirmware(
  */
 export async function deleteFirmware(project: string, model: string, board: string): Promise<void> {
   const query = `project=${encodeURIComponent(project)}&model=${encodeURIComponent(model)}&board=${encodeURIComponent(board)}`;
-  let raw: unknown;
-  try {
-    raw = await requestApi<unknown>(`ota/firmware/delete?${query}`, {
-      method: "POST",
-    });
-  } catch (error) {
-    if (error instanceof ApiError) {
-      throw new Error(`删除失败：${error.body.trim() || `HTTP ${error.status}`}`);
-    }
-    throw error instanceof Error ? error : new Error(String(error));
-  }
+  const raw = await apiPost<unknown>(`ota/firmware/delete?${query}`, undefined, {
+    onError: firmwareDeleteError,
+  });
   if (!isRecord(raw) || raw["ok"] !== true) {
     throw new Error("删除失败：服务端未确认删除（响应缺少 ok:true），不视为已删除。");
   }

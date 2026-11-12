@@ -22,6 +22,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
+import { useRequest } from "ahooks";
 import { LoaderCircle } from "lucide-react";
 import { SectionCard } from "@/components/config/SectionCard";
 import { SectionHotHint } from "@/components/config/SectionHotHint";
@@ -103,6 +104,8 @@ function groupVoices(voices: Voice[]): VoiceGroup[] {
       buckets.set(key, [voice]);
     }
   }
+  // 未知组合按 key 升序追加；es-toolkit sortBy 类型仅支持 object[]（T extends object），
+  // 纯 string[] 无库函数覆盖，保留原生 sort（UTF-16 code-unit 升序）。
   const rest = [...buckets.keys()].filter((key) => !preferred.includes(key)).sort();
   const keys = [...preferred.filter((key) => buckets.has(key)), ...rest];
   return keys.map((key) => {
@@ -211,7 +214,12 @@ function XfyunSection(): ReactElement {
 
   const mountedRef = useRef(true);
   const pollSeqRef = useRef(0);
+  /** 首跳延迟 timer（对齐旧 pollOnce 首次 setTimeout）；续轮询由 ahooks 接管。 */
   const pollTimerRef = useRef<number | null>(null);
+  /** 轮询请求所属的 pollSeq；新一轮受理后旧响应按此作废。 */
+  const probeRunSeqRef = useRef(0);
+  /** 已收到的 probing 响应计数（对齐旧 attempt 递增口径）。 */
+  const probeAttemptRef = useRef(0);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -296,86 +304,107 @@ function XfyunSection(): ReactElement {
 
   /**
    * 轮询 `GET /api/tts/voices` 直到 `probing === false`，然后重拉目录作为最终状态。
-   * 每次启动用 pollSeq 作废旧轮询；卸载时清 timer，避免 setState-after-unmount。
+   * useRequest pollingInterval 接管续轮询与卸载清理外的调度；首跳仍延后 2s（对齐旧
+   * pollOnce 的首次 setTimeout），过期响应用 pollSeq 作废（对齐旧 seq 守卫）。
    */
-  function pollOnce(seq: number, attempt: number): void {
-    if (!mountedRef.current || seq !== pollSeqRef.current) {
-      return;
-    }
-    if (attempt >= POLL_MAX_ATTEMPTS) {
-      setProbing(false);
-      setRefreshMessage(null);
-      setRefreshError(
-        `探测超时：已轮询 ${POLL_MAX_ATTEMPTS} 次（约 ${(POLL_MAX_ATTEMPTS * POLL_INTERVAL_MS) / 1000} 秒），服务端仍在探测，请查看服务端日志。本次不视为成功。`,
-      );
-      return;
-    }
-    pollTimerRef.current = window.setTimeout(() => {
-      if (!mountedRef.current || seq !== pollSeqRef.current) {
+  const probeRequest = useRequest(getTtsVoices, {
+    manual: true,
+    pollingInterval: POLL_INTERVAL_MS,
+    // 旧版 setTimeout 轮询不感知页面可见性，保持后台继续探测。
+    pollingWhenHidden: true,
+    // 一次失败即停（对齐旧版 catch 不续轮询）。
+    pollingErrorRetryCount: 0,
+    onSuccess: (snapshot: VoicesResult) => {
+      // 新一轮探测已受理（pollSeq 已递增）：本轮响应作废。cancel 让本响应不再是
+      // 「最新 run」，polling onFinally 的 count 守卫不通过，不会排下次 refresh
+      // （否则该轮询链会在 2s 后复活）。
+      if (!mountedRef.current || pollSeqRef.current !== probeRunSeqRef.current) {
+        cancelVoiceProbe();
         return;
       }
-      void getTtsVoices()
-        .then((snapshot) => {
-          if (!mountedRef.current || seq !== pollSeqRef.current) {
-            return;
-          }
-          if (snapshot.probing) {
-            const next = attempt + 1;
-            setPollAttempt(next);
-            setRefreshMessage(`探测中…（第 ${next}/${POLL_MAX_ATTEMPTS} 次检查，每 2 秒）`);
-            pollOnce(seq, next);
-            return;
-          }
-          // probing 转 false 后按 Kuikly 语义再重拉一次目录，不直接拿轮询快照冒充成功。
-          void loadVoices().then((final) => {
-            if (!mountedRef.current || seq !== pollSeqRef.current) {
-              return;
-            }
-            setProbing(false);
-            if (final === null) {
-              setRefreshMessage(null);
-              setRefreshError("探测已结束，但目录重拉失败；上面已显示具体原因，不视为探测成功。");
-              return;
-            }
-            setRefreshError(null);
-            if (final.source === "empty" && final.fetchedAt === 0) {
-              // 尚未探测：交给下方「尚未探测」的可行动指引呈现，不报「服务端坏了」，
-              // 也不写成探测成功。
-              setRefreshMessage(
-                "探测流程已结束，但目录仍是「尚未探测」状态；请按下方指引先保存三要素后重试，本次不视为探测成功。",
-              );
-            } else if (final.voices.length === 0) {
-              // 探测完成但 0 条可用：由下方 warning 呈现，不假装拿到目录。
-              setRefreshMessage(
-                "探测完成但 0 条可用音色；请按下方提示核对账号授权，本次不视为探测成功。",
-              );
-            } else {
-              setRefreshMessage(
-                `探测完成：共 ${final.voices.length} 个实测可用音色，已按性别 × 类型分组。`,
-              );
-            }
-          });
-        })
-        .catch((error: unknown) => {
-          if (!mountedRef.current || seq !== pollSeqRef.current) {
-            return;
-          }
+      if (snapshot.probing) {
+        const next = probeAttemptRef.current + 1;
+        probeAttemptRef.current = next;
+        setPollAttempt(next);
+        setRefreshMessage(`探测中…（第 ${next}/${POLL_MAX_ATTEMPTS} 次检查，每 2 秒）`);
+        if (next >= POLL_MAX_ATTEMPTS) {
+          // cancel() 递增 Fetch.count：polling 的 onFinally 不再调度下一次刷新。
+          cancelVoiceProbe();
           setProbing(false);
           setRefreshMessage(null);
-          if (isCatalogueUnavailable(error)) {
-            setUnavailable(true);
-            setUnavailableMessage(catalogueErrorMessage(error));
-            setVoices(null);
-          }
-          setRefreshError(`轮询音色目录失败：${catalogueErrorMessage(error)}`);
-        });
-    }, POLL_INTERVAL_MS);
-  }
+          setRefreshError(
+            `探测超时：已轮询 ${POLL_MAX_ATTEMPTS} 次（约 ${(POLL_MAX_ATTEMPTS * POLL_INTERVAL_MS) / 1000} 秒），服务端仍在探测，请查看服务端日志。本次不视为成功。`,
+          );
+        }
+        return;
+      }
+      // probing 转 false 后按 Kuikly 语义再重拉一次目录，不直接拿轮询快照冒充成功。
+      cancelVoiceProbe();
+      void loadVoices().then((final) => {
+        if (!mountedRef.current || pollSeqRef.current !== probeRunSeqRef.current) {
+          return;
+        }
+        setProbing(false);
+        if (final === null) {
+          setRefreshMessage(null);
+          setRefreshError("探测已结束，但目录重拉失败；上面已显示具体原因，不视为探测成功。");
+          return;
+        }
+        setRefreshError(null);
+        if (final.source === "empty" && final.fetchedAt === 0) {
+          // 尚未探测：交给下方「尚未探测」的可行动指引呈现，不报「服务端坏了」，
+          // 也不写成探测成功。
+          setRefreshMessage(
+            "探测流程已结束，但目录仍是「尚未探测」状态；请按下方指引先保存三要素后重试，本次不视为探测成功。",
+          );
+        } else if (final.voices.length === 0) {
+          // 探测完成但 0 条可用：由下方 warning 呈现，不假装拿到目录。
+          setRefreshMessage(
+            "探测完成但 0 条可用音色；请按下方提示核对账号授权，本次不视为探测成功。",
+          );
+        } else {
+          setRefreshMessage(
+            `探测完成：共 ${final.voices.length} 个实测可用音色，已按性别 × 类型分组。`,
+          );
+        }
+      });
+    },
+    onError: (error: unknown) => {
+      if (!mountedRef.current || pollSeqRef.current !== probeRunSeqRef.current) {
+        // 同 onSuccess：拒绝分支必须 cancel，防止轮询链复活。
+        cancelVoiceProbe();
+        return;
+      }
+      setProbing(false);
+      setRefreshMessage(null);
+      if (isCatalogueUnavailable(error)) {
+        setUnavailable(true);
+        setUnavailableMessage(catalogueErrorMessage(error));
+        setVoices(null);
+      }
+      setRefreshError(`轮询音色目录失败：${catalogueErrorMessage(error)}`);
+    },
+  });
+  const { run: runVoiceProbe, cancel: cancelVoiceProbe } = probeRequest;
+
+  // 卸载停轮询：ahooks 内置 useUnmount(() => cancel())，此显式 cleanup 为冗余保险；
+  // 首跳延迟 timer 由上方既有 unmount 清理（ahooks 不管外部 setTimeout）。
+  useEffect(() => {
+    return () => {
+      cancelVoiceProbe();
+    };
+  }, [cancelVoiceProbe]);
 
   /** 启动后台探测：立即 200 只是「已受理」，后续靠轮询确认结束。 */
   const handleRefresh = (): void => {
+    // 入口先 cancel：作废在途响应（count++）+ 清 pending 轮询 timer（onCancel）。
+    // 不加的话，旧链在「pollSeq 已递增、probeRunSeqRef 尚未更新为新 seq」的窗口外，
+    // 还存在「probeRunSeqRef 已更新但旧链响应先到」的窗口——两 ref 相等守卫失效，
+    // 旧快照会被当作新一轮检查、probeAttempt 计数漂移，僵尸链 2s 后复活。
+    cancelVoiceProbe();
     pollSeqRef.current += 1;
     const seq = pollSeqRef.current;
+    probeAttemptRef.current = 0;
     setProbing(true);
     setPollAttempt(0);
     setRefreshError(null);
@@ -386,7 +415,15 @@ function XfyunSection(): ReactElement {
           return;
         }
         setRefreshMessage(`探测已启动（候选 ${started.candidates} 个），后台逐个真实合成验证中…`);
-        pollOnce(seq, 0);
+        // 首跳延后 2s（对齐旧 pollOnce 首次 setTimeout）；之后由 pollingInterval 接管。
+        probeRunSeqRef.current = seq;
+        pollTimerRef.current = window.setTimeout(() => {
+          pollTimerRef.current = null;
+          if (!mountedRef.current || seq !== pollSeqRef.current) {
+            return;
+          }
+          runVoiceProbe();
+        }, POLL_INTERVAL_MS);
       })
       .catch((error: unknown) => {
         if (!mountedRef.current || seq !== pollSeqRef.current) {
