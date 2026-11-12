@@ -1,5 +1,7 @@
 # 架构设计：NLU iot 域语音控制 Tuya 设备（首期插座开关）
 
+> **归档说明（归档波次：W15-2，旧端软下线）**：本文为 gearui-kit/echomuse/tuya 计划与验收/架构 原文，文中「Kuikly / GearUI / gearuiKit / client/shared / publishWeb / h5App/web / sharedCompose」等均为当时旧端口径，**保留史实、不作现行实现依据**。当前管理台为 `client/admin-web`（React + Vite + shadcn/ui + Tauri 2，生产静态目录 `client/admin-web/dist`）；见 [admin-web 指引](<../../client/admin-web/AGENTS.md>) 与 [W15 资产盘点归档](<./admin-web-migration/w15-legacy-assets-research.md>)。
+
 依据 `docs/plans/nlu-iot-voice-prd.md`；代码现状已复核（skill_plan.rs L91-121 / plan.rs L102-118 / tuya/mod.rs set_dp / defaults.json / ConfigNluCatalog.kt）。全部设计已按用户裁决口径锁定。
 
 ## 1. 核心决策

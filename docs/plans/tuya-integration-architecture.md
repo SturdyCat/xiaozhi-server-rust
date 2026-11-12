@@ -1,5 +1,7 @@
 # Tuya IoT 集成架构设计（局域网控制 + 管理台设备管理）
 
+> **归档说明（归档波次：W15-2，旧端软下线）**：本文为 gearui-kit/echomuse/tuya 计划与验收/架构 原文，文中「Kuikly / GearUI / gearuiKit / client/shared / publishWeb / h5App/web / sharedCompose」等均为当时旧端口径，**保留史实、不作现行实现依据**。当前管理台为 `client/admin-web`（React + Vite + shadcn/ui + Tauri 2，生产静态目录 `client/admin-web/dist`）；见 [admin-web 指引](<../../client/admin-web/AGENTS.md>) 与 [W15 资产盘点归档](<./admin-web-migration/w15-legacy-assets-research.md>)。
+
 > 上游：`docs/plans/tuya-integration-prd.md`。范围：服务端 `device/tuya` 模块 + 管理台涂鸦设备页；不含语音控制（NLU 不动）。
 
 ## 1. 模块与分层

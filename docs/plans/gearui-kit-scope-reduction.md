@@ -1,5 +1,7 @@
 # GearUI 迁移 · 范围削减决定（2026-10-29）
 
+> **归档说明（归档波次：W15-2，旧端软下线）**：本文为 gearui-kit/echomuse/tuya 计划与验收/架构 原文，文中「Kuikly / GearUI / gearuiKit / client/shared / publishWeb / h5App/web / sharedCompose」等均为当时旧端口径，**保留史实、不作现行实现依据**。当前管理台为 `client/admin-web`（React + Vite + shadcn/ui + Tauri 2，生产静态目录 `client/admin-web/dist`）；见 [admin-web 指引](<../../client/admin-web/AGENTS.md>) 与 [W15 资产盘点归档](<./admin-web-migration/w15-legacy-assets-research.md>)。
+
 > 状态：**已生效**。本文件是 T10–T13 的范围权威，与 `gearui-kit-migration-architecture.md` §5 冲突时以本文为准。
 > 依据：用户指令「项目主要是配置与测试，以及设备管理与调试，其他不相关的都可以移除简化项目，方便适配 gearui-kit」；
 > 并经确认：文件管理保留（属配置相关）、EchoMuse 六 tab 全保留（Q6 维持）。

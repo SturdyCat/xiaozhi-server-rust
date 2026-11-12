@@ -1,5 +1,7 @@
 # P1 剩余功能增量 PRD（P1-5 / P1-6 / P1-7 / P1-9 / P1-10)
 
+> **归档说明（归档波次：W15-2，旧端软下线）**：本文为 gearui-kit/echomuse/tuya 计划与验收/架构 原文，文中「Kuikly / GearUI / gearuiKit / client/shared / publishWeb / h5App/web / sharedCompose」等均为当时旧端口径，**保留史实、不作现行实现依据**。当前管理台为 `client/admin-web`（React + Vite + shadcn/ui + Tauri 2，生产静态目录 `client/admin-web/dist`）；见 [admin-web 指引](<../../client/admin-web/AGENTS.md>) 与 [W15 资产盘点归档](<./admin-web-migration/w15-legacy-assets-research.md>)。
+
 > 版本：v1.0（草案）　作者：产品经理 许清楚　日期：2026-10-12
 > 上游输入：`docs/plans/overall-implementation-plan.md` §2 Phase 2 表格（需求源头）、`docs/research/architecture-optimization-analysis.md`（分模块分析）。
 > 本文档是**增量 PRD**：只覆盖 P1 尚未启动的 5 项功能，不含已完成的 P0 六项与 P1-1/P1-2/P1-4。

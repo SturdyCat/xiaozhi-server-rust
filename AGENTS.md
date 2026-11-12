@@ -1,6 +1,6 @@
 # 仓库核心指引
 
-小智 ESP32 语音服务端（Rust）与 Kuikly 多端管理台。先沿下级入口阅读目标模块指引、源码说明和测试。
+小智 ESP32 语音服务端（Rust）与 React 管理台（`client/admin-web`）。先沿下级入口阅读目标模块指引、源码说明和测试。
 
 ## 全局约定
 
@@ -14,7 +14,7 @@
 ## 直属下级
 
 - [server](<server/AGENTS.md>)：服务端构建、依赖、源码与测试。
-- [client](<client/AGENTS.md>)：客户端平台、构建、公共管理台与原生宿主。
+- [client](<client/AGENTS.md>)：客户端平台、构建、React 管理台（`client/admin-web`）与旧端原生宿主归档。
 - [plugins-src](<plugins-src/AGENTS.md>)：15 个官方系统插件源码根（契约 `xiaozhi:plugin@0.2.0`；产物由 `tools/build-system-plugins.sh` 构建到 `build/system-plugins/`，共 16 个 `.wasm`）。
 
 ## 本级资料

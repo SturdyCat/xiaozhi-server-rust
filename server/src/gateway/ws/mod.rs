@@ -28,7 +28,7 @@
 //!   当场试召回（"记忆到底有没有在工作"的反馈）、立即维护与清空。
 //! - `GET/POST /api/ota(/)`：小智固件 OTA 引导（返回 websocket 接入信息 + 校时 + 版本，
 //!   契约见 [`ota`]；固件侧把 OTA_URL 指到本服务即自动接入，无需硬编码 WS 地址）。
-//! - 其余路径：静态托管 `[server].admin_dir`（h5App 构建产物，含 `index.html`）；
+//! - 其余路径：静态托管 `[server].admin_dir`（默认 `../client/admin-web/dist`，admin-web 构建产物，含 `index.html` 与 `dist/em/` 官方页）；
 //!   目录不存在时 [`admin_missing`] 返回友好提示而非崩溃；SPA 未知路径回退 `index.html`。
 //!
 //! ## 鉴权
@@ -144,7 +144,7 @@ pub(super) fn json_ok(body: serde_json::Value) -> Response {
 }
 
 /// 构造 Axum 路由：API（健康检查 / WebSocket）之外，其余路径静态托管
-/// `config.server.admin_dir` 指向的管理页面（h5App 构建产物，含 index.html）。
+/// `config.server.admin_dir` 指向的管理页面（默认 `../client/admin-web/dist`，admin-web 构建产物，含 index.html 与 `dist/em/`）；`XIAOZHI_ADMIN_DIR` 环境变量最后覆盖且优先、不写回。
 /// 该目录不存在时，`/` 及以下返回友好提示而非崩溃。
 pub fn router(engines: Arc<Engines>) -> Router {
     let admin_dir = engines.config.server.admin_dir.clone();
@@ -353,7 +353,7 @@ async fn health() -> Response {
 async fn admin_missing() -> Response {
     (
         StatusCode::NOT_FOUND,
-        "管理页面未找到：请先构建 h5App（web）并将 [server].admin_dir 指向其包含 index.html 的输出目录。",
+        "管理页面未找到：请先运行 pnpm --dir client/admin-web build 生成 client/admin-web/dist，或将 [server].admin_dir 指向已构建的该目录（含 index.html 与 dist/em/）。",
     )
         .into_response()
 }

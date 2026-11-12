@@ -1,6 +1,6 @@
 # xiaozhi-server-rust
 
-**小智（xiaozhi-esp32）语音服务端，纯 Rust 单二进制**：本地 ASR/TTS 离线推理（SenseVoice / Kokoro INT8）、Silero VAD 池化、OpenAI 兼容 LLM，WebSocket 协议严格对齐固件（v1/v2/v3 二进制 Opus 帧）。内置 Kuikly 多端管理台（Web 直开 + macOS 原生测试台）。为 N5105 级低功耗主机的 Docker 部署而生。
+**小智（xiaozhi-esp32）语音服务端，纯 Rust 单二进制**：本地 ASR/TTS 离线推理（SenseVoice / Kokoro INT8）、Silero VAD 池化、OpenAI 兼容 LLM，WebSocket 协议严格对齐固件（v1/v2/v3 二进制 Opus 帧）。内置 React 管理台（`client/admin-web`，Vite + shadcn/ui + Tauri 2；生产静态产物 `client/admin-web/dist`，Web 直开）。为 N5105 级低功耗主机的 Docker 部署而生。
 
 > 架构与设计详见 [docs/architecture.md](<docs/architecture.md>)；功能、配置与维护入口见 [docs/README.md](<docs/README.md>)。
 
@@ -25,7 +25,7 @@
 ```mermaid
 flowchart LR
     ESP[ESP32 设备<br/>Opus 上行 / 音频下行]
-    ADMIN[Kuikly 管理台<br/>Web + macOS 测试台]
+    ADMIN[React 管理台<br/>admin-web / Web + Tauri 2]
 
     subgraph srv[Rust 服务端 · 单二进制]
         GW[HTTP / WS 网关<br/>固件协议 v1/v2/v3 · 静态管理页]
@@ -85,16 +85,16 @@ curl http://127.0.0.1:8000/api/health              # => {"status":"ok",...}
 ## 本地 UI 开发（无需模型）
 
 ```bash
-./dev-server.sh                  # 真实 Rust server + 已构建的 Kuikly 管理台
-./dev-server.sh --build-web      # 修改 UI 后重建 Web 再启动
+./dev-server.sh                  # 真实 Rust server + 已构建的 React 管理台（admin-web/dist）
+pnpm --dir client/admin-web build  # 修改 UI 后重建 React SPA（--build-web 已废弃）
 ./dev-server.sh --port 8001      # 自定义本地端口
 ```
 
-默认访问 **http://127.0.0.1:8000/**。缺少 Web 产物时脚本自动构建；不启动另一套前端 mock server。Rust 默认 feature 即可运行，不需要 sherpa、libopus 或语音模型；首次编译需下载 Cargo 依赖，首次 Web 构建需 JDK/Gradle。
+默认访问 **http://127.0.0.1:8000/**。缺少 `dist/index.html` 或 `dist/em/index.html` 时脚本报错并提示先构建；不启动另一套前端 mock server。Rust 默认 feature 即可运行，不需要 sherpa、libopus 或语音模型；首次编译需下载 Cargo 依赖，首次前端构建需 Node/pnpm（`pnpm --dir client/admin-web install && pnpm --dir client/admin-web build`）。
 
 - 配置、文件、日志与管理台 WS 都走真实 API；数据隔离在 `.dev/`（已忽略），重启保留。默认不伪造设备或模型输出，设备列表为空是正常状态。
 - `--dev` 仅监听回环地址，不广播 mDNS、不开放设备专用监听、不预下载模型。ASR/TTS/VAD/LLM、节点测试、语音会话与训练返回明确的开发模式不可用错误；能力状态不伪装健康。
-- 开发模式忽略 `XIAOZHI_CONFIG_DB`，可显式用 `--config-db <文件>` 选择独立开发库；不要传入生产库。`XIAOZHI_ADMIN_DIR` 可指定已有 Web 目录。UI 修改后需重建并刷新浏览器，不承诺热更新。
+- 开发模式忽略 `XIAOZHI_CONFIG_DB`，可显式用 `--config-db <文件>` 选择独立开发库；不要传入生产库。`XIAOZHI_ADMIN_DIR` 可指定已有静态目录（默认 `client/admin-web/dist`）。`[server].admin_dir` 是 SQLite 配置库内可写字段，代码默认值只对空库首次落库生效；存量实例请用 `XIAOZHI_ADMIN_DIR` 环境变量或管理页 PUT `/api/config` 改 `server.admin_dir` 后重启。UI 修改后需重建并刷新浏览器，不承诺热更新。
 - 等价后端命令：`cargo run --manifest-path server/Cargo.toml --no-default-features -- --dev`。不带 `--dev` 的生产启动仍要求真实模型与对应 feature。
 
 ---
@@ -131,10 +131,12 @@ curl http://127.0.0.1:8000/api/health              # => {"status":"ok",...}
 │   ├── crates/xiaozhi-plugin-sdk # guest 侧插件 SDK（独立 crate）
 │   └── tests/mock_client.py    # 场景化协议联调（多轮 + abort + 唤醒问候）
 ├── tools/                         # wasm-fixtures 测试夹具源（本地按需构建）/ NLU 训练器
-└── client/                        # Kuikly 多端管理台
-    ├── shared/commonMain/       # 管理台 + 配置页（跨端共用）
-    ├── shared/macosArm64Main/   # macOS 壳 + 测试台（仅 macOS 编译）
-    └── apps/                    # h5App(Web) / macosApp(Catalyst) / iosApp / androidApp / ohosApp
+└── client/                        # 前端与管理台
+    ├── admin-web/                 # React + Vite + shadcn/ui + Tauri 2 管理台（当前生产）
+    │   ├── dist/                  # 生产静态产物，[server].admin_dir 默认指向此处
+    │   └── scripts/sync-em.mjs    # /em/ 白名单 4 文件同步：em/ → public/em/ → dist/em/
+    ├── apps/h5App/em/             # /em/ 官方页源目录（13 文件，保留；非管理台资产）
+    └── shared/ gearuiKit/ apps/macosApp/  # 旧 Kotlin/Kuikly 管理台：W15 软下线归档，保留但不构建
 ```
 
 ---

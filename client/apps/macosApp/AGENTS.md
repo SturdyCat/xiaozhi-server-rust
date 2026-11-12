@@ -1,5 +1,7 @@
 # macOS / Mac Catalyst 指引
 
+> **归档说明（归档波次：W15-2，旧端软下线）**：本文为 旧 macOS 宿主（Mac Catalyst）指引 原文，文中「Kuikly / GearUI / gearuiKit / client/shared / publishWeb / h5App/web / sharedCompose」等均为当时旧端口径，**保留史实、不作现行实现依据**。当前管理台为 `client/admin-web`（React + Vite + shadcn/ui + Tauri 2，生产静态目录 `client/admin-web/dist`）；见 [admin-web 指引](<../../admin-web/AGENTS.md>) 与 [W15 资产盘点归档](<../../docs/plans/admin-web-migration/w15-legacy-assets-research.md>)。
+
 继承[客户端指引（从上级入口导航）](<../../AGENTS.md>)。宿主使用 UIKit 渲染器，只选 **My Mac (Mac Catalyst)**，不是原生 My Mac。
 
 - 改 shared 页面后先运行 `:shared:linkReleaseFrameworkMacosArm64`；只跑 Xcode 会链接旧业务框架。Web 构建不覆盖该路径。

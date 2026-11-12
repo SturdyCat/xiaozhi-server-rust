@@ -1,5 +1,7 @@
 # Client 管理台 UI 全量迁移到 GearUI Kit · 迁移规格（PRD）
 
+> **归档说明（归档波次：W15-2，旧端软下线）**：本文为 gearui-kit/echomuse/tuya 计划与验收/架构 原文，文中「Kuikly / GearUI / gearuiKit / client/shared / publishWeb / h5App/web / sharedCompose」等均为当时旧端口径，**保留史实、不作现行实现依据**。当前管理台为 `client/admin-web`（React + Vite + shadcn/ui + Tauri 2，生产静态目录 `client/admin-web/dist`）；见 [admin-web 指引](<../../client/admin-web/AGENTS.md>) 与 [W15 资产盘点归档](<./admin-web-migration/w15-legacy-assets-research.md>)。
+
 > 版本：v1.0　作者：产品经理 许清楚　日期：2026-10-27
 > 上游输入：主理人已确认的调研事实（GearUI Kit 组件清单 / 本项目现状盘点 / 用户三项决策）。
 > 本文档**替代**此前 `compose/AdminComposeShell.kt` 里"逐段搬运 + 旧版出口"的渐进路线，改为**一次性全量替换**的规格基线。

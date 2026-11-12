@@ -1,5 +1,7 @@
 # EchoMuse 设备管理界面官方对齐 + Web 控制台 · 系统设计与任务分解
 
+> **归档说明（归档波次：W15-2，旧端软下线）**：本文为 gearui-kit/echomuse/tuya 计划与验收/架构 原文，文中「Kuikly / GearUI / gearuiKit / client/shared / publishWeb / h5App/web / sharedCompose」等均为当时旧端口径，**保留史实、不作现行实现依据**。当前管理台为 `client/admin-web`（React + Vite + shadcn/ui + Tauri 2，生产静态目录 `client/admin-web/dist`）；见 [admin-web 指引](<../../client/admin-web/AGENTS.md>) 与 [W15 资产盘点归档](<./admin-web-migration/w15-legacy-assets-research.md>)。
+
 > 作者：高见远（架构）｜状态：待评审｜依托 PRD：`docs/plans/echomuse-admin-parity-prd.md`
 > 上游唯一功能来源：`/tmp/upstream/controller_static_dashboard.jsx`（11658 行）、`controller_em_controller.py`、`controller_em_shell.py`、`device_control.go`、`device_internal_config_config.go`
 > 我方现状：`server/src/device/echomuse/`、`client/shared/src/commonMain/kotlin/com/xiaozhi/admin/`

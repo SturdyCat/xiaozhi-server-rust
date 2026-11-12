@@ -1,5 +1,7 @@
 # Wyoming Provider 调研与评估（合并归档）
 
+> **归档说明（归档波次：W15-2，旧端软下线）**：本文为 架构研究 原文，文中「Kuikly / GearUI / gearuiKit / client/shared / publishWeb / h5App/web / sharedCompose」等均为当时旧端口径，**保留史实、不作现行实现依据**。当前管理台为 `client/admin-web`（React + Vite + shadcn/ui + Tauri 2，生产静态目录 `client/admin-web/dist`）；见 [admin-web 指引](<../../client/admin-web/AGENTS.md>) 与 [W15 资产盘点归档](<../plans/admin-web-migration/w15-legacy-assets-research.md>)。
+
 > 状态：**过期调研记录（2026-10-14），提案未采纳**。当前代码无 Wyoming 实现（`server/Cargo.toml` 无相关依赖、注册表无 wyoming 描述符、无 `[asr.wyoming]` / `[tts.wyoming]` 配置段）。本记录保留供未来重启该方向时参考，不代表当前能力；当前事实以源码、测试与[插件层维护](<../../plugins/AGENTS.md>)为准。
 > 来源：两份同日期文档合并——PM 许清楚《Wyoming 协议事实卡 + xiaozhi-server-rust 接入需求清单》（协议与生态调研，637 行）+ 架构师 高见远《Wyoming Provider 可行性评估 + 接入点设计》（对照代码现状的评估，597 行）。两部分结论互补；其中对 PCM↔Opus 转码成本的判断相反，**以第二部分代码核实结论为准**（见 §5.1）。
 > 阅读顺序：先读「结论速览」；协议字节布局、生态与竞品查第一部分；接入成本、代码影响与分期查第二部分。

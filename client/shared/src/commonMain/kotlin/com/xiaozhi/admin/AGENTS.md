@@ -1,5 +1,7 @@
 # 公共管理台维护
 
+> **归档说明（归档波次：W15-2，旧端软下线）**：本文为 旧 Kotlin/Kuikly 公共管理台维护 原文，文中「Kuikly / GearUI / gearuiKit / client/shared / publishWeb / h5App/web / sharedCompose」等均为当时旧端口径，**保留史实、不作现行实现依据**。当前管理台为 `client/admin-web`（React + Vite + shadcn/ui + Tauri 2，生产静态目录 `client/admin-web/dist`）；见 [admin-web 指引](<../../../../../../../../client/admin-web/AGENTS.md>) 与 [W15 资产盘点归档](<../../../../../../../../docs/plans/admin-web-migration/w15-legacy-assets-research.md>)。
+
 这里是跨端管理页面、表单和网络状态；macOS 专用测试台不属于 commonMain。
 
 **单一壳**：web 与 macOS 共用 `@Page("admin")`（[AdminPage](<AdminPage.kt>)，Compose 壳 [AdminShell](<AdminShell.kt>)，一级导航 10 项 + 动态插件组），平台差异全部收口到 [AdminPlatform.kt](<AdminPlatform.kt>) 的 expect/actual（macosArm64Main 真实现，js/android/ios 空实现）。全仓只注册 `admin` 与 `config`（[ConfigPage](<ConfigPage.kt>)，无侧栏平台/深链的单页兜底）两个页面——KSP 生成的 `KuiklyCoreEntry` 锁定，**⛔ 不新增 `@Page`**（旧 `router` 双壳与 Compose 试点 `admin-compose` 均已删除）。

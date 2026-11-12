@@ -1,5 +1,7 @@
 # 管理台界面设计与验收记录（历史）
 
+> **归档说明（归档波次：W15-2，旧端软下线）**：本文为 管理台/插件设计 原文，文中「Kuikly / GearUI / gearuiKit / client/shared / publishWeb / h5App/web / sharedCompose」等均为当时旧端口径，**保留史实、不作现行实现依据**。当前管理台为 `client/admin-web`（React + Vite + shadcn/ui + Tauri 2，生产静态目录 `client/admin-web/dist`）；见 [admin-web 指引](<../../client/admin-web/AGENTS.md>) 与 [W15 资产盘点归档](<../plans/admin-web-migration/w15-legacy-assets-research.md>)。
+
 > 定位：本文收录管理页信息架构、配置与上下文页面设计，以及健康和记忆的前端验收记录（原 `config-ui`、`context-ui`、`health-and-memory` 三份记录合并）。
 > 内容来源：插件架构统一 §0.11、§5；人格与图记忆 §6–§7；P1 第一轮 §6–§8。
 > 当前 UI 约束见[管理台维护](<../../client/shared/src/commonMain/kotlin/com/xiaozhi/admin/AGENTS.md>)；文中 `§N` 与 `AGENTS.md §N` 指重组前的旧长文，页面结构以源码与当前指引为准。

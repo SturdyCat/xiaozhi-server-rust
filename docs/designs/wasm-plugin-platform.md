@@ -1,5 +1,7 @@
 # WASM 插件平台（方案 v4 实施记录 · 历史）
 
+> **归档说明（归档波次：W15-2，旧端软下线）**：本文为 管理台/插件设计 原文，文中「Kuikly / GearUI / gearuiKit / client/shared / publishWeb / h5App/web / sharedCompose」等均为当时旧端口径，**保留史实、不作现行实现依据**。当前管理台为 `client/admin-web`（React + Vite + shadcn/ui + Tauri 2，生产静态目录 `client/admin-web/dist`）；见 [admin-web 指引](<../../client/admin-web/AGENTS.md>) 与 [W15 资产盘点归档](<../plans/admin-web-migration/w15-legacy-assets-research.md>)。
+
 > **历史文档 / 状态**：本文描述 v0.1 契约（`xiaozhi:plugin@0.1.0`）与方案 v4 的 P0–P9 阶段。
 > **§5 契约清单、§9 阶段表、§10 及各阶段验证计数均为当时快照，不作现行规则**（见 `docs/README.md` 维护规则 6）。
 > **当前契约以 `server/wit/plugin.wit`（`xiaozhi:plugin@0.2.0` / 方案 v5）与 [`plugins/wasm/AGENTS.md`](<../../plugins/wasm/AGENTS.md>) 为唯一权威。**

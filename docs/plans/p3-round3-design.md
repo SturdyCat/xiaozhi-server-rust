@@ -1,5 +1,7 @@
 # P1-5 配置预设 + 每设备 overlay（第 3 轮设计）
 
+> **归档说明（归档波次：W15-2，旧端软下线）**：本文为 gearui-kit/echomuse/tuya 计划与验收/架构 原文，文中「Kuikly / GearUI / gearuiKit / client/shared / publishWeb / h5App/web / sharedCompose」等均为当时旧端口径，**保留史实、不作现行实现依据**。当前管理台为 `client/admin-web`（React + Vite + shadcn/ui + Tauri 2，生产静态目录 `client/admin-web/dist`）；见 [admin-web 指引](<../../client/admin-web/AGENTS.md>) 与 [W15 资产盘点归档](<./admin-web-migration/w15-legacy-assets-research.md>)。
+
 > 版本：v1.0　日期：2026-10-12
 > 上游：`docs/plans/p1-features-prd.md` §3.1（P1-5）
 > 决策基线：用户拍板「**保守白名单——不包含 engine 切换**」，且本项动 `Config::load`/保存核心链路、回归风险最高，单独成轮。

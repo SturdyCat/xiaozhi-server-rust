@@ -20,7 +20,7 @@
 | MCP、OTA、音色探测与文件管理 | [MCP](<../server/src/workflow/mcp/AGENTS.md>)、[OTA](<../server/src/device/firmware/AGENTS.md>)、[音色](<../server/src/device/voices/AGENTS.md>)、[文件管理](<../server/src/gateway/files/AGENTS.md>) |
 | NLU 动态技能、模型构建与效果验收 | [模型唯一识别与完整默认技能清单](<model-only-skills.md>)、[稳定技能能力/持久任务](<../server/src/skills/AGENTS.md>)、[构建/候选测试契约](<../server/src/gateway/ws/nlu_build/AGENTS.md>)、[2026-11-01 真实验证及发布边界](<nlu-model-validation-20261101.md>)、[2026-11-02 构建修复与同输入对照](<nlu-model-validation-20261102.md>) |
 | 语音主流程、节点测试与公共 SVG UI | [重组与验证记录](<voice-pipeline.md>)、[节点测试样本](<node-test-samples.md>) |
-| 公共管理台与 Mac Catalyst 测试台 | [管理台](<../client/shared/src/commonMain/kotlin/com/xiaozhi/admin/AGENTS.md>)、[Mac Catalyst](<../client/apps/macosApp/AGENTS.md>) |
+| React 管理台与 /em/ 官方页 | [admin-web 指引](<../client/admin-web/AGENTS.md>)、[em 官方页源目录](<../client/apps/h5App/em/README.md>)；旧 Kotlin/Kuikly 管理台已 W15 软下线归档，见 [W15 资产盘点](<plans/admin-web-migration/w15-legacy-assets-research.md>) |
 | 测试与回归 | [测试入口](<../server/tests/AGENTS.md>) |
 
 当前行为以源码、测试和邻近维护说明为准。字段与默认值核对对应类型和[配置样例](<../server/config.example.toml>)；热生效档位由注册表元数据唯一声明，不在文档中另维护复制表。

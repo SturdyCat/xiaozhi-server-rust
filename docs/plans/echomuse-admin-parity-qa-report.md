@@ -1,5 +1,7 @@
 # EchoMuse 设备管理界面对齐官方 + Web 控制台 · QA 验收报告
 
+> **归档说明（归档波次：W15-2，旧端软下线）**：本文为 gearui-kit/echomuse/tuya 计划与验收/架构 原文，文中「Kuikly / GearUI / gearuiKit / client/shared / publishWeb / h5App/web / sharedCompose」等均为当时旧端口径，**保留史实、不作现行实现依据**。当前管理台为 `client/admin-web`（React + Vite + shadcn/ui + Tauri 2，生产静态目录 `client/admin-web/dist`）；见 [admin-web 指引](<../../client/admin-web/AGENTS.md>) 与 [W15 资产盘点归档](<./admin-web-migration/w15-legacy-assets-research.md>)。
+
 > 作者：严过关（QA）｜日期：2026-10-26｜基线：`main@da6f55a`（工作区未提交）
 > 验收基准：`docs/plans/echomuse-admin-parity-prd.md`、`docs/plans/echomuse-admin-parity-design.md`
 > 原则：**所有结论以本人独立跑出的结果为准**，不采信实现者自报。

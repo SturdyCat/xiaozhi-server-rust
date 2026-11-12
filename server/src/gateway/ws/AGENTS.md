@@ -6,7 +6,7 @@
 - 配置 GET 打码、PUT/POST 部分更新、revision 冲突与热生效回报，见[配置端点说明](<config/AGENTS.md>)。
 - 设备/会话/最近对话/用量/延迟是进程内观测态，重启清零；online 来自生命周期，不是心跳，也不是“今日统计”。长期原文留存属于 memory。
 - 健康接口与插件清单共用宿主 capability 聚合，不另写 fold；探测只做本地检查，不构建引擎或请求外网。默认底座只输出核心 ASR/VAD/TTS/LLM 能力，设备业务能力、静态 schema 与设备路由均不进入底座；业务 UI 只能来自已装载的 WASM manifest 或显式 native plugin feature。默认边界由 [plugins_tests](<plugins_tests.rs>) 与配置序列化回归钉死。
-- Kuikly NetworkModule 只用 GET/POST；保留配置 POST=PUT、overlay/preset 删除 POST 别名，不能只测 curl 的 PUT/DELETE。
+- Kuikly NetworkModule 只用 GET/POST；保留配置 POST=PUT、overlay/preset 删除 POST 别名，不能只测 curl 的 PUT/DELETE。（W15 归档注：管理台现为 `client/admin-web`；此 HTTP 契约成因——Kuikly NetworkModule 只用 GET/POST、保留配置 POST=PUT 别名——仍属现行契约依据，POST 别名至今生效，不作废。）
 - 人格 preview 接受未保存草稿，返回完整 effective；记忆 recall 是当场验证入口，clear 必须显式 scope 或 all。
 - 固件使用[固件子路由](<../../device/firmware/http.rs>)，按功能/型号匹配；不要把统一插件 action/job 设计当成已存在路由。
 - NLU 模型闭环见 [nlu_build](<nlu_build.rs>) 与 [候选诊断](<nlu_model.rs>)：构建只读取 SQLite 保存态并核对 `expected_revision`，每次生成独立版本目录和校验清单，不改生产开关。训练执行服务内嵌受信脚本，依赖镜像仅供 ML 环境；发布脚本修复需发布新服务。`POST /api/nlu/model/test` 只接受受管 `build_id`，校验产物指纹后独立真实推理，不经过规则、不会执行技能或保存配置；训练、状态、日志、候选测试均使用管理鉴权，开发模式禁止真实训练/推理。

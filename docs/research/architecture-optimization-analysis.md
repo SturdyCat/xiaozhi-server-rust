@@ -1,5 +1,7 @@
 # xiaozhi-server-rust 功能与 UI 分模块优化分析
 
+> **归档说明（归档波次：W15-2，旧端软下线）**：本文为 架构研究 原文，文中「Kuikly / GearUI / gearuiKit / client/shared / publishWeb / h5App/web / sharedCompose」等均为当时旧端口径，**保留史实、不作现行实现依据**。当前管理台为 `client/admin-web`（React + Vite + shadcn/ui + Tauri 2，生产静态目录 `client/admin-web/dist`）；见 [admin-web 指引](<../../client/admin-web/AGENTS.md>) 与 [W15 资产盘点归档](<../plans/admin-web-migration/w15-legacy-assets-research.md>)。
+
 > **历史分析 / 结论**：2026-10-12 的分模块优化调研，作为总体实施计划的上游输入；文中注册表条数、`FieldSchema` 形状与文件规模均为当时快照，当前事实以源码、测试与各模块 `AGENTS.md` 为准。
 > 方法：参考 Golang 版 [`xiaozhi-esp32-server-golang`](https://github.com/hackers365/xiaozhi-esp32-server-golang) 的优秀设计，对 Rust 版 `xiaozhi-server-rust` 做分模块优化分析。
 > 团队：软件开发专家团（主理人 齐活林 / 架构师 高见远 / 产品经理 许清楚）。

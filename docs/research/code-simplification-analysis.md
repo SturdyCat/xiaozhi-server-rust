@@ -1,5 +1,7 @@
 # 代码简化分析报告 · 分模块（2026-10-12）
 
+> **归档说明（归档波次：W15-2，旧端软下线）**：本文为 架构研究 原文，文中「Kuikly / GearUI / gearuiKit / client/shared / publishWeb / h5App/web / sharedCompose」等均为当时旧端口径，**保留史实、不作现行实现依据**。当前管理台为 `client/admin-web`（React + Vite + shadcn/ui + Tauri 2，生产静态目录 `client/admin-web/dist`）；见 [admin-web 指引](<../../client/admin-web/AGENTS.md>) 与 [W15 资产盘点归档](<../plans/admin-web-migration/w15-legacy-assets-research.md>)。
+
 > **历史分析 / 结论**：只分析不改码；文中 `plugins/registry` 清理项、文件数与优先级均为 2026-10-12 快照，实施前须重新核对源码，不作现行规则。
 > 分析方式：6 组并行只读分析（Simplify skill），范围 = server（Rust，131 文件约 19k 行）+ client/shared（Kuikly Kotlin，40 文件约 7.1k 行）。
 > 原则：只分析不改码；所有"刻意设计"（P4 描述符架构、DownlinkPacer/prefetch、协议小写 tag、密钥打码三处同改、normalize/rewrite_legacy_paths 等）已核实未被误伤。

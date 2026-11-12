@@ -1,5 +1,7 @@
 # P1 第一轮增量设计：P1-6 引擎健康自检 + P1-7 记忆多后端注册表（历史设计与实施记录）
 
+> **归档说明（归档波次：W15-2，旧端软下线）**：本文为 gearui-kit/echomuse/tuya 计划与验收/架构 原文，文中「Kuikly / GearUI / gearuiKit / client/shared / publishWeb / h5App/web / sharedCompose」等均为当时旧端口径，**保留史实、不作现行实现依据**。当前管理台为 `client/admin-web`（React + Vite + shadcn/ui + Tauri 2，生产静态目录 `client/admin-web/dist`）；见 [admin-web 指引](<../../client/admin-web/AGENTS.md>) 与 [W15 资产盘点归档](<./admin-web-migration/w15-legacy-assets-research.md>)。
+
 > 定位：本文是 P1 第一轮（P1-6 引擎健康自检、P1-7 记忆多后端注册表）的历史长文；方案、任务和验收映射保留原语境，不把当时“剩余工作”或可选项当作当前状态。
 > 章节分布：§0–§1.2 见[健康自检维护](<../../plugins/health/AGENTS.md>)与[记忆维护](<../../plugins/memory/AGENTS.md>)；**§1.3–§5 见本页**；§6–§8 见[管理台界面设计与验收记录](<../designs/admin-ui-design.md>)。
 > 文中形如 `agents.md §N` 或 `AGENTS.md §N` 的引用指重组前的旧长文。

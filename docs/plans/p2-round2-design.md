@@ -1,5 +1,7 @@
 # 第 2 轮设计：P1-10 MCP 清单驱动 + P1-9 本地 RAG 后端
 
+> **归档说明（归档波次：W15-2，旧端软下线）**：本文为 gearui-kit/echomuse/tuya 计划与验收/架构 原文，文中「Kuikly / GearUI / gearuiKit / client/shared / publishWeb / h5App/web / sharedCompose」等均为当时旧端口径，**保留史实、不作现行实现依据**。当前管理台为 `client/admin-web`（React + Vite + shadcn/ui + Tauri 2，生产静态目录 `client/admin-web/dist`）；见 [admin-web 指引](<../../client/admin-web/AGENTS.md>) 与 [W15 资产盘点归档](<./admin-web-migration/w15-legacy-assets-research.md>)。
+
 > **历史设计 / 状态**：第 2 轮设计已交付；文中「REGISTRY 14 条」等条数为当时快照，当前注册表以 `plugins/registry/` 源码为准。
 > 依据：`docs/plans/p1-features-prd.md` §3.4/§3.5 + 探索报告（2026-10-12，Explore-1/Explore-2）。
 > 第 1 轮（P1-6 `4df249f` / P1-7 `e8843ce`）已交付注册表地基，本轮两项在其上叠加。

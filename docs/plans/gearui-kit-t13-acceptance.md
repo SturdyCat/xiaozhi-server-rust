@@ -1,5 +1,7 @@
 # T13 四端验收清单（GearUI 迁移收口）
 
+> **归档说明（归档波次：W15-2，旧端软下线）**：本文为 gearui-kit/echomuse/tuya 计划与验收/架构 原文，文中「Kuikly / GearUI / gearuiKit / client/shared / publishWeb / h5App/web / sharedCompose」等均为当时旧端口径，**保留史实、不作现行实现依据**。当前管理台为 `client/admin-web`（React + Vite + shadcn/ui + Tauri 2，生产静态目录 `client/admin-web/dist`）；见 [admin-web 指引](<../../client/admin-web/AGENTS.md>) 与 [W15 资产盘点归档](<./admin-web-migration/w15-legacy-assets-research.md>)。
+
 > 本文档汇总 GearUI 迁移（T01–T12）各轮报告中的验收项与「需本地验证」项，作为 T13 的**唯一执行清单**：
 > 自动验收照 §1 逐条跑，本地验证照 §2 逐条勾。验收时不算 bug 的已知差异见 §3，回滚策略见 §4。
 >

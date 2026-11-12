@@ -91,6 +91,6 @@
 「载入预设内容到表单」/「清空人格字段」（回到只用预设）/「预览最终提示词」。
 
 **验收**：`cargo test` **226 passed**（默认与 `--features sherpa` 同数，其中灵魂相关 25 条）；
-客户端两个 Kotlin 目标 **0 warning**、`publishWeb` 成功且产物含全部新文案。
+客户端两个 Kotlin 目标 **0 warning**、`publishWeb` 成功且产物含全部新文案。（W15 归档注：此为旧 Kotlin 端历史验收记录，保留史料；当前管理台构建以 `pnpm --dir client/admin-web build` 为准。）
 
 ---

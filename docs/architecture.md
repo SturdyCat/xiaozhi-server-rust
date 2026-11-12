@@ -7,7 +7,7 @@
 ```mermaid
 flowchart LR
     ESP[ESP32 设备] <-->|JSON + Opus / WS| WS[HTTP / WS 网关]
-    UI[Kuikly Web / macOS 管理台] -->|HTTP 配置与观测| WS
+    UI[React 管理台 admin-web<br/>Web + Tauri 2] -->|HTTP 配置与观测| WS
     WS --> SESSION[每连接 Session]
     SESSION --> VAD[VAD 独立会话状态 / 实例池]
     VAD --> ASR[共享 ASR / 推理闸门]
@@ -54,10 +54,10 @@ flowchart LR
 
 ## 4. 管理台、部署与验证
 
-- [公共管理台](<../client/shared/src/commonMain/kotlin/com/xiaozhi/admin/AGENTS.md>)跨端复用；Web 双 bundle 由服务端同源托管，端到端语音测试由[Mac Catalyst](<../client/apps/macosApp/AGENTS.md>)原生桥承载，Opus 已实现。
+- [React 管理台](<../client/admin-web/AGENTS.md>)（`client/admin-web`，Vite + shadcn/ui + Tauri 2）由 server `ServeDir` 同源托管在 `/`，生产静态目录 `client/admin-web/dist`；`/em/` 官方页由 `scripts/sync-em.mjs` 白名单 4 文件同步进 `dist/em/`。旧 Kotlin/Kuikly 管理台（含 Mac Catalyst 语音测试台）已 W15 软下线归档、源码保留但不再构建。Opus 已实现。
 - 设备/会话/最近对话/用量/延迟是进程内观测态，重启清零；长期对话由记忆原文表留存，online 不是心跳。
 - [部署说明](<deployment.md>)管理目录卷、模型准备和构建限制；当前 compose 仅真实服务，没有零模型 mock profile。
-- [服务端验证](<../server/AGENTS.md>)区分默认单测、sherpa 类型检查和真实链接/联调；[客户端验证](<../client/AGENTS.md>)区分 Web 与 macOS 源集。
+- [服务端验证](<../server/AGENTS.md>)区分默认单测、sherpa 类型检查和真实链接/联调；[客户端验证](<../client/AGENTS.md>)以 `pnpm --dir client/admin-web build` 为准（旧端 Gradle 源集已归档）。
 
 ## 5. 扩展落点
 
@@ -68,6 +68,6 @@ flowchart LR
 | 新配置字段 / 密钥 | [配置维护](<../server/src/config/AGENTS.md>)与[HTTP 契约](<../server/src/gateway/ws/config/AGENTS.md>) |
 | 新协议消息 / 二进制布局 | [协议实现](<../server/src/workflow/protocol/protocol.rs>)、同级测试与客户端联调 |
 | 新设备工具调用 | [MCP 契约](<../server/src/workflow/mcp/AGENTS.md>)与会话响应关联 |
-| 新管理页 / 分区 | [管理台维护](<../client/shared/src/commonMain/kotlin/com/xiaozhi/admin/AGENTS.md>) |
+| 新管理页 / 分区 | [admin-web 指引](<../client/admin-web/AGENTS.md>)（W15 起；旧端 `client/shared` 已归档） |
 
 不要照搬历史设计里的旧中心工厂、chat/completions、mock 后端或未实现的 action/job 端点。

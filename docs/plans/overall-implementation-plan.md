@@ -1,5 +1,7 @@
 # xiaozhi-server-rust 整体优化实施方案（合并版）
 
+> **归档说明（归档波次：W15-2，旧端软下线）**：本文为 gearui-kit/echomuse/tuya 计划与验收/架构 原文，文中「Kuikly / GearUI / gearuiKit / client/shared / publishWeb / h5App/web / sharedCompose」等均为当时旧端口径，**保留史实、不作现行实现依据**。当前管理台为 `client/admin-web`（React + Vite + shadcn/ui + Tauri 2，生产静态目录 `client/admin-web/dist`）；见 [admin-web 指引](<../../client/admin-web/AGENTS.md>) 与 [W15 资产盘点归档](<./admin-web-migration/w15-legacy-assets-research.md>)。
+
 > 目的：把两路工作合并成一份可执行的分阶段路线图——(A) 前期《分模块优化分析》(`docs/research/architecture-optimization-analysis.md`，参考 Golang 版优秀设计)；(B) 2026-10 落地的「配置 UI 导航重组」。
 > 方法论：取其架构思想，不搬其重实现；凡新增服务端能力优先复用现有 `registry`/`schema`/`bench`/`observe` 基础设施。
 > 定位前提：Rust 版 = 离线 ASR/TTS(sherpa-onnx) + 云端 HTTP LLM 的**单二进制 Docker** 小智服务端，固件协议严格对齐(v1/v2/v3)，N5105 低功耗主机；macOS/iOS/Android 有原生麦克风可做语音链路测试，Web 仅能做 LLM/TTS 延迟类轻测。

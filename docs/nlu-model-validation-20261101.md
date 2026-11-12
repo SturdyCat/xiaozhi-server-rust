@@ -1,5 +1,7 @@
 # NLU 配置、模型构建与真实推理验证（2026-11-01）
 
+> **归档说明（归档波次：W15-2，旧端软下线）**：本文为 2026-11-01 NLU 模型验证 原文，文中「Kuikly / GearUI / gearuiKit / client/shared / publishWeb / h5App/web / sharedCompose」等均为当时旧端口径，**保留史实、不作现行实现依据**。当前管理台为 `client/admin-web`（React + Vite + shadcn/ui + Tauri 2，生产静态目录 `client/admin-web/dist`）；见 [admin-web 指引](<../client/admin-web/AGENTS.md>) 与 [W15 资产盘点归档](<./plans/admin-web-migration/w15-legacy-assets-research.md>)。
+
 ## 范围与结论
 
 - 目标为用户指定的 `http://192.168.99.249`（80 端口），不是本地 `--dev` 服务。

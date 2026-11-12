@@ -15,7 +15,7 @@
 > ③ **bootstrap 引导源 + TOML 导入/导出**，否则会出现新一轮"配置到底在哪"的困惑。
 >
 > 另外有一个容易被忽略的事实：**"提供接口，用 web 与 mac app 管理配置"这件事现状已经完成**——
-> `client/shared/commonMain` 的 `ConfigFormState.kt` 已经经 `NetworkModule` 走 `GET/POST /api/config`，
+> 旧 Kotlin 端 `client/shared/commonMain` 的 `ConfigFormState.kt`（已 W15 软下线归档）曾经过 `NetworkModule` 走 `GET/POST /api/config`；当前管理台为 `client/admin-web`（React + Vite + Tauri 2），HTTP 契约同源不变，
 > web（h5App）与 mac app 共用同一份 `commonMain` 代码。本次要迁移的是**接口背后的存储**，HTTP 契约保持不变，
 > 因此客户端在 P0/P1 阶段**零改动**。
 
@@ -32,7 +32,7 @@
 | HTTP 契约 | 部分更新（缺失=保持 / 显式 `null`=清除）、密钥空串=保留、密钥打码只回 `has_*`、内容指纹 `revision` + 409 乐观并发、`hot/hot_hint/changed_sections` | `server/src/gateway/ws/config.rs:311`、`:100`、`:212`、`impact.rs` |
 | 旁路落盘 | 设备 overlay → `overlays/devices/<id>.toml`；预设 → `presets/<name>.toml`（文件名 sanitize 防穿越 + 读时裁剪越界字段） | `server/src/config/overlay.rs:135`、`:142`、`:57` |
 | 无配置文件时 | `PUT /api/config` 直接 **400**（不可持久化）；热句音频落盘同时禁用 | `server/src/gateway/ws/config.rs:385`；`server/src/runtime/mod.rs:126` |
-| 客户端 | web 与 mac app 共用 `commonMain` 管理台，走 `/api/config`、`/api/config/meta`、`/api/config/schema`、`/api/config/presets` | `client/shared/src/commonMain/kotlin/com/xiaozhi/admin/ConfigFormState.kt` |
+| 客户端 | 旧 Kotlin/Kuikly 管理台（W15 软下线归档；当前为 `client/admin-web`）曾共用 `commonMain` 走 `/api/config`、`/api/config/meta`、`/api/config/schema`、`/api/config/presets` | `client/shared/src/commonMain/kotlin/com/xiaozhi/admin/ConfigFormState.kt`（旧端已归档） |
 
 **结论（落地前盘点）：** 配置的"接口"已经存在且跨端可用；缺的是存储形态——该缺口已于 2026-10-14 由 `SqliteConfigStore` 补齐（见 §5/§7）。下表为落地前的原始盘点，保留作设计动机参考；落地后的存储形态为 SQLite，文件/默认后端仅为降级路径。
 
@@ -212,7 +212,7 @@ CREATE TABLE IF NOT EXISTS cfg_presets (
 | `server/src/config/overlay.rs` | `device_overlay_path`/`read_device_overlay_value`/`json_to_toml`/`presets_dir`/`preset_path` 仍被 `FileConfigStore` 复用；`overlay_allowed`/`validate_overlay`/`prune_disallowed`/`merge_overlay` **不动** | ✅ 已完成（文件后端路径保留） |
 | `plugins/memory/schema.rs` | **未动**（共用 `_cfg_migrations` 命名空间隔离，见 §3.1） | — |
 | `docker-entrypoint.sh`、`docker-compose.yml`、`README.md`、[配置说明](<../AGENTS.md>) | 部署层已兼容：目录卷不变量；`config.toml` 退化为引导/导入源（见 §3.3 落地说明） | ✅ 已完成 |
-| `client/shared/.../admin/` | **零改动**；HTTP 契约（`/api/config`、`/api/config/meta`、`/api/config/presets` 等）保持不变 | ✅ 已完成 |
+| `client/shared/.../admin/` | **零改动**（旧 Kotlin/Kuikly 管理台，W15 软下线归档，此条为历史验收记录）；HTTP 契约（`/api/config`、`/api/config/meta`、`/api/config/presets` 等）保持不变 | ✅ 已完成 |
 
 > 注：原提案中的 `export`/`import`/`history`/`rollback` 端点在本轮未实现（本期范围为"DB 优先 + 兼容导入 + 只读查询 + 备份"）；历史/回滚能力可由 `cfg_revisions` 表扩展，列为后续增强。
 

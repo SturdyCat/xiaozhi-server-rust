@@ -1,5 +1,7 @@
 # 给 LLM 加「灵魂」与「记忆」——集成 graph-memory 图记忆 + 管理界面配置（历史设计与实施记录）
 
+> **归档说明（归档波次：W15-2，旧端软下线）**：本文为 管理台/插件设计 原文，文中「Kuikly / GearUI / gearuiKit / client/shared / publishWeb / h5App/web / sharedCompose」等均为当时旧端口径，**保留史实、不作现行实现依据**。当前管理台为 `client/admin-web`（React + Vite + shadcn/ui + Tauri 2，生产静态目录 `client/admin-web/dist`）；见 [admin-web 指引](<../../client/admin-web/AGENTS.md>) 与 [W15 资产盘点归档](<../plans/admin-web-migration/w15-legacy-assets-research.md>)。
+
 > 定位：本文是人格与图记忆的历史长文。早期“没有人格 / 记忆代码”等盘点与后续实施记录属于不同时间点，不应混作当前事实；记录时点状态为 **P0（灵魂）与 P1（记忆骨架）已实现，P2/P3 未开始**。
 > 章节分布：**§0–§3、§8–§10 见本页**；§4 见[人格维护](<../../plugins/soul/AGENTS.md>)；§5 见[记忆维护](<../../plugins/memory/AGENTS.md>)；§6–§7 见[管理台界面设计与验收记录](<admin-ui-design.md>)；§11–§12 见[提示词维护](<../../plugins/prompt/AGENTS.md>)。
 > 文中形如 `agents.md §N` 或 `AGENTS.md §N` 的引用指重组前的旧长文。

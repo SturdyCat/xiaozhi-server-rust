@@ -2,7 +2,7 @@
 
 从上游 [EchoMuse controller](https://github.com/wilbowes/EchoMuse/tree/main/controller/static)
 **原样 vendor** 的设备管理界面：设备卡列表 + 设备详情六 tab（状态 / 活动 / 配置 / 控制台 /
-更新 / 日志）。由 Rust 服务端的静态目录同源托管在 `/em/`，与 Kuikly 管理台（`/`）是两个
+更新 / 日志）。由 Rust 服务端的静态目录同源托管在 `/em/`，与 React 管理台（`client/admin-web`，`/`）是两个
 独立文档，全局变量零冲突。
 
 ## 目录
@@ -55,7 +55,7 @@ ESBUILD_BIN=/path/to/esbuild tools/build_em_dashboard.sh
    ——否则加载即挂载官方完整 App（用户体系 / Settings / 配网向导）；
 3. 写 `README.sha256`。
 
-改了 `dashboard.jsx` 而没重跑脚本 → `:apps:h5App:verifyEmBundle` 会让 `publishWeb` 失败。
+改了 `dashboard.jsx` 而没重跑脚本 → `:apps:h5App:verifyEmBundle` 会让旧端 `publishWeb` 失败（旧端已 W15 软下线归档；当前 `/em/` 下发由 `client/admin-web/scripts/sync-em.mjs` 白名单 4 文件负责，不含 `dashboard.jsx`）。
 
 ## 适配层（adapter.js）
 
@@ -104,7 +104,7 @@ ESBUILD_BIN=/path/to/esbuild tools/build_em_dashboard.sh
 | 日志 tab | 时间列是按行号倒推的**合成时间**（拉取时刻 − 行号 × 1s） | 设备日志行不含时间戳 |
 | 配置 tab | 每段默认显示 `Local override (7 of 7)` | 本服务端没有 fleet 全局配置，settings 整份落盘；7 段全算"本地覆盖" |
 | 配置 tab | 唤醒词模型下拉只有内置项 | 没有模型仓库端点 |
-| 配置 tab | 保存时白名单外（controller 侧：meter 族、led 族、console 族、controllerEndpoints…）的键被丢弃且**界面无提示** | 这些键设备端不消费，服务端会过滤；改动它们请走 Kuikly 管理台对应面板 |
+| 配置 tab | 保存时白名单外（controller 侧：meter 族、led 族、console 族、controllerEndpoints…）的键被丢弃且**界面无提示** | 这些键设备端不消费，服务端会过滤；改动它们请走 React 管理台（`client/admin-web`）对应面板 |
 
 配置保存走**增量下发**：上游 `pushConfig` 发的是整份 effectiveConfig（fleet 打底 + 设备
 覆盖），而本服务端 `/settings` 会把收到的每个键都写进设备设置。adapter 先读一次设备
@@ -170,7 +170,9 @@ node --check client/apps/h5App/em/static/host.js
 CDN 地址与上游 `controller/Dockerfile` 下载源逐字一致（cdnjs / jsdelivr /
 fonts.gstatic）。
 
-## 与 Kuikly 管理台的关系
+## 与 React 管理台的关系（旧端 Kuikly 实现已 W15 归档）
+
+以下为旧 Kotlin/Kuikly 管理台时期的实现记录，W15 后已归档；当前 `client/admin-web` 的 DevicehubPage 自 W12 起以 `<iframe src="/em/?...">` 嵌入本页。
 
 Kuikly 管理台的「EchoMuse」页使用设备摘要卡打开同一管理弹窗，顶部由 GearUI 系统 Tabs
 统一导航：官方状态/活动/配置/控制台/更新/日志六项，与 DLNA 音乐/GATT 工具/VAD 资产/

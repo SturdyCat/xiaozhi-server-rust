@@ -1,5 +1,7 @@
 # 架构提案评估：差距核实 + 价值审查（合并归档）
 
+> **归档说明（归档波次：W15-2，旧端软下线）**：本文为 架构研究 原文，文中「Kuikly / GearUI / gearuiKit / client/shared / publishWeb / h5App/web / sharedCompose」等均为当时旧端口径，**保留史实、不作现行实现依据**。当前管理台为 `client/admin-web`（React + Vite + shadcn/ui + Tauri 2，生产静态目录 `client/admin-web/dist`）；见 [admin-web 指引](<../../client/admin-web/AGENTS.md>) 与 [W15 资产盘点归档](<../plans/admin-web-migration/w15-legacy-assets-research.md>)。
+
 > 状态：**过期评估记录（2026-10-14），提案未作为实施清单采纳**。评估对象《xiaozhi-server-rust 架构优化建议》原文未入库（依据主理人转述条目核实）；总体结论为「可作设计思想参考，不作为实施清单」。其中部分真缺口（如 VAD 池化）此后已有对应实现，**当前状态一律以源码、测试与各模块 `AGENTS.md` 为准**；文中 `文件:行号` 为记录时点快照。
 > 来源：两份同日期、同评估人的文档合并——架构师 高见远《架构提案 × 代码现状 差距核实报告》（Gap Audit v2，282 行，逐条核实提案 vs 代码现状）+ 《技术方案价值评估 + 过度设计审查》（313 行，站在本仓库真实约束上判必要 vs 过度设计）。
 > 阅读顺序：先读「结论速览」；逐条差距与改动量查第一部分；价值取舍、过度设计与替代优先级查第二部分。

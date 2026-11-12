@@ -42,7 +42,7 @@
   预设是用户主动快照，动它等于篡改。
 - 改默认值的完整动作：① 插件 `Default` + serde `default_*()`（单一权威）；②
   [注册表字段](<../plugins/registry/AGENTS.md>) `default_hint`；③ 客户端表单状态初值
-  （`client/shared/.../Config*State.kt`）；④ `BATCHES` 追加登记 + `CURRENT_DEFAULTS_VERSION` +1；
+  （旧 Kotlin 端 `client/shared/.../Config*State.kt`，已 W15 软下线归档；当前管理台配置表单见 `client/admin-web`）；④ `BATCHES` 追加登记 + `CURRENT_DEFAULTS_VERSION` +1；
   ⑤ [配置样例](<../../config.example.toml>)。漂移由 `defaults/tests.rs` 的
   `targets_match_code_defaults` 与 `registry/tests.rs` 兜底。
 - 部署核对：升级后启动日志会打印一行 `配置库默认值对齐 v0 → v1：…`（写明哪些键被打开、

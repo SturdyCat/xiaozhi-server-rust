@@ -1,5 +1,7 @@
 # 插件架构统一 —— 借鉴 DSH 插件理念 + 适合本项目的 LLM 插件 + 管理页 UI 设计（历史设计与实施记录）
 
+> **归档说明（归档波次：W15-2，旧端软下线）**：本文为 管理台/插件设计 原文，文中「Kuikly / GearUI / gearuiKit / client/shared / publishWeb / h5App/web / sharedCompose」等均为当时旧端口径，**保留史实、不作现行实现依据**。当前管理台为 `client/admin-web`（React + Vite + shadcn/ui + Tauri 2，生产静态目录 `client/admin-web/dist`）；见 [admin-web 指引](<../../client/admin-web/AGENTS.md>) 与 [W15 资产盘点归档](<../plans/admin-web-migration/w15-legacy-assets-research.md>)。
+
 > 定位：本文是插件架构统一的完整历史长文。盘点描述改造前状态、设计描述目标方案、实施记录描述当时交付，均不代替当前源码、测试与维护约束。
 > 章节分布：**§0–§0.6、§1、§6–§9 见本页**；§0.7–§0.8 见[插件维护](<../../plugins/AGENTS.md>)；§0.9 见[人格与图记忆](<soul-and-graph-memory-plan.md>)；§0.10 与 §2–§3 见[注册表规范](<../../plugins/registry/AGENTS.md>)；§4 见 [LLM 维护](<../../plugins/llm/AGENTS.md>)；§0.11 与 §5 见[管理台界面设计与验收记录](<admin-ui-design.md>)。
 > 文中形如 `agents.md §N` 或 `AGENTS.md §N` 的引用指重组前的旧长文，不表示当前指引存在该章节。

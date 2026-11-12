@@ -1,5 +1,7 @@
 # 三项缺口设计 — 历史完整记录
 
+> **归档说明（归档波次：W15-2，旧端软下线）**：本文为 管理台/插件设计 原文，文中「Kuikly / GearUI / gearuiKit / client/shared / publishWeb / h5App/web / sharedCompose」等均为当时旧端口径，**保留史实、不作现行实现依据**。当前管理台为 `client/admin-web`（React + Vite + shadcn/ui + Tauri 2，生产静态目录 `client/admin-web/dist`）；见 [admin-web 指引](<../../client/admin-web/AGENTS.md>) 与 [W15 资产盘点归档](<../plans/admin-web-migration/w15-legacy-assets-research.md>)。
+
 > **历史设计 / 实施记录**：本文件汇总"ASR/TTS 推理并发闸门、TTFA 分段延迟指标、SentenceSplitter 定时 flush"三项缺口的设计、接线与实施记录（原 §0–8，架构师高见远，2026-10-13／实施 2026-10-14）。
 > 其中的"缺口"、伪代码签名、文件数和任务优先级均以原记录时点为背景，不代表当前仍未实现，也不作为现状规范；实际行为需核对源码、测试与各模块维护说明。
 > 文中形如 `AGENTS.md` §N 的引用指重组前的旧长文，不表示当前根目录 `AGENTS.md` 存在该章节；现行约定见[仓库指引](<../../AGENTS.md>)。

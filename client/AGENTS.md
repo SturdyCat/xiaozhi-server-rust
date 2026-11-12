@@ -1,26 +1,24 @@
-# Kuikly 客户端指引
+# 前端客户端指引
 
-继承[根指引](<../AGENTS.md>)。本文件只放平台/构建边界；页面和表单维护见[公共管理台维护](<shared/src/commonMain/kotlin/com/xiaozhi/admin/AGENTS.md>)。
+继承[根指引](<../AGENTS.md>)。本文件只放前端平台/构建边界与入口链接；页面和表单维护见 [React 管理台指引](<admin-web/AGENTS.md>)，旧 Kotlin/Kuikly 管理台已 W15 软下线归档（源码保留但不再构建，见 [W15 资产盘点归档](<../docs/plans/admin-web-migration/w15-legacy-assets-research.md>)）。
 
-- UI 修改前查仓库 Kuikly 技能与官方组件；管理台的组件层是 GearUI（vendored 于 `gearuiKit/`）+ `shared/.../admin/kit/` 零件库，优先复用这两处，不手搓官方已有的 Switch、AlertDialog、Tabs 或 Button。
-- commonMain 管理台跨端复用，web 与 macOS 共用单一 `@Page("admin")` 壳（原 macOS 双壳 AdminShell 已废除，平台差异走 AdminPlatform expect/actual）；麦克风/Opus 语音测试只在 macosArm64Main 与 macOS 原生桥，不把测试依赖带进 Web/Android/iOS/OHOS。
-- Web 双 bundle：shared 持有 JS 目标产业务包 nativevue2.js，h5App 壳产 h5App.js，入口先业务后壳。不要移走 shared 的 JS 目标。
-- Web 管理台文本须可划选复制：h5App [Main](<apps/h5App/src/jsMain/kotlin/com/xiaozhi/admin/Main.kt>) 设 `KuiklyProcessor.preventDefaultSelect = false`（渲染器默认在桌面浏览器把滚动容器内的 selectstart 全部拦截）；drag 拦截保持 true 防 HTML5 原生拖拽卡死滚动列表，不要回退。
-- 渲染器坐标/版本以[Gradle 配置](<apps/h5App/build.gradle.kts>)与[版本配置](<gradle.properties>)为准；升级同步根 buildscript，保留[JS 依赖锁](<kotlin-js-store/yarn.lock>)。
-- 不设 PREFER_SETTINGS，不加入多余项目级 repositories，避免丢 Kotlin/JS 自动注入的 Node 下载源。
-- Kotlin/JS 的 yarn 归档不走 GitHub release：根 `build.gradle.kts` 清空 KGP 的 `downloadBaseUrl`，由 `settings.gradle.kts` 中带 content 过滤的 npm registry ivy 源（链首）解析；⛔ 不要改回默认值，也不要把该 ivy 源移出链首（KGP 动态注入的 project 级仓库会挤掉 settings 链，端点 5xx 即整条构建失败）。
+## 当前管理台（admin-web）
+
+- 当前管理台为 [React 管理台](<admin-web/AGENTS.md>)（`client/admin-web`，Vite + shadcn/ui + Tauri 2），生产静态目录 `client/admin-web/dist`；`[server].admin_dir` / `XIAOZHI_ADMIN_DIR` / Docker `/app/web` 默认指向此处。
+- 前端构建：`pnpm --dir client/admin-web install && pnpm --dir client/admin-web build`（产物 `dist/` 与 `dist/em/`）；启用 Tauri 桌面壳需 Rust 工具链与 `src-tauri/` 配置。
+- 前端检查：`pnpm --dir client/admin-web format:check` / `typecheck` / `build`；`/em/` 官方页由 `admin-web/scripts/sync-em.mjs` 白名单 4 文件同步进 `dist/em/`。
 
 在 client 目录验证：
 
 ```bash
-./gradlew :bleProtocolTests:jvmTest
-./gradlew :apps:h5App:publishWeb -PwebSourceMap=false
-./gradlew :shared:compileKotlinMacosArm64
+pnpm --dir admin-web typecheck
+pnpm --dir admin-web build
 ```
 
-`bleProtocolTests` 是无页面、无 Kuikly/KSP 的普通 KMP 测试模块，只引用生产 `EchoMuseBleCodec.kt` 源文件并运行纯协议/校验回归，不复制实现，也不参与生产 bundle。共享模块的 native 测试依赖宿主导出 `com_tencent_kuikly_IsCurrentOnContextThread`，不能将只编译成功称为测试通过，或为测试伪造渲染宿主符号。
+## 旧端 Kotlin/Kuikly 管理台（W15 软下线归档，保留不构建）
 
-publishWeb 不覆盖 macOS 源集；原生运行另重建框架。[macOS 构建指引](<apps/macosApp/AGENTS.md>) · [部署内存限制](<../docs/deployment.md>)
+- 旧端源码位于 `shared/`（commonMain / macosArm64Main 管理台与配置页）、`gearuiKit/`（vendored GearUI）、`apps/macosApp/`（Mac Catalyst 原生桥与语音测试台）、`apps/h5App/em/`（官方 `/em/` 页源目录，13 文件保留）。
+- W15 起旧端不再参与生产构建；其维护说明与契约数字均保留为史料，不作现行实现依据（[W15 资产盘点归档](<../docs/plans/admin-web-migration/w15-legacy-assets-research.md>)）。
 
 ## 上级入口
 
@@ -28,6 +26,6 @@ publishWeb 不覆盖 macOS 源集；原生运行另重建框架。[macOS 构建�
 
 ## 下级入口
 
-- [macOS 宿主](<apps/macosApp/AGENTS.md>)：Mac Catalyst 原生桥与语音测试台。
-- [公共管理台](<shared/src/commonMain/kotlin/com/xiaozhi/admin/AGENTS.md>)：跨端页面、表单与配置契约。
-- [Admin Web](<admin-web/AGENTS.md>)：React + shadcn/ui + Tauri 2 管理台开发环境（占位骨架，不参与 Gradle 构建）。
+- [React 管理台](<admin-web/AGENTS.md>)：当前管理台开发环境与维护入口。
+- [旧端 Kotlin 管理台（归档）](<shared/src/commonMain/kotlin/com/xiaozhi/admin/AGENTS.md>)：W15 前跨端页面、表单与配置契约，已归档。
+- [旧端 macOS 宿主（归档）](<apps/macosApp/AGENTS.md>)：Mac Catalyst 原生桥与语音测试台，已归档。

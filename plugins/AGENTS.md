@@ -110,8 +110,8 @@ Kotlin 把「服务端 JSON ⇄ 表单映射」（`fill` + `putSecret`）独立�
 ```bash
 ~/.cargo/bin/cargo test                                                    # => 113 passed; 0 failed; 3 ignored（与拆分前同数同结果）
 ~/.cargo/bin/cargo test --features sherpa                                  # => 113 passed; 0 failed
-cd client && ./gradlew :apps:h5App:publishWeb -PwebSourceMap=false         # => BUILD SUCCESSFUL in 34s
-find server/src client/shared \( -name '*.rs' -o -name '*.kt' \) -exec wc -l {} + | awk '$1>600 && $2!="total"'   # => 空
+pnpm --dir client/admin-web build                                        # => dist/ 与 dist/em/ 就绪
+find server/src client/admin-web/src \( -name '*.rs' -o -name '*.tsx' -o -name '*.ts' \) -exec wc -l {} + | awk '$1>600 && $2!="total"'   # => 空
 ```
 
 **过程记录（避免后人重踩）**：拆分用脚本按行区间搬移，工具链**不认行为等价**，因此脚本里对每个

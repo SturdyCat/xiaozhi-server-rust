@@ -251,6 +251,6 @@ embedding = "bge-m3"
 | 新增 TTS 供应商成本 | 服务端需要改的只剩：① 新实现文件；② `plugins/tts/mod.rs` 的凭据/参数结构 + `build_<id>()`；③ 注册表描述符 1 条（`fields` 进 `registry/fields.rs`）；④ `<CAP>_ENGINES` 表 1 行。**枚举/工厂分发/签名函数/`match` 分支已全部消失**（原 19 处 → 服务端 ≤5 处；客户端的 `ttsRemoteEngines` + 字段区待 P5 由 schema 驱动收口） |
 | engine 写错的可见性 | `unknown_engine_marks_capability_failed_with_hint`（`/api/plugins` 标 `Failed` + 列出可选值）、`boot_rejects_unknown_engine_with_actionable_message`、`memory_engine_none_is_not_an_unknown_engine` |
 
-**验证命令与实际结果**：`cargo test` 默认 **195 passed / 0 failed / 3 ignored**；`cargo test --features sherpa` **195 passed / 0 failed / 3 ignored**；`./gradlew :apps:h5App:publishWeb` **BUILD SUCCESSFUL**（产物含 `kokoro`/`"engine"`/「engine（引擎）」）；文件规模 ≤600 行与"0 个内联测试块"校验均无输出；被改的 21 个 Rust 文件经 `rustfmt --check --skip-children` **0 diff**（`--skip-children` 是必需的：不加会把子模块既有漂移算到本文件头上，我第一轮统计就被它误导过一次）。
+**验证命令与实际结果**：`cargo test` 默认 **195 passed / 0 failed / 3 ignored**；`cargo test --features sherpa` **195 passed / 0 failed / 3 ignored**；`./gradlew :apps:h5App:publishWeb` **BUILD SUCCESSFUL**（产物含 `kokoro`/`"engine"`/「engine（引擎）」）；文件规模 ≤600 行与"0 个内联测试块"校验均无输出；被改的 21 个 Rust 文件经 `rustfmt --check --skip-children` **0 diff**（`--skip-children` 是必需的：不加会把子模块既有漂移算到本文件头上，我第一轮统计就被它误导过一次）。（W15 归档注：本验证记录含旧 Kotlin 端 `publishWeb` 构建步骤，保留史料；当前管理台构建以 `pnpm --dir client/admin-web build` 为准。）
 
 ⚠️ **未做**：真实模型下的端到端联调（本机无 `/data/models`，跑不了 `mock_client.py`）；`/api/config` 的运行时形状冒烟（无模型无法启动进程，形状由单测覆盖）；统一动作模型（见偏差 8）。
