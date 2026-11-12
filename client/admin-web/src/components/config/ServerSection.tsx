@@ -63,9 +63,9 @@ export function ServerSection(): ReactElement {
           <TextField
             path="server.admin_dir"
             label="管理页面静态目录"
-            hint="server 在 / 直接托管该目录；为空或目录不存在时返回友好提示。默认 ../client/apps/h5App/web。"
+            hint="server 在 / 直接托管该目录；为空或目录不存在时返回友好提示。默认 ../client/admin-web/dist（admin-web Vite 构建产物）。"
             advanced
-            placeholder="../client/apps/h5App/web"
+            placeholder="../client/admin-web/dist"
           />
           {advancedMode ? (
             <div className="py-2">

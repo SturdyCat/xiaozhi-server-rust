@@ -7,3 +7,6 @@ dist/
 .DS_Store
 src-tauri/target/
 src-tauri/gen/
+# W15-1：scripts/sync-em.mjs 生成的 /em/ 官方页白名单拷贝产物（不入库）。
+# Vite 默认 publicDir 会在 build 时把它拷进 dist/em/；dist/ 本身已在上方忽略。
+public/em/

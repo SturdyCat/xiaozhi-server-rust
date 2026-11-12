@@ -47,7 +47,7 @@ client/admin-web/
 
 ## API baseURL 与 dev proxy
 
-- `src/lib/api.ts` 是唯一 API 入口：默认同源相对 `/api`，可用 `VITE_API_BASE_URL` 覆盖；`apiUrl()` / `requestApi()` / `getWebSocketUrl()` 都从这里走。生产由 Rust `ServeDir` 同源托管（`dev-server.sh` 的 `XIAOZHI_ADMIN_DIR` 可指向本目录 `dist/`），Tauri 生产默认「加载服务器页面」同理，**均无 CORS 问题**。三种模式的 baseURL 语义写在 `api.ts` 文件头注释：dev = Vite proxy 同源、生产服务器页面 = 同源、`XIAOZHI_ADMIN_EMBEDDED=1` 内嵌 SPA 预览 = **API 不可达**；本轮不改请求实现，不改成插件 IPC。
+- `src/lib/api.ts` 是唯一 API 入口：默认同源相对 `/api`，可用 `VITE_API_BASE_URL` 覆盖；`apiUrl()` / `requestApi()` / `getWebSocketUrl()` 都从这里走。生产由 Rust `ServeDir` 同源托管（**W15-1 起 `[server].admin_dir` / `dev-server.sh` 的 `XIAOZHI_ADMIN_DIR` / Docker 镜像 `/app/web` 默认均指向本目录 `dist/`**，旧端 `h5App/web` 已软下线归档、源码保留），Tauri 生产默认「加载服务器页面」同理，**均无 CORS 问题**。三种模式的 baseURL 语义写在 `api.ts` 文件头注释：dev = Vite proxy 同源、生产服务器页面 = 同源、`XIAOZHI_ADMIN_EMBEDDED=1` 内嵌 SPA 预览 = **API 不可达**；本轮不改请求实现，不改成插件 IPC。
 - Vite dev proxy：`/api`、`/ws`（`ws: true`）、`/em` → `VITE_PROXY_TARGET`（默认 `http://127.0.0.1:8000`）。
 - **`/em/` 排除口径**：proxy 中间件先于 SPA history fallback 生效，因此 `/em/`（含尾斜杠）会原样转发到 Rust server，不会被 `index.html` 吞掉。前端路由不得占用 `/em/` 前缀；官方页已于 W12 以 `<iframe src="/em/?...">`（带尾斜杠 + URL 参数）接入 DevicehubPage（契约见「Devicehub 页（已迁移）」）。微前端方向已否决。
 - 路由使用 `HashRouter`：静态托管与 Tauri 内嵌 SPA 都没有服务端 history fallback，避免刷新／深链接 404。
@@ -63,6 +63,7 @@ client/admin-web/
 | **生产默认：加载服务器页面（推荐，方案 B）** | 生产构建，且未设置 `XIAOZHI_ADMIN_EMBEDDED=1`                                                     | `WebviewUrl::External(server_url)`                                                                                | **全可达**：同源，无 CORS                         | 日常运行 / 局域网 / 生产 |
 | **内嵌 SPA 预览**                            | 仅 `XIAOZHI_ADMIN_EMBEDDED=1`（精确 `"1"`）                                                       | `WebviewUrl::App("index.html")` → `tauri://localhost`                                                             | **API 不可达**，仅预览 UI，**不作为默认运行方式** | 离线 UI 预览             |
 
+- **W15-1 生产指向（方案 B 的「服务器页面」即本工程 `dist/`）**：`server/src/config.rs` 的 `default_admin_dir()`、`server/config.example.toml`、`server/src/dev.rs` 的 `--dev` 兜底、`dev-server.sh` 的 `XIAOZHI_ADMIN_DIR` 与 Docker 镜像 `/app/web` 均已切到 `client/admin-web/dist`；`dist/em/` 由 `scripts/sync-em.mjs` 白名单 4 文件 + Vite 默认 `public/` 机制生成，故 `/em/` iframe 在服务器页面下仍可达。旧端 `client/apps/h5App/web` 软下线归档（源码保留、不再作为默认），回滚用 `XIAOZHI_ADMIN_DIR` 指回旧目录。⚠️ `admin_dir` 是 SQLite 配置库可写字段，改代码默认值**不影响存量实例已持久化的值**；`XIAOZHI_ADMIN_DIR` env 最后覆盖且优先、不写回（`GET /api/config` 仍展示库内原值）。
 - **服务器地址来源**：`XIAOZHI_ADMIN_URL` 优先（合法 http/https），未设置时用默认常量 `http://127.0.0.1:8000`。生产/局域网部署需**显式设置** `XIAOZHI_ADMIN_URL`（例如 `http://192.168.1.20:8000`），后续可接 mDNS 发现或地址配置页（本轮未实现，列为待办）。`parse_external_url()` 先做 URL 语法解析、再做 `http` / `https` scheme 白名单校验（对应 tauri-utils 对 `WebviewUrl::External` 「Must use either the http or https schemes」的要求，直接构造枚举会绕过 Deserialize 分类），`ftp://`、`file://`、`data:`、空串与非法串都返回明确 Err（错误信息区分「语法错误」与「scheme 不支持」）。
 - **`cfg(dev)` 已查证可用**：`tauri-build-2.7.4/src/lib.rs:714` 的 `cfg_alias("dev", is_dev())` 经本工程 `build.rs` 的 `tauri_build::build()` 暴露给业务 crate，且 `cfg_alias`（同文件 `:304-308`）同时发出 `cargo:rustc-check-cfg=cfg(dev)`，故 `cfg!(dev)` 不会触发 `unexpected_cfg` 警告，`build.rs` 无需补 check-cfg。`tauri-2.12.5/src/manager/mod.rs:345-359` 的 `get_app_url()` 在 `#[cfg(dev)]` 下返回 `build.devUrl`，否则返回 `tauri://localhost`（`frontendDist` 是目录而非 URL）。`cargo check` 实测无 `unexpected_cfg` 警告。
 - `resolve_window_url()` 只负责读环境变量 + `cfg(dev)`；分流逻辑抽成不读环境变量的纯函数 `decide_window_url(is_dev, remote_raw, embedded_raw)`，避免单测间环境变量竞态。`cargo test` 覆盖：dev 恒为 App、未设置环境变量返回默认服务器 External、合法 http/https 沿用、精确 `"1"` 的纯分支（`"true"`/`"0"`/`" 1 "` 不生效）、非 http(s) 仍返回 Err。
@@ -222,7 +223,7 @@ client/admin-web/
 
 ## 后续迁移待办
 
-- 按 `src/lib/nav.ts` 的 **10 个描述符**逐页迁移 Kuikly adminCore 逻辑，**数据源统一走新增的 `@/lib/adminApi`**：**全部 10 项迁移完成**（Overview / Devices / devicehub / Config(18 段) / Settings / Console / Files / Plugins / Testbench[W14a 纯文本 + W14b 硬件桥接] / echomuse 占位保留）；后续顺序 **W15 旧端下线**（切 admin-web/dist 构建链、验收矩阵 + 灰度前置、归档 client/shared 管理台与 h5App/web）。
+- 按 `src/lib/nav.ts` 的 **10 个描述符**逐页迁移 Kuikly adminCore 逻辑，**数据源统一走新增的 `@/lib/adminApi`**：**全部 10 项迁移完成**（Overview / Devices / devicehub / Config(18 段) / Settings / Console / Files / Plugins / Testbench[W14a 纯文本 + W14b 硬件桥接] / echomuse 占位保留）；后续顺序 **W15 旧端下线：W15-1 构建链切换完成，旧端软下线（源码归档保留），真机验收待执行**；验收矩阵落地（`tools/admin_web_switch_check.sh`）与 47 个 md 文档口径全量同步归 W15-2 独立波。
 - 页面里需要复制的交互统一调用 `@/lib/clipboard` 的 `copyText()`（三级降级、不会抛错到 UI），不要各自摸 `navigator.clipboard`。
 - 生产/局域网部署前显式设置 `XIAOZHI_ADMIN_URL`；后续可接 mDNS 发现或地址配置页，替代默认 `http://127.0.0.1:8000`（本轮未实现）。
 - 若确实需要在服务器页面启用 Tauri 插件 IPC，按「插件」小节的模板显式配置 `remote.urls` 并复核官方 remote API 安全提示；同时重评剪贴板信任边界。

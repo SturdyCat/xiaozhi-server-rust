@@ -180,6 +180,12 @@ Kuikly 管理台的「EchoMuse」页使用设备摘要卡打开同一管理弹�
 ## 注意
 
 - 链接必须带尾斜杠 `/em/`：Rust 的 `ServeDir` 未知路径会回退到主站 `index.html`，
-  那样会在 `/em/` 下启动 Kuikly 造成二次初始化。
-- `web/em/` 是 `syncEmAssets` 的拷贝产物，已 gitignore；改 `em/` 结构后先
-  `rm -rf client/apps/h5App/web/em`（`publishWeb` 不清理旧文件）。
+  那样会在 `/em/` 下二次挂载 React SPA（管理台页面）。
+- `em/` 的下发有两个落点：`web/em/`（Gradle `publishWeb` 的 `syncEmAssets` 拷贝产物）与
+  `client/admin-web/public/em/ → dist/em/`（`client/admin-web/scripts/sync-em.mjs` 只拷
+  白名单 4 文件：`index.html` + `static/{adapter.js,dashboard.js,host.js}`）。两者都已
+  gitignore。**`publishWeb` 不清理旧文件这一点对两个落点都成立**（Gradle Copy 只增不删，
+  且完全不碰 admin-web 侧落点）；改 `em/` 结构后先
+  `rm -rf client/apps/h5App/web/em client/admin-web/public/em`，再重跑
+  `pnpm --dir client/admin-web build`（`dist/em/` 由 Vite `emptyOutDir` 每次 build 整体重建，
+  无需单独删）。`em/` 源目录 13 文件原位保留、不迁不删，仍是 `/em/` 的唯一来源。
